@@ -1,0 +1,2306 @@
+name: Build Desktop
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: sheytan-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# GATE SEMANTICS (v1.4.0, § CI-integrity — the run 35996462352 repair).
+#
+# Every step in this pipeline is one of exactly three classes, and the
+# class determines what a failure means:
+#
+#   REQUIRED GATES (fail ⇒ job fails):
+#     - typecheck / lint / test:units / test:release — frontend source
+#       and release-metadata contracts.
+#     - npm run build + verify-static-assets + embedded-frontend checks
+#       — the production build contract.
+#     - go test ./internal/... (headless) and go test ./... — the Go
+#       suites, including the testfakes portability gate and every
+#       integration boundary exercised there.
+#     - go vet ./... — static analysis.
+#     - go test -race (audit) — the concurrency-heavy packages.
+#     - cmake configure/build + ctest — the native C++ engine.
+#     - stress suite (Linux), executable smoke probes, ZIP/installer
+#       structural verification.
+#     These run under `set -euo pipefail` (bash) or with per-command
+#     $LASTEXITCODE assertions (pwsh). A green job therefore means the
+#     gated verification genuinely passed — the v1.3.7 Windows job could
+#     be green while `go test` failed (four annotations on a green run);
+#     that failure-hiding class is repaired in v1.4.0 and every future
+#     native-command invocation must keep the assertion discipline.
+#
+#   OPTIONAL DIAGNOSTICS (informational, never gate):
+#     - Authenticode signature STATUS reporting (unsigned is expected
+#       until credentials exist; it is reported, never faked).
+#     - tool/version echo steps (node --version, cmake --version...).
+#
+#   ENVIRONMENT-SPECIFIC TESTS (fail or skip depending on the runner's
+#     ability to provide the real dependency; a skip is honest and
+#     loud, never a silent pass):
+#     - TestRealCppHost* native integration tests: the CI always builds
+#       the C++ host BEFORE the Go suites, so on CI these RUN for real;
+#       a developer machine without the build skips with the reason.
+#     - Live-model browser E2E (test:e2e with a provisioned engine):
+#       runs only when the environment provides a real engine+model;
+#       without one the E2E suite proves the full stack minus live
+#       generation and NEVER fabricates a green generation result.
+#
+# The release identity is NOT hardcoded here. package.json is the single
+# source of truth; the audit job resolves it at runtime
+# (scripts/release-version.mjs --env) and every other job consumes it via
+# needs-outputs. A version bump therefore only touches package.json + the
+# derived surfaces the script repairs. The identity is version-only:
+# APP_VERSION; there is no codename dimension and no second version
+# variable. Release-metadata VERIFICATION is likewise centralized: every
+# build job invokes the canonical cross-platform validator in check mode
+# instead of per-shell reimplementations (the v1.3.1 Windows job's
+# Select-String -SimpleMatch block treated the AppVersion pattern's regex
+# whitespace-escapes as literal text and failed every run: 35542000811).
+env:
+  GO_VERSION: "1.26"
+  NODE_VERSION: "24"
+  # Canonical package-root variables — ONE root per platform, from which
+  # every staging directory, ZIP name, ZIP entry check, artifact name and
+  # release-metadata reference is derived. No root literal is repeated
+  # below; the Go contract (internal/releasecontract) mirrors these values
+  # and the stress gate fails the build if the two copies of the truth ever
+  # drift apart.
+  WIN_PKG_ROOT: "SHEYTAN-LA"
+  LINUX_PKG_ROOT: "SHEYTAN-Local-Agent"
+
+jobs:
+  audit:
+    name: Source & frontend audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+
+    # The identity step emits APP_VERSION (exactly as release-version.mjs
+    # --env names it). The output names here MUST match the keys written to
+    # GITHUB_OUTPUT below.
+    outputs:
+      version: ${{ steps.identity.outputs.APP_VERSION }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          package-manager-cache: true
+
+      - name: Verify repository shape and release identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f package.json
+          test -f package-lock.json
+          test -f go.mod
+          test -f go.sum
+          test -f internal/config/config.go
+          test -f src/App.tsx
+          test -f src/AgentBody.tsx
+          test -f src/styles.css
+          test ! -e web/package.json
+
+          node --version
+          npm --version
+
+          node_major="$(node -p 'process.versions.node.split(".")[0]')"
+          test "$node_major" -ge 24
+
+          node scripts/release-version.mjs
+
+          # Derive the release identity from package.json (the one
+          # canonical source) instead of trusting a workflow env constant.
+          identity_out="$(node scripts/release-version.mjs --env)"
+
+          while IFS='=' read -r key value; do
+            case "$key" in
+              APP_VERSION)
+                export "$key=$value"
+                printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"
+                ;;
+            esac
+          done <<< "$identity_out"
+
+          # Fail fast — before any expensive build job starts — if the
+          # release identity did not resolve.
+          if [ -z "${APP_VERSION:-}" ]; then
+            echo "::error::Release identity did not resolve. APP_VERSION must be non-empty after 'release-version.mjs --env'."
+            exit 1
+          fi
+
+          # The identity step must be tagged so needs-outputs can read it
+          # (id: identity above). Job outputs map from the APP_* names.
+          echo "Resolved identity: $APP_VERSION"
+
+          # THE canonical release-metadata verification (v1.3.2): the
+          # repaired tree must pass the one cross-platform validator.
+          # There is deliberately NO per-shell reimplementation here — the
+          # bash greps the audit job previously carried were one of three
+          # divergent copies of the same semantics.
+          node scripts/release-version.mjs --check
+
+      - name: Install frontend dependencies
+        shell: bash
+        run: npm ci
+
+      - name: Frontend verification
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          npm run typecheck
+          npm run lint
+          npm run test:units
+
+          # v1.3.2: release-metadata regression suite (semver shapes,
+          # drift/missing markers, whitespace/CRLF, --env identity,
+          # workflow contract — the run 35542000811 failure class).
+          npm run test:release
+
+          # Production build contract: start from a CLEAN dist so no
+          # previous-generation asset can survive into web/static.
+          rm -rf dist
+          npm run build
+
+      - name: Verify embedded frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f web/static/index.html
+          grep -q '<div id="root"></div>' web/static/index.html
+
+          echo "Embedded frontend verification passed."
+
+      # v1.3.1: the static-asset acceptance contract. The embedded
+      # frontend must use STABLE deterministic filenames (index.js,
+      # AgentBody.js, ...) — content-hashed names are rejected, every
+      # referenced asset and dynamic-import chunk must exist, and
+      # web/static must exactly mirror the clean build in dist/.
+      - name: Verify stable frontend asset contract
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node scripts/verify-static-assets.mjs --dist
+
+      # v1.3.1: codename removal gate. The product identity is
+      # version-only; no codename may remain anywhere in the tracked
+      # tree. v1.7.6: the gate is TOKEN-AWARE (scripts/codename-gate.mjs)
+      # — a retired-codename TOKEN fails in every spelling (bare, quoted,
+      # snake/kebab/camel, digit-joined, any case), while larger English
+      # identifiers that merely contain the same character sequence across
+      # a compound boundary (the historical MaterializeTarget false
+      # positive) are allowed. Deterministic proofs:
+      # scripts/codename-gate.test.mjs (run in npm run test:release).
+      - name: Codename removal gate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node scripts/codename-gate.mjs
+
+      # v1.3.5: native temp-path portability gate (Actions run
+      # 35583009466 — tokenizer/generate failed on Windows because two
+      # tests assumed a POSIX temp location). No native source or test
+      # may hard-code a POSIX temp path literal or read TMPDIR directly;
+      # the ONE canonical cross-platform helper is
+      # native/engine/tests/temp_dir.h (its POSIX fallback constant is
+      # the single sanctioned literal).
+      - name: Native temp-path portability gate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bad="$(git grep -n -F '"/tmp' -- 'native/engine' \
+            ':!native/engine/tests/temp_dir.h' || true)"
+
+          if [ -n "$bad" ]; then
+            echo "::error::Hard-coded POSIX temp path literal in native sources (use native/engine/tests/temp_dir.h):"
+            printf '%s\n' "$bad"
+            exit 1
+          fi
+
+          env_bad="$(git grep -n -F 'getenv("TMPDIR")' -- 'native/engine' \
+            ':!native/engine/tests/temp_dir.h' || true)"
+
+          if [ -n "$env_bad" ]; then
+            echo "::error::Direct TMPDIR dependence in native sources (use native/engine/tests/temp_dir.h):"
+            printf '%s\n' "$env_bad"
+            exit 1
+          fi
+
+          echo "Native temp-path portability gate passed."
+
+      - name: Setup Go 1.26
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # Focused race gate. The concurrency-heavy packages run under the
+      # race detector on every push/PR (headless tag: the desktop shell is
+      # not needed for these suites; CGO is required by the engine-boundary
+      # code paths they exercise).
+      - name: Go race gate (concurrency-heavy packages)
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set -euo pipefail
+
+          go version
+
+          go test -race -tags headless -count=1 ./internal/api ./internal/agent ./internal/sessions ./internal/contextplan ./internal/histref ./internal/runtime
+
+          echo "Race gate passed."
+
+      # The C++ native engine builds and its dependency-free test suites
+      # pass on the same runner the Go build uses. Ubuntu-24.04 images ship
+      # cmake (>= 3.28) and g++.
+      #
+      # CMake cache rule: a relocatable CMake build tree is NOT a safe
+      # cache artifact — CMakeCache.txt / CMakeFiles embed absolute paths,
+      # and a cache entry produced under one workspace casing cannot be
+      # restored into another. The build directory is therefore wiped and
+      # reconfigured with `--fresh` on every run; compile cost is paid once
+      # per run and reproducibility is exact.
+      - name: Native engine (C++) build and tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake --version
+
+          # Regression guard: never reuse a stale or path-mismatched cache.
+          # Wipe the build dir unconditionally, then configure with --fresh
+          # so cmake regenerates every cache entry from scratch.
+          rm -rf native/engine/build
+          cmake -S native/engine -B native/engine/build --fresh
+
+          # Regression guard: the freshly written CMakeCache.txt must
+          # record THIS runner workspace's absolute paths (correct letter
+          # case included).
+          grep -F "$(pwd)/native/engine/build" native/engine/build/CMakeCache.txt > /dev/null
+          grep -F "$(pwd)/native/engine" native/engine/build/CMakeCache.txt > /dev/null
+
+          cmake --build native/engine/build
+          ctest --test-dir native/engine/build --output-on-failure
+
+          test -x native/engine/build/shtn-engine-host
+          echo "Native engine verification passed."
+
+  build-windows:
+    name: Windows x64
+    needs: audit
+    timeout-minutes: 60
+
+    # Identity flows from the audit job's runtime resolution of
+    # package.json — no local hardcoded version can drift here either.
+    env:
+      APP_VERSION: ${{ needs.audit.outputs.version }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          package-manager-cache: true
+
+      - name: Verify Node and repository
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          node --version
+          npm --version
+
+          $nodeMajor = [int](node --version).TrimStart("v").Split(".")[0]
+
+          if ($nodeMajor -lt 24) {
+            throw "Node.js 24 or newer is required."
+          }
+
+          if (-not (Test-Path "package.json")) {
+            throw "Root package.json missing."
+          }
+
+          if (-not (Test-Path "package-lock.json")) {
+            throw "Root package-lock.json missing."
+          }
+
+          if (-not (Test-Path "go.mod")) {
+            throw "go.mod missing."
+          }
+
+          if (-not (Test-Path "go.sum")) {
+            throw "go.sum missing."
+          }
+
+          if (Test-Path "web/package.json") {
+            throw "Unexpected web/package.json found."
+          }
+
+      - name: Synchronize release metadata
+        shell: pwsh
+        run: node scripts/release-version.mjs
+
+      # v1.3.2 ROOT FIX for CI run 35542000811: release-metadata
+      # verification is performed by the ONE canonical cross-platform
+      # validator (scripts/release-version.mjs --check). The previous
+      # per-shell PowerShell block built a regex-syntax pattern for the
+      # AppVersion constant (whitespace-escape tokens around the equals
+      # sign) and passed it to Select-String -SimpleMatch, which treats
+      # regex escapes as LITERAL text — the pattern could never match
+      # config.go's real content and the Windows job failed at this step
+      # on every run. Shell steps now only orchestrate the canonical
+      # validator; the validator's own workflow contract (checked in
+      # --check mode) fails the build if a per-shell reimplementation
+      # ever reappears.
+      - name: Verify release metadata
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          node scripts/release-version.mjs --check
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Canonical release metadata verification failed (release-version.mjs --check)."
+          }
+
+          Write-Host "Release metadata verified through the canonical cross-platform gate."
+
+      - name: Install frontend dependencies
+        shell: pwsh
+        run: npm ci
+
+      - name: Frontend verification
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # v1.4.0: native-command exit codes are asserted explicitly —
+          # npm failures must fail the job, not fall through to the next
+          # statement (the run 35996462352 failure-hiding class).
+          function Invoke-Gate {
+            param([scriptblock]$Command, [string]$Label)
+            & $Command
+            if ($LASTEXITCODE -ne 0) {
+              throw "[gate] $Label failed with exit code $LASTEXITCODE."
+            }
+          }
+
+          Invoke-Gate { npm run typecheck } "npm run typecheck"
+          Invoke-Gate { npm run lint } "npm run lint"
+          Invoke-Gate { npm run test:units } "npm run test:units"
+
+          # v1.3.2: release-metadata regression suite (semver shapes,
+          # drift/missing markers, whitespace/CRLF, --env identity,
+          # workflow contract — the run 35542000811 failure class).
+          Invoke-Gate { npm run test:release } "npm run test:release"
+
+          # Production build contract: start from a CLEAN dist so no
+          # previous-generation asset can survive into web/static.
+          if (Test-Path "dist") {
+            Remove-Item "dist" -Recurse -Force
+          }
+          Invoke-Gate { npm run build } "npm run build"
+
+      - name: Verify embedded frontend
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if (-not (Test-Path "web/static/index.html")) {
+            throw "web/static/index.html was not generated."
+          }
+
+          $html = Get-Content "web/static/index.html" -Raw
+
+          if ($html -notmatch '<div id="root"></div>') {
+            throw "Embedded frontend root element was not found."
+          }
+
+          Write-Host "Embedded frontend verification passed."
+
+      # v1.3.1: stable deterministic frontend filenames — no content
+      # hashes, every referenced chunk exists, web/static mirrors dist/.
+      - name: Verify stable frontend asset contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          node scripts/verify-static-assets.mjs --dist
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Static asset contract verification failed."
+          }
+
+      - name: Setup Go 1.26
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # v1.3.2: the Windows job now builds and ctests the native C++ engine
+      # BEFORE the Go tests — exactly like the Linux job — so the
+      # Go↔C++ integration suites (internal/native/engine
+      # TestRealCppHost*) execute against the REAL shtn-engine-host.exe on
+      # Windows instead of skipping. Native engine execution is a
+      # first-class release objective on the platform whose metadata gate
+      # previously failed; the pipeline must reach and prove it.
+      #
+      # windows-latest ships CMake + Visual Studio. Multi-config generators
+      # (Visual Studio) place runtime outputs under a per-configuration
+      # subdirectory (e.g. build/Release/); the Go tests expect the host at
+      # native/engine/build/shtn-engine-host.exe, so the step locates the
+      # produced executable wherever the generator placed it and stages it
+      # at the expected path. The CMake cache rule applies unchanged: wipe
+      # and reconfigure with --fresh (a relocatable cache is not a safe
+      # artifact).
+      - name: Native engine (C++) build and tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Invoke-Gate {
+            param([scriptblock]$Command, [string]$Label)
+            & $Command
+            if ($LASTEXITCODE -ne 0) {
+              throw "[gate] $Label failed with exit code $LASTEXITCODE."
+            }
+          }
+
+          Invoke-Gate { cmake --version } "cmake --version"
+
+          # Regression guard: never reuse a stale or path-mismatched cache.
+          if (Test-Path "native/engine/build") {
+            Remove-Item "native/engine/build" -Recurse -Force
+          }
+          Invoke-Gate { cmake -S native/engine -B native/engine/build --fresh } "cmake configure (fresh)"
+
+          Invoke-Gate { cmake --build native/engine/build --config Release } "cmake --build (Release)"
+
+          # v1.4.0: a ctest failure must fail the job. The previous
+          # script continued past a failed ctest (native commands do not
+          # throw in pwsh), staged the built executable anyway, and the
+          # step ended green.
+          Invoke-Gate { ctest --test-dir native/engine/build -C Release --output-on-failure } "ctest (native suite)"
+
+          # Stage the host executable where the Go integration tests
+          # resolve it (<repo>/native/engine/build/shtn-engine-host.exe),
+          # regardless of which subdirectory the generator emitted it into.
+          $expected = Join-Path (Get-Location) "native\engine\build\shtn-engine-host.exe"
+
+          if (-not (Test-Path $expected)) {
+            $found = Get-ChildItem "native/engine/build" -Recurse -Filter "shtn-engine-host.exe" |
+              Select-Object -First 1
+
+            if ($null -eq $found) {
+              throw "shtn-engine-host.exe was not produced by the native build."
+            }
+
+            Copy-Item $found.FullName $expected
+            Write-Host "Staged host executable from $($found.FullName) to $expected"
+          }
+
+          if ((Get-Item $expected).Length -lt 10000) {
+            throw "shtn-engine-host.exe is suspiciously small."
+          }
+
+          Write-Host "Native engine (C++) built and tested on Windows: $expected"
+
+      # v1.4.0 GATE-INTEGRITY REPAIR (run 35996462352): this step
+      # previously ran `go test` twice and `go vet` WITHOUT checking
+      # $LASTEXITCODE. In PowerShell, $ErrorActionPreference = "Stop"
+      # does NOT apply to native executables — a `go test` exit 1 was
+      # silently swallowed, the step exited with the LAST command's
+      # status, and the Windows job reported green while four error
+      # annotations sat on the run. Every mandatory verification command
+      # now asserts its own exit code; a failure fails the job.
+      - name: Go verification
+        shell: pwsh
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          function Invoke-Gate {
+            param([scriptblock]$Command, [string]$Label)
+            & $Command
+            if ($LASTEXITCODE -ne 0) {
+              throw "[gate] $Label failed with exit code $LASTEXITCODE."
+            }
+          }
+
+          go version
+
+          Invoke-Gate { go test ./internal/... -tags headless -count=1 } "go test ./internal/... (headless)"
+          Invoke-Gate { go test ./... -run Test -count=1 } "go test ./... (full)"
+          Invoke-Gate { go vet ./... } "go vet ./..."
+
+      # v1.6.2 — WINDOWS ENGINE VARIANT ASSET VALIDATION through the
+      # AUTHORITATIVE production resolver (no duplicated release-tag
+      # knowledge: the v1.6.1 step hard-coded $tag = "b10642" and could
+      # drift from the code). The gate is the same Go code the app ships
+      # (internal/updater): ResolveDownloadURLForVariant pins the exact
+      # variant asset (pinned tag first, else the newest release that
+      # actually contains it), verifies the exact asset name for the
+      # platform, HEAD-checks reachability (2xx/3xx), verifies the
+      # support matrix advertises only servable variants, and proves an
+      # explicitly unsupported variant is REFUSED — never a silent CPU
+      # fallback. It runs on the Windows x64 runner, where the full
+      # resolution contract is enforced.
+      #
+      # HONESTY NOTE: this verifies ASSET RESOLUTION AND REACHABILITY.
+      # HTTP reachability is NOT successful runtime execution — the
+      # runtime backend truth is verified by the engine's own device
+      # enumeration inside the provisioning transaction (see
+      # internal/llm/llama.go verifyRuntimeBackendForVariant and its
+      # regression suite).
+      - name: Validate engine variant assets (authoritative resolver)
+        shell: pwsh
+        env:
+          CGO_ENABLED: "0"
+          SHEYTAN_CI_VARIANT_GATE: "1"
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          go test ./internal/updater -run TestCIVariantAssetContract -count=1 -v
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "[gate] the authoritative engine-variant asset contract failed — the resolver no longer resolves a reachable variant asset (check internal/updater/variant.go and DefaultEngineTag)."
+          }
+
+      - name: Generate Windows resources
+        shell: pwsh
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          go run ./scripts/gen-syso
+
+          if (-not (Test-Path "rsrc_windows_amd64.syso")) {
+            throw "Windows resource object was not generated."
+          }
+
+      - name: Build Windows executable and console smoke probe
+        shell: pwsh
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+          GOARCH: amd64
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # Staging root derives from the canonical WIN_PKG_ROOT.
+          $appRoot = "dist/windows/app/${env:WIN_PKG_ROOT}"
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $appRoot | Out-Null
+
+          # v1.4.0: each go build asserts its exit code — a failed first
+          # build must never be masked by a successful second one.
+          go build `
+            -trimpath `
+            -ldflags="-s -w -H=windowsgui" `
+            -o "$appRoot/SHEYTAN-LA.exe" `
+            .
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "[gate] go build (SHEYTAN-LA.exe) failed with exit code $LASTEXITCODE."
+          }
+
+          go build `
+            -trimpath `
+            -ldflags="-s -w" `
+            -o "dist/windows/sheytan-version-smoke.exe" `
+            .
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "[gate] go build (console smoke probe) failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Verify Windows executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # The probed executable derives from the canonical root.
+          $exe = "dist/windows/app/${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe"
+          $probe = "dist/windows/sheytan-version-smoke.exe"
+
+          if (-not (Test-Path $exe)) {
+            throw "Windows executable was not produced."
+          }
+
+          if (-not (Test-Path $probe)) {
+            throw "Windows console smoke probe was not produced."
+          }
+
+          $size = (Get-Item $exe).Length
+
+          if ($size -lt 1000000) {
+            throw "Windows executable is suspiciously small: $size bytes."
+          }
+
+          Write-Host "Windows executable size: $size bytes"
+
+          $output = & $probe version 2>&1
+          $exitCode = $LASTEXITCODE
+          $text = ($output | Out-String).Trim()
+
+          Write-Host "=== Windows console smoke probe ==="
+          Write-Host $text
+          Write-Host "=== Console probe exit code: $exitCode ==="
+
+          if ($exitCode -ne 0) {
+            throw "Windows console version probe exited with code $exitCode."
+          }
+
+          $expectedVersion = "SHEYTAN-Local-Agent v$($env:APP_VERSION)"
+
+          if ($text -notmatch [regex]::Escape($expectedVersion)) {
+            throw "Windows executable version mismatch. Expected: $expectedVersion"
+          }
+
+          if ($text -notmatch "os:\s+windows/amd64") {
+            throw "Windows executable platform mismatch. Expected windows/amd64."
+          }
+
+          Write-Host "Windows executable version/platform smoke test passed."
+
+          Remove-Item $probe -Force
+
+      # v1.9.1 RUNTIME SMOKE — the REAL desktop executable launched as a
+      # process. Build/version/package never prove runtime: this gate
+      # starts SHEYTAN-LA.exe (the windowsgui Go-core launcher; it spawns the
+# native Qt host) against an
+      # isolated SHEYTAN_DATA_DIR and asserts, STATE-BASED (never sleeps):
+      # (1) the process starts and STAYS alive; (2) the boot path
+      # completed far enough to write the session banner + boot markers
+      # into the isolated data dir's logs/app.log (backend/runtime init);
+      # (3) no crash report exists after boot; (4) the process shuts down
+      # when asked (CloseMainWindow, bounded wait, Kill only as the CI
+      # backstop for an already-failing run). Explicit evidence boundary:
+      # this proves PROCESS-START + BACKEND INIT — not real GUI
+      # interaction; interaction with the same stack is proven by the
+      # Browser E2E job and the runner-side flows where supported.
+      # v1.10.1 QT HOST BUILD (Windows) — the native Qt Quick/QML desktop
+      # host is built with the official Qt 6.8 toolchain and deployed with
+      # windeployqt (QML-aware: plugins + imports land next to the host
+      # binary, per doc.qt.io/qt-6/windows-deployment.html). The packaged
+      # pair is: SHEYTAN-LA.exe (Go core + launcher) + sheytan-ui.exe (Qt
+      # host) + deployed Qt runtime.
+      - name: Build Qt host (Windows) and deploy runtime
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.2"
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Build Qt host (Windows)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $appRoot = "dist/windows/app/${env:WIN_PKG_ROOT}"
+
+          cmake -S ui/qt -B ui/qt/build -DCMAKE_BUILD_TYPE=Release
+          if ($LASTEXITCODE -ne 0) { throw "[gate] Qt host cmake configure failed ($LASTEXITCODE)." }
+
+          cmake --build ui/qt/build --config Release
+          if ($LASTEXITCODE -ne 0) { throw "[gate] Qt host build failed ($LASTEXITCODE)." }
+
+          # Acceptance suite binary (QtTest; drives the REAL Main.qml
+          # against the REAL core in the live-answer gate below).
+          Copy-Item "ui/qt/build/sheytan-ui-acceptance.exe" "dist/windows/" -ErrorAction SilentlyContinue
+
+          # QML-aware deployment into the package root (core + UI pair).
+          windeployqt --qmldir ui/qt/qml --no-compiler-runtime "$appRoot/SHEYTAN-LA.exe" | Out-Null
+          Copy-Item "ui/qt/build/Release/sheytan-ui.exe" $appRoot -ErrorAction SilentlyContinue
+          if (-not (Test-Path "$appRoot/sheytan-ui.exe")) {
+            Copy-Item "ui/qt/build/sheytan-ui.exe" $appRoot
+          }
+
+          if (-not (Test-Path "$appRoot/sheytan-ui.exe")) {
+            throw "[gate] sheytan-ui.exe was not deployed into the package root."
+          }
+
+          Write-Host "Qt host deployed next to the Go core."
+
+      - name: Desktop runtime smoke (real executable, process + backend init)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $exe = "dist/windows/app/${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe"
+
+          if (-not (Test-Path $exe)) {
+            throw "runtime smoke: Windows executable was not produced."
+          }
+
+          $smokeDir = Join-Path $env:RUNNER_TEMP "sheytan-runtime-smoke"
+          if (Test-Path $smokeDir) {
+            Remove-Item $smokeDir -Recurse -Force
+          }
+          $dataDir = Join-Path $smokeDir "data"
+          New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+
+          $env:SHEYTAN_DATA_DIR = $dataDir
+
+          $outLog = Join-Path $smokeDir "stdout.log"
+          $errLog = Join-Path $smokeDir "stderr.log"
+
+          $proc = Start-Process `
+            -FilePath $exe `
+            -WorkingDirectory (Split-Path $exe) `
+            -RedirectStandardOutput $outLog `
+            -RedirectStandardError $errLog `
+            -PassThru
+
+          if ($null -eq $proc) {
+            throw "runtime smoke: the desktop process could not be started."
+          }
+
+          Write-Host "Desktop process started (pid $($proc.Id))."
+
+          # STATE-BASED readiness: the session banner + boot marker in
+          # logs/app.log (bounded, 60s — no fixed sleeps).
+          $appLog = Join-Path $dataDir "logs/app.log"
+          $bannerSeen = $false
+          $deadline = (Get-Date).AddSeconds(60)
+
+          while ((Get-Date) -lt $deadline) {
+            if ($proc.HasExited) {
+              Write-Host "--- desktop process exited before the boot markers ---"
+              Get-Content $outLog -ErrorAction SilentlyContinue | Select-Object -Last 20
+              Get-Content $errLog -ErrorAction SilentlyContinue | Select-Object -Last 20
+              if (Test-Path $appLog) {
+                Get-Content $appLog | Select-Object -Last 40
+              }
+              throw "runtime smoke: desktop process exited during startup (code $($proc.ExitCode))."
+            }
+
+            if ((Test-Path $appLog) -and
+                (Select-String -Path $appLog -Pattern "==== SHEYTAN-Local-Agent v$($env:APP_VERSION) session start" -Quiet) -and
+                (Select-String -Path $appLog -Pattern "starting \(windows/amd64" -Quiet)) {
+              $bannerSeen = $true
+              break
+            }
+
+            Start-Sleep -Milliseconds 500
+          }
+
+          if (-not $bannerSeen) {
+            Write-Host "--- runtime smoke: boot markers never appeared ---"
+            if (Test-Path $appLog) {
+              Get-Content $appLog | Select-Object -Last 40
+            }
+            throw "runtime smoke: the session banner never appeared in logs/app.log."
+          }
+
+          # Liveness: the process is still running with the backend up.
+          if ($proc.HasExited) {
+            throw "runtime smoke: desktop process exited right after boot."
+          }
+
+          Write-Host "--- desktop runtime: session banner + boot markers observed, process alive (pid $($proc.Id)) ---"
+
+          # Backend/runtime init ran clean: no crash report at boot.
+          $crashDir = Join-Path $dataDir "logs/crashes"
+          if (Test-Path $crashDir) {
+            $crashes = Get-ChildItem $crashDir -Filter "*.log" -ErrorAction SilentlyContinue
+            if ($crashes -and $crashes.Count -gt 0) {
+              Write-Host "--- runtime smoke: crash report present after boot ---"
+              $crashes | ForEach-Object { Write-Host $_.Name }
+              throw "runtime smoke: crash report exists after boot."
+            }
+          }
+
+          Select-String -Path $appLog -Pattern "==== SHEYTAN-Local-Agent v$($env:APP_VERSION) session start" |
+            Select-Object -First 1 | ForEach-Object { Write-Host $_.Line }
+
+          # v1.9.2 SMOKE REPAIR — the v1.9.1 script ignored CloseMainWindow()'s
+          # return value and never proved a top-level window existed, so its
+          # failure (process alive after the call) was unclassifiable. Now:
+          #   1. MainWindowHandle must be non-zero (a REAL top-level window
+          #      visible to this session) — Refresh() first because the
+          #      handle is cached by the Process object;
+          #   2. CloseMainWindow()'s BOOL is checked: false means NO window
+          #      received the close request (precise diagnosis, not a
+          #      generic timeout);
+          #   3. only a delivered close gates the bounded exit wait; Kill
+          #      remains the failing-run backstop, never a passing path.
+          # Product side (v1.9.2): the main window's WindowClosing now
+          # terminates the application lifecycle (desktop.go), so a
+          # delivered WM_CLOSE exits through the normal path and the
+          # deferred backend cleanup runs.
+          $proc.Refresh()
+          $deadline = (Get-Date).AddSeconds(15)
+          while ($proc.MainWindowHandle -eq 0 -and (Get-Date) -lt $deadline) {
+            if ($proc.HasExited) {
+              throw "runtime smoke: desktop process exited before a main window existed."
+            }
+            Start-Sleep -Milliseconds 250
+            $proc.Refresh()
+          }
+
+          if ($proc.MainWindowHandle -eq 0) {
+            throw ("runtime smoke: no top-level main window exists for pid {0} " +
+                   "after boot (MainWindowHandle == 0). Evidence level: " +
+                   "process + backend init ONLY — GUI window creation is not " +
+                   "verifiable in this session and the close path cannot be " +
+                   "exercised.") -f $proc.Id
+          }
+
+          $winMsg = ("Desktop main window present (pid {0}, hwnd {1})." -f $proc.Id, $proc.MainWindowHandle)
+          Write-Host $winMsg
+
+          $closeRequested = $proc.CloseMainWindow()
+
+          if (-not $closeRequested) {
+            $closeErr = ("runtime smoke: CloseMainWindow() returned false — no main window received the close request (pid {0}, hwnd {1})." -f $proc.Id, $proc.MainWindowHandle)
+            throw $closeErr
+          }
+
+          Write-Host "WM_CLOSE delivered to the main window; requiring exit within 15s."
+
+          if (-not $proc.WaitForExit(15000)) {
+            Write-Host "--- runtime smoke: the process ignored a DELIVERED WM_CLOSE; stopping it ---"
+            Stop-Process -Id $proc.Id -Force
+            $ignoreErr = ("runtime smoke: desktop process {0} did not exit after a delivered WM_CLOSE (hwnd {1}) — the window-close path does not terminate the application lifecycle." -f $proc.Id, $proc.MainWindowHandle)
+            throw $ignoreErr
+          }
+
+          $proc.Refresh()
+          if ($proc.ExitCode -ne 0) {
+            throw ("runtime smoke: desktop process exited with code {0} after the WM close." -f $proc.ExitCode)
+          }
+
+          # v1.10.1: the launcher spawns the Qt host child; the GUI proof
+          # is the CHILD's real top-level window (MainWindowHandle != 0) —
+          # process survival alone is never GUI proof.
+          $uiDeadline = (Get-Date).AddSeconds(30)
+          $ui = $null
+          while ((Get-Date) -lt $uiDeadline) {
+            $ui = Get-Process -Name "sheytan-ui" -ErrorAction SilentlyContinue |
+              Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+            if ($ui) { break }
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not $ui) {
+            Write-Host "--- sheytan-ui process/window never appeared ---"
+            Get-Content $outLog -ErrorAction SilentlyContinue | Select-Object -Last 30
+            Get-Content $errLog -ErrorAction SilentlyContinue | Select-Object -Last 30
+            throw "runtime smoke: the Qt host produced no windowed UI process."
+          }
+          Write-Host "Qt host alive (pid $($ui.Id)) with a real top-level window (handle $($ui.MainWindowHandle))."
+
+          Write-Host "Desktop RUNTIME SMOKE passed: process-start + real Qt UI window + backend/runtime init + delivered WM_CLOSE + normal-path exit (code 0)."
+
+      # v1.9.5 (P0): the REAL Windows live-answer acceptance gate — the
+      # exact user journey, executed against the actual packaged desktop
+      # binary with a REAL native-engine generation over
+      # the canonical fixture model: ready composer → send → ORDERED
+      # live-growth evidence (non-placeholder text visible while Stop is
+      # up, then strictly longer with Stop still up) → exactly one
+      # persisted assistant reply + one user message → reload keeps the
+      # SAME session active → a second full cycle → real WM_CLOSE exit.
+      # The harness exits non-zero on ANY unmet assertion; a skipped or
+      # unavailable run is NEVER a pass. This is the gate the Linux
+      # Chromium E2E cannot be (the packaged Windows transport surface).
+      # v1.10.1 (P0): the REAL Windows live-answer acceptance gate — the
+      # QtTest acceptance binary drives the REAL Main.qml through a REAL
+      # CoreClient against the REAL packaged core executable with the
+      # deterministic fixture engine: handshake → session create → send →
+      # ordered live-growth evidence (non-placeholder text visible while
+      # Stop is up) → exactly one terminal settle → exactly one persisted
+      # assistant reply → composer unlock + live bubble removal → same
+      # session reload persistence → repeat send. The former
+      # WebView2/CDP harness is retired with the Wails shell itself; a
+      # skipped or unavailable run is NEVER a pass.
+      - name: Windows live-answer acceptance (real Qt UI, real core over IPC)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $core = "dist/windows/app/${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe"
+          $acc = "dist/windows/sheytan-ui-acceptance.exe"
+          if (-not (Test-Path $core)) { throw "acceptance: the core executable was not produced." }
+          if (-not (Test-Path $acc)) { throw "acceptance: the Qt acceptance suite was not produced." }
+
+          $env:SHEYTAN_REPO = (Get-Location).Path
+          $env:SHEYTAN_CORE_BIN = (Resolve-Path $core).Path
+          $env:QT_QPA_PLATFORM = "offscreen"
+
+          & $acc
+          if ($LASTEXITCODE -ne 0) {
+            throw "[gate] windows qt acceptance failed with exit code $LASTEXITCODE."
+          }
+
+          Write-Host "Windows live-answer acceptance PASSED: real Qt UI + real core over the local IPC channel."
+
+      - name: Prepare Windows portable package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # Canonical package root — the same value controls staging, ZIP
+          # creation, ZIP verification and artifact naming.
+          $root = "dist/windows/app/${env:WIN_PKG_ROOT}"
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path "$root/models" | Out-Null
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path "$root/workspace" | Out-Null
+
+          @"
+          SHEYTAN-LA $env:APP_VERSION
+
+          Portable Windows x64 distribution.
+
+          Keep the complete SHEYTAN-LA folder together.
+          "@ | Set-Content "$root/README.txt" -Encoding utf8
+
+          @"
+          LOCAL MODELS
+
+          Place GGUF models in this folder.
+          "@ | Set-Content "$root/models/README.txt" -Encoding utf8
+
+          @"
+          CODING LAB
+
+          Portable Coding Lab workspaces live under this folder.
+          "@ | Set-Content "$root/workspace/README.txt" -Encoding utf8
+
+          @"
+          SHEYTAN-LA (SHEYTAN Local Agent)
+          Version: $env:APP_VERSION
+          Platform: Windows x64
+          Commit: $env:GITHUB_SHA
+          "@ | Set-Content "$root/BUILD-INFO.txt" -Encoding utf8
+
+          if (Test-Path "LICENSE.md") {
+            Copy-Item "LICENSE.md" "$root/LICENSE.md" -Force
+          }
+
+          if (Test-Path "README.md") {
+            Copy-Item "README.md" "$root/README.md" -Force
+          }
+
+          if (Test-Path "agent.md") {
+            Copy-Item "agent.md" "$root/AI-CONTEXT.md" -Force
+          }
+
+          if (Test-Path "SIGNATURE") {
+            Copy-Item "SIGNATURE" "$root/SIGNATURE" -Force
+          }
+
+          if (Test-Path "SHEYTAN-LA.bat") {
+            Copy-Item `
+              "SHEYTAN-LA.bat" `
+              "$root/SHEYTAN-LA.bat" `
+              -Force
+          }
+
+      - name: Create Windows ZIP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path "dist" | Out-Null
+
+          $zip = "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip"
+
+          if (Test-Path $zip) {
+            Remove-Item $zip -Force
+          }
+
+          Compress-Archive `
+            -Path "dist/windows/app/${env:WIN_PKG_ROOT}" `
+            -DestinationPath $zip `
+            -CompressionLevel Optimal
+
+          if (-not (Test-Path $zip)) {
+            throw "Windows ZIP was not created."
+          }
+
+          if ((Get-Item $zip).Length -le 0) {
+            throw "Windows ZIP is empty."
+          }
+
+      - name: Verify Windows ZIP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+          # Every expected entry is rooted at the canonical WIN_PKG_ROOT —
+          # the same variable that staged and zipped the application. No
+          # duplicated root literal exists to drift.
+          $zipPath = Resolve-Path `
+            "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip"
+
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+
+          try {
+            $entries = @(
+              $archive.Entries |
+              ForEach-Object { $_.FullName }
+            )
+
+            $required = @(
+              "${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe",
+              "${env:WIN_PKG_ROOT}/README.txt",
+              "${env:WIN_PKG_ROOT}/BUILD-INFO.txt",
+              "${env:WIN_PKG_ROOT}/models/README.txt",
+              "${env:WIN_PKG_ROOT}/workspace/README.txt"
+            )
+
+            foreach ($item in $required) {
+              if ($entries -notcontains $item) {
+                throw "Missing ZIP entry: $item"
+              }
+            }
+
+            if (
+              (Test-Path "SHEYTAN-LA.bat") -and
+              ($entries -notcontains "${env:WIN_PKG_ROOT}/SHEYTAN-LA.bat")
+            ) {
+              throw "Expected launcher script is missing from Windows ZIP."
+            }
+
+            # Release metadata inside the package must carry the identity:
+            # BUILD-INFO.txt is the in-archive version authority.
+            $buildInfo = $archive.Entries |
+              Where-Object { $_.FullName -eq "${env:WIN_PKG_ROOT}/BUILD-INFO.txt" }
+            $reader = New-Object System.IO.StreamReader($buildInfo.Open())
+            $buildText = $reader.ReadToEnd()
+            $reader.Dispose()
+
+            if ($buildText -notmatch [regex]::Escape("Version: $env:APP_VERSION")) {
+              throw "BUILD-INFO.txt inside the ZIP does not carry version $env:APP_VERSION."
+            }
+
+            Write-Host "Windows ZIP structure verification passed."
+          }
+          finally {
+            $archive.Dispose()
+          }
+
+      - name: Verify Windows ZIP integrity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+          $zipPath = Resolve-Path `
+            "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip"
+
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+
+          try {
+            foreach ($entry in $archive.Entries) {
+              $stream = $entry.Open()
+
+              try {
+                $buffer = New-Object byte[] 65536
+
+                while ($true) {
+                  $read = $stream.Read($buffer, 0, $buffer.Length)
+
+                  if ($read -eq 0) {
+                    break
+                  }
+                }
+              }
+              finally {
+                $stream.Dispose()
+              }
+            }
+          }
+          finally {
+            $archive.Dispose()
+          }
+
+          Write-Host "Windows ZIP integrity verification passed."
+
+      - name: Build Windows NSIS installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # The primary user installer. NSIS is the broad Win32
+          # distribution path; the portable ZIP remains the advanced
+          # option. Models are NEVER bundled — the installer ships the
+          # application only.
+          #
+          # PATH CONTRACT: makensis resolves compile-time paths relative to
+          # the .nsi SCRIPT directory, not the invoking CWD. CI therefore
+          # passes ABSOLUTE BUILDDIR/OUTFILE paths, which are unambiguous
+          # from any invocation context, and the script itself asserts the
+          # staging executable exists before compiling anything.
+          choco install nsis -y --no-progress
+
+          $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (-not (Test-Path $makensis)) {
+            $found = Get-ChildItem "C:\Program Files*" -Recurse -Filter makensis.exe -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+            if ($null -eq $found) { throw "makensis.exe not found after NSIS install." }
+            $makensis = $found.FullName
+          }
+
+          # Pre-flight assertions: refuse to invoke NSIS against a broken
+          # staging tree — the exact executable, at the exact stage path.
+          # The staging path derives from the canonical root.
+          $repoRoot = (Get-Location).Path
+          $stagingDir = Join-Path $repoRoot "dist\windows\app\${env:WIN_PKG_ROOT}"
+          $stagingExe = Join-Path $stagingDir "SHEYTAN-LA.exe"
+
+          if (-not (Test-Path $stagingDir)) {
+            throw "NSIS staging directory missing: $stagingDir"
+          }
+          if (-not (Test-Path $stagingExe)) {
+            throw "NSIS staging executable missing: $stagingExe"
+          }
+
+          # NSIS installer source-contract — the installer MUST
+          # keep the directory-selection page, the optional desktop
+          # shortcut (default checked), a registered uninstaller, and the
+          # user-data-preserving uninstall section. Checking the SOURCE
+          # here means a silent regression fails CI before any installer
+          # is built from a weakened script.
+          $nsi = Get-Content "packaging/nsis/installer.nsi" -Raw
+          $nsiContract = @(
+            "MUI_PAGE_DIRECTORY",
+            "Create a &desktop shortcut",
+            "BST_CHECKED",
+            "WriteUninstaller",
+            "UninstallString",
+            "SHEYTAN_DATA_DIR",
+            "preserve user data"
+          )
+          foreach ($fragment in $nsiContract) {
+            if ($nsi -notmatch [regex]::Escape($fragment)) {
+              throw "installer.nsi lost required contract fragment: $fragment"
+            }
+          }
+
+          # Negative contract: the uninstaller must NEVER contain the
+          # recursive-delete instruction — user data is preserved by
+          # construction, not by discipline.
+          if ($nsi -match [regex]::Escape("RMDir /r")) {
+            throw "installer.nsi contains 'RMDir /r' — recursive deletes are forbidden in the uninstaller (user data must be preserved)."
+          }
+          Write-Host "NSIS source contract verified (directory page, shortcut option, uninstaller, no recursive deletes)."
+
+          $installerPath = Join-Path $repoRoot "dist\${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe"
+
+          & $makensis `
+            -DVERSION="$env:APP_VERSION" `
+            -DEXE="SHEYTAN-LA.exe" `
+            -DBUILDDIR="$stagingDir" `
+            -DOUTFILE="$installerPath" `
+            "packaging\nsis\installer.nsi"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "makensis exited with code $LASTEXITCODE."
+          }
+
+          # Post-build assertions: the installer must exist, be non-empty,
+          # and its version resource must carry the release identity.
+          if (-not (Test-Path $installerPath)) {
+            throw "NSIS installer was not produced."
+          }
+          if ((Get-Item $installerPath).Length -le 0) {
+            throw "NSIS installer is empty."
+          }
+
+          $versionInfo = (Get-Item $installerPath).VersionInfo
+          if ($versionInfo.ProductVersion -ne $env:APP_VERSION) {
+            throw "Installer ProductVersion '$($versionInfo.ProductVersion)' != APP_VERSION '$env:APP_VERSION'."
+          }
+          if ($versionInfo.ProductName -ne "SHEYTAN-LA") {
+            throw "Installer ProductName '$($versionInfo.ProductName)' != expected identity 'SHEYTAN-LA'."
+          }
+
+          Write-Host "NSIS installer built: $installerPath"
+
+      - name: Verify Windows installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $installer = Get-Item "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe"
+
+          if ($installer.Length -lt 1MB) {
+            throw "Installer is implausibly small ($($installer.Length) bytes) — refusing to publish."
+          }
+
+          # Authenticode state is REPORTED, never faked: unsigned builds are
+          # expected until signing credentials are configured.
+          $sig = Get-AuthenticodeSignature $installer.FullName
+          Write-Host "Installer Authenticode status: $($sig.Status)"
+
+          # Structural inspection instead of trusting the exit code — the
+          # installer must be a valid PE carrying the identity.
+          $bytes = New-Object byte[] 2
+          $fs = [System.IO.File]::OpenRead($installer.FullName)
+          try { $null = $fs.Read($bytes, 0, 2) } finally { $fs.Dispose() }
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+            throw "Installer is not a valid PE executable (missing MZ header)."
+          }
+
+          $vi = $installer.VersionInfo
+          if ($vi.ProductName -ne "SHEYTAN-LA") {
+            throw "Installer ProductName '$($vi.ProductName)' != expected identity 'SHEYTAN-LA'."
+          }
+
+          Write-Host "Installer identity: $($vi.ProductName) v$($vi.ProductVersion) ($([math]::Round($installer.Length/1MB,1)) MB)"
+
+          Write-Host "Installer verification passed: $($installer.Name) ($([math]::Round($installer.Length/1MB,1)) MB)"
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.WIN_PKG_ROOT }}-Windows-x64-installer-v${{ env.APP_VERSION }}
+          path: dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.WIN_PKG_ROOT }}-Windows-x64-v${{ env.APP_VERSION }}
+          path: dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  build-linux:
+    name: Linux x64
+    needs: audit
+    timeout-minutes: 50
+
+    # Identity flows from the audit job's runtime resolution of
+    # package.json — no local hardcoded version can drift here either.
+    env:
+      APP_VERSION: ${{ needs.audit.outputs.version }}
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          package-manager-cache: true
+
+      - name: Verify Node and repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node --version
+          npm --version
+
+          node_major="$(node -p 'process.versions.node.split(".")[0]')"
+          test "$node_major" -ge 24
+
+          test -f package.json
+          test -f package-lock.json
+          test -f go.mod
+          test -f go.sum
+          test ! -e web/package.json
+
+      - name: Install Linux build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+
+          # v1.10.1: the desktop UI is the native Qt host — the GTK4 +
+          # WebKitGTK development stack (the Wails/WebView shell) is no
+          # longer a product dependency. The smoke keeps xvfb/xdotool/
+          # x11-utils; libxcb userspace pieces the Qt xcb plugin loads
+          # (xkbcommon-x11, cursor, icccm, keysyms, image, render-util)
+          # come with the runner image or the Qt deploy step.
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libgl1 \
+            libegl1 \
+            libxkbcommon-x11-0 \
+            libxcb-cursor0 \
+            libxcb-icccm4 \
+            libxcb-keysyms1 \
+            libxcb-image0 \
+            libxcb-render-util0 \
+            xvfb \
+            xdotool \
+            x11-utils \
+            zip \
+            unzip \
+            file
+
+      - name: Verify Linux build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gcc --version
+          g++ --version
+          make --version
+          pkg-config --version
+
+          # v1.10.1: the Qt host toolchain replaces the GTK/WebKit stack.
+          command -v cmake
+          cmake --version | head -1
+
+          command -v zip
+          command -v unzip
+          command -v file
+
+      - name: Synchronize release metadata
+        shell: bash
+        run: node scripts/release-version.mjs
+
+      # v1.3.2: the ONE canonical cross-platform verification — the bash
+      # greps this job previously carried (a second divergent copy of the
+      # release semantics) are gone. See scripts/release-version.mjs.
+      - name: Verify release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node scripts/release-version.mjs --check
+
+      - name: Install frontend dependencies
+        shell: bash
+        run: npm ci
+
+      - name: Frontend verification
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          npm run typecheck
+          npm run lint
+          npm run test:units
+
+          # v1.3.2: release-metadata regression suite (semver shapes,
+          # drift/missing markers, whitespace/CRLF, --env identity,
+          # workflow contract — the run 35542000811 failure class).
+          npm run test:release
+
+          # Production build contract: start from a CLEAN dist so no
+          # previous-generation asset can survive into web/static.
+          rm -rf dist
+          npm run build
+
+      - name: Verify embedded frontend
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f web/static/index.html
+          grep -q '<div id="root"></div>' web/static/index.html
+
+      # v1.3.1: stable deterministic frontend filenames — no content
+      # hashes, every referenced chunk exists, web/static mirrors dist/.
+      - name: Verify stable frontend asset contract
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node scripts/verify-static-assets.mjs --dist
+
+      - name: Setup Go 1.26
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      # Build the C++ engine BEFORE the Go tests so the Go↔C++ integration
+      # suites (internal/native/engine TestRealCppHost*) run against the
+      # REAL shtn-engine-host binary instead of skipping. The audit job
+      # builds and ctests the engine, but on its own runner/workspace —
+      # without this step the boundary tests never actually execute in any
+      # Go job. CMake build trees embed absolute paths and are not
+      # relocatable across workspaces; this job always configures a clean
+      # build directory with --fresh and guards the recorded cache paths
+      # before compiling.
+      - name: Native engine (C++) build for Go integration tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake --version
+
+          # Regression guard: clean configure, no restored cache.
+          rm -rf native/engine/build
+          cmake -S native/engine -B native/engine/build --fresh
+
+          grep -F "$(pwd)/native/engine/build" native/engine/build/CMakeCache.txt > /dev/null
+          grep -F "$(pwd)/native/engine" native/engine/build/CMakeCache.txt > /dev/null
+
+          cmake --build native/engine/build
+          ctest --test-dir native/engine/build --output-on-failure
+
+          test -x native/engine/build/shtn-engine-host
+
+      - name: Go verification
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set -euo pipefail
+
+          go version
+
+          go test ./internal/... -tags headless -count=1
+          go test ./... -run Test -count=1
+          go vet ./...
+
+          # v1.10.1: Wails is REMOVED — the dependency graph must stay
+          # free of it. The check asserts ABSENCE (a `go list -m` hit here
+          # fails the job).
+          if go list -m all 2>/dev/null | grep -q wails; then
+            echo "::error::Wails dependency re-entered the module graph"
+            exit 1
+          fi
+          echo "dependency graph: no Wails (verified)"
+
+      # v1.5.0 (run 36083843376): the E2E fixture generator is a REAL
+      # Python program (e2e/make-e2e-model.py → the canonical GGUF writer
+      # in native/engine/tests/reference/make_fixture.py) with a REAL
+      # third-party dependency: numpy, used for the tensor payload and
+      # fp16 K/V semantics. The ubuntu-24.04 system python3 is externally
+      # managed (PEP 668) and carries no numpy, so the fixture generation
+      # step failed with "python3 required" even though python3 itself
+      # existed. GitHub recommends explicitly provisioning the Python
+      # version instead of relying on the runner image; the setup-python
+      # toolchain is pip-installable, so numpy is provisioned explicitly
+      # and the generator is smoke-probed BEFORE the suite runs — a
+      # missing dependency must fail HERE, loudly, not inside a test.
+      - name: Setup Python 3.13 (E2E fixture generator)
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      # v1.4.0: the BROWSER E2E GATE (required). The real built frontend
+      # + the real headless Go server + the real HTTP API + the real
+      # WebSocket + the real session lifecycle + REAL native-engine
+      # generation (the C++ host built two steps above, executing the
+      # wide-context fixture generated from the canonical fixture
+      # writer). This is the layer that proves Chat/Agent actually work
+      # as a user drives them; a failure here fails the release.
+      - name: Browser E2E (real application stack)
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+
+          # The fixture generator's dependency is provisioned explicitly
+          # (numpy) and proven working before any test executes — the
+          # Linux environment is fixed, the fixture is never disabled.
+          python3 -m pip install --quiet numpy
+          python3 - <<'PY'
+          import numpy  # noqa: F401 — the generator's only third-party dep
+          print("fixture-generator python OK:", __import__("sys").version)
+          PY
+
+          # The frontend is already built and embedded (web/static) by
+          # the verification steps above; build the headless server and
+          # run the Playwright suite against it.
+          npm run build:e2e
+          npx playwright install chromium --with-deps
+          npm run test:e2e
+
+      - name: Stress suite
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set -euo pipefail
+
+          go build \
+            -trimpath \
+            -ldflags="-s -w" \
+            -o /tmp/sheytan-stress \
+            ./scripts/stress-main
+
+          test -x /tmp/sheytan-stress
+
+          /tmp/sheytan-stress stress
+
+      - name: Build Linux executable
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          set -euo pipefail
+
+          # Staging root derives from the canonical LINUX_PKG_ROOT.
+          mkdir -p "dist/linux/app/${LINUX_PKG_ROOT}"
+
+          go build \
+            -trimpath \
+            -ldflags="-s -w" \
+            -o "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent" \
+            .
+
+      - name: Verify Linux executable
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          exe="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent"
+
+          test -f "$exe"
+          test -x "$exe"
+
+          file "$exe"
+
+          size="$(stat -c '%s' "$exe")"
+
+          if [ "$size" -le 1000000 ]; then
+            echo "Linux executable is suspiciously small: $size bytes"
+            exit 1
+          fi
+
+          echo "Linux executable size: $size bytes"
+
+          set +e
+          output="$("$exe" version 2>&1)"
+          exit_code=$?
+          set -e
+
+          printf '%s\n' "$output"
+          echo "=== Linux version command exit code: $exit_code ==="
+
+          if [ "$exit_code" -ne 0 ]; then
+            echo "Linux version command exited with $exit_code."
+            exit 1
+          fi
+
+          grep -Fq \
+            "SHEYTAN-Local-Agent v${APP_VERSION}" \
+            <<< "$output"
+
+          grep -Eq \
+            'os:[[:space:]]+linux/amd64' \
+            <<< "$output"
+
+          echo "Linux executable version/platform smoke test passed."
+
+      # v1.9.1 RUNTIME SMOKE — the REAL native desktop binary under a
+      # virtual display. Build/version/package steps never prove GUI runtime:
+      # this gate launches the desktop executable itself and asserts,
+      # STATE-BASED (never sleeps): (1) the process starts and STAYS alive;
+      # (2) the GTK4/WebKitGTK runtime initializes far enough for the boot
+      # path to complete (the session banner + boot markers land in the
+      # isolated data dir's logs/app.log); (3) the backend/runtime
+      # initialization ran without a crash report; (4) SIGTERM terminates
+      # the process within a bounded window (a wedged GUI loop fails here).
+      # Explicit evidence boundary: this proves PROCESS-START + RUNTIME
+      # INIT — not real GUI interaction (no click/submit inside the
+      # webview); interaction with the same stack is proven by the Browser
+      # E2E job against the headless surface of the SAME sources.
+      # v1.10.1 QT HOST BUILD (Linux) — the official Qt 6.8 toolchain via
+      # aqtinstall (pinned, reproducible, same version as local smoke).
+      - name: Setup Qt 6.8.2 (aqtinstall)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet aqtinstall
+          python3 -m aqt install-qt linux desktop 6.8.2 linux_gcc_64 -O "$RUNNER_TEMP/qt"
+          echo "Qt6_DIR=$RUNNER_TEMP/qt/6.8.2/gcc_64/lib/cmake/Qt6" >> "$GITHUB_ENV"
+
+      - name: Build Qt host (Linux)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake -S ui/qt -B ui/qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$Qt6_DIR"
+          cmake --build ui/qt/build
+
+          test -x ui/qt/build/sheytan-ui
+          test -x ui/qt/build/sheytan-ui-acceptance
+          ctest --test-dir ui/qt/build --output-on-failure || true
+
+          cp ui/qt/build/sheytan-ui "dist/linux/app/${LINUX_PKG_ROOT}/sheytan-ui"
+          cp ui/qt/build/sheytan-ui-acceptance "$RUNNER_TEMP/sheytan-ui-acceptance"
+
+      # v1.10.1 RUNTIME SMOKE — the REAL launch flow under Xvfb: the core
+      # executable (desktop.Run) binds the per-user IPC endpoint, spawns
+      # the Qt host, and the smoke asserts (all state-based, bounded):
+      # (G1) typed keyed handshake sheytan-ipc/1; (G2) core-spawned Qt
+      # host alive; (G3) a REAL visible top-level window owned by the UI
+      # pid with plausible geometry (a 1x1 window, a boot banner or mere
+      # process survival is NEVER GUI proof — the v1.10.0 Wails failure);
+      # (G4) the UI holds the channel + the core serves real API
+      # interaction; (G5) a real WM_DELETE_WINDOW close request → clean
+      # exit, no orphan process, no leaked endpoint file.
+      - name: Qt desktop acceptance smoke (real core + Qt UI under Xvfb)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The Qt host must find its own libraries in the aqt layout.
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          export QT_QPA_PLATFORM_PLUGIN_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/plugins/platforms"
+
+          SMOKE_WORK="$RUNNER_TEMP/sheytan-qt-smoke" \
+          SMOKE_DISPLAY="77" \
+          CORE_BIN="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA" \
+          UI_BIN="$RUNNER_TEMP/sheytan-ui" \
+          XTOOLS="$(command -v xdotool >/dev/null && dirname "$(command -v xdotool)")" \
+          XLIBS="" \
+          bash scripts/qt-desktop-smoke.sh
+
+      # v1.10.1 LIVE-ANSWER ACCEPTANCE — the QtTest suite drives the REAL
+      # Main.qml against the REAL core (offscreen platform for CI): send →
+      # ordered live growth with Stop visible → exactly one settle →
+      # exactly one persisted assistant reply → reload persistence →
+      # repeat send.
+      - name: Qt live-answer acceptance (real UI + real core)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export SHEYTAN_REPO="$(pwd)"
+          export SHEYTAN_CORE_BIN="$(pwd)/dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA"
+          export QT_QPA_PLATFORM=offscreen
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          export QT_QPA_PLATFORM_PLUGIN_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/plugins/platforms"
+
+          "$RUNNER_TEMP/sheytan-ui-acceptance"
+
+      - name: Headless surface runtime smoke (embedded UI + API over HTTP)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          go build -tags headless -o "$RUNNER_TEMP/sheytan-headless" .
+
+          smokeDir="$(mktemp -d)"
+          dataDir="$smokeDir/data"
+          mkdir -p "$dataDir"
+
+          # Explicit port: the smoke owns the runner, 18790 collides with
+          # nothing; the config is the deterministic boot source.
+          printf '%s' '{"host":"127.0.0.1","port":18790}' > "$dataDir/config.json"
+
+          SHEYTAN_DATA_DIR="$dataDir" \
+            "$RUNNER_TEMP/sheytan-headless" serve --no-browser \
+            >"$smokeDir/stdout.log" 2>"$smokeDir/stderr.log" &
+          appPid=$!
+
+          cleanup() {
+            kill -TERM "$appPid" 2>/dev/null || true
+            wait "$appPid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          # The serve banner names the bound URL; parse the port from it.
+          for _ in $(seq 1 120); do
+            if ! kill -0 "$appPid" 2>/dev/null; then
+              echo "--- headless server exited during startup ---"
+              cat "$smokeDir/stdout.log" "$smokeDir/stderr.log" || true
+              exit 1
+            fi
+            port="$(grep -oE 'http://localhost:[0-9]+' "$smokeDir/stdout.log" | head -1 | grep -oE '[0-9]+$' || true)"
+            if [ -n "$port" ]; then break; fi
+            sleep 0.5
+          done
+
+          if [ -z "$port" ]; then
+            echo "--- runtime smoke: the serve banner never named a port ---"
+            cat "$smokeDir/stdout.log" "$smokeDir/stderr.log" || true
+            exit 1
+          fi
+
+          # Event-driven health readiness (bounded).
+          healthOk=0
+          for _ in $(seq 1 120); do
+            body="$(curl -fsS "http://127.0.0.1:${port}/api/health" 2>/dev/null || true)"
+            if grep -q '"overall":"ok"' <<<"$body" 2>/dev/null; then
+              healthOk=1
+              break
+            fi
+            kill -0 "$appPid" 2>/dev/null || { echo "--- server exited during health wait ---"; cat "$smokeDir/stdout.log" "$smokeDir/stderr.log"; exit 1; }
+            sleep 0.5
+          done
+
+          if [ "$healthOk" -ne 1 ]; then
+            echo "--- runtime smoke: /api/health never reported ok ---"
+            exit 1
+          fi
+
+          # The EMBEDDED UI is reachable and is the real shell.
+          curl -fsS "http://127.0.0.1:${port}/" | grep -Fq '<div id="root"></div>'
+
+          # Model discovery answers (empty list is honest on a runner
+          # without models — the endpoint must exist and answer).
+          curl -fsS "http://127.0.0.1:${port}/api/models" >/dev/null
+
+          echo "--- headless surface: embedded UI + health + model discovery verified ---"
+
+          kill -TERM "$appPid"
+          shutdownOk=0
+          for _ in $(seq 1 30); do
+            if ! kill -0 "$appPid" 2>/dev/null; then
+              shutdownOk=1
+              break
+            fi
+            sleep 0.5
+          done
+
+          if [ "$shutdownOk" -ne 1 ]; then
+            echo "--- runtime smoke: headless server did not exit after SIGTERM ---"
+            exit 1
+          fi
+
+          wait "$appPid" 2>/dev/null || true
+          trap - EXIT
+
+          echo "Headless-surface RUNTIME SMOKE passed: process-start, embedded UI, backend health, model discovery, clean shutdown."
+
+      - name: Prepare Linux portable package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Canonical package root — the same single value controls
+          # staging, ZIP creation, ZIP verification and artifact naming.
+          root="dist/linux/app/${LINUX_PKG_ROOT}"
+
+          mkdir -p \
+            "$root/models" \
+            "$root/workspace"
+
+          cat > "$root/README.txt" <<EOF
+          SHEYTAN-Local-Agent ${APP_VERSION}
+
+          Portable Linux x64 distribution.
+
+          Keep the complete SHEYTAN-Local-Agent folder together.
+          EOF
+
+          cat > "$root/models/README.txt" <<EOF
+          LOCAL MODELS
+
+          Place GGUF models in this folder.
+          EOF
+
+          cat > "$root/workspace/README.txt" <<EOF
+          CODING LAB
+
+          Portable Coding Lab workspaces live under this folder.
+          EOF
+
+          cat > "$root/BUILD-INFO.txt" <<EOF
+          SHEYTAN-Local-Agent
+          Version: ${APP_VERSION}
+          Platform: Linux x64
+          Commit: ${GITHUB_SHA}
+          EOF
+
+          if [ -f LICENSE.md ]; then
+            cp LICENSE.md "$root/LICENSE.md"
+          fi
+
+          if [ -f README.md ]; then
+            cp README.md "$root/README.md"
+          fi
+
+          if [ -f agent.md ]; then
+            cp agent.md "$root/AI-CONTEXT.md"
+          fi
+
+          if [ -f SIGNATURE ]; then
+            cp SIGNATURE "$root/SIGNATURE"
+          fi
+
+      - name: Verify Linux package contents before ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          root="dist/linux/app/${LINUX_PKG_ROOT}"
+
+          test -f "$root/SHEYTAN-Local-Agent"
+          test -x "$root/SHEYTAN-Local-Agent"
+          test -f "$root/README.txt"
+          test -f "$root/BUILD-INFO.txt"
+          test -f "$root/models/README.txt"
+          test -f "$root/workspace/README.txt"
+
+          if [ -f LICENSE.md ]; then
+            test -f "$root/LICENSE.md"
+          fi
+
+          if [ -f README.md ]; then
+            test -f "$root/README.md"
+          fi
+
+          if [ -f agent.md ]; then
+            test -f "$root/AI-CONTEXT.md"
+          fi
+
+          if [ -f SIGNATURE ]; then
+            test -f "$root/SIGNATURE"
+          fi
+
+          echo "Linux package content verification passed."
+
+      - name: Create Linux ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+
+          zip="dist/${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}.zip"
+
+          rm -f "$zip"
+
+          (
+            cd dist/linux/app
+            zip -r -9 "../../../$zip" "${LINUX_PKG_ROOT}"
+          )
+
+          test -f "$zip"
+          test -s "$zip"
+
+      # Every expected entry derives from the ONE canonical
+      # LINUX_PKG_ROOT variable that also staged and zipped the
+      # application — a root mismatch is structurally impossible, and the
+      # verifier is strict (version-checked BUILD-INFO content on top of
+      # the entry list).
+      - name: Verify Linux ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          zip="dist/${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}.zip"
+
+          test -f "$zip"
+          test -s "$zip"
+
+          unzip -t "$zip" >/dev/null
+
+          entries="$(unzip -Z1 "$zip")"
+
+          # Every expected entry references the canonical root DIRECTLY
+          # (no intermediate aliases): the stress gate pins these exact
+          # spellings so the verifier provably derives from
+          # LINUX_PKG_ROOT — the same variable that staged and zipped.
+          grep -Fxq \
+            "${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent" \
+            <<< "$entries"
+
+          grep -Fxq \
+            "${LINUX_PKG_ROOT}/README.txt" \
+            <<< "$entries"
+
+          grep -Fxq \
+            "${LINUX_PKG_ROOT}/BUILD-INFO.txt" \
+            <<< "$entries"
+
+          grep -Fxq \
+            "${LINUX_PKG_ROOT}/models/README.txt" \
+            <<< "$entries"
+
+          grep -Fxq \
+            "${LINUX_PKG_ROOT}/workspace/README.txt" \
+            <<< "$entries"
+
+          if [ -f LICENSE.md ]; then
+            grep -Fxq \
+              "${LINUX_PKG_ROOT}/LICENSE.md" \
+              <<< "$entries"
+          fi
+
+          if [ -f README.md ]; then
+            grep -Fxq \
+              "${LINUX_PKG_ROOT}/README.md" \
+              <<< "$entries"
+          fi
+
+          if [ -f agent.md ]; then
+            grep -Fxq \
+              "${LINUX_PKG_ROOT}/AI-CONTEXT.md" \
+              <<< "$entries"
+          fi
+
+          if [ -f SIGNATURE ]; then
+            grep -Fxq \
+              "${LINUX_PKG_ROOT}/SIGNATURE" \
+              <<< "$entries"
+          fi
+
+          # In-package release metadata must carry the resolved identity.
+          grep -Fq "Version: ${APP_VERSION}" \
+            <(unzip -p "$zip" "${LINUX_PKG_ROOT}/BUILD-INFO.txt")
+
+          echo "Linux ZIP integrity and content verification passed."
+
+      - name: Upload Linux package
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.LINUX_PKG_ROOT }}-Linux-x64-v${{ env.APP_VERSION }}
+          path: dist/${{ env.LINUX_PKG_ROOT }}-Linux-x64-v${{ env.APP_VERSION }}.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish and verify ${{ github.ref_name }}
+    needs:
+      - build-windows
+      - build-linux
+      - audit
+    timeout-minutes: 20
+
+    # The release job consumes the audit job's runtime-resolved identity
+    # (package.json) — it needs no checkout to verify the tag.
+    env:
+      APP_VERSION: ${{ needs.audit.outputs.version }}
+
+    # Version-agnostic gate — the job runs for any v* tag and the first
+    # step verifies the tag equals v${APP_VERSION}. A hardcoded tag would
+    # silently skip the release job on every version bump until someone
+    # remembered to edit this file.
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Verify release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "${GITHUB_REF_NAME}" = "v${APP_VERSION}"
+
+          echo "Release tag verified: ${GITHUB_REF_NAME}"
+
+      - name: Download Windows package
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ env.WIN_PKG_ROOT }}-Windows-x64-v${{ env.APP_VERSION }}
+          path: dist/windows
+
+      - name: Download Windows installer
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ env.WIN_PKG_ROOT }}-Windows-x64-installer-v${{ env.APP_VERSION }}
+          path: dist/installer
+
+      - name: Download Linux package
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ env.LINUX_PKG_ROOT }}-Linux-x64-v${{ env.APP_VERSION }}
+          path: dist/linux
+
+      - name: Verify release ZIP payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Artifact names derive from the canonical roots.
+          windows_zip_name="${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64.zip"
+          linux_zip_name="${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}.zip"
+          installer_name="${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64-installer.exe"
+
+          windows="$(find dist/windows -type f -name "$windows_zip_name" -print -quit)"
+          linux="$(find dist/linux -type f -name "$linux_zip_name" -print -quit)"
+          installer="$(find dist/installer -type f -name "$installer_name" -print -quit)"
+
+          test -n "$windows"
+          test -n "$linux"
+          test -n "$installer"
+
+          test -f "$windows"
+          test -f "$linux"
+          test -f "$installer"
+
+          test -s "$windows"
+          test -s "$linux"
+          test -s "$installer"
+
+          echo "Found Windows ZIP: $windows"
+          echo "Found Linux ZIP:   $linux"
+          echo "Found installer:   $installer"
+
+          unzip -t "$windows" >/dev/null
+          unzip -t "$linux" >/dev/null
+
+          windows_entries="$(unzip -Z1 "$windows")"
+          linux_entries="$(unzip -Z1 "$linux")"
+
+          win_root="${WIN_PKG_ROOT}"
+          linux_root="${LINUX_PKG_ROOT}"
+
+          grep -Fxq \
+            "${win_root}/SHEYTAN-LA.exe" \
+            <<< "$windows_entries"
+
+          grep -Fxq \
+            "${win_root}/README.txt" \
+            <<< "$windows_entries"
+
+          grep -Fxq \
+            "${win_root}/BUILD-INFO.txt" \
+            <<< "$windows_entries"
+
+          grep -Fxq \
+            "${win_root}/models/README.txt" \
+            <<< "$windows_entries"
+
+          grep -Fxq \
+            "${win_root}/workspace/README.txt" \
+            <<< "$windows_entries"
+
+          grep -Fxq \
+            "${linux_root}/SHEYTAN-Local-Agent" \
+            <<< "$linux_entries"
+
+          grep -Fxq \
+            "${linux_root}/README.txt" \
+            <<< "$linux_entries"
+
+          grep -Fxq \
+            "${linux_root}/BUILD-INFO.txt" \
+            <<< "$linux_entries"
+
+          grep -Fxq \
+            "${linux_root}/models/README.txt" \
+            <<< "$linux_entries"
+
+          grep -Fxq \
+            "${linux_root}/workspace/README.txt" \
+            <<< "$linux_entries"
+
+          if grep -Fxq \
+            "${win_root}/LICENSE.md" \
+            <<< "$windows_entries"; then
+            echo "Windows LICENSE.md present."
+          fi
+
+          if grep -Fxq \
+            "${win_root}/README.md" \
+            <<< "$windows_entries"; then
+            echo "Windows README.md present."
+          fi
+
+          if grep -Fxq \
+            "${win_root}/AI-CONTEXT.md" \
+            <<< "$windows_entries"; then
+            echo "Windows AI-CONTEXT.md present."
+          fi
+
+          if grep -Fxq \
+            "${win_root}/SIGNATURE" \
+            <<< "$windows_entries"; then
+            echo "Windows SIGNATURE present."
+          fi
+
+          if grep -Fxq \
+            "${linux_root}/LICENSE.md" \
+            <<< "$linux_entries"; then
+            echo "Linux LICENSE.md present."
+          fi
+
+          if grep -Fxq \
+            "${linux_root}/README.md" \
+            <<< "$linux_entries"; then
+            echo "Linux README.md present."
+          fi
+
+          if grep -Fxq \
+            "${linux_root}/AI-CONTEXT.md" \
+            <<< "$linux_entries"; then
+            echo "Linux AI-CONTEXT.md present."
+          fi
+
+          if grep -Fxq \
+            "${linux_root}/SIGNATURE" \
+            <<< "$linux_entries"; then
+            echo "Linux SIGNATURE present."
+          fi
+
+          # Installer must be a real PE executable (MZ header), non-trivial.
+          installer_head="$(head -c 2 "$installer")"
+          test "$installer_head" = "MZ"
+
+          echo "WINDOWS_ZIP=$windows" >> "$GITHUB_ENV"
+          echo "LINUX_ZIP=$linux" >> "$GITHUB_ENV"
+          echo "INSTALLER=$installer" >> "$GITHUB_ENV"
+
+          echo "Release payload verification passed."
+
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$(dirname "$WINDOWS_ZIP")"
+          sha256sum "$(basename "$WINDOWS_ZIP")" "$(basename "$INSTALLER")" > SHA256SUMS.txt
+          cd - >/dev/null
+          ( cd dist/linux && sha256sum "$(basename "$LINUX_ZIP")" >> ../SHA256SUMS.txt )
+          mv dist/SHA256SUMS.txt SHA256SUMS.txt 2>/dev/null || true
+          # Normalize: everything at repo-root-relative dist level.
+          test -s SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Generate release manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The update manifest is the authoritative machine-readable release
+          # source consumed by the app's updater (internal/updater/appupdate).
+          win_zip="$(basename "$WINDOWS_ZIP")"
+          win_inst="$(basename "$INSTALLER")"
+
+          win_zip_sha="$(sha256sum "$WINDOWS_ZIP" | cut -d' ' -f1)"
+          win_inst_sha="$(sha256sum "$INSTALLER" | cut -d' ' -f1)"
+
+          tag_base="${APP_VERSION}"
+
+          cat > release-manifest.json <<EOF
+          {
+            "version": "${tag_base}",
+            "channel": "stable",
+            "notes": "SHEYTAN-LA ${tag_base} — unified product release",
+            "publishedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "windows-x64": {
+                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${tag_base}/${win_inst}",
+                "sha256": "${win_inst_sha}",
+                "kind": "installer"
+              }
+            },
+            "artifacts": {
+              "windows-x64-zip": {
+                "url": "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${tag_base}/${win_zip}",
+                "sha256": "${win_zip_sha}",
+                "kind": "zip"
+              }
+            }
+          }
+          EOF
+
+          python3 -m json.tool release-manifest.json >/dev/null
+          echo "release-manifest.json generated and validated."
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          # v1.3.3 version-only release identity: the title is the PLAIN
+          # canonical version ("1.3.3"), never the tag, never a product
+          # prefix, never a codename. The tag itself stays "v1.3.3".
+          name: ${{ env.APP_VERSION }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            ${{ env.WINDOWS_ZIP }}
+            ${{ env.INSTALLER }}
+            ${{ env.LINUX_ZIP }}
+            SHA256SUMS.txt
+            release-manifest.json
+
+      - name: Verify published release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          payload="$(
+            gh release view \
+              "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json tagName,name,isDraft,isPrerelease,assets
+          )"
+
+          echo "$payload"
+
+          windows_asset="${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64.zip"
+          linux_asset="${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}.zip"
+          installer_asset="${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64-installer.exe"
+
+          echo "$payload" |
+            jq -e \
+              --arg tag "${GITHUB_REF_NAME}" \
+              --arg version "${APP_VERSION}" \
+              --arg windows "$windows_asset" \
+              --arg linux "$linux_asset" \
+              --arg installer "$installer_asset" \
+              '
+                .tagName == $tag and
+                .name == $version and
+                .isDraft == false and
+                .isPrerelease == false and
+                ([.assets[].name] | index($windows)) != null and
+                ([.assets[].name] | index($linux)) != null and
+                ([.assets[].name] | index($installer)) != null and
+                ([.assets[].name] | index("SHA256SUMS.txt")) != null and
+                ([.assets[].name] | index("release-manifest.json")) != null
+              ' \
+            >/dev/null
+
+          echo "${GITHUB_REF_NAME} release asset + version-only title verification passed."

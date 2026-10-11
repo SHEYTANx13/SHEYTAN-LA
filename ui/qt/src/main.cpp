@@ -1,0 +1,59 @@
+// main.cpp — the Qt Quick/QML desktop host entry point.
+//
+// The UI is an IPC CLIENT of the Go core (sheytan-ipc/1): endpoint and
+// ephemeral key arrive through the environment set by the Go launcher
+// (internal/desktop). A developer override (SHEYTAN_IPC_ENDPOINT /
+// SHEYTAN_IPC_KEY on the command line) exists for local runs only.
+#include <QGuiApplication>
+#include <QQmlApplicationEngine>
+#include <QQuickStyle>
+#include <QCommandLineParser>
+#include <QUrl>
+
+#include "coreclient.h"
+
+int main(int argc, char *argv[]) {
+    QGuiApplication app(argc, argv);
+    QGuiApplication::setApplicationName(QStringLiteral("SHEYTAN Local Agent"));
+    QGuiApplication::setApplicationVersion(QStringLiteral("1.10.1"));
+    QGuiApplication::setOrganizationName(QStringLiteral("Parsaetak"));
+
+    QQuickStyle::setStyle(QStringLiteral("Basic"));
+
+    QCommandLineParser parser;
+    parser.setApplicationDescription(QStringLiteral("SHEYTAN Local Agent — Qt desktop host"));
+    parser.addHelpOption();
+    parser.addOptions({
+        {{"e", "endpoint"}, QStringLiteral("Local IPC endpoint (socket path or pipe name)"),
+         QStringLiteral("endpoint")},
+        {{"k", "key"}, QStringLiteral("Ephemeral handshake key"), QStringLiteral("key")},
+    });
+    parser.process(app);
+
+    const QString endpoint = parser.value("endpoint").isEmpty()
+                                 ? qEnvironmentVariable("SHEYTAN_IPC_ENDPOINT")
+                                 : parser.value("endpoint");
+    const QString key = parser.value("key").isEmpty()
+                            ? qEnvironmentVariable("SHEYTAN_IPC_KEY")
+                            : parser.value("key");
+
+    qmlRegisterSingletonInstance("sheytan.ui", 1, 0, "Core", new CoreClient());
+
+    QQmlApplicationEngine engine;
+    const QUrl url(QStringLiteral("qrc:/qml/Main.qml"));
+    QObject::connect(
+        &engine, &QQmlApplicationEngine::objectCreationFailed, &app,
+        []() { QCoreApplication::exit(1); }, Qt::QueuedConnection);
+    engine.load(url);
+
+    if (engine.rootObjects().isEmpty()) return 1;
+
+    // The QML main view calls Core.connectToCore(endpoint, key) on
+    // Component.completed with the resolved values.
+    if (!endpoint.isEmpty()) {
+        engine.rootObjects().first()->setProperty("ipcEndpoint", endpoint);
+        engine.rootObjects().first()->setProperty("ipcKey", key);
+    }
+
+    return app.exec();
+}

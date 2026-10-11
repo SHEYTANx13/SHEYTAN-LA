@@ -1,0 +1,5 @@
+# Prettier must not touch generated build output or vendored code.
+node_modules/
+dist/
+web/static/
+package-lock.json

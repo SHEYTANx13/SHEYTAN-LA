@@ -1,0 +1,79 @@
+# SHEYTAN-Local-Agent — build & runtime artifacts
+# Source is Go; everything below is generated at build or run time.
+#
+# ⚠ v1.0.11 LESSON — KEEP THE LEADING SLASHES:
+# Runtime data dirs are created NEXT TO THE EXE (repo root in dev). The
+# leading "/" anchors them to the repo root ONLY. Without it, the unanchored
+# `sessions/` and `sandbox/` patterns ALSO matched internal/sessions/ and
+# internal/sandbox/ — the two packages silently never got committed, which
+# is exactly what broke the v1.0.9 and v1.0.10 CI builds. A regression test
+# (internal/releasegate) now fails the build if a pattern swallows source.
+# The same gate runs in GitHub Actions via `go test ./internal/...`.
+
+# Build outputs
+/dist-stage/
+# /build/ receives GENERATED artifacts (icon-preview.png from gen-syso,
+# shot dirs from tooling) — but build/config.yml is committed Wails source
+# metadata that CI audits (release-version.mjs + workflow grep). Ignore the
+# directory CONTENTS, then re-include the one source file. A blanket `/build/`
+# is what silently swallowed build/config.yml and broke the v1.1.2 CI runs:
+# the file existed on disk, `git add .` skipped it, and GitHub got ENOENT.
+/build/*
+!/build/config.yml
+# 1.1.6 §12: the multi-resolution brand icon is committed packaging
+# metadata (regenerated deterministically by scripts/gen-syso).
+!/build/sheytan.ico
+*.exe
+*.syso
+*.zip
+/local-agent
+/build.log
+/build1.log
+
+# Runtime data (portable app creates these next to the exe — repo root only)
+/models/
+/workspace/
+/charts/
+/sessions/
+/logs/
+/browser-profile/
+/sandbox/
+/data/
+/config.json
+/installed.json
+
+# Test-generated artifacts land under /build/ (covered above).
+
+# Go tooling
+*.test
+*.out
+coverage.*
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Vite build output (synced into web/static at build time)
+/dist/
+
+# v1.1.5: C++ native engine build artifacts (CMake/Make output — the
+# shtn-engine-host binary is a build product, never a source file)
+/native/engine/build/
+
+# Node frontend dependencies (npm install — root only, never commit)
+/node_modules/
+
+# Go module cache/proxies pulled by local tooling
+/vendor/
+
+# v1.4.0: browser E2E build products and per-run artifacts (the server
+# binary is built by npm run build:e2e; .artifacts holds the isolated
+# per-run stacks, traces and screenshots)
+/e2e/.build/
+/e2e/.artifacts/
+
+# v1.10.1: the Qt host's local CMake build tree (CI builds it fresh).
+ui/qt/build/
