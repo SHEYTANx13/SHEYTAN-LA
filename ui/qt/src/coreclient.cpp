@@ -208,6 +208,7 @@ void CoreClient::connectToCore(const QString &endpoint, const QString &key) {
                     emit handshakeDone();
                     emit connectedChanged();
                     refreshSessions();
+                    refreshSystems();
                     openActivityStream();
                 } else if (status == 200 && ok) {
                     setError(QStringLiteral("protocol mismatch: core speaks %1/%2, UI requires sheytan-ipc/1")
@@ -334,6 +335,37 @@ void CoreClient::patchConfig(const QVariantMap &patch) {
     request("POST", "/api/config", QJsonDocument(QJsonObject::fromVariantMap(patch)).toJson(),
             [this](int status, const QByteArray &) {
                 if (status != 200) setError(QStringLiteral("config update failed (status %1)").arg(status));
+            });
+}
+
+// --- AI Systems (pure IPC client of the ONE Go store) ----------------------
+
+void CoreClient::refreshSystems() {
+    request("GET", "/api/systems", QByteArray(), [this](int status, const QByteArray &body) {
+        if (status != 200) return;
+        bool ok = false;
+        const QVariantMap m = toMap(body, &ok);
+        if (!ok) return;
+        m_systems = m.value("systems").toList();
+        const QString active = m.value("activeSystemId").toString();
+        if (active != m_activeSystemId) {
+            m_activeSystemId = active;
+            emit activeSystemIdChanged();
+        }
+        emit systemsChanged();
+    });
+}
+
+void CoreClient::activateSystem(const QString &id) {
+    if (id.isEmpty()) return;
+    request("POST", QStringLiteral("/api/systems/%1/activate").arg(id), QByteArray(),
+            [this, id](int status, const QByteArray &) {
+                if (status != 200) {
+                    setError(QStringLiteral("system activation failed (status %1)").arg(status));
+                    return;
+                }
+                // The store is the authority: re-read the list + active id.
+                refreshSystems();
             });
 }
 

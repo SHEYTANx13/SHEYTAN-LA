@@ -26,6 +26,11 @@ class CoreClient : public QObject {
     Q_PROPERTY(QVariantList sessions READ sessions NOTIFY sessionsChanged)
     Q_PROPERTY(QVariantMap currentSession READ currentSession NOTIFY currentSessionChanged)
     Q_PROPERTY(QVariantList messages READ messages NOTIFY messagesChanged)
+    // AI Systems surface (v1.10.2): a pure IPC client of the ONE Go store
+    // (/api/systems). List + activation only — validation, persistence and
+    // the reserved default stay server-owned; no second authority here.
+    Q_PROPERTY(QVariantList systems READ systems NOTIFY systemsChanged)
+    Q_PROPERTY(QString activeSystemId READ activeSystemId NOTIFY activeSystemIdChanged)
     Q_PROPERTY(bool canStop READ canStop NOTIFY busyChanged)
 
 public:
@@ -42,6 +47,8 @@ public:
     Q_INVOKABLE void stop();
     Q_INVOKABLE void refreshConfig();
     Q_INVOKABLE void patchConfig(const QVariantMap &patch);
+    Q_INVOKABLE void refreshSystems();
+    Q_INVOKABLE void activateSystem(const QString &id);
     Q_INVOKABLE void refreshApprovals();
     Q_INVOKABLE void resolveApproval(const QString &id, bool approve);
 
@@ -55,6 +62,8 @@ public:
     QVariantList sessions() const { return m_sessions; }
     QVariantMap currentSession() const { return m_currentSession; }
     QVariantList messages() const { return m_messages; }
+    QVariantList systems() const { return m_systems; }
+    QString activeSystemId() const { return m_activeSystemId; }
     bool canStop() const { return m_busy; }
 
 signals:
@@ -68,6 +77,8 @@ signals:
     void sessionsChanged();
     void currentSessionChanged();
     void messagesChanged();
+    void systemsChanged();
+    void activeSystemIdChanged();
     void settled(const QString &outcome, const QString &caption);
 
 private:
@@ -102,6 +113,8 @@ private:
     QVariantList m_sessions;
     QVariantMap m_currentSession;
     QVariantList m_messages;
+    QVariantList m_systems;
+    QString m_activeSystemId;
 
     // activity WS state
     QLocalSocket *m_wsSock = nullptr;

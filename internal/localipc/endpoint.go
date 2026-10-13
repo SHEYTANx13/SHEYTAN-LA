@@ -29,43 +29,53 @@
 package localipc
 
 import (
-	"crypto/rand"
-	"encoding/hex"
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
+        "crypto/rand"
+        "encoding/hex"
+        "errors"
+        "fmt"
+        "os"
+        "path/filepath"
+        "runtime"
+        "strings"
 )
 
 // ProtocolName / ProtocolVersion are the typed handshake identity. Bump
 // ProtocolVersion whenever the wire contract changes shape; the Qt host
 // refuses a mismatched core instead of guessing.
 const (
-	ProtocolName    = "sheytan-ipc"
-	ProtocolVersion = 1
+        ProtocolName    = "sheytan-ipc"
+        ProtocolVersion = 1
 )
 
 // Environment variables passed by the desktop launcher to the UI process.
 const (
-	// EnvEndpoint is the full endpoint string (socket path or pipe name).
-	EnvEndpoint = "SHEYTAN_IPC_ENDPOINT"
-	// EnvKey is the ephemeral handshake key. Never logged, never persisted.
-	EnvKey = "SHEYTAN_IPC_KEY"
+        // EnvEndpoint is the full endpoint string (socket path or pipe name).
+        EnvEndpoint = "SHEYTAN_IPC_ENDPOINT"
+        // EnvKey is the ephemeral handshake key. Never logged, never persisted.
+        EnvKey = "SHEYTAN_IPC_KEY"
 )
 
 // ErrUnauthorized is returned when a peer fails the transport-level
 // identity check (foreign uid on Unix, foreign SID on Windows).
 var ErrUnauthorized = errors.New("localipc: peer identity rejected")
 
+// credAllowed is the pure Unix identity decision, separated so the deny
+// path is unit-testable without forging kernel credentials. It lives in
+// the platform-neutral file (not listener_unix.go) so the contract tests
+// compile on every platform — on Windows the named-pipe DACL plus the
+// post-connect client-SID check own the identity boundary and this
+// helper is simply unused by the transport.
+func credAllowed(uid int) bool {
+        return uid == os.Getuid()
+}
+
 // NewKey returns a fresh 128-bit hex handshake key.
 func NewKey() (string, error) {
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("localipc: handshake key: %w", err)
-	}
-	return hex.EncodeToString(buf), nil
+        buf := make([]byte, 16)
+        if _, err := rand.Read(buf); err != nil {
+                return "", fmt.Errorf("localipc: handshake key: %w", err)
+        }
+        return hex.EncodeToString(buf), nil
 }
 
 // Endpoint returns the per-user local endpoint for the desktop channel and
@@ -75,55 +85,55 @@ func NewKey() (string, error) {
 // so two accounts on one machine can never collide. The socket directory is
 // created with mode 0700: only the current user can even see the path.
 func Endpoint() (endpoint string, dir string, err error) {
-	if runtime.GOOS == "windows" {
-		user := strings.TrimSpace(os.Getenv("USERNAME"))
-		if user == "" {
-			user = "user"
-		}
-		// Pipe names are case-insensitive and flat; keep the character set
-		// conservative (letters, digits, dash).
-		var b strings.Builder
-		for _, r := range strings.ToLower(user) {
-			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '.' {
-				b.WriteRune(r)
-			}
-		}
-		name := b.String()
-		if name == "" {
-			name = "user"
-		}
-		return fmt.Sprintf(`\\.\pipe\sheytan-la-%s-core`, name), "", nil
-	}
+        if runtime.GOOS == "windows" {
+                user := strings.TrimSpace(os.Getenv("USERNAME"))
+                if user == "" {
+                        user = "user"
+                }
+                // Pipe names are case-insensitive and flat; keep the character set
+                // conservative (letters, digits, dash).
+                var b strings.Builder
+                for _, r := range strings.ToLower(user) {
+                        if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '.' {
+                                b.WriteRune(r)
+                        }
+                }
+                name := b.String()
+                if name == "" {
+                        name = "user"
+                }
+                return fmt.Sprintf(`\\.\pipe\sheytan-la-%s-core`, name), "", nil
+        }
 
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
-		return "", "", fmt.Errorf("localipc: unsupported platform %q", runtime.GOOS)
-	}
+        if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+                return "", "", fmt.Errorf("localipc: unsupported platform %q", runtime.GOOS)
+        }
 
-	if runtime0700 := os.Getenv("XDG_RUNTIME_DIR"); runtime0700 != "" {
-		dir = filepath.Join(runtime0700, "sheytan-la")
-	} else {
-		// Fall back to the system temp dir; the directory itself is created
-		// 0700 owned by the current user, which preserves the boundary.
-		base := os.TempDir()
-		dir = filepath.Join(base, fmt.Sprintf("sheytan-la-%d", os.Getuid()))
-	}
+        if runtime0700 := os.Getenv("XDG_RUNTIME_DIR"); runtime0700 != "" {
+                dir = filepath.Join(runtime0700, "sheytan-la")
+        } else {
+                // Fall back to the system temp dir; the directory itself is created
+                // 0700 owned by the current user, which preserves the boundary.
+                base := os.TempDir()
+                dir = filepath.Join(base, fmt.Sprintf("sheytan-la-%d", os.Getuid()))
+        }
 
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", "", fmt.Errorf("localipc: endpoint directory: %w", err)
-	}
+        if err := os.MkdirAll(dir, 0o700); err != nil {
+                return "", "", fmt.Errorf("localipc: endpoint directory: %w", err)
+        }
 
-	// Defensive: if the directory already existed with a wider mode, tighten
-	// it. A world-visible socket directory would leak the endpoint path and
-	// invite pre-emption (stale-endpoint squatting).
-	if st, statErr := os.Stat(dir); statErr == nil {
-		if st.Mode().Perm() != 0o700 {
-			if chErr := os.Chmod(dir, 0o700); chErr != nil {
-				return "", "", fmt.Errorf("localipc: tighten endpoint directory mode: %w", chErr)
-			}
-		}
-	}
+        // Defensive: if the directory already existed with a wider mode, tighten
+        // it. A world-visible socket directory would leak the endpoint path and
+        // invite pre-emption (stale-endpoint squatting).
+        if st, statErr := os.Stat(dir); statErr == nil {
+                if st.Mode().Perm() != 0o700 {
+                        if chErr := os.Chmod(dir, 0o700); chErr != nil {
+                                return "", "", fmt.Errorf("localipc: tighten endpoint directory mode: %w", chErr)
+                        }
+                }
+        }
 
-	return filepath.Join(dir, "core.sock"), dir, nil
+        return filepath.Join(dir, "core.sock"), dir, nil
 }
 
 // cleanStaleEndpoint removes a leftover socket file that no live core is
@@ -132,23 +142,23 @@ func Endpoint() (endpoint string, dir string, err error) {
 // exist there is nothing to do (true); if connecting fails with a
 // connection error the file is stale and is removed (true).
 func cleanStaleEndpoint(endpoint string) (removed bool, err error) {
-	if runtime.GOOS == "windows" {
-		// Named pipes vanish with their last handle; nothing to clean.
-		return false, nil
-	}
+        if runtime.GOOS == "windows" {
+                // Named pipes vanish with their last handle; nothing to clean.
+                return false, nil
+        }
 
-	conn, dialErr := dialEndpoint(endpoint)
-	if dialErr == nil {
-		_ = conn.Close()
-		return false, nil // live core — never touch
-	}
+        conn, dialErr := dialEndpoint(endpoint)
+        if dialErr == nil {
+                _ = conn.Close()
+                return false, nil // live core — never touch
+        }
 
-	if os.IsNotExist(dialErr) {
-		return false, nil
-	}
+        if os.IsNotExist(dialErr) {
+                return false, nil
+        }
 
-	if rmErr := os.Remove(endpoint); rmErr != nil && !os.IsNotExist(rmErr) {
-		return false, fmt.Errorf("localipc: remove stale endpoint: %w", rmErr)
-	}
-	return true, nil
+        if rmErr := os.Remove(endpoint); rmErr != nil && !os.IsNotExist(rmErr) {
+                return false, fmt.Errorf("localipc: remove stale endpoint: %w", rmErr)
+        }
+        return true, nil
 }

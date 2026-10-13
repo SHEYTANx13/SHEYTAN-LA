@@ -159,3 +159,109 @@ func TestReportShowsNotMeasuredWithReasons(t *testing.T) {
 		t.Fatal("the report must carry the release")
 	}
 }
+
+// --- v1.10.2 fail-closed host classification -------------------------------
+
+func TestValidateHostClassRejectsEmptyAndUnknown(t *testing.T) {
+        if err := ValidateHostClass(""); err == nil {
+                t.Fatal("empty host class must be refused (fail-closed: nothing is assumed)")
+        }
+        if err := ValidateHostClass("Hosted"); err == nil {
+                t.Fatal("unknown class casing must be refused")
+        }
+        if err := ValidateHostClass("physical"); err != nil {
+                t.Fatalf("physical must be accepted: %v", err)
+        }
+        if err := ValidateHostClass("hosted"); err != nil {
+                t.Fatalf("hosted must be accepted: %v", err)
+        }
+}
+
+func TestCheckHostClassificationRefusesPhysicalOverHostedEvidence(t *testing.T) {
+        // The dangerous direction: a hosted runner declaring physical.
+        err := CheckHostClassification(HostClassPhysical, []string{"GITHUB_ACTIONS"})
+        if err == nil {
+                t.Fatal("physical claim over hosted-CI evidence must be REFUSED")
+        }
+        if !strings.Contains(err.Error(), "fail-closed") {
+                t.Fatalf("refusal must state the fail-closed contract, got: %v", err)
+        }
+
+        // Under-claiming is always safe.
+        if err := CheckHostClassification(HostClassHosted, []string{"GITHUB_ACTIONS"}); err != nil {
+                t.Fatalf("hosted over hosted evidence must be accepted: %v", err)
+        }
+        if err := CheckHostClassification(HostClassHosted, nil); err != nil {
+                t.Fatalf("hosted without evidence must be accepted: %v", err)
+        }
+
+        // Physical without markers is accepted but the artifact still
+        // carries the (empty) evidence list for the reader to judge.
+        if err := CheckHostClassification(HostClassPhysical, nil); err != nil {
+                t.Fatalf("physical without evidence must be accepted: %v", err)
+        }
+}
+
+func TestDetectHostEvidenceFindsMarkers(t *testing.T) {
+        t.Setenv("GITHUB_ACTIONS", "true")
+        t.Setenv("CI", "1")
+
+        found := DetectHostEvidence()
+        has := func(name string) bool {
+                for _, f := range found {
+                        if f == name {
+                                return true
+                        }
+                }
+                return false
+        }
+        if !has("GITHUB_ACTIONS") || !has("CI") {
+                t.Fatalf("evidence = %v, want GITHUB_ACTIONS and CI present", found)
+        }
+        if len(found) != 2 {
+                t.Fatalf("evidence must contain exactly the set markers, got %v", found)
+        }
+}
+
+func TestEnvelopeCarriesHostClassification(t *testing.T) {
+        env := NewEnvelope()
+        env.HostClass = HostClassHosted
+        env.HostEvidence = []string{"GITHUB_ACTIONS"}
+        env.RAMMB = 8192
+        env.Hostname = "runner-1"
+
+        raw, err := env.JSON()
+        if err != nil {
+                t.Fatalf("json: %v", err)
+        }
+
+        var back Envelope
+        if err := json.Unmarshal(raw, &back); err != nil {
+                t.Fatalf("unmarshal: %v", err)
+        }
+        if back.HostClass != HostClassHosted {
+                t.Fatalf("hostClass = %q, want %q", back.HostClass, HostClassHosted)
+        }
+        if len(back.HostEvidence) != 1 || back.HostEvidence[0] != "GITHUB_ACTIONS" {
+                t.Fatalf("hostEvidence = %v, want [GITHUB_ACTIONS]", back.HostEvidence)
+        }
+        if !back.HostedCI {
+                t.Fatal("hostedCI must stay true for hosted artifacts (schema compat)")
+        }
+        if back.RAMMB != 8192 || back.Hostname != "runner-1" {
+                t.Fatalf("ram/hostname lost in round-trip: %v %q", back.RAMMB, back.Hostname)
+        }
+
+        // Physical artifact: hostedCI false, evidence empty but present.
+        env2 := NewEnvelope()
+        env2.HostClass = HostClassPhysical
+        raw2, _ := env2.JSON()
+        var back2 Envelope
+        _ = json.Unmarshal(raw2, &back2)
+        if back2.HostedCI {
+                t.Fatal("physical artifact must carry hostedCI=false")
+        }
+        if back2.HostClass != HostClassPhysical {
+                t.Fatalf("hostClass = %q, want physical", back2.HostClass)
+        }
+}

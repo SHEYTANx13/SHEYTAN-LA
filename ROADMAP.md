@@ -19,7 +19,7 @@ Motto: **"The model proposes. The tools execute. The laboratory verifies."**
 
 ## Shipped baseline (compact)
 
-**v1.10.1 is the shipped baseline; release evidence is in changelog.md.**
+**v1.10.2 is the shipped baseline; release evidence is in changelog.md.**
 
 v1.8 delivered, with per-release evidence in `changelog.md`: the adaptive
 runtime (task classification, tier system, context planning), the staged
@@ -92,6 +92,11 @@ documentation only, nothing ships.
 Instrument: `internal/perf` + `cmd/shtn-perf` (shipped). Done: the
 hosted-CI posture captured (cold start, idle/peak memory measured;
 generation-path metrics honestly NOT MEASURED with per-metric reasons).
+v1.10.2: host classification is FAIL-CLOSED — `--host-class
+physical|hosted` is mandatory (no default), a physical claim over
+detected hosted-CI markers is refused, `hostedCI` is derived from the
+declared class, and artifacts now also record RAM, hostname and the
+evidence list (see `baselines/perf-hosted-v1.10.2.json`).
 Remaining: capture the physical Windows baseline on real consumer
 hardware (cold start to interactive, warm TTFT, streaming latency,
 idle/peak memory, tool round-trip, file output overhead) with the
@@ -138,19 +143,30 @@ WM_DELETE_WINDOW close (scripts/qt-desktop-smoke.sh G1-G5) and the
 QtTest live-answer acceptance (real QML + real core). Windows CI is
 wired to the same gates (Qt 6.8.2 MSVC build + windeployqt + Qt
 acceptance + windowed runtime smoke) and remains NOT VERIFIED until a
-green hosted run exists. NOT YET migrated to Qt: AI Systems, Goals,
+green hosted run exists.
+v1.10.2 STATUS: HARDENED + one more surface migrated. (a) The Windows
+Go verification gate is repaired for real: `internal/localipc`'s
+test-only `credAllowed` helper lived behind the `!windows` build tag and
+broke `go test ./...` compilation on Windows — the helper now lives in
+the platform-neutral file, so the full suite (the exact gate the
+Windows job runs) builds on both platforms. (b) The Linux smoke now
+OWNS its environment (Xvfb + Openbox/equivalent WM when present,
+self-built close tool, trap cleanup) and its G1–G5 pass under a real
+WM. (c) The AI Systems list/activation surface moved to Qt — a pure
+`/api/systems` client view (list, activate, typed 404 error path) with
+an acceptance slot; the store keeps ALL authority. Remaining surfaces
+NOT yet migrated to Qt (honest): AI Systems editing/import, Goals,
 Coding Lab, Net Search page, repository index, tasks/automations,
-downloads/diagnostics panels — those surfaces remain on the documented
-headless/browser mode; the migration is FUTURE work and is not claimed
-done. The Go API remains the ONLY authority — the shell grows no second
-run registry, session store, tool registry, downloader, scheduler or
-policy authority. DEPENDENCY: Phase 1 (the inference path the shell
-renders must be settled first); Qt deployment/packaging evidence
-(Qt 6.8.2 pinned; QML-aware deployment via the official CMake deploy
-script / windeployqt). RISK: Qt learning/packaging cost — mitigated by
-the thin shell; IPC latency — to be measured with the Phase 0 harness
-(shared memory / zero-copy only where profiling demonstrates a
-payload-size gain).
+downloads/diagnostics panels — those remain on the documented
+headless/browser mode. The Go API remains the ONLY authority — the
+shell grows no second run registry, session store, tool registry,
+downloader, scheduler or policy authority. DEPENDENCY: Phase 1 (the
+inference path the shell renders must be settled first); Qt
+deployment/packaging evidence (Qt 6.8.2 pinned; QML-aware deployment
+via the official CMake deploy script / windeployqt). RISK: Qt
+learning/packaging cost — mitigated by the thin shell; IPC latency — to
+be measured with the Phase 0 harness (shared memory / zero-copy only
+where profiling demonstrates a payload-size gain).
 
 **Phase 3 — measured refinements + optional WinUI 3.** Only if
 Windows-specific measurements justify a second shell; C# never becomes

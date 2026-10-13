@@ -21,6 +21,7 @@ package perf
 import (
         "encoding/json"
         "fmt"
+        "os"
         "sort"
         "strings"
         "time"
@@ -46,6 +47,78 @@ const (
 
 // MetricStatus is the honest capture status of one metric.
 type MetricStatus string
+
+// Host classes (v1.10.2). The classification is EXPLICIT and FAIL-CLOSED:
+// a run that does not declare its host class is refused, and a run that
+// declares "physical" on a host carrying hosted/CI evidence is refused —
+// the two can never be silently swapped in either direction.
+const (
+        HostClassPhysical = "physical"
+        HostClassHosted   = "hosted"
+)
+
+// hostedEvidenceEnvVars are well-known hosted-CI markers. The list is
+// deliberately conservative: only variables that hosted providers set on
+// their runners. A marker here is EVIDENCE the host is hosted; the
+// ABSENCE of markers is NOT evidence the host is physical (a virtualized
+// session host may export none of them) — which is exactly why the
+// declared class is cross-checked only in the dangerous direction
+// (physical claim over hosted evidence = refusal).
+var hostedEvidenceEnvVars = []string{
+        "GITHUB_ACTIONS",
+        "GITLAB_CI",
+        "TRAVIS",
+        "CIRCLECI",
+        "BUILDKITE",
+        "JENKINS_URL",
+        "TF_BUILD",
+        "CI",
+}
+
+// ValidateHostClass accepts only the explicit classes.
+func ValidateHostClass(class string) error {
+        switch class {
+        case HostClassPhysical, HostClassHosted:
+                return nil
+        case "":
+                return fmt.Errorf("host class is mandatory: pass --host-class %s or %s (fail-closed: nothing is assumed)", HostClassPhysical, HostClassHosted)
+        default:
+                return fmt.Errorf("unknown host class %q (want %q or %q)", class, HostClassPhysical, HostClassHosted)
+        }
+}
+
+// DetectHostEvidence returns the hosted-CI marker variables present in
+// the current environment (name=value context is NOT returned — only
+// names; marker values are irrelevant and never logged).
+func DetectHostEvidence() []string {
+        var found []string
+        for _, v := range hostedEvidenceEnvVars {
+                if _, ok := os.LookupEnv(v); ok {
+                        found = append(found, v)
+                }
+        }
+        return found
+}
+
+// CheckHostClassification is the fail-closed cross-check between the
+// DECLARED class and the DETECTED host evidence:
+//
+//   - physical declaration over hosted evidence → REFUSED (a hosted
+//     runner must never be able to emit a physical-hardware artifact);
+//   - hosted declaration is always accepted (under-claiming is safe);
+//   - physical declaration without markers is accepted — the absence of
+//     markers is not proof of physicality, so the artifact still carries
+//     the declaration plus the evidence list (empty) for the reader to
+//     judge; the honesty boundary stays explicit either way.
+func CheckHostClassification(declared string, evidence []string) error {
+        if err := ValidateHostClass(declared); err != nil {
+                return err
+        }
+        if declared == HostClassPhysical && len(evidence) > 0 {
+                return fmt.Errorf("fail-closed: host class %q contradicts hosted-CI evidence %v — hosted runners cannot emit physical-hardware baselines", declared, evidence)
+        }
+        return nil
+}
 
 const (
         // StatusMeasured: real samples were recorded on this host.
@@ -134,6 +207,10 @@ type Envelope struct {
         OS            string                  `json:"os"`
         Arch          string                  `json:"arch"`
         CPU           string                  `json:"cpu"`
+        RAMMB         float64                 `json:"ramMB,omitempty"`
+        Hostname      string                  `json:"hostname,omitempty"`
+        HostClass     string                  `json:"hostClass"`
+        HostEvidence  []string                `json:"hostEvidence,omitempty"`
         GPU           string                  `json:"gpu,omitempty"`
         GPUDriver     string                  `json:"gpuDriver,omitempty"`
         Model         string                  `json:"model,omitempty"`
@@ -240,8 +317,20 @@ func targetNote(p95, target float64) string {
         return fmt.Sprintf("P95 %.1f ms exceeds the %.1f ms target by %.1f ms — gap recorded", p95, target, p95-target)
 }
 
+// normalize derives the schema-compat HostedCI flag from the explicit
+// HostClass so the two can never disagree in a rendered artifact
+// (fail-closed: one source of truth, no silent swap possible).
+func (e *Envelope) normalize() {
+        if e.HostClass == HostClassHosted {
+                e.HostedCI = true
+        } else if e.HostClass == HostClassPhysical {
+                e.HostedCI = false
+        }
+}
+
 // JSON renders the machine-readable artifact.
 func (e *Envelope) JSON() ([]byte, error) {
+        e.normalize()
         e.Duration = time.Since(e.StartedAt)
         return json.MarshalIndent(e, "", "  ")
 }
@@ -249,6 +338,7 @@ func (e *Envelope) JSON() ([]byte, error) {
 // Report renders the concise human report. NOT MEASURED dimensions are
 // listed with their reasons — an honest baseline shows its holes.
 func (e *Envelope) Report() string {
+        e.normalize()
         e.Duration = time.Since(e.StartedAt)
 
         var b strings.Builder
@@ -256,6 +346,20 @@ func (e *Envelope) Report() string {
         b.WriteString("SHEYTAN-LA performance baseline (R&D 2026-10-11 §10)\n")
         b.WriteString(fmt.Sprintf("  release: %s  code: %s\n", e.Release, shortSHA(e.CodeSHA)))
         b.WriteString(fmt.Sprintf("  host: %s/%s cpu=%q gpu=%q\n", e.OS, e.Arch, e.CPU, e.GPU))
+        if e.RAMMB > 0 {
+                b.WriteString(fmt.Sprintf("  ram: %.0f MB", e.RAMMB))
+                if e.Hostname != "" {
+                        b.WriteString(fmt.Sprintf("  host-id: %s", e.Hostname))
+                }
+                b.WriteString("\n")
+        }
+        if e.HostClass != "" {
+                b.WriteString(fmt.Sprintf("  host-class: %s", e.HostClass))
+                if len(e.HostEvidence) > 0 {
+                        b.WriteString(fmt.Sprintf("  (evidence: %s)", strings.Join(e.HostEvidence, ",")))
+                }
+                b.WriteString("\n")
+        }
         if e.Model != "" {
                 b.WriteString(fmt.Sprintf("  model: %s quant=%s ctx=%s backend=%s\n", e.Model, e.Quantization, e.ContextTokens, e.Backend))
         } else {

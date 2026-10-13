@@ -6,6 +6,8 @@
 //   visible → exactly one terminal settle → transcript reload (persisted
 //   assistant answer, live bubble gone, composer unlocked) → repeat send
 //   works → clean close via QML window close.
+//   Plus the v1.10.2 AI Systems surface: list (seeded default), typed
+//   activation, and the typed 404 error path — all through /api/systems.
 //
 // No mocks: the core is the production binary; only the LLM backend is the
 // deterministic fixture (scripts/fake-remote-engine.py).
@@ -33,6 +35,7 @@ class Acceptance : public QObject {
 private slots:
     void initTestCase();
     void chatStreamPersistRepeatAndClose();
+    void aiSystemsListActivate();
     void cleanupTestCase();
 
 private:
@@ -200,6 +203,52 @@ void Acceptance::chatStreamPersistRepeatAndClose() {
 void Acceptance::cleanupTestCase() {
     if (m_core) m_core->terminate();
     if (m_engine) m_engine->terminate();
+}
+
+// aiSystemsListActivate — the v1.10.2 AI Systems surface: a pure IPC
+// client cycle against the ONE Go store. Proves: seeded list arrives
+// typed (systemId + name per entry), activation flips the authoritative
+// activeSystemId, and an unknown id surfaces the typed 404 error.
+void Acceptance::aiSystemsListActivate() {
+    CoreClient core;
+    bool handshake = false;
+    connect(&core, &CoreClient::handshakeDone, [&]() { handshake = true; });
+
+    core.connectToCore(m_endpoint, QStringLiteral("acceptance"));
+    QVERIFY(waitFor([&]() { return handshake; }));
+    QVERIFY(waitFor([&]() { return core.connected(); }));
+
+    // The store seeds the reserved default — the list is non-empty.
+    core.refreshSystems();
+    QVERIFY(waitFor([&]() { return core.systems().size() > 0; }, 10000));
+
+    const QString active = core.activeSystemId();
+    QVERIFY(!active.isEmpty());
+
+    // Typed shape: every entry carries systemId and name; pick the first
+    // NON-active id (re-activating the only entry is the fallback).
+    QString pick;
+    for (const auto &v : core.systems()) {
+        const QVariantMap m = v.toMap();
+        QVERIFY2(!m.value("systemId").toString().isEmpty(),
+                 "system entry must carry a systemId");
+        QVERIFY2(!m.value("name").toString().isEmpty(),
+                 "system entry must carry a name");
+        if (pick.isEmpty() && m.value("systemId").toString() != active)
+            pick = m.value("systemId").toString();
+    }
+    if (pick.isEmpty()) pick = active;
+
+    core.activateSystem(pick);
+    QVERIFY(waitFor([&]() { return core.activeSystemId() == pick; }, 10000));
+
+    // Typed error path: an unknown id is a 404 surfaced as an error, and
+    // the authoritative state does not change.
+    core.activateSystem(QStringLiteral("sheytan-acceptance-missing"));
+    QVERIFY(waitFor([&]() { return !core.error().isEmpty(); }, 10000));
+    QVERIFY2(core.error().contains(QStringLiteral("status 404")),
+             qPrintable(core.error()));
+    QCOMPARE(core.activeSystemId(), pick);
 }
 
 QTEST_MAIN(Acceptance)

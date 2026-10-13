@@ -1,26 +1,107 @@
-# UPDATE.md — v1.10.1 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.10.2 Release Notes & Maintenance Behavior
 
-**Release:** `v1.10.1` (canonical application version; single version
+**Release:** `v1.10.2` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ c9494dc` (`v1.10.0`) · **Date:** 2026-10-11
-**Package:** `SHEYTAN-Local-Agent-v1.10.1-FINAL.zip` (complete repository tree)
+**Base:** `main @ cb11a23` (`v1.10.1`) · **Date:** 2026-10-13
+**Package:** `SHEYTAN-LA-v1.10.2-FINAL.zip` (complete repository tree)
 **R&D authority:** `Parsaetak/Contents`, branch `Research-and-Development`,
 `SHEYTAN-LA-2026-10-11.md` (linked, not copied — the R&D document stays in
 its source repository).
 
 The authoritative per-release history lives in `changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
-behavior. v1.10.1 completes the R&D Phase 2 UI decision: the desktop UI
-is now the native Qt Quick/QML host over a secured per-user IPC channel,
-Wails is removed from the product and the dependency graph, and the two
-run-`38152579695` failures are repaired at their roots. The R&D Phase 1
-engine gate is honestly untouched: the physical-Windows warm-TTFT /
-native-vs-managed comparison remains NOT MEASURED in this release (no
-physical hardware was available), and the native C++ engine default
-stays evidence-gated.
+behavior. v1.10.2 is the reliability and completeness step after the
+v1.10.1 Qt migration: it repairs the Windows Go verification gate that
+the full-suite compile exposes, hardens the Linux desktop smoke to own
+its whole environment (including a real window manager), migrates the
+AI Systems list/activation surface to Qt as a pure IPC client, makes
+measurement host-classification fail-closed, fixes the high-severity
+`ws` advisory with the smallest compatible bump, and reconciles every
+document to the 1.10.2 identity. The R&D Phase 1 engine gate is
+honestly untouched: the physical-Windows warm-TTFT /
+native-vs-managed comparison remains NOT MEASURED (no physical
+hardware was available in this session), and the native C++ engine
+default stays evidence-gated.
 
-## What v1.10.1 changes
+## What v1.10.2 changes
+
+1. **P0 — the Windows Go verification gate now COMPILES (`internal/
+   localipc`).** The contract-test helper `credAllowed` lived in
+   `listener_unix.go` behind the `!windows` build tag while
+   `serve_test.go` used it unconditionally, so on Windows `go vet` and
+   `go test ./...` (the exact gate the Windows job runs) failed to BUILD
+   the package — the suite could not even reach its assertions. The
+   helper moved to the platform-neutral `endpoint.go` (the Windows
+   transport uses the DACL + client-SID check instead and simply never
+   calls it), so the full suite builds and runs on both platforms.
+   Reproduced before (`GOOS=windows go vet ./internal/localipc/` →
+   `undefined: credAllowed`) and green after; `GOOS=windows go build
+   ./...` clean end to end. No test was weakened — the pure-decision
+   test now runs on Windows too.
+2. **P1 — the Linux desktop smoke owns its whole environment.**
+   `scripts/qt-desktop-smoke.sh` no longer assumes machine-specific
+   state: X11 helpers come from the system PATH (opt-in `XTOOLS`/
+   `XLIBS` overrides remain), the `closewin` WM-request tool is built
+   from the tracked `scripts/closewin.c` by the smoke itself, the core
+   binary is built from the repo when not staged, the UI binary falls
+   back to the developer build tree, an Openbox (or equivalent,
+   `WINMGR_BIN`) window manager is started when present — with its
+   private-prefix XDG dirs resolved so themes load — and every spawned
+   process is tracked and killed on ANY exit path (trap-based).
+   G1–G5 passed under a real WM: keyed handshake, core-spawned UI pid,
+   visible 1280x840 top-level, real core interaction, clean
+   WM_DELETE_WINDOW exit, no orphan, no leaked endpoint. The gates
+   themselves are unchanged.
+3. **P1 — the AI Systems list/activation surface moved to Qt** — the
+   highest-value remaining surface that could meet the evidence bar
+   inside this release. `CoreClient` gains `systems` /
+   `activeSystemId` properties and `refreshSystems()` /
+   `activateSystem(id)` over the EXISTING `/api/systems` handlers
+   (GET list, POST activate) — no second store, no second authority;
+   validation, persistence and the reserved default stay server-owned.
+   `Main.qml` gains an AI Systems drawer (list, active badge, activate,
+   refresh). The acceptance suite gains `aiSystemsListActivate`:
+   seeded list arrives typed, activation flips the authoritative
+   activeSystemId, an unknown id surfaces the typed 404, and the
+   authoritative state does not change. The remaining surfaces (AI
+   Systems editing/import, Goals, Coding Lab, Net Search, repository
+   index, tasks/automations, downloads/diagnostics) stay on the
+   documented headless/web mode — migrating them did NOT fit the
+   evidence bar in this budget and is not claimed done.
+4. **P1 — measurement host-classification is fail-closed.** The old
+   `--hosted-ci` bool defaulted to true and could be silently swapped
+   in either direction. `cmd/shtn-perf` now REQUIRES `--host-class
+   physical|hosted` (no default: an unclassified run is refused),
+   refuses a physical claim on any host carrying well-known hosted-CI
+   markers (GITHUB_ACTIONS, GITLAB_CI, TRAVIS, CIRCLECI, BUILDKITE,
+   JENKINS_URL, TF_BUILD, CI), and derives the schema-compat
+   `hostedCI` flag from the single declared class so the artifact can
+   never disagree with itself. Artifacts additionally record RAM,
+   hostname, the detected-evidence list and caller-supplied honesty
+   notes. New pins in `internal/perf/perf_test.go` cover refusal on
+   empty/unknown classes, the dangerous direction, and the envelope
+   round-trip. Committed artifact:
+   `baselines/perf-hosted-v1.10.2.json` (hosted session host, plainly
+   labeled — NOT GitHub Actions, NOT physical hardware).
+5. **P1 — high-severity `ws` advisories closed by the smallest
+   compatible fix.** GHSA-58qx-3vcg-4xpx (uninitialized memory
+   disclosure) and GHSA-96hv-2xvq-fx4p (memory-exhaustion DoS) affected
+   the direct devDependency ws 8.18.3. Bumped to 8.22.0 (same major,
+   no `--force`); `npm audit --audit-level=high` is clean and the full
+   frontend gate stack stays green.
+6. **P2 — documentation/version reconciliation.** Canonical identity
+   1.10.2 via `scripts/release-version.mjs` (package.json source;
+   config.go, build/config.yml, SIGNATURE repaired; `--check` green);
+   `ui/qt/CMakeLists.txt` project VERSION bumped in the same pass;
+   README current-release block (stale 1.10.0 wording), ARCHITECTURE.md
+   desktop-lifecycle paragraph, ROADMAP Phase 0/2 status lines,
+   changelog.md, agent.md and this file updated. No claim anywhere that
+   the remaining surfaces are already on Qt; the v1.9 future-boundary
+   items (goal-to-subtask fan-out, anti-hack guard, MCP registry) stay
+   FUTURE.
+
+## v1.10.1 notes (superseded where they describe the current release)
 
 1. **P0 — Windows test teardown repaired (run `38152579695`,
    `TestWebSocketSeesTerminalErrorNotSilence`).** The test returned at
@@ -194,17 +275,18 @@ areas is the one described above.
 
 ## Current measured baseline (honest)
 
-Recorded in this session (hosted Linux CI-class container — NOT physical
-consumer hardware; artifact:
-`baselines/perf-hosted-ci-v1.10.0.json`, method + limitations embedded):
+Recorded in this session (virtualized Linux container session host —
+NOT physical consumer hardware and NOT GitHub Actions hosted CI;
+artifact: `baselines/perf-hosted-v1.10.2.json`, declared host class
+`hosted`, method + limitations + honesty notes embedded):
 
-* `cold_start_to_interactive_ms`: MEASURED — 1.4 ms (api.New +
+* `cold_start_to_interactive_ms`: MEASURED — 1.2 ms (api.New +
   EnsureSetup boundary on the hosted host; the GUI shell adds its own
   window cost, measured by the desktop acceptance surface). Target
   < 800 ms is met on THIS host only — not a product-wide claim.
-* `idle_memory_mb` / `peak_memory_mb`: MEASURED — 16.5 MB (process
-  RSS/VmHWM, server-only posture; excludes the WebView process). The
-  < 80 MB preference is met on THIS host only.
+* `idle_memory_mb` / `peak_memory_mb`: MEASURED — 14.8 MB (process
+  RSS/VmHWM, server-only posture; excludes the desktop shell process).
+  The < 80 MB preference is met on THIS host only.
 * `engine_ready_ms`, `warm_ttft_ms`, `stream_duration_ms`: NOT MEASURED
   — no serving llama-server binary and no real model on this host.
 * `stream_chunk_to_visible_ms`: NOT MEASURED — requires the real desktop
@@ -218,29 +300,37 @@ specific blocking evidence for the Phase 1 default promotion.
 
 ## Verification evidence (classes kept separate)
 
-* **Local, v1.10.0 release session (Linux hosted container):** canonical
-  version gate green (`node scripts/release-version.mjs --check` at
-  1.10.0); frontend `typecheck` / `lint` (0 findings) / `test:units`
-  (236/236) / `test:release` (38/38) / clean `build` /
-  `verify:web` green; native C++ clean cmake configure + build with
-  `ctest --output-on-failure` 13/13 (including bit-for-bit prefill
-  parity); `go test ./internal/llm/ -run 'TestUpdateNow|TestAdmission|TestNilGate'
-  -count=1` 9/9 (the four new v1.10.0 pins + the v1.9.6/v1.9.5 pins
-  unchanged); `GOOS=windows go build/vet ./internal/desktop/` clean (the
-  repaired shell compiles for Windows); `go vet ./internal/desktop/`
-  clean (headless); `cmd/shtn-perf` baseline captured. Exact commands
-  and results are recorded in `worklog.md`.
-* **UNVERIFIED in this session (honestly):** the Windows desktop smoke +
-  live-answer acceptance on real Windows (no Windows host here — the fix
-  is derived from the pinned wails sources and the step timing), the
-  Linux Xvfb window smoke (no GTK4/WebKitGTK headers and no root in this
-  container — the WM repair follows this run's own X11 evidence class),
-  the full packaged browser-E2E matrix, and the physical-hardware
-  baseline. Local green is not CI green; Linux green is not Windows
-  green; hosted-CI numbers are not physical benchmarks.
+* **Local, v1.10.2 release session (Linux virtualized container,
+  Go 1.26.0 / Qt 6.8.2 / CMake 4.4.4):** canonical version gate green
+  (`node scripts/release-version.mjs --check` at 1.10.2); `go build
+  ./...` + `go vet ./...` clean; FULL `go test ./... -count=1` PASS
+  (incl. the new `internal/perf` fail-closed pins and the new
+  `internal/desktop` resolution pins); `GOOS=windows go build ./...`
+  clean and `GOOS=windows go vet` on the touched packages clean (the
+  Windows full-suite compile gate now builds); Qt 6.8.2 configure +
+  build of `ui/qt` green; QtTest acceptance 4/4 (chat live-answer cycle
+  + the new AI Systems list/activate/typed-404 slot) with the real core
+  + fixture engine; `scripts/qt-desktop-smoke.sh` G1–G5 PASS under
+  Xvfb + Openbox with no orphan and no leaked endpoint; frontend
+  typecheck / lint (0 findings) / clean release build / `verify:web`
+  green; `npm audit --audit-level=high` clean at ws 8.22.0;
+  `cmd/shtn-perf` baseline captured with the fail-closed classification
+  (unclassified run refused; physical-over-hosted-evidence refused).
+  Exact commands and results are recorded in `worklog.md`.
+* **NOT RUN / NOT VERIFIED in this session (honestly):** the Windows
+  Qt 6.8.2 MSVC build, windeployqt packaging, windowed runtime smoke
+  and QtTest live-answer acceptance on real Windows (no Windows host
+  here; the hostable subset — full-suite Windows compile/vet and
+  windows/amd64 core cross-build — is green and documented above);
+  the hosted-CI Actions verdict (no push performed from this session;
+  the GitHub Actions API query was rate-limited from this IP, so even
+  the STATUS of existing runs could not be read); the native C++
+  engine CTest parity gates (no llama.cpp sources fetched — the native
+  default stays gated exactly as before); and the physical-Windows
+  Phase 1 baseline (NOT MEASURED — no physical hardware). Local green
+  is not CI green; Linux green is not Windows green; hosted numbers
+  are not physical benchmarks.
 * **CI:** this session does NOT push and therefore has NO Actions run
-  for v1.10.0. The authoritative verdict is the first Actions run that
-  carries this revision; until it exists, no green-run claim is made for
-  v1.10.0. The v1.9.6 run (`38135751846`) is a FAILED baseline for both
-  platform jobs and is cited only as the failure evidence this release
-  repairs.
+  for v1.10.2. The authoritative verdict is the first Actions run that
+  carries this revision; until it exists, no green-run claim is made
+  for v1.10.2.

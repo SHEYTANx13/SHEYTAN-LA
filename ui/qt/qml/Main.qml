@@ -5,7 +5,10 @@
 // Surfaces implemented here: session list (create/open/delete), chat
 // transcript with per-message roles, live streaming bubble (cumulative
 // text), Stop while streaming, composer lock/unlock, settlement →
-// persistence reload, error/empty/loading states, model/backend settings.
+// persistence reload, error/empty/loading states, model/backend settings,
+// and the AI Systems panel (v1.10.2: list + activation over /api/systems
+// — the store's validation, persistence and reserved default stay
+// server-owned; this view holds no second authority).
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -24,6 +27,111 @@ ApplicationWindow {
     visible: true
     title: qsTr("SHEYTAN Local Agent") + (Core.connected && Core.coreVersion !== "" ? "  ·  v" + Core.coreVersion : "")
     color: "#121214"
+
+    // AI Systems panel (v1.10.2): right-edge drawer, pure /api/systems client.
+    Drawer {
+        id: systemsDrawer
+        edge: Qt.RightEdge
+        width: 380
+        height: root.height
+        onOpened: Core.refreshSystems()
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 14
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+                Label {
+                    text: qsTr("AI Systems")
+                    color: "#e8e8ea"
+                    font.pixelSize: 16
+                    font.bold: true
+                    Layout.fillWidth: true
+                }
+                Button {
+                    text: qsTr("Refresh")
+                    display: AbstractButton.TextOnly
+                    onClicked: Core.refreshSystems()
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: Core.activeSystemId !== ""
+                      ? qsTr("Active: ") + Core.activeSystemId
+                      : qsTr("No active system")
+                color: "#8fb8dd"
+                font.pixelSize: 12
+                elide: Text.ElideRight
+            }
+
+            ListView {
+                id: systemsList
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                spacing: 8
+                model: Core.systems
+                ScrollBar.vertical: ScrollBar {}
+
+                delegate: Rectangle {
+                    required property var modelData
+                    width: systemsList.width
+                    height: sysCol.implicitHeight + 20
+                    radius: 8
+                    color: Core.activeSystemId === modelData.systemId ? "#243a2c" : "#222226"
+
+                    ColumnLayout {
+                        id: sysCol
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 4
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label {
+                                text: modelData.name !== undefined ? modelData.name : modelData.systemId
+                                color: "#e8e8ea"
+                                font.bold: true
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+                            Label {
+                                text: Core.activeSystemId === modelData.systemId ? qsTr("ACTIVE") : ""
+                                color: "#7dd3a0"
+                                font.pixelSize: 10
+                                font.bold: true
+                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: modelData.systemId + "  ·  r" + (modelData.revision !== undefined ? modelData.revision : 0)
+                            color: "#8a8a92"
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        Button {
+                            visible: Core.activeSystemId !== modelData.systemId
+                            text: qsTr("Activate")
+                            onClicked: Core.activateSystem(modelData.systemId)
+                        }
+                    }
+                }
+
+                EmptyState {
+                    anchors.centerIn: parent
+                    visible: Core.systems.length === 0
+                    icon: "◇"
+                    title: Core.connected ? qsTr("No AI Systems") : qsTr("Not connected")
+                    detail: Core.connected
+                        ? qsTr("The core store lists no systems.")
+                        : qsTr("Connect to the core to list AI Systems.")
+                }
+            }
+        }
+    }
 
     function connect() {
         if (ipcEndpoint !== "") Core.connectToCore(ipcEndpoint, ipcKey)
@@ -111,6 +219,13 @@ ApplicationWindow {
                         title: qsTr("No sessions yet")
                         detail: qsTr("Create a session to start chatting.")
                     }
+                }
+
+                Button {
+                    Layout.fillWidth: true
+                    text: qsTr("AI Systems")
+                    enabled: Core.connected
+                    onClicked: systemsDrawer.open()
                 }
 
                 Button {

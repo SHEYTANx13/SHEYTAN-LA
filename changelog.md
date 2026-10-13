@@ -11,6 +11,105 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.10.2 — 2026-10-13 — the Windows-gate compile repair, the smoke that owns its environment, the AI Systems Qt surface, and fail-closed measurement
+
+Focus: harden the v1.10.1 Qt + localipc architecture for real — repair
+the Windows Go verification gate the full-suite compile exposes, make
+the Linux desktop smoke own every prerequisite it needs (including its
+window manager), migrate the highest-value remaining surface that can
+meet the evidence bar (AI Systems list/activation) as a pure IPC
+client, close the fail-open hole in measurement host-classification,
+and reconcile every document to the 1.10.2 identity. Honest boundaries
+unchanged: the native C++ engine default stays evidence-gated (the
+physical-Windows Phase 1 baseline remains NOT MEASURED) and the
+remaining Qt surfaces are not claimed done.
+
+1. **P0 — `internal/localipc` contract tests now compile on Windows.**
+   The test-only `credAllowed` helper lived behind the `!windows` build
+   tag (`listener_unix.go`) while `serve_test.go` used it
+   unconditionally, so `go vet` / `go test ./...` on Windows could not
+   even build the package — the exact gate the Windows job runs
+   (`go test ./... -run Test -count=1`) was red by construction. The
+   helper moved to the platform-neutral `endpoint.go`; the Windows
+   transport (named-pipe DACL + post-connect client-SID check) is
+   unaffected and never calls it. Reproduced before
+   (`GOOS=windows go vet ./internal/localipc/` → `undefined:
+   credAllowed`), green after, with `GOOS=windows go build ./...` clean
+   end to end. No assertion weakened; the pure-decision test now runs
+   on both platforms.
+2. **P1 — `scripts/qt-desktop-smoke.sh` owns its whole environment.**
+   The v1.10.1 smoke assumed machine-specific state (hardcoded XTOOLS
+   prefix, a pre-staged core, a pre-built close tool, no window
+   manager). It now: derives X11 helpers from the system PATH (opt-in
+   `XTOOLS`/`XLIBS` overrides), builds the core from the repo when not
+   staged, falls back to the developer UI build tree, builds
+   `closewin` from the tracked `scripts/closewin.c`, starts an Openbox
+   (or `WINMGR_BIN`) window manager when present with private-prefix
+   XDG dirs resolved, and tracks every spawned process behind a trap
+   so no exit path leaks. G1–G5 PASS under Xvfb + Openbox: keyed
+   handshake, core-spawned UI pid, visible 1280x840 top-level, real
+   core interaction, clean WM_DELETE_WINDOW exit, no orphan, no leaked
+   endpoint. Gate semantics unchanged — the environment contract is
+   the fix.
+3. **P1 — AI Systems list/activation migrated to Qt (surface 1 of the
+   remaining set).** `CoreClient` gains `systems`/`activeSystemId` +
+   `refreshSystems()`/`activateSystem(id)` over the EXISTING
+   `/api/systems` handlers; `Main.qml` gains an AI Systems drawer
+   (list, active badge, activate, refresh); the acceptance suite gains
+   `aiSystemsListActivate` (seeded typed list, authoritative activation
+   flip, typed 404 error path with unchanged authoritative state). No
+   second store and no second authority: validation, persistence and
+   the reserved default stay server-owned. Remaining surfaces (AI
+   Systems editing/import, Goals, Coding Lab, Net Search, repository
+   index, tasks/automations, downloads/diagnostics) stay on the
+   documented headless/web mode — not claimed done.
+4. **P1 — measurement host classification is fail-closed.**
+   `cmd/shtn-perf`'s `--hosted-ci` bool (default true, never
+   cross-checked) could silently swap physical ↔ hosted. Replaced by a
+   mandatory `--host-class physical|hosted` (unclassified runs are
+   refused), a physical-over-hosted-evidence refusal (well-known CI
+   marker env vars are evidence; a hosted runner can never emit a
+   physical-hardware artifact), a derived `hostedCI` schema-compat
+   flag, and RAM/hostname/evidence/notes recorded in the envelope.
+   Pins in `internal/perf/perf_test.go`; committed artifact
+   `baselines/perf-hosted-v1.10.2.json` (hosted session host, plainly
+   labeled).
+5. **P1 — high-severity `ws` advisories closed (smallest compatible
+   fix).** GHSA-58qx-3vcg-4xpx + GHSA-96hv-2xvq-fx4p on the direct
+   devDependency ws 8.18.3; bumped to 8.22.0 (same major, no
+   `--force`); `npm audit --audit-level=high` clean; frontend gates
+   green.
+6. **P2 — launcher resolution contract pinned by unit tests.** New
+   `internal/desktop/desktop_test.go` locks the `uiExecutable`
+   resolution: the `none` sentinel, the explicit override, the
+   next-to-core packaged layout, the missing-override refusal, and the
+   hard refusal when no UI can be located (a silent headless fallback
+   would hide a broken install).
+7. **P2 — documentation/version reconciliation.** Canonical identity
+   1.10.2 (package.json → release-version.mjs → config.go /
+   build/config.yml / SIGNATURE / ui/qt CMakeLists project VERSION);
+   README current-release block updated (was stale at 1.10.0);
+   ARCHITECTURE.md desktop-lifecycle paragraph extended (launcher
+   resolution contract, smoke environment ownership, fail-closed
+   measurement, AI Systems surface); ROADMAP Phase 0/2 status lines
+   updated; UPDATE.md rewritten for v1.10.2 with the v1.10.1 notes
+   retained as history; agent.md re-handed-off. The v1.9
+   future-boundary items (goal-to-subtask fan-out, anti-hack guard,
+   MCP registry) remain FUTURE unless code+tests exist.
+
+Local verification on the session host (virtualized Linux container;
+Go 1.26.0, Qt 6.8.2, CMake 4.4.4): full `go test ./... -count=1` PASS;
+`go vet ./...` clean; GOOS=windows build+vet clean for the full module;
+Qt 6.8.2 configure/build green; QtTest acceptance 4/4; qt-desktop-smoke
+G1–G5 PASS under Openbox; frontend typecheck/lint/build/verify:web
+green; `npm audit --audit-level=high` clean; release-version --check
+PASS at 1.10.2. NOT RUN (no host): Windows MSVC/windeployqt/windowed
+smoke/QtTest-on-Windows; native C++ CTest parity gates; hosted-CI
+Actions verdict (no push; API status read rate-limited). The physical
+Windows baseline stays NOT MEASURED.
+
+---
+
 ## v1.10.1 — 2026-10-11 — the FULL Qt/QML migration + the v1.10.0 failure repair (P0): Wails removed from the product and dependency graph, the Go core + native Qt host desktop pair over a secured per-user IPC channel, deterministic run teardown, the canonical test entrypoint
 
 Focus: repair the two demonstrated v1.10.0 run-`38152579695` failures at

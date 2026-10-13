@@ -1704,3 +1704,52 @@ Stage Summary:
 - v1.10.1 is code-complete on the session host. Primary deliverable:
   `download/SHEYTAN-Local-Agent-v1.10.1-FINAL.zip` (source archive,
   audited). Version identity 1.10.1 everywhere.
+
+---
+Task ID: 1-2-3 (audit + reproduce + plan)
+Agent: Super Z (v1.10.2 hardening session)
+Task: Phase 1 LIVE AUDIT, Phase 2 GATE REPRODUCTION, Phase 3 ROOT CAUSE + ORDERED PLAN
+
+Work Log:
+- HEAD = cb11a238 (v1.10.1) = the audited baseline; worktree clean; no local tags.
+- Toolchain provisioned user-space (no root): Go 1.26.0, CMake 4.4.4/Ninja, Qt 6.8.2 (aqt, linux_gcc_64), Xvfb present, xdotool/xwininfo/openbox extracted via dpkg -x into /home/z/xtools.
+- go vet ./... clean; go build ./... clean; go test ./... -count=1 PASS (full suite).
+- Focused localipc contract suite PASS (9 tests: uid scoping, stale endpoints, keyed handshake happy/mismatch, real API tunneling, malformed/oversized rejection, clean stop, no-TCP-listener).
+- QtTest live-answer acceptance PASS (3/3) on Qt 6.8.2 + real core + fixture engine: keyed handshake, session create, live text growth with Stop visible, exactly-one terminal settle, one persisted assistant reply, reload, repeat send.
+- GitHub Actions API query: 403 rate-limited from this IP → hosted-CI verdict NOT QUERYABLE this session (no push performed; per rules).
+- npm audit: HIGH — ws 8.18.3 (direct devDependency): GHSA-58qx-3vcg-4xpx (uninitialized memory disclosure), GHSA-96hv-2xvq-fx4p (memory-exhaustion DoS). Smallest compatible fix: direct bump to 8.22.0 (same major), no --force.
+
+ROOT CAUSE TABLE (Phase 3):
+| # | Area | Cause / Evidence | Fix priority |
+|---|------|------------------|--------------|
+| R1 | docs drift | README.md "Current release: v1.10.0" vs canonical 1.10.1 | P3 (Phase 8) |
+| R2 | smoke portability | scripts/qt-desktop-smoke.sh hardcodes XTOOLS=/home/z/xcb-libs (machine-specific; broken default anywhere else) and references $WORK/closewin without building it; no WM ownership (spec: smoke owns its WM) | P2 (Phase 5) |
+| R3 | perf fail-open | cmd/shtn-perf --hosted-ci defaults true and is never cross-checked against host evidence; physical<->hosted can be silently swapped; RAM/hostname not recorded | P1 (Phase 6) |
+| R4 | desktop lifecycle tests | internal/desktop has zero test files (uiExecutable resolution untested) | P2 (Phase 6) |
+| R5 | remaining Qt surfaces | AI Systems, Goals, Coding Lab, Net Search, repoindex, tasks, downloads/diagnostics still headless/web (ROADMAP L141-143). Highest-value safe slice: AI Systems list+activation (GET /api/systems, POST /api/systems/{id}/activate — typed, bounded, existing authority) | P2 (Phase 7) |
+| R6 | version identity | all canonical surfaces at 1.10.1; ui/qt/CMakeLists project VERSION not covered by release-version.mjs (manual sync needed) | P3 (Phase 8) |
+| R7 | Windows Qt gates | MSVC/windeployqt/windowed smoke/QtTest-on-Windows cannot run here (no Windows host). Hostable proof: GOOS=windows cross-build of the core + static review of listener_windows.go + workflow. Honest status: NOT RUN / PHYSICAL HARDWARE UNVERIFIED | P1 honest-report (Phase 4) |
+
+ORDERED PLAN: R7(honest hostable subset) → R2 smoke hardening+WM → R3 perf fail-closed → R4 desktop tests → R5 AI Systems Qt surface + acceptance slot → R6/R1 version+docs → ws bump → full regression → baselines → ZIP.
+
+Stage Summary:
+- Baseline reproduced green locally (Go + localipc + Qt acceptance). Real defects found: R2, R3, R4 (+R1 doc drift, ws advisory). Windows gate remains honestly NOT RUN (no physical/hosted Windows).
+
+---
+Task ID: 4-10 (implement + regression + package)
+Agent: Super Z (v1.10.2 hardening session)
+Task: Phases 4-10 — Windows hostable subset, smoke hardening, perf fail-closed, desktop tests, AI Systems Qt surface, docs/version/security, full regression, clean ZIP
+
+Work Log:
+- R8/P0 Windows gate: `GOOS=windows go vet ./internal/localipc/` reproduced `undefined: credAllowed` (test-only helper behind !windows tag used unconditionally by serve_test.go → the Windows job's `go test ./...` could not even build). Moved credAllowed to platform-neutral endpoint.go. After: Windows vet + full cross-build clean; Linux suite unchanged. No test weakened.
+- R2 smoke: scripts/qt-desktop-smoke.sh — XTOOLS/XLIBS default to system PATH (opt-in overrides only), self-builds closewin from scripts/closewin.c (-lX11), self-builds the core when unstaged, UI fallback to the developer build tree, Openbox/equivalent WM ownership (WINMGR_BIN, private-prefix XDG dirs resolved so themes load), trap-based cleanup of every spawned process. G1-G5 PASS under Xvfb+Openbox: keyed handshake, core-spawned UI pid, visible 1280x840 top-level, real core interaction, clean WM_DELETE_WINDOW exit, no orphan, no leaked endpoint (ran twice, deterministic).
+- R3 perf fail-closed: --hosted-ci bool (default true) replaced by MANDATORY --host-class physical|hosted; DetectHostEvidence (8 well-known CI markers); CheckHostClassification refuses physical-over-hosted-evidence; hostedCI derived from the declared class (normalize at JSON/Report); RAM/hostname/evidence/notes recorded. Pins in internal/perf/perf_test.go. Verified refusals: no class → refused; physical+GITHUB_ACTIONS → refused. New artifact baselines/perf-hosted-v1.10.2.json (hosted session host, honestly noted).
+- R4: new internal/desktop/desktop_test.go (5 tests: none sentinel, override, override-missing refusal, next-to-core resolution, hard refusal when nothing resolvable). Portability gate initially flagged my #!/bin/sh placeholder fixtures — fixed to plain bytes (gate discipline respected).
+- R5 AI Systems on Qt: CoreClient systems/activeSystemId properties + refreshSystems/activateSystem over existing /api/systems handlers; Main.qml AI Systems drawer (list, active badge, activate, refresh); acceptance slot aiSystemsListActivate (seeded typed list, authoritative activation flip, typed 404 with unchanged authoritative state). Acceptance 4/4.
+- R6/R1 version+docs: package.json 1.10.2 → release-version.mjs repaired config.go/build/config.yml/SIGNATURE; ui/qt/CMakeLists.txt project VERSION 1.10.2; README (stale 1.10.0 block), ARCHITECTURE (current-for + desktop-lifecycle paragraph), ROADMAP (shipped-baseline line, Phase 0 + Phase 2 v1.10.2 status), UPDATE.md (v1.10.2 notes; v1.10.1 retained as history; baseline/verification sections rewritten), changelog.md (v1.10.2 entry), agent.md (v1.10.2 handoff). Stale-wording sweep clean.
+- Security: ws 8.18.3 → 8.22.0 (direct devDependency; GHSA-58qx-3vcg-4xpx, GHSA-96hv-2xvq-fx4p; no --force). npm audit --audit-level=high: 0 findings.
+- Regression: node test:units 236/236 + test:release PASS; go vet/build clean; go test ./... -count=1 65 pkgs PASS; go test -race on 5 heavy packages PASS; headless build PASS; GOOS=windows build+vet PASS; native/engine cmake build clean + CTest 13/13 (incl. prefill parity); Qt clean reconfigure/build at 1.10.2 + acceptance 4/4; qt-desktop-smoke G1-G5 PASS under Openbox; E2E (playwright, real native engine host) 40/40 PASS; canonical `node scripts/verify-all.mjs` 16/16 PASS.
+- Actions status: NOT RUN this session (no push per rules); the unauthenticated Actions API query was 403 rate-limited from this IP — even run STATUS was not readable. Windows MSVC/windeployqt/QtTest-on-Windows and the physical-Windows Phase 1 baseline remain NOT RUN / NOT MEASURED (no Windows host; no physical hardware).
+
+Stage Summary:
+- v1.10.2 is code-complete on the session host. Deliverable: download/SHEYTAN-LA-v1.10.2-FINAL.zip (clean tracked tree via git archive, audited clean-room). Version identity 1.10.2 everywhere. Native-engine default NOT flipped; remaining Qt surfaces honestly listed.

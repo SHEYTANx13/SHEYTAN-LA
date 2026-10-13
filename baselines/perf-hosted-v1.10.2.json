@@ -1,0 +1,161 @@
+{
+  "schema": "sheytan.perf.baseline/1",
+  "codeSha": "(unknown — build with -ldflags -X main.codeSHA=... or set SHEYTAN_PERF_CODE_SHA)",
+  "release": "1.10.2",
+  "os": "linux",
+  "arch": "amd64",
+  "cpu": "Intel(R) Xeon(R) Processor",
+  "ramMB": 4159.56640625,
+  "hostname": "c-6ace3b40-145cf406-97d5e6e57e27",
+  "hostClass": "hosted",
+  "backend": "managed-llama (fake fixture engine)",
+  "state": "cold",
+  "hostedCI": true,
+  "startedAt": "2026-10-13T14:57:43.19908044Z",
+  "durationMs": 1772458,
+  "metrics": {
+    "cold_start_to_interactive_ms": {
+      "status": "measured",
+      "stats": {
+        "n": 1,
+        "min": 1.317,
+        "p50": 1.317,
+        "p95": 1.317,
+        "max": 1.317,
+        "mean": 1.317,
+        "unit": "ms"
+      },
+      "method": "api.New + EnsureSetup (backend/runtime interactive boundary; the GUI shell adds its own window cost measured by the desktop acceptance)",
+      "targetMs": 800,
+      "targetNote": "P95 1.3 ms meets the 800.0 ms target on THIS host (not a product-wide claim)",
+      "samples": [
+        1.317
+      ]
+    },
+    "engine_ready_ms": {
+      "status": "NOT MEASURED",
+      "stats": {
+        "n": 0,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0,
+        "mean": 0,
+        "unit": ""
+      },
+      "method": "not captured in this session",
+      "reason": "no real model provided — the engine-ready boundary needs a real engine boot"
+    },
+    "file_output_overhead_ms": {
+      "status": "NOT MEASURED",
+      "stats": {
+        "n": 0,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0,
+        "mean": 0,
+        "unit": ""
+      },
+      "method": "not captured in this session",
+      "reason": "no file-output tool round executed by this runner"
+    },
+    "idle_memory_mb": {
+      "status": "measured",
+      "stats": {
+        "n": 1,
+        "min": 16.6875,
+        "p50": 16.6875,
+        "p95": 16.6875,
+        "max": 16.6875,
+        "mean": 16.6875,
+        "unit": "MB"
+      },
+      "method": "process RSS (VmRSS) after boot with no model loaded",
+      "limitations": [
+        "excludes the desktop shell's WebView process; idle-with-model needs a real engine boot"
+      ],
+      "samples": [
+        16.6875
+      ]
+    },
+    "peak_memory_mb": {
+      "status": "measured",
+      "stats": {
+        "n": 1,
+        "min": 16.6875,
+        "p50": 16.6875,
+        "p95": 16.6875,
+        "max": 16.6875,
+        "mean": 16.6875,
+        "unit": "MB"
+      },
+      "method": "process peak RSS (VmHWM) over this session",
+      "limitations": [
+        "same boundary as idle_memory_mb"
+      ],
+      "samples": [
+        16.6875
+      ]
+    },
+    "stream_chunk_to_visible_ms": {
+      "status": "NOT MEASURED",
+      "stats": {
+        "n": 0,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0,
+        "mean": 0,
+        "unit": ""
+      },
+      "method": "not captured in this session",
+      "reason": "no real model provided; the token→visible-DOM boundary additionally requires the desktop shell (Windows live-answer acceptance surface)"
+    },
+    "stream_duration_ms": {
+      "status": "NOT MEASURED",
+      "stats": {
+        "n": 0,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0,
+        "mean": 0,
+        "unit": ""
+      },
+      "method": "not captured in this session",
+      "reason": "no real model provided"
+    },
+    "tool_round_trip_ms": {
+      "status": "NOT MEASURED",
+      "stats": {
+        "n": 0,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0,
+        "mean": 0,
+        "unit": ""
+      },
+      "method": "not captured in this session",
+      "reason": "no agent tool round executed by this runner (the agent loop is driven by the E2E suite, not by a perf run)"
+    },
+    "warm_ttft_ms": {
+      "status": "NOT MEASURED",
+      "stats": {
+        "n": 0,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0,
+        "mean": 0,
+        "unit": ""
+      },
+      "method": "not captured in this session",
+      "reason": "no real model provided — plumbing-only posture cannot produce a TTFT sample"
+    }
+  },
+  "notes": [
+    "host: virtualized container session host (Linux amd64, Xeon shared vCPU, 4 GB RAM) — NOT GitHub Actions hosted CI and NOT physical hardware; generation-path metrics need a real model + engine binary"
+  ]
+}

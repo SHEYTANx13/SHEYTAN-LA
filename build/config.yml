@@ -1,11 +1,11 @@
 info:
   productName: "SHEYTAN-LA"
   productIdentifier: "com.parsaetak.sheytan-la"
-  productVersion: "1.10.1"
+  productVersion: "1.10.2"
   companyName: "Parsaetak"
   productDescription: "SHEYTAN Local Agent — native local AI agent runtime (SHEYTAN-LA)"
 
-# v1.10.1: build metadata is carried by package.json (canonical release
+# v1.10.2: build metadata is carried by package.json (canonical release
 # version) + SIGNATURE (release identity) + this file's productVersion.
 # The desktop build is now the Go core plus the native Qt Quick/QML host
 # under ui/qt (CMake); the Wails task runner configuration is retired with

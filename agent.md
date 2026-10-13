@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.1 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.2 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -7,49 +7,70 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.10.1 — the Qt Phase 2 migration + the run
-`38152579695` failure repair.** The production desktop UI is the native
-Qt Quick/QML host (`ui/qt`), an IPC CLIENT of the unchanged Go core over
-`internal/localipc` (per-user Unix socket / named pipe, transport-level
-identity checks, versioned keyed handshake `sheytan-ipc/1`, bounded
-framing). Wails is REMOVED — from the product, the build
-(`build/config.yml`), the module graph (go.mod/go.sum; CI asserts the
-absence) and the current-product docs; historical release records that
-name Wails stay (deleting them would falsify history). The shipped Qt
-surfaces are sessions/chat/live-streaming-with-Stop/settlement-
-persistence-reload/repeat-send and the core states; the remaining UI
-surfaces (AI Systems, Goals, Coding Lab, Net Search page, repository
-index, tasks/automations, downloads/diagnostics) are still served by the
+**Current release: v1.10.2 — the Qt architecture hardening + the AI
+Systems surface migration + fail-closed measurement.** The production
+desktop UI is the native Qt Quick/QML host (`ui/qt`), an IPC CLIENT of
+the unchanged Go core over `internal/localipc` (per-user Unix socket /
+named pipe, transport-level identity checks, versioned keyed handshake
+`sheytan-ipc/1`, bounded framing). Wails is REMOVED — from the product,
+the build (`build/config.yml`), the module graph (go.mod/go.sum; CI
+asserts the absence) and the current-product docs; historical release
+records that name Wails stay (deleting them would falsify history). The
+shipped Qt surfaces are sessions/chat/live-streaming-with-Stop/
+settlement-persistence-reload/repeat-send, the core states, and — new
+in v1.10.2 — the AI Systems list/activation drawer (a pure
+`/api/systems` client: list, activate, typed error paths; the store
+keeps ALL authority). The remaining UI surfaces (AI Systems
+editing/import, Goals, Coding Lab, Net Search page, repository index,
+tasks/automations, downloads/diagnostics) are still served by the
 documented headless/browser mode until their Qt migration lands — they
 are NOT claimed done. Run teardown is deterministic: run spawns are
 tracked and `Server.Close` joins them (bounded) before releasing the
 stack; new run/resume registrations are refused once shutdown began.
-The ONE canonical test entrypoint is scripts/verify-all.mjs (CI calls
-it). The Phase 1 engine gate is UNCHANGED: the physical-Windows
-warm-TTFT/native-vs-managed baseline is NOT MEASURED (no physical
-hardware), so the native C++ engine default stays evidence-gated and
-the managed llama.cpp path remains the default backend. The Windows
-TEST-ONLY CDP acceptance switch is retired with the Wails shell; the
-live-answer gate is now the Qt acceptance suite (real QML UI + real
-core) on both platforms. The former loopback activity transport is
-retired; /api/ws-origin now answers same-origin unconditionally for the
-headless/browser mode. Version identity is exactly `1.10.1` everywhere
+The launcher's UI-resolution contract is unit-tested
+(`internal/desktop/desktop_test.go`: `none` sentinel, override,
+next-to-core layout, hard refusal). The Linux desktop smoke owns its
+whole environment (Xvfb + Openbox/equivalent WM when present, self-built
+close tool, self-built core when unstaged, trap cleanup) and its G1–G5
+PASS under a real WM. The Windows full-suite compile gate is repaired:
+the localipc contract tests build on Windows too (the test-only
+`credAllowed` helper is platform-neutral now). The ONE canonical test
+entrypoint is scripts/verify-all.mjs (CI calls it). The Phase 1 engine
+gate is UNCHANGED: the physical-Windows warm-TTFT/native-vs-managed
+baseline is NOT MEASURED (no physical hardware), so the native C++
+engine default stays evidence-gated and the managed llama.cpp path
+remains the default backend. The Windows TEST-ONLY CDP acceptance
+switch is retired with the Wails shell; the live-answer gate is now the
+Qt acceptance suite (real QML UI + real core) on both platforms. The
+former loopback activity transport is retired; /api/ws-origin now
+answers same-origin unconditionally for the headless/browser mode.
+Measurement is FAIL-CLOSED about hosts: `cmd/shtn-perf` requires an
+explicit `--host-class physical|hosted` (no default), refuses a
+physical claim over detected hosted-CI markers, derives the
+schema-compat `hostedCI` flag from that class, and records
+RAM/hostname/evidence/notes (artifacts:
+`baselines/perf-hosted-ci-v1.10.0.json`,
+`baselines/perf-hosted-v1.10.2.json`). The direct devDependency `ws` is
+at 8.22.0 (GHSA-58qx-3vcg-4xpx / GHSA-96hv-2xvq-fx4p closed, no
+`--force`). Version identity is exactly `1.10.2` everywhere
 (canonical gate: `node scripts/release-version.mjs --check`).
 
 R&D decision
 (`Parsaetak/Contents` → `Research-and-Development` →
 `SHEYTAN-LA-2026-10-11.md`) remains the direction authority: Go stays
 the single orchestration authority; C++ owns numerical inference; the
-native-engine DEFAULT promotion is NOT flipped in v1.10.1 — the
+native-engine DEFAULT promotion is NOT flipped in v1.10.2 — the
 blocking evidence is the physical-Windows warm-TTFT comparison against
-managed llama.cpp (checklist in ROADMAP.md); the Phase 0 baseline lives
-in `baselines/perf-hosted-ci-v1.10.0.json` + `worklog.md` (hosted-CI
-labeled, NOT-MEASURED honesty per metric); the Qt/IPC seam is DEFINED in
-ARCHITECTURE.md (implemented at the chat/sessions surface, not yet at
-every panel). Version identity is
-exactly `1.10.1` everywhere (canonical gate:
-`node scripts/release-version.mjs --check`). No stale 1.9.6
-current-release claims exist outside `changelog.md`.
+managed llama.cpp (checklist in ROADMAP.md); the Phase 0 baselines live
+in `baselines/` (hosted class, NOT-MEASURED honesty per metric,
+fail-closed host classification) + `worklog.md`; the Qt/IPC seam is
+DEFINED in ARCHITECTURE.md (implemented at the chat/sessions surface
+and the AI Systems list/activation surface, not yet at every panel).
+Version identity is
+exactly `1.10.2` everywhere (canonical gate:
+`node scripts/release-version.mjs --check`). No stale 1.10.0/1.10.1
+current-release claims exist outside `changelog.md` and the retained
+historical note sections.
 
 **WHAT v1.10.0 CHANGED (the v1.10.0 regression-sensitive surfaces; all
 still current):**

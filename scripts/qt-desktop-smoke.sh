@@ -21,13 +21,35 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 WORK="${SMOKE_WORK:-/tmp/sheytan-qt-smoke}"
 DISPLAY_NUM="${SMOKE_DISPLAY:-77}"
-XTOOLS="${XTOOLS:-/home/z/xcb-libs/usr/bin}"
-XLIBS="${XLIBS:-/home/z/xcb-libs/usr/lib/x86_64-linux-gnu}"
-export PATH="$XTOOLS:$PATH"
-export LD_LIBRARY_PATH="$XLIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# X11 helpers (xdotool, xwininfo) come from the SYSTEM PATH by default.
+# XTOOLS/XLIBS remain as opt-in overrides for hosts that keep private
+# tool prefixes (no machine-specific path is baked into the script).
+XTOOLS="${XTOOLS:-}"
+XLIBS="${XLIBS:-}"
+[ -n "$XTOOLS" ] && export PATH="$XTOOLS:$PATH"
+[ -n "$XLIBS" ] && export LD_LIBRARY_PATH="$XLIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 CORE_BIN="${CORE_BIN:-$WORK/sheytan-core}"
+# UI resolution: explicit override → staged copy → the repo's developer
+# build tree. The smoke never builds the Qt host itself (that is the Qt
+# build/acceptance job's contract) but a normal developer checkout works
+# with no staging at all.
 UI_BIN="${UI_BIN:-$WORK/ui/build/sheytan-ui}"
+if [ ! -x "$UI_BIN" ] && [ -x "$REPO/ui/qt/build/sheytan-ui" ]; then
+  UI_BIN="$REPO/ui/qt/build/sheytan-ui"
+fi
+
+# The smoke owns its binaries: if the core is not provided/staged, build it
+# from the repo with the on-PATH Go toolchain (no pre-staged binary is
+# assumed — a fresh checkout must be able to run this end to end).
+if [ ! -x "$CORE_BIN" ]; then
+  if command -v go >/dev/null 2>&1; then
+    echo "core binary not staged — building it from the repo with go"
+    (cd "$REPO" && go build -o "$CORE_BIN" .) || fail "go build of the core failed"
+  else
+    fail "core binary $CORE_BIN missing and no 'go' on PATH to build it"
+  fi
+fi
 
 rm -rf "$WORK/data"
 mkdir -p "$WORK/data"
@@ -35,19 +57,70 @@ cd "$WORK"
 
 fail() { echo "SMOKE FAIL: $1"; exit 1; }
 
+# --- tracked cleanup ---------------------------------------------------------
+# Everything the smoke starts is tracked and killed on ANY exit path —
+# a failing gate must not leak processes or displays behind it.
+XVFB_PID=""
+WM_PID=""
+ENGINE_PID=""
+CORE_PID=""
+smoke_cleanup() {
+  [ -n "$CORE_PID" ] && kill "$CORE_PID" 2>/dev/null
+  [ -n "$ENGINE_PID" ] && kill "$ENGINE_PID" 2>/dev/null
+  [ -n "$WM_PID" ] && kill "$WM_PID" 2>/dev/null
+  [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null
+  return 0
+}
+trap smoke_cleanup EXIT INT TERM
+
 # Leftovers from a previous run must never wedge this one.
 pkill -f "fake-remote-engine.py" 2>/dev/null || true
 pkill -f "sheytan-qt-smoke/sheytan-core" 2>/dev/null || true
 pkill -f "sheytan-qt-smoke/ui/build/sheytan-ui" 2>/dev/null || true
 sleep 0.5
 
-# --- display -----------------------------------------------------------------
+# --- display + window manager (smoke-OWNED, not product-owned) ---------------
 # Clean any stale lock/socket from a previous run (bounded, display-scoped).
 rm -f "/tmp/.X${DISPLAY_NUM}-lock" "/tmp/.X11-unix/X${DISPLAY_NUM}" 2>/dev/null || true
 Xvfb :$DISPLAY_NUM -screen 0 1280x840x24 -nolisten tcp >"$WORK/xvfb.log" 2>&1 &
 XVFB_PID=$!
 sleep 1.5
 kill -0 $XVFB_PID 2>/dev/null || fail "Xvfb died at startup"
+
+# A real window manager owns mapping/geometry/WM_DELETE_WINDOW routing so
+# the gates exercise the same protocol path a user's desktop has. Openbox
+# (or an equivalent via WINMGR_BIN) is used when present; without any WM
+# the run continues WM-less and states that fact in the log — the gates
+# themselves never change. The WM is smoke-owned: it is never a product
+# dependency of the shipped desktop pair.
+WINMGR_BIN="${WINMGR_BIN:-$(command -v openbox || true)}"
+if [ -n "$WINMGR_BIN" ] && [ -x "$WINMGR_BIN" ]; then
+  # If the WM lives in a private prefix, hand it its own share/config dirs
+  # so themes and rc.xml resolve (openbox refuses to run without a theme).
+  WM_PREFIX="$(cd "$(dirname "$WINMGR_BIN")/.." && pwd)"
+  export XDG_DATA_DIRS="$WM_PREFIX/share${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
+  export XDG_CONFIG_DIRS="$WM_PREFIX/etc/xdg${XDG_CONFIG_DIRS:+:$XDG_CONFIG_DIRS}"
+  DISPLAY=:$DISPLAY_NUM "$WINMGR_BIN" >"$WORK/wm.log" 2>&1 &
+  WM_PID=$!
+  sleep 1
+  if kill -0 $WM_PID 2>/dev/null; then
+    echo "WM: openbox-owned display (pid $WM_PID)"
+  else
+    WM_PID=""
+    echo "WM: window manager exited immediately — continuing WM-less"
+  fi
+else
+  echo "WM: no window manager on PATH — continuing WM-less (smoke-owned Xvfb only)"
+fi
+
+# --- WM close-request tool (built from the tracked source, never shipped) ----
+if [ ! -x "$WORK/closewin" ]; then
+  if command -v cc >/dev/null 2>&1; then
+    cc -O2 -o "$WORK/closewin" "$REPO/scripts/closewin.c" -lX11 || fail "closewin build failed"
+  else
+    fail "closewin missing and no cc compiler available to build it"
+  fi
+fi
 
 # --- fixture engine ----------------------------------------------------------
 python3 "$REPO/scripts/fake-remote-engine.py" 18642 >"$WORK/engine.log" 2>&1 &

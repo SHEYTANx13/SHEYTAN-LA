@@ -15,16 +15,18 @@
 //     WebView rendering) are NOT measurable from this runner — the DOM
 //     boundary needs the real desktop shell (the Windows live-answer
 //     acceptance is that boundary's proof surface);
-//   - hosted-CI execution MUST pass --hosted-ci so the artifact is never
-//     mistaken for a physical-hardware benchmark;
+//   - the host class is EXPLICIT and FAIL-CLOSED (v1.10.2): --host-class
+//     physical|hosted is mandatory with no default; a run that declares
+//     "physical" while hosted-CI markers are detected is REFUSED, so a
+//     hosted runner can never emit a physical-hardware artifact;
 //   - without a real model the generation-path metrics stay NOT MEASURED;
 //     the fake engine measures plumbing latency only and is labeled as
 //     such in the artifact's backend field.
 //
 // Usage:
 //
-//      go run ./cmd/shtn-perf --out perf-baseline.json [--samples 3]
-//          [--model path/to/model.gguf] [--data-dir dir] [--hosted-ci]
+//      go run ./cmd/shtn-perf --host-class hosted --out perf-baseline.json
+//          [--samples 3] [--model path/to/model.gguf] [--data-dir dir]
 package main
 
 import (
@@ -33,6 +35,7 @@ import (
         "os"
         "path/filepath"
         "runtime"
+        "strconv"
         "strings"
         "time"
 
@@ -46,9 +49,19 @@ func main() {
         samples := flag.Int("samples", 3, "generation samples for the TTFT/stream metrics (>=1)")
         model := flag.String("model", "", "optional real GGUF model path (generation metrics stay NOT MEASURED without one)")
         dataDir := flag.String("data-dir", "", "data directory (default: a fresh temp dir)")
-        hostedCI := flag.Bool("hosted-ci", true, "mark the artifact as hosted-CI (never a physical-hardware benchmark)")
+        // FAIL-CLOSED host classification (v1.10.2). No default: an unclassified
+        // run is refused, and a physical claim over detected hosted-CI evidence
+        // is refused by perf.CheckHostClassification. The old --hosted-ci bool
+        // defaulted to true and could be silently swapped in either direction.
+        hostClass := flag.String("host-class", "", "MANDATORY: 'physical' or 'hosted' — the honest host class of THIS machine (no default)")
         release := flag.String("release", "", "release identity (default: package.json version when resolvable)")
+        notes := flag.String("notes", "", "free-text honesty context recorded in the artifact (e.g. 'virtualized session host, not GitHub Actions')")
         flag.Parse()
+
+        evidence := perf.DetectHostEvidence()
+        if err := perf.CheckHostClassification(*hostClass, evidence); err != nil {
+                fatal("%v", err)
+        }
 
         if *samples < 1 {
                 *samples = 1
@@ -60,9 +73,16 @@ func main() {
         env.OS = runtime.GOOS
         env.Arch = runtime.GOARCH
         env.CPU = cpuModel()
+        env.RAMMB = totalRAMMB()
+        env.Hostname = hostname()
+        env.HostClass = *hostClass
+        env.HostEvidence = evidence
         env.Backend = "managed-llama (fake fixture engine)" // honest boot posture below
         env.State = "cold"
-        env.HostedCI = *hostedCI
+        env.HostedCI = *hostClass == perf.HostClassHosted
+        if strings.TrimSpace(*notes) != "" {
+                env.Notes = append(env.Notes, strings.TrimSpace(*notes))
+        }
         if env.Release == "" {
                 env.Release = readPackageVersion()
         }
@@ -188,6 +208,34 @@ func cpuModel() string {
                 }
         }
         return runtime.GOARCH
+}
+
+// totalRAMMB reads MemTotal from /proc/meminfo (0 = unknown, honestly
+// omitted from the artifact/report rather than guessed).
+func totalRAMMB() float64 {
+        data, err := os.ReadFile("/proc/meminfo")
+        if err != nil {
+                return 0
+        }
+        for _, line := range strings.Split(string(data), "\n") {
+                if strings.HasPrefix(line, "MemTotal:") {
+                        parts := strings.Fields(line)
+                        if len(parts) >= 2 {
+                                if kb, err := strconv.ParseFloat(parts[1], 64); err == nil {
+                                        return kb / 1024.0
+                                }
+                        }
+                }
+        }
+        return 0
+}
+
+func hostname() string {
+        h, err := os.Hostname()
+        if err != nil {
+                return ""
+        }
+        return h
 }
 
 func quantFromName(model string) string {
