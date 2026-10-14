@@ -49,6 +49,44 @@ func TestUIExecutableExplicitOverride(t *testing.T) {
         }
 }
 
+// TestUIExecutableOverrideWinsOverNextToCore pins the v1.10.3 (R13)
+// resolution order: an EXPLICIT override wins even when a packaged UI sits
+// next to the core executable. The v1.10.2 next-to-core-first order
+// silently ignored the override in exactly that situation.
+func TestUIExecutableOverrideWinsOverNextToCore(t *testing.T) {
+        self, err := os.Executable()
+        if err != nil {
+                t.Skipf("cannot resolve test binary: %v", err)
+        }
+        name, ok := uiExecutableNames[runtime.GOOS]
+        if !ok {
+                t.Skipf("no packaged UI name for %s", runtime.GOOS)
+        }
+        // A packaged UI next to the core (the test binary here).
+        placeholder := filepath.Join(filepath.Dir(self), name)
+        if err := os.WriteFile(placeholder, []byte("placeholder"), 0o755); err != nil {
+                t.Skipf("test binary dir is not writable: %v", err)
+        }
+        t.Cleanup(func() { _ = os.Remove(placeholder) })
+
+        // AND an explicit override pointing somewhere else: the override
+        // must win — never the next-to-core copy.
+        dir := t.TempDir()
+        alt := filepath.Join(dir, "override-ui")
+        if err := os.WriteFile(alt, []byte("placeholder"), 0o755); err != nil {
+                t.Fatalf("write alt: %v", err)
+        }
+        t.Setenv("SHEYTAN_UI_EXECUTABLE", alt)
+
+        path, err := uiExecutable()
+        if err != nil {
+                t.Fatalf("override must be honored: %v", err)
+        }
+        if path != alt {
+                t.Fatalf("uiExecutable = %q, want the override %q (next-to-core must lose)", path, alt)
+        }
+}
+
 func TestUIExecutableOverrideMissingIsRefused(t *testing.T) {
         t.Setenv("SHEYTAN_UI_EXECUTABLE", filepath.Join(t.TempDir(), "does-not-exist"))
         _, err := uiExecutable()
@@ -78,8 +116,10 @@ func TestUIExecutableNextToCoreIsResolved(t *testing.T) {
         }
         t.Cleanup(func() { _ = os.Remove(placeholder) })
 
+        // v1.10.3 (R13): an EMPTY override means "no override" — one call
+        // does both the set and the restore (t.Setenv); the redundant
+        // os.Unsetenv pair is gone.
         t.Setenv("SHEYTAN_UI_EXECUTABLE", "")
-        os.Unsetenv("SHEYTAN_UI_EXECUTABLE")
 
         path, err := uiExecutable()
         if err != nil {
@@ -95,7 +135,6 @@ func TestUIExecutableMissingEverywhereIsAHardRefusal(t *testing.T) {
         // path must FAIL LOUDLY (the launcher exits non-zero) instead of
         // starting a UI-less desktop silently.
         t.Setenv("SHEYTAN_UI_EXECUTABLE", "")
-        os.Unsetenv("SHEYTAN_UI_EXECUTABLE")
 
         _, err := uiExecutable()
         if err == nil {

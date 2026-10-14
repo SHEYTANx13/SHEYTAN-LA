@@ -99,7 +99,11 @@ ApplicationWindow {
                                 Layout.fillWidth: true
                             }
                             Label {
+                                // v1.10.3 (R9a): bind visibility to the text —
+                                // the empty ACTIVE badge kept its layout space
+                                // in the v1.10.2 row, shifting the title.
                                 text: Core.activeSystemId === modelData.systemId ? qsTr("ACTIVE") : ""
+                                visible: text !== ""
                                 color: "#7dd3a0"
                                 font.pixelSize: 10
                                 font.bold: true
@@ -197,7 +201,11 @@ ApplicationWindow {
                                 Layout.fillWidth: true
                             }
                             Label {
-                                text: (modelData.messageCount !== undefined ? modelData.messageCount : 0) + qsTr(" messages")
+                                // v1.10.3 field contract: the wire field is
+                                // msgCount (internal/sessions Session json
+                                // tag) — the v1.10.2 messageCount read was
+                                // always undefined, rendering "0 messages".
+                                text: (modelData.msgCount !== undefined ? modelData.msgCount : 0) + qsTr(" messages")
                                 color: "#8a8a92"
                                 font.pixelSize: 11
                             }

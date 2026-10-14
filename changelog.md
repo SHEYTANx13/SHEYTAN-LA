@@ -11,6 +11,123 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.10.3 — 2026-10-14 — the Qt IPC hardening release: real framing, strict handshake, runnable CI, honest evidence
+
+Focus: close the real defects and untested risk surfaces the v1.10.2
+commit audit verified. The Qt CoreClient's HTTP path now completes
+responses under real framing (Content-Length honored, close-delimited
+still supported, oversized heads/bodies refused deterministically) — the
+v1.10.2 client completed a body only when the server closed the channel,
+so any response that kept the socket open hung until timeout. The IPC
+handshake now requires the protocol NAME and the protocol VERSION
+(`sheytan-ipc` version 1) — a core speaking v2 is refused visibly. Every
+silent non-200/malformed error
+path in the client now surfaces a typed error. The Linux smoke aborts
+cleanly on a missing core (the `fail` defined-after-use bug), cleans up
+on INT/TERM, derives its stale-process patterns from the run's own
+paths, resolves a bare `WINMGR_BIN` through PATH, and REFUSES G3 without
+a window manager instead of claiming geometry proof under bare Xvfb. The
+two platform CI jobs are runnable again: `libx11-dev` + `openbox` are
+installed, the smoke is handed the REAL staged binary paths (the core
+name and the never-staged UI_BIN both silently masked by fallbacks
+before), and the Windows acceptance-binary staging resolves the MSVC
+multi-config `Release/` layout instead of silently no-oppping. The
+launcher's explicit `SHEYTAN_UI_EXECUTABLE` override now wins over the
+next-to-core packaged UI, pinned by test. The perf flake on hosts
+exporting extra CI markers is fixed (membership, not exact count); the
+hosted baseline artifact was re-measured with the code SHA stamped and
+UPDATE.md now quotes it character for character. Ten new QtTest
+framing/contract slots and three Go field-contract pins lock the wire
+contract (bare-array sessions, `msgCount`, systems shape) so the next
+commit cannot reintroduce the class.
+
+1. **P0 — CoreClient HTTP framing completed under Content-Length and
+   Connection: close, with deterministic oversize refusals.** The
+   response body now completes the moment Content-Length is satisfied
+   (no hang when the server holds the socket open); a declared length
+   beyond the 8 MiB body bound is refused before buffering; a completed
+   head beyond the 64 KiB bound is refused (the v1.10.2 code only
+   checked the incomplete case); close-delimited bodies still complete.
+   Proven before/after: on the v1.10.2 client, 9 of the 10 new framing
+   slots fail (including a 20 s hang per Content-Length response); on
+   v1.10.3 all 14 acceptance slots pass.
+2. **P0 — strict IPC handshake (R17).** `connectToCore` requires
+   `protocol == "sheytan-ipc"` AND `protocolVersion == 1` before
+   `connected` flips; the v1.10.2 happy path checked the name only and
+   accepted a sheytan-ipc/2 core. Regression: the new
+   `handshakeRejectsWrongProtocolVersion` slot FAILS on the v1.10.2
+   client (it accepts v2) and PASSES on v1.10.3.
+3. **P1 — every silent client error path now surfaces a typed error.**
+   `refreshSystems` non-200 → `systems refresh failed (status N)` (R7);
+   `refreshSessions` non-200/malformed → typed errors (the v1.10.2 code
+   silently skipped BOTH — which had hidden a real contract drift, see
+   item 4); `deleteSession` non-200 → typed error. The `ACTIVE` badge
+   no longer keeps layout space when inactive (R9a). The activity
+   WebSocket gained an explicit policy: only complete text frames carry
+   events, fragmented frames are REFUSED with a typed error (the
+   v1.10.2 code silently dropped continuation payloads), ping → masked
+   pong, close → masked close reply + stream teardown, and the frame
+   loop no longer starves frames queued behind a control frame.
+4. **P1 — the sessions wire contract is now parsed as the core serves
+   it.** `GET /api/sessions` returns a BARE JSON array whose stubs carry
+   `id`, `title` (omitempty) and `msgCount` — the v1.10.2 client
+   expected a wrapped `{"sessions":[…]}` envelope and a `messageCount`
+   field that never exist on the wire; the silent malformed-skip hid
+   both, so the sidebar list never loaded and every session showed
+   "0 messages". Client parsing fixed, QML fixed, and three new Go
+   field-contract pins (`internal/api/qt_field_contract_test.go`) lock
+   the shape so a rename fails a test instead of blanking the UI.
+   `activateSystem`/`openSession`/`deleteSession`/the activity WS URL
+   now percent-encode id segments defensively (R8; the store's charset
+   — `default` / `sys-` + lowercase hex — is verified URL-safe).
+5. **P1 — the Linux smoke aborts and cleans correctly (R1/R2), and the
+   hosted CI jobs are runnable (R3/R4/R16).** `fail()` is defined
+   before its first call site (the v1.10.2 missing-core path printed
+   "command not found" and CONTINUED, dying later with a confusing
+   empty-log error — reproduced before the fix); INT/TERM now exit with
+   signal codes instead of resuming; stale-process pkill patterns are
+   derived from `$CORE_BIN`/`$UI_BIN`/`$WORK` instead of hardcoded
+   /tmp paths; a bare `WINMGR_BIN` resolves through `command -v`; the
+   IPC-key environ read retries bounded; Xvfb/engine/core readiness is
+   event-based instead of fixed sleeps; and G3 REFUSES to run without a
+   real window manager. The Linux job installs `libx11-dev` (closewin
+   builds with `cc -lX11`) and `openbox`, stages `sheytan-ui` to the
+   exact `UI_BIN` path it passes, and passes the REAL core name
+   (`SHEYTAN-Local-Agent`) to both the smoke and the live-answer
+   acceptance; the Windows job resolves the acceptance binary from
+   `ui/qt/build/Release/` first and throws when neither path exists
+   (never SilentlyContinue).
+6. **P1 — launcher override order (R13) and measurement honesty
+   (R5/R6/R10).** `uiExecutable` checks the explicit
+   `SHEYTAN_UI_EXECUTABLE` override FIRST (the v1.10.2 next-to-core-first
+   order silently ignored an explicit override whenever a UI sat beside
+   the core); pinned by `TestUIExecutableOverrideWinsOverNextToCore`;
+   the redundant `t.Setenv("")`+`os.Unsetenv` pairs are gone.
+   `TestDetectHostEvidenceFindsMarkers` asserts membership, not an
+   exact count (a host exporting TF_BUILD/JENKINS_URL/TRAVIS/CIRCLECI/
+   BUILDKITE failed the v1.10.2 assert spuriously — reproduced with
+   TF_BUILD=1 before the fix). The stale `readCodeSHA` ldflags comment
+   is corrected. `baselines/perf-hosted-v1.10.2.json` is re-measured
+   with `SHEYTAN_PERF_CODE_SHA` stamped to the audited commit and a
+   trailing newline; UPDATE.md quotes the artifact character for
+   character (the v1.10.2 release notes claimed 1.2 ms / 14.8 MB while
+   the committed artifact recorded different numbers and an unknown
+   codeSha).
+7. **P2 — identity 1.10.3, docs reconciled (R11/R12/R14/R15).**
+   Canonical version via `scripts/release-version.mjs` + `--check`
+   (config.go, build/config.yml, SIGNATURE repaired; ui/qt/CMakeLists.txt
+   project VERSION bumped); no stale "1.10.0/1.10.2 current" claims
+   outside changelog history. The "smallest compatible fix" ws claim is
+   corrected in place (upstream fixed in 8.20.1/8.21.0; 8.22.0 chosen;
+   dependency unchanged). The Go space-indent convention is recorded in
+   agent.md (no mass reformat; CI does not gate gofmt). The agent.md
+   "CI calls verify-all.mjs" claim is corrected to match the workflow
+   (the CI gates are inline; verify-all.mjs is the LOCAL canonical
+   entrypoint). worklog.md carries the per-item fixed/skipped/not-run
+   evidence.
+
+---
+
 ## v1.10.2 — 2026-10-13 — the Windows-gate compile repair, the smoke that owns its environment, the AI Systems Qt surface, and fail-closed measurement
 
 Focus: harden the v1.10.1 Qt + localipc architecture for real — repair
@@ -74,11 +191,13 @@ remaining Qt surfaces are not claimed done.
    Pins in `internal/perf/perf_test.go`; committed artifact
    `baselines/perf-hosted-v1.10.2.json` (hosted session host, plainly
    labeled).
-5. **P1 — high-severity `ws` advisories closed (smallest compatible
-   fix).** GHSA-58qx-3vcg-4xpx + GHSA-96hv-2xvq-fx4p on the direct
+5. **P1 — high-severity `ws` advisories closed.** GHSA-58qx-3vcg-4xpx + GHSA-96hv-2xvq-fx4p on the direct
    devDependency ws 8.18.3; bumped to 8.22.0 (same major, no
    `--force`); `npm audit --audit-level=high` clean; frontend gates
-   green.
+   green. (v1.10.3 correction: the v1.10.2 wording called this the
+   "smallest compatible fix", but the advisories were already fixed
+   upstream in ws 8.20.1 and 8.21.0 — 8.22.0 was chosen, not the
+   smallest; the dependency itself is unchanged.)
 6. **P2 — launcher resolution contract pinned by unit tests.** New
    `internal/desktop/desktop_test.go` locks the `uiExecutable`
    resolution: the `none` sentinel, the explicit override, the

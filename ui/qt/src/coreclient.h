@@ -93,6 +93,7 @@ private:
     void pumpSocket(QLocalSocket *sock);
     void finishRequest(int id, QLocalSocket *sock, bool ok, const QByteArray &body);
     void openActivityStream();
+    void closeWsStream();
     void handleActivityFrame(const QByteArray &text);
     QByteArray readWsFrame(QLocalSocket *sock, bool &ok);
     void setError(const QString &msg);

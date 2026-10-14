@@ -1,28 +1,99 @@
-# UPDATE.md — v1.10.2 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.10.3 Release Notes & Maintenance Behavior
 
-**Release:** `v1.10.2` (canonical application version; single version
+**Release:** `v1.10.3` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ cb11a23` (`v1.10.1`) · **Date:** 2026-10-13
-**Package:** `SHEYTAN-LA-v1.10.2-FINAL.zip` (complete repository tree)
+**Base:** `main @ 1d3b1f2` (`v1.10.2`) · **Date:** 2026-10-14
+**Package:** `SHEYTAN-LA-v1.10.3-FINAL.zip` (complete repository tree)
 **R&D authority:** `Parsaetak/Contents`, branch `Research-and-Development`,
 `SHEYTAN-LA-2026-10-11.md` (linked, not copied — the R&D document stays in
 its source repository).
 
 The authoritative per-release history lives in `changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
-behavior. v1.10.2 is the reliability and completeness step after the
-v1.10.1 Qt migration: it repairs the Windows Go verification gate that
-the full-suite compile exposes, hardens the Linux desktop smoke to own
-its whole environment (including a real window manager), migrates the
-AI Systems list/activation surface to Qt as a pure IPC client, makes
-measurement host-classification fail-closed, fixes the high-severity
-`ws` advisory with the smallest compatible bump, and reconciles every
-document to the 1.10.2 identity. The R&D Phase 1 engine gate is
-honestly untouched: the physical-Windows warm-TTFT /
-native-vs-managed comparison remains NOT MEASURED (no physical
-hardware was available in this session), and the native C++ engine
-default stays evidence-gated.
+behavior. v1.10.3 is the Qt IPC hardening release after the v1.10.2
+commit audit: it makes the CoreClient's HTTP and WebSocket paths correct
+under real framing (Content-Length completion, deterministic oversize
+refusals, strict sheytan-ipc/1 handshake, typed error surfacing, the
+real sessions wire contract), makes the Linux smoke abort and clean up
+correctly and refuse WM-less GUI claims, makes the two platform CI jobs
+runnable again (dependencies, real staged paths, MSVC Release/ staging),
+repairs the launcher override order, fixes the measurement flake, and
+reconciles the evidence narrative (the artifact re-measured with the
+code SHA stamped; the docs quote it character for character). The R&D
+Phase 1 engine gate is honestly untouched: the physical-Windows
+warm-TTFT / native-vs-managed comparison remains NOT MEASURED (no
+physical hardware was available in this session), and the native C++
+engine default stays evidence-gated. The remaining Qt surfaces (Goals,
+Coding Lab, Net Search, edit/import of AI Systems, repository index,
+tasks/automations, downloads/diagnostics) are NOT claimed migrated.
+
+## What v1.10.3 changes
+
+1. **P0 — CoreClient HTTP + WebSocket framing repaired and pinned.**
+   Content-Length completion (no hang when the server holds the socket
+   open), close-delimited completion kept, oversized heads/bodies
+   refused deterministically, strict handshake (name AND version=1),
+   percent-encoded id segments, typed errors on every silent path, WS
+   control-frame policy (ping→pong, close→close-reply + teardown,
+   fragmentation refused), and the frame loop no longer starves frames
+   behind a control frame. Ten new QtTest slots
+   (`ui/qt/tests/tst_acceptance.cpp`) prove the framing contract
+   byte-level; the two REAL-core slots prove the live-answer cycle.
+   Before/after evidence: on the v1.10.2 client 9 of the 10 framing
+   slots FAIL (including the R17 accept-a-v2-core behavior); on
+   v1.10.3 all 14 slots PASS against the real core.
+2. **P1 — the sessions wire contract is parsed as the core serves it.**
+   GET /api/sessions is a BARE array of stubs (`id`, `title` omitempty,
+   `msgCount`) — the v1.10.2 client expected a wrapped envelope and a
+   `messageCount` field, both hidden by the silent malformed-skip, so
+   the sidebar never loaded and every session showed "0 messages".
+   Fixed in the client and QML; pinned by three new Go contract tests
+   (`internal/api/qt_field_contract_test.go`).
+3. **P1 — smoke + CI runnability (R1/R2/R3/R4/R16) and launcher order
+   (R13).** fail-before-define aborted correctly reproduced and fixed;
+   traps/pkill patterns/WINMGR resolution hardened; G3 refuses without
+   a WM; CI installs libx11-dev + openbox, stages the UI to the exact
+   UI_BIN path, passes the REAL core name; the Windows acceptance
+   staging resolves Release/ first and throws if absent; the explicit
+   SHEYTAN_UI_EXECUTABLE override wins over next-to-core (pinned).
+4. **P1 — measurement honesty (R5/R6/R10).** Membership-only host
+   evidence assert (the TF_BUILD=1 repro failed before the fix); the
+   stale readCodeSHA comment corrected; the artifact re-measured with
+   the code SHA stamped and a trailing newline — quoted below
+   character for character.
+5. **P2 — identity + docs (R11/R12/R14/R15).** Canonical 1.10.3 via
+   `node scripts/release-version.mjs` + `--check`; ws "smallest
+   compatible fix" reworded in place (upstream fixed in 8.20.1 and
+   8.21.0; 8.22.0 chosen; dependency unchanged); Go space-indent
+   convention recorded in agent.md; the "CI calls verify-all.mjs"
+   claim corrected (CI gates are inline); per-item evidence appended
+   to worklog.md.
+
+## Current measured baseline (honest, v1.10.3 re-measurement)
+
+Recorded in this session (virtualized Linux container session host —
+NOT physical consumer hardware and NOT GitHub Actions hosted CI;
+artifact: `baselines/perf-hosted-v1.10.2.json`, declared host class
+`hosted`, `SHEYTAN_PERF_CODE_SHA=1d3b1f2e0ece271f9eac0656788368638062366a`
+stamped, method + limitations + honesty notes embedded):
+
+* `cold_start_to_interactive_ms`: MEASURED — 1.339 ms (api.New +
+  EnsureSetup boundary on the hosted host; the GUI shell adds its own
+  window cost, measured by the desktop acceptance surface). Target
+  < 800 ms is met on THIS host only — not a product-wide claim.
+* `idle_memory_mb` / `peak_memory_mb`: MEASURED — 14.3203125 MB (process
+  RSS/VmHWM, server-only posture; excludes the desktop shell process).
+  The < 80 MB preference is met on THIS host only.
+
+---
+
+# v1.10.2 release notes (historical — superseded by v1.10.3 above)
+
+The v1.10.2 notes below are kept as history; where they describe the
+CURRENT release behavior they are superseded by the v1.10.3 sections
+above. The v1.10.2-era measured-baseline section further down carries
+the R10 correction narrative.
 
 ## What v1.10.2 changes
 
@@ -84,12 +155,14 @@ default stays evidence-gated.
    round-trip. Committed artifact:
    `baselines/perf-hosted-v1.10.2.json` (hosted session host, plainly
    labeled — NOT GitHub Actions, NOT physical hardware).
-5. **P1 — high-severity `ws` advisories closed by the smallest
-   compatible fix.** GHSA-58qx-3vcg-4xpx (uninitialized memory
+5. **P1 — high-severity `ws` advisories closed.** GHSA-58qx-3vcg-4xpx (uninitialized memory
    disclosure) and GHSA-96hv-2xvq-fx4p (memory-exhaustion DoS) affected
    the direct devDependency ws 8.18.3. Bumped to 8.22.0 (same major,
    no `--force`); `npm audit --audit-level=high` is clean and the full
-   frontend gate stack stays green.
+   frontend gate stack stays green. (v1.10.3 correction: the
+   "smallest compatible fix" claim was wrong — the advisories were
+   already fixed upstream in ws 8.20.1 and 8.21.0; 8.22.0 was chosen,
+   not the smallest. The dependency is unchanged.)
 6. **P2 — documentation/version reconciliation.** Canonical identity
    1.10.2 via `scripts/release-version.mjs` (package.json source;
    config.go, build/config.yml, SIGNATURE repaired; `--check` green);
@@ -273,18 +346,28 @@ areas is the one described above.
    boundary; identifier-free ordinary logs (no `runId=` / `session=`
    reintroduction).
 
-## Current measured baseline (honest)
+## v1.10.2-era measured baseline (historical record)
 
-Recorded in this session (virtualized Linux container session host —
+Recorded in the v1.10.2 session (virtualized Linux container session host —
 NOT physical consumer hardware and NOT GitHub Actions hosted CI;
 artifact: `baselines/perf-hosted-v1.10.2.json`, declared host class
 `hosted`, method + limitations + honesty notes embedded):
 
-* `cold_start_to_interactive_ms`: MEASURED — 1.2 ms (api.New +
+> v1.10.3 correction (R10): the v1.10.2 session quoted 1.2 ms / 14.8 MB
+> here while the committed artifact recorded different numbers and an
+> unstamped code SHA — an evidence narrative drift. The artifact was
+> re-measured in the v1.10.3 session (same evidence class, same
+> fail-closed classification) with `SHEYTAN_PERF_CODE_SHA` stamped to the
+> audited commit `1d3b1f2e0ece271f9eac0656788368638062366a` and a
+> trailing newline; the CURRENT baseline section at the top of this file
+> quotes THAT artifact character for character. Never keep two
+> narratives at once.
+
+* `cold_start_to_interactive_ms`: MEASURED — 1.339 ms (api.New +
   EnsureSetup boundary on the hosted host; the GUI shell adds its own
   window cost, measured by the desktop acceptance surface). Target
   < 800 ms is met on THIS host only — not a product-wide claim.
-* `idle_memory_mb` / `peak_memory_mb`: MEASURED — 14.8 MB (process
+* `idle_memory_mb` / `peak_memory_mb`: MEASURED — 14.3203125 MB (process
   RSS/VmHWM, server-only posture; excludes the desktop shell process).
   The < 80 MB preference is met on THIS host only.
 * `engine_ready_ms`, `warm_ttft_ms`, `stream_duration_ms`: NOT MEASURED

@@ -7,8 +7,8 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.10.2 — the Qt architecture hardening + the AI
-Systems surface migration + fail-closed measurement.** The production
+**Current release: v1.10.3 — the Qt IPC hardening release (framing,
+handshake, CI runnability, evidence reconciliation).** The production
 desktop UI is the native Qt Quick/QML host (`ui/qt`), an IPC CLIENT of
 the unchanged Go core over `internal/localipc` (per-user Unix socket /
 named pipe, transport-level identity checks, versioned keyed handshake
@@ -34,8 +34,11 @@ whole environment (Xvfb + Openbox/equivalent WM when present, self-built
 close tool, self-built core when unstaged, trap cleanup) and its G1–G5
 PASS under a real WM. The Windows full-suite compile gate is repaired:
 the localipc contract tests build on Windows too (the test-only
-`credAllowed` helper is platform-neutral now). The ONE canonical test
-entrypoint is scripts/verify-all.mjs (CI calls it). The Phase 1 engine
+`credAllowed` helper is platform-neutral now). The ONE canonical local
+verification entrypoint is scripts/verify-all.mjs; the CI jobs run
+their gates INLINE in build-desktop.yml and do NOT invoke verify-all.mjs
+(v1.10.3 correction — the v1.10.2 wording claimed CI calls it, and the
+workflow never did). The Phase 1 engine
 gate is UNCHANGED: the physical-Windows warm-TTFT/native-vs-managed
 baseline is NOT MEASURED (no physical hardware), so the native C++
 engine default stays evidence-gated and the managed llama.cpp path
@@ -52,7 +55,9 @@ RAM/hostname/evidence/notes (artifacts:
 `baselines/perf-hosted-ci-v1.10.0.json`,
 `baselines/perf-hosted-v1.10.2.json`). The direct devDependency `ws` is
 at 8.22.0 (GHSA-58qx-3vcg-4xpx / GHSA-96hv-2xvq-fx4p closed, no
-`--force`). Version identity is exactly `1.10.2` everywhere
+`--force`; upstream fixed them in 8.20.1 and 8.21.0 respectively —
+8.22.0 was chosen, not the smallest). Version identity is exactly
+`1.10.3` everywhere
 (canonical gate: `node scripts/release-version.mjs --check`).
 
 R&D decision
@@ -368,6 +373,13 @@ tools execute. The laboratory verifies."**
   unsupported with honest fallback (never prompt-side emulation).
 * The codename-removal gate stays enabled; release identity flows from
   package.json through `scripts/release-version.mjs` only.
+
+## Code formatting convention
+
+* Go sources are SPACE-indented by repo convention (some packages were
+  converted tab→space in the 1d3b1f2 tree). CI does NOT gate gofmt/
+  gofumpt — do not run a mass reformat; match the indentation of the
+  file you are editing (v1.10.3 record, register R12).
 
 ## Linux / Windows evidence boundaries
 

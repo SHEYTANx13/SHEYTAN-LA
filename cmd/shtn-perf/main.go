@@ -257,12 +257,14 @@ func copyModel(src, dst string) error {
 }
 
 func readCodeSHA() string {
-        // VCS info is stamped by the build; an unstamped binary reports
-        // unknown honestly.
+        // v1.10.3 (R6): the code SHA comes from the SHEYTAN_PERF_CODE_SHA
+        // environment variable (the measurement harness exports it before
+        // invoking this CLI). An unset variable reports unknown honestly —
+        // no stamping, no guessing.
         if info, ok := os.LookupEnv("SHEYTAN_PERF_CODE_SHA"); ok {
                 return info
         }
-        return "(unknown — build with -ldflags -X main.codeSHA=... or set SHEYTAN_PERF_CODE_SHA)"
+        return "(unknown — set SHEYTAN_PERF_CODE_SHA)"
 }
 
 func readPackageVersion() string {

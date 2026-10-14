@@ -743,7 +743,17 @@ jobs:
 
           # Acceptance suite binary (QtTest; drives the REAL Main.qml
           # against the REAL core in the live-answer gate below).
-          Copy-Item "ui/qt/build/sheytan-ui-acceptance.exe" "dist/windows/" -ErrorAction SilentlyContinue
+          # v1.10.3 (R16): MSVC multi-config puts the binary in build/Release/
+          # — the v1.10.2 single flat-path Copy-Item with SilentlyContinue
+          # silently no-opped there, so the acceptance gate threw late with
+          # "the Qt acceptance suite was not produced". Resolve Release/
+          # first, then the flat path, and throw if NEITHER exists — never
+          # a silent continue.
+          $accSrc = "ui/qt/build/Release/sheytan-ui-acceptance.exe"
+          if (-not (Test-Path $accSrc)) { $accSrc = "ui/qt/build/sheytan-ui-acceptance.exe" }
+          if (-not (Test-Path $accSrc)) { throw "[gate] sheytan-ui-acceptance.exe was not produced (looked in ui/qt/build/Release/ and ui/qt/build/)." }
+          Copy-Item $accSrc "dist/windows/"
+          if (-not (Test-Path "dist/windows/sheytan-ui-acceptance.exe")) { throw "[gate] acceptance binary staging failed." }
 
           # QML-aware deployment into the package root (core + UI pair).
           windeployqt --qmldir ui/qt/qml --no-compiler-runtime "$appRoot/SHEYTAN-LA.exe" | Out-Null
@@ -1369,17 +1379,24 @@ jobs:
           # x11-utils; libxcb userspace pieces the Qt xcb plugin loads
           # (xkbcommon-x11, cursor, icccm, keysyms, image, render-util)
           # come with the runner image or the Qt deploy step.
+          # v1.10.3 (R3): libx11-dev (the smoke builds scripts/closewin.c
+          # with cc -lX11) and openbox (the smoke's G3/G5 gates require a
+          # REAL window manager — no WM-less GUI claims) are REQUIRED now;
+          # their v1.10.2 absence made the first hosted smoke run fail
+          # (missing X11 headers) or run WM-less (untrustable geometry).
           sudo apt-get install -y \
             build-essential \
             pkg-config \
             libgl1 \
             libegl1 \
+            libx11-dev \
             libxkbcommon-x11-0 \
             libxcb-cursor0 \
             libxcb-icccm4 \
             libxcb-keysyms1 \
             libxcb-image0 \
             libxcb-render-util0 \
+            openbox \
             xvfb \
             xdotool \
             x11-utils \
@@ -1679,6 +1696,12 @@ jobs:
 
           cp ui/qt/build/sheytan-ui "dist/linux/app/${LINUX_PKG_ROOT}/sheytan-ui"
           cp ui/qt/build/sheytan-ui-acceptance "$RUNNER_TEMP/sheytan-ui-acceptance"
+          # v1.10.3 (R4): stage the UI at the exact path the smoke step
+          # passes as UI_BIN — the v1.10.2 workflow passed
+          # $RUNNER_TEMP/sheytan-ui without ever copying it there, so the
+          # run only survived via the smoke's silent repo-tree fallback.
+          cp ui/qt/build/sheytan-ui "$RUNNER_TEMP/sheytan-ui"
+          test -x "$RUNNER_TEMP/sheytan-ui"
 
       # v1.10.1 RUNTIME SMOKE — the REAL launch flow under Xvfb: the core
       # executable (desktop.Run) binds the per-user IPC endpoint, spawns
@@ -1699,9 +1722,17 @@ jobs:
           export LD_LIBRARY_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           export QT_QPA_PLATFORM_PLUGIN_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/plugins/platforms"
 
+          # v1.10.3 (R4): the REAL staged paths. The v1.10.2 step passed
+          # CORE_BIN=.../SHEYTAN-LA while the build stages the core as
+          # SHEYTAN-Local-Agent (and never staged UI_BIN at all) — both
+          # mismatches were masked by the smoke's silent fallbacks, so a
+          # green run proved the fallbacks, not the wiring. The explicit
+          # existence checks fail loudly BEFORE the smoke can fall back.
+          test -x "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent"
+          test -x "$RUNNER_TEMP/sheytan-ui"
           SMOKE_WORK="$RUNNER_TEMP/sheytan-qt-smoke" \
           SMOKE_DISPLAY="77" \
-          CORE_BIN="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA" \
+          CORE_BIN="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent" \
           UI_BIN="$RUNNER_TEMP/sheytan-ui" \
           XTOOLS="$(command -v xdotool >/dev/null && dirname "$(command -v xdotool)")" \
           XLIBS="" \
@@ -1718,7 +1749,7 @@ jobs:
           set -euo pipefail
 
           export SHEYTAN_REPO="$(pwd)"
-          export SHEYTAN_CORE_BIN="$(pwd)/dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA"
+          export SHEYTAN_CORE_BIN="$(pwd)/dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent"
           export QT_QPA_PLATFORM=offscreen
           export LD_LIBRARY_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           export QT_QPA_PLATFORM_PLUGIN_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/plugins/platforms"

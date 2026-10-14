@@ -19,7 +19,9 @@ Motto: **"The model proposes. The tools execute. The laboratory verifies."**
 
 ## Shipped baseline (compact)
 
-**v1.10.2 is the shipped baseline; release evidence is in changelog.md.**
+**v1.10.3 is the shipped baseline; release evidence is in changelog.md.**
+(v1.10.2 is the parent release — the Qt architecture hardening + the AI
+Systems surface migration; its evidence stays in changelog.md.)
 
 v1.8 delivered, with per-release evidence in `changelog.md`: the adaptive
 runtime (task classification, tier system, context planning), the staged
@@ -144,18 +146,23 @@ QtTest live-answer acceptance (real QML + real core). Windows CI is
 wired to the same gates (Qt 6.8.2 MSVC build + windeployqt + Qt
 acceptance + windowed runtime smoke) and remains NOT VERIFIED until a
 green hosted run exists.
-v1.10.2 STATUS: HARDENED + one more surface migrated. (a) The Windows
-Go verification gate is repaired for real: `internal/localipc`'s
-test-only `credAllowed` helper lived behind the `!windows` build tag and
-broke `go test ./...` compilation on Windows — the helper now lives in
-the platform-neutral file, so the full suite (the exact gate the
-Windows job runs) builds on both platforms. (b) The Linux smoke now
-OWNS its environment (Xvfb + Openbox/equivalent WM when present,
-self-built close tool, trap cleanup) and its G1–G5 pass under a real
-WM. (c) The AI Systems list/activation surface moved to Qt — a pure
-`/api/systems` client view (list, activate, typed 404 error path) with
-an acceptance slot; the store keeps ALL authority. Remaining surfaces
-NOT yet migrated to Qt (honest): AI Systems editing/import, Goals,
+v1.10.3 STATUS: Qt IPC HARDENED. (a) The CoreClient HTTP path completes
+under real framing — Content-Length completion (no hang when the server
+holds the socket open), close-delimited kept, oversized heads/bodies
+refused deterministically — and the handshake requires sheytan-ipc/1
+(name AND version) before connected. Ten QtTest framing/contract slots
+pin these byte-level rules; on the v1.10.2 client 9 of 10 FAIL. (b) The
+sessions wire contract is parsed as the core serves it (bare array,
+msgCount) and pinned by Go field-contract tests. (c) The smoke aborts
+correctly (fail-before-define fixed), refuses WM-less G3, and the Linux
+job now installs libx11-dev + openbox and passes the REAL staged paths
+(the v1.10.2 wiring survived only via silent fallbacks); the Windows
+acceptance staging resolves the MSVC Release/ layout and throws when
+absent. Windows CI remains NOT VERIFIED until a green hosted run exists
+(the v1.10.2 leftovers that would have failed the first run — R1, R3,
+R4, R16 — are repaired; nothing here flips that status without a run).
+Remaining surfaces NOT yet migrated to Qt (honest): AI Systems
+editing/import, Goals,
 Coding Lab, Net Search page, repository index, tasks/automations,
 downloads/diagnostics panels — those remain on the documented
 headless/browser mode. The Go API remains the ONLY authority — the

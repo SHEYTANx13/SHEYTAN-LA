@@ -21,6 +21,13 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 WORK="${SMOKE_WORK:-/tmp/sheytan-qt-smoke}"
 DISPLAY_NUM="${SMOKE_DISPLAY:-77}"
+
+# v1.10.3 (R1): fail() is defined BEFORE its first call site. The v1.10.2
+# script called fail() inside the CORE_BIN block before the definition
+# existed; with set -u only (no set -e), the abort printed "command not
+# found" and the smoke CONTINUED with a missing core, dying later with a
+# confusing empty-log error. Every abort path must end the run here.
+fail() { echo "SMOKE FAIL: $1"; exit 1; }
 # X11 helpers (xdotool, xwininfo) come from the SYSTEM PATH by default.
 # XTOOLS/XLIBS remain as opt-in overrides for hosts that keep private
 # tool prefixes (no machine-specific path is baked into the script).
@@ -37,6 +44,15 @@ CORE_BIN="${CORE_BIN:-$WORK/sheytan-core}"
 UI_BIN="${UI_BIN:-$WORK/ui/build/sheytan-ui}"
 if [ ! -x "$UI_BIN" ] && [ -x "$REPO/ui/qt/build/sheytan-ui" ]; then
   UI_BIN="$REPO/ui/qt/build/sheytan-ui"
+fi
+# v1.10.3 (R2c): a BARE binary name (e.g. WINMGR_BIN=openbox) is resolved
+# through PATH; a bare name that resolves nowhere stays empty and the run
+# is handled by the explicit WM-less path below (never a silent [ -x ] miss).
+WINMGR_BIN="${WINMGR_BIN:-}"
+if [ -n "$WINMGR_BIN" ] && [ "${WINMGR_BIN#*/}" = "$WINMGR_BIN" ]; then
+  WINMGR_BIN="$(command -v "$WINMGR_BIN" 2>/dev/null || true)"
+else
+  WINMGR_BIN="${WINMGR_BIN:-$(command -v openbox 2>/dev/null || true)}"
 fi
 
 # The smoke owns its binaries: if the core is not provided/staged, build it
@@ -55,8 +71,6 @@ rm -rf "$WORK/data"
 mkdir -p "$WORK/data"
 cd "$WORK"
 
-fail() { echo "SMOKE FAIL: $1"; exit 1; }
-
 # --- tracked cleanup ---------------------------------------------------------
 # Everything the smoke starts is tracked and killed on ANY exit path —
 # a failing gate must not leak processes or displays behind it.
@@ -71,12 +85,22 @@ smoke_cleanup() {
   [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null
   return 0
 }
-trap smoke_cleanup EXIT INT TERM
+# v1.10.3 (R2a): EXIT always cleans up; INT/TERM clean up AND exit with the
+# conventional signal codes — the v1.10.2 single trap resumed execution
+# after an interrupt instead of terminating the run.
+trap smoke_cleanup EXIT
+trap 'smoke_cleanup; exit 130' INT
+trap 'smoke_cleanup; exit 143' TERM
 
-# Leftovers from a previous run must never wedge this one.
+# Leftovers from a previous run must never wedge this one. The patterns are
+# v1.10.3 (R2b) derived from THIS run's resolved paths ($WORK, $CORE_BIN,
+# $UI_BIN and the repo-tree fallback) — the hardcoded
+# /tmp/sheytan-qt-smoke patterns missed every overridden SMOKE_WORK and the
+# repo-tree UI fallback.
 pkill -f "fake-remote-engine.py" 2>/dev/null || true
-pkill -f "sheytan-qt-smoke/sheytan-core" 2>/dev/null || true
-pkill -f "sheytan-qt-smoke/ui/build/sheytan-ui" 2>/dev/null || true
+pkill -f "$CORE_BIN" 2>/dev/null || true
+pkill -f "$UI_BIN" 2>/dev/null || true
+pkill -f "$REPO/ui/qt/build/sheytan-ui" 2>/dev/null || true
 sleep 0.5
 
 # --- display + window manager (smoke-OWNED, not product-owned) ---------------
@@ -84,16 +108,24 @@ sleep 0.5
 rm -f "/tmp/.X${DISPLAY_NUM}-lock" "/tmp/.X11-unix/X${DISPLAY_NUM}" 2>/dev/null || true
 Xvfb :$DISPLAY_NUM -screen 0 1280x840x24 -nolisten tcp >"$WORK/xvfb.log" 2>&1 &
 XVFB_PID=$!
-sleep 1.5
-kill -0 $XVFB_PID 2>/dev/null || fail "Xvfb died at startup"
+# v1.10.3: event-based readiness — poll for the display socket instead of a
+# fixed sleep (bounded; a dead Xvfb fails fast).
+xvfb_ready=""
+for i in $(seq 1 30); do
+  [ -S "/tmp/.X11-unix/X${DISPLAY_NUM}" ] && kill -0 $XVFB_PID 2>/dev/null && { xvfb_ready="yes"; break; }
+  kill -0 $XVFB_PID 2>/dev/null || fail "Xvfb died at startup"
+  sleep 0.5
+done
+[ -n "$xvfb_ready" ] || fail "Xvfb socket never appeared"
 
 # A real window manager owns mapping/geometry/WM_DELETE_WINDOW routing so
 # the gates exercise the same protocol path a user's desktop has. Openbox
-# (or an equivalent via WINMGR_BIN) is used when present; without any WM
-# the run continues WM-less and states that fact in the log — the gates
-# themselves never change. The WM is smoke-owned: it is never a product
+# (or an equivalent via WINMGR_BIN) is used when present. v1.10.3: without
+# any WM the run boots but REFUSES at G3 — geometry is not trustable under
+# bare Xvfb, so no GUI proof is claimed WM-less (CI installs openbox, see
+# build-desktop.yml). The WM is smoke-owned: it is never a product
 # dependency of the shipped desktop pair.
-WINMGR_BIN="${WINMGR_BIN:-$(command -v openbox || true)}"
+WM_PRESENT=""
 if [ -n "$WINMGR_BIN" ] && [ -x "$WINMGR_BIN" ]; then
   # If the WM lives in a private prefix, hand it its own share/config dirs
   # so themes and rc.xml resolve (openbox refuses to run without a theme).
@@ -104,13 +136,14 @@ if [ -n "$WINMGR_BIN" ] && [ -x "$WINMGR_BIN" ]; then
   WM_PID=$!
   sleep 1
   if kill -0 $WM_PID 2>/dev/null; then
-    echo "WM: openbox-owned display (pid $WM_PID)"
+    echo "WM: $WINMGR_BIN-owned display (pid $WM_PID)"
+    WM_PRESENT="yes"
   else
     WM_PID=""
-    echo "WM: window manager exited immediately — continuing WM-less"
+    echo "WM: window manager exited immediately — the run will refuse G3 below"
   fi
 else
-  echo "WM: no window manager on PATH — continuing WM-less (smoke-owned Xvfb only)"
+  echo "WM: no window manager available — the run will refuse G3 below (geometry is not trustable under bare Xvfb)"
 fi
 
 # --- WM close-request tool (built from the tracked source, never shipped) ----
@@ -125,8 +158,16 @@ fi
 # --- fixture engine ----------------------------------------------------------
 python3 "$REPO/scripts/fake-remote-engine.py" 18642 >"$WORK/engine.log" 2>&1 &
 ENGINE_PID=$!
-sleep 0.5
-kill -0 $ENGINE_PID 2>/dev/null || fail "fixture engine did not start"
+# v1.10.3: readiness by connection, not by fixed sleep (bounded).
+engine_ready=""
+for i in $(seq 1 20); do
+  kill -0 $ENGINE_PID 2>/dev/null || { cat "$WORK/engine.log"; fail "fixture engine did not start"; }
+  if python3 -c "import socket,sys; s=socket.socket(); s.settimeout(0.5); sys.exit(0 if s.connect_ex(('127.0.0.1',18642))==0 else 1)" 2>/dev/null; then
+    engine_ready="yes"; break
+  fi
+  sleep 0.5
+done
+[ -n "$engine_ready" ] || { cat "$WORK/engine.log"; fail "fixture engine never accepted a connection"; }
 
 # Core config: deterministic remote provider pointing at the fixture engine
 # (the fixture replaces the MODEL, never the product — the real run
@@ -148,11 +189,16 @@ SHEYTAN_DATA_DIR="$WORK/data" \
 SHEYTAN_UI_EXECUTABLE="$UI_BIN" \
   "$CORE_BIN" >"$WORK/core.log" 2>&1 &
 CORE_PID=$!
-sleep 2
-kill -0 $CORE_PID 2>/dev/null || { cat "$WORK/core.log"; fail "core died at boot"; }
-
-ENDPOINT=$(grep -oE 'core endpoint: .*' "$WORK/core.log" | head -1 | sed 's/core endpoint: //')
-[ -n "$ENDPOINT" ] || fail "core did not report an IPC endpoint"
+# v1.10.3: event-based boot readiness — poll the log for the endpoint line
+# instead of a fixed sleep; a core that dies at boot fails fast WITH its log.
+core_ready=""
+for i in $(seq 1 40); do
+  kill -0 $CORE_PID 2>/dev/null || { cat "$WORK/core.log"; fail "core died at boot"; }
+  ENDPOINT=$(grep -oE 'core endpoint: .*' "$WORK/core.log" | head -1 | sed 's/core endpoint: //')
+  [ -n "$ENDPOINT" ] && { core_ready="yes"; break; }
+  sleep 0.5
+done
+[ -n "$core_ready" ] || { cat "$WORK/core.log"; fail "core did not report an IPC endpoint"; }
 
 # G2: core-spawned UI child alive (the REAL launcher flow).
 UI_PID=""
@@ -166,7 +212,16 @@ echo "G2 PASS: core-spawned Qt host alive (pid $UI_PID, core pid $CORE_PID)"
 
 # G1: typed handshake over the endpoint (with the launcher's ephemeral key
 # read from the core process environment — never logged anywhere).
-IPC_KEY=$(tr '\0' '\n' < /proc/$UI_PID/environ 2>/dev/null | grep '^SHEYTAN_IPC_KEY=' | cut -d= -f2)
+# v1.10.3: the environ read is retried (bounded) — a single racing read of
+# /proc/<pid>/environ is the least reliable moment of the whole smoke. The
+# key is still ONLY read from the UI child's environment (the launcher
+# publishes it nowhere else, by design; it is never logged).
+IPC_KEY=""
+for i in $(seq 1 10); do
+  IPC_KEY=$(tr '\0' '\n' < /proc/$UI_PID/environ 2>/dev/null | grep '^SHEYTAN_IPC_KEY=' | cut -d= -f2)
+  [ -n "$IPC_KEY" ] && break
+  sleep 0.5
+done
 [ -n "$IPC_KEY" ] || fail "UI child environment carries no SHEYTAN_IPC_KEY"
 python3 - "$ENDPOINT" "$IPC_KEY" <<'PY' || fail "G1 typed handshake"
 import socket, sys
@@ -186,18 +241,30 @@ print("G1 PASS: typed handshake (sheytan-ipc/1, keyed)")
 PY
 
 # G3: visible top-level window with plausible geometry owned by the UI PID.
+# v1.10.3: WITHOUT a window manager the geometry/visibility evidence is not
+# trustable (no mapping/reparenting protocol ran), so the gate refuses
+# explicitly instead of claiming GUI proof under bare Xvfb. CI installs a
+# real WM (openbox) — see build-desktop.yml.
+[ -n "$WM_PRESENT" ] || fail "G3: no window manager on this display — GUI geometry proof requires one (install openbox or set WINMGR_BIN)"
+# v1.10.3: the Qt host maps MORE than one window (a 1x1 helper alongside
+# the real main window) — the v1.10.2 `head -1` picked the helper first and
+# failed the gate on a perfectly good 1280x840 main window. Check EVERY
+# visible window of the UI pid and pass on the first plausible one; G5
+# closes THAT window.
 win_ok=""
+G3_WIN=""
 for i in $(seq 1 40); do
-  win_id=$(DISPLAY=:$DISPLAY_NUM xdotool search --onlyvisible --pid "$UI_PID" 2>/dev/null | head -1)
-  if [ -n "$win_id" ]; then
+  for win_id in $(DISPLAY=:$DISPLAY_NUM xdotool search --onlyvisible --pid "$UI_PID" 2>/dev/null); do
     geom=$(DISPLAY=:$DISPLAY_NUM xdotool getwindowgeometry --shell "$win_id" 2>/dev/null)
     w=$(echo "$geom" | sed -n 's/^WIDTH=//p')
     h=$(echo "$geom" | sed -n 's/^HEIGHT=//p')
     if [ -n "$w" ] && [ "$w" -gt 200 ] && [ -n "$h" ] && [ "$h" -gt 200 ]; then
       win_ok="id=$win_id ${w}x${h}"
+      G3_WIN="$win_id"
       break
     fi
-  fi
+  done
+  [ -n "$win_ok" ] && break
   sleep 0.5
 done
 [ -n "$win_ok" ] || {
@@ -244,7 +311,9 @@ PY
 echo "G4 PASS: UI holds $holds channel socket(s); core API verified"
 
 # G5: real WM_DELETE_WINDOW close request → clean exit.
-UI_WIN=$(DISPLAY=:$DISPLAY_NUM xdotool search --onlyvisible --pid "$UI_PID" 2>/dev/null | head -1)
+# v1.10.3: the close request goes to the window G3 verified (the real main
+# window) — closing the 1x1 helper would prove nothing.
+UI_WIN="$G3_WIN"
 [ -n "$UI_WIN" ] || fail "G5: window vanished before close"
 DISPLAY=:$DISPLAY_NUM "$WORK/closewin" "$UI_WIN" || fail "G5: close request send failed"
 

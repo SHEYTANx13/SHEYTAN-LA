@@ -68,7 +68,8 @@ native `test_prefill_parity` gate across chunk sizes 1/3/7/16. The native
 CMake build defaults to the Release configuration when the caller does not
 choose one (an unflagged -O0 engine is not a supported inference build).
 
-**Desktop shell lifecycle (v1.10.1 Qt migration; v1.10.2 hardening):**
+**Desktop shell lifecycle (v1.10.1 Qt migration; v1.10.2 hardening;
+v1.10.3 IPC framing hardening):**
 the Wails/WebView shell is REMOVED from the product. The desktop pair is
 the Go core executable (the ONE policy/orchestration authority,
 unchanged) plus a native Qt Quick/QML host (`ui/qt`) that acts as an IPC
@@ -76,14 +77,35 @@ CLIENT over a secured per-user local channel (`internal/localipc`): a
 Unix domain socket with SO_PEERCRED uid verification on Linux/macOS, a
 named pipe with a current-user-only DACL plus a post-connect client-SID
 check on Windows, and a versioned keyed handshake (`sheytan-ipc/1`) in
-front of the EXISTING api.Server handlers. No TCP listener is opened on
+front of the EXISTING api.Server handlers. **The handshake is STRICT as
+of v1.10.3: the client requires the protocol name AND
+`protocolVersion == 1` before `connected` flips — a core speaking any
+other version is refused visibly (R17). The CoreClient's HTTP framing
+is real as of v1.10.3: a response body completes when Content-Length is
+satisfied (the server may keep the socket open), close-delimited bodies
+still complete, a declared body beyond the 8 MiB bound and a head beyond
+the 64 KiB bound are refused deterministically before buffering. The
+activity WebSocket policy is explicit: only complete text frames carry
+events, fragmented frames are refused with a typed error, ping is
+answered with a masked pong, close is answered with a masked close
+reply and tears the stream down; the frame loop never starves frames
+queued behind a control frame. Every non-200/malformed client path
+surfaces a typed error — no silent swallowing. The wire field contract
+the QML consumes (sessions: bare array with `id`/`title` omitempty/
+`msgCount`; systems: `systemId`/`name`/`revision` under
+`activeSystemId`) is pinned by Go tests
+(`internal/api/qt_field_contract_test.go`) and QtTest framing slots
+(`ui/qt/tests/tst_acceptance.cpp`) so a rename fails a test instead of
+blanking the UI. Ids interpolated into request lines/URLs are
+percent-encoded defensively.** No TCP listener is opened on
 the desktop path; the embedded web frontend remains only as the
 documented headless/API serving mode. The launcher (`internal/desktop`)
 spawns the Qt host next to the core, hands it the endpoint + an
 ephemeral key through the environment, and terminates the whole
 lifecycle on child exit or signal; the resolution contract (the "none"
-sentinel, the explicit override, the next-to-core packaged layout and
-the hard refusal when no UI can be located) is unit-tested
+sentinel, the explicit override WINNING over the next-to-core packaged
+layout as of v1.10.3, and the hard refusal when no UI can be located)
+is unit-tested
 (`internal/desktop/desktop_test.go`). Closing the QML window ends the
 process through the normal Qt close path. Run-goroutine teardown is
 deterministic: every run spawn is tracked and `Server.Close` JOINS them

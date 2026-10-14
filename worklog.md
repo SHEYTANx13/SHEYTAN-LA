@@ -1,6 +1,6 @@
 # SHEYTAN-Local-Agent — Engineering Worklog
 
-Current release:  v1.10.1
+Current release:  v1.10.3
 
 This worklog is a session log, not a second architecture document. The
 architecture truth lives in `ARCHITECTURE.md`, the release evidence in
@@ -1753,3 +1753,169 @@ Work Log:
 
 Stage Summary:
 - v1.10.2 is code-complete on the session host. Deliverable: download/SHEYTAN-LA-v1.10.2-FINAL.zip (clean tracked tree via git archive, audited clean-room). Version identity 1.10.2 everywhere. Native-engine default NOT flipped; remaining Qt surfaces honestly listed.
+
+---
+Task ID: 1 (v1.10.3 session)
+Agent: v1.10.3 engineering session
+Task: v1.10.3 — the Qt IPC hardening release: make the Qt CoreClient's
+HTTP/WebSocket paths correct under real framing, make the smoke and the
+two hosted CI jobs runnable, prove the Windows staging path, pin the IPC
+handshake and field contracts, and reconcile the evidence narrative
+(register R1–R17 audited against 1d3b1f2 = live main HEAD at session
+start)
+
+Work Log:
+- Baseline: cloned origin/main at `1d3b1f2` (v1.10.2) — HEAD matched the
+  audited baseline commit exactly; every register item re-confirmed by
+  reading the committed tree before fixing.
+- Environment (hosted container, NOT GitHub Actions, NOT physical
+  hardware): Go 1.27.2 (module builds go 1.26 language), Qt 6.8.2 via
+  aqtinstall (the CI pin), CMake 4.4.4 + Ninja, Node 24; GL/X11 stacks
+  staged from distro debs into a local prefix because the host has no
+  root. GitHub Actions API rate-limited from this IP — live Actions
+  status could NOT be retrieved; the runnability claims rest on the
+  local reproduction + workflow wiring fixes, stated honestly below.
+
+Per-item results (register → outcome → evidence):
+
+- R1 (P0, smoke fail-after-use) — FIXED+VERIFIED. Reproduced first:
+  missing-core/no-go printed "fail: command not found" and CONTINUED,
+  dying later with "core died at boot". After the fix the same probe
+  aborts immediately: "SMOKE FAIL: core binary … missing and no 'go'
+  on PATH to build it", exit 1.
+- R2 (P2, traps/pkill/WINMGR) — FIXED. EXIT-only cleanup + INT→130 /
+  TERM→143 traps; pkill patterns derived from $CORE_BIN/$UI_BIN/$WORK
+  plus the repo-tree fallback; bare WINMGR_BIN resolved via
+  `command -v`; environ key read retried (bounded); Xvfb/engine/core
+  readiness is event-based (socket/conn/log-line polls), fixed sleeps
+  removed where replacement was exact.
+- R3 (P0, Linux CI deps) — FIXED. libx11-dev + openbox added to the
+  apt-get list (closewin builds with `cc -lX11` locally against staged
+  headers; G3 refuses WM-less, so openbox is REQUIRED, not optional).
+- R4 (P1, wrong staged paths) — FIXED. CORE_BIN and SHEYTAN_CORE_BIN
+  now pass the REAL staged core name (SHEYTAN-Local-Agent); sheytan-ui
+  is copied to $RUNNER_TEMP/sheytan-ui with an explicit `test -x`
+  BEFORE the smoke runs — the silent repo-tree fallback can no longer
+  mask the wiring.
+- R5 (P1, exact-count flake) — FIXED+VERIFIED. Reproduced with
+  TF_BUILD=1 (test failed: "evidence must contain exactly the set
+  markers, got [GITHUB_ACTIONS TF_BUILD CI]"); after the fix the same
+  env passes (membership asserted; foreign markers exercised in-test).
+- R6 (P2, stale comment) — FIXED. readCodeSHA comment now describes the
+  SHEYTAN_PERF_CODE_SHA contract. The three fail-closed CLI refusal
+  probes were executed (no flag → 1; --host-class bogus → 1; physical
+  with CI=1 → 1).
+- R7 (P1, silent refreshSystems) — FIXED+VERIFIED. Non-200 now surfaces
+  "systems refresh failed (status N)"; regression slot
+  systemsRefreshSurfacesTypedError FAILS on the v1.10.2 client, PASSES
+  on v1.10.3. refreshSessions/deleteSession got the same treatment.
+- R8 (P2, raw id in request line) — FIXED+VERIFIED. Store charset
+  verified URL-safe (`default`, `sys-`+lowercase hex); ids are
+  percent-encoded defensively (path segments + the activity WS query);
+  activateSystemEncodesSegment asserts the encoded wire path.
+- R9 (P3, badge/EmptyState/double-refresh) — R9a FIXED (badge visible
+  bound to text); R9b (EmptyState centered in ListView contentItem) and
+  R9c (onOpened + connectToCore double refresh) are DOCUMENTED ONLY per
+  register (harmless; noted in the changelog, no code change).
+- R10 (P0, evidence drift) — FIXED+RE-MEASURED. The artifact was
+  re-measured on this host (same declared evidence class as the v1.10.2
+  record, notes carry the honest host description) with
+  SHEYTAN_PERF_CODE_SHA=1d3b1f2… stamped and a trailing newline:
+  cold_start 1.339 ms, idle/peak 14.3203125 MB. UPDATE.md quotes the
+  artifact character for character; the stale 1.2 ms / 14.8 MB claims
+  are corrected in place with a dated correction note.
+- R11 (P2, "smallest compatible fix") — REWORDED in changelog.md,
+  UPDATE.md, agent.md (upstream fixed in ws 8.20.1 / 8.21.0; 8.22.0
+  chosen; dependency unchanged — `npm audit --audit-level=high` clean,
+  0 vulnerabilities).
+- R12 (RECORD, indent convention) — RECORDED in agent.md
+  ("Code formatting convention": space-indented Go by convention, no
+  gofmt gate, no mass reformat performed).
+- R13 (P2, launcher override order) — FIXED+VERIFIED. Override now wins
+  over next-to-core; TestUIExecutableOverrideWinsOverNextToCore added;
+  the redundant t.Setenv("")+os.Unsetenv pairs removed.
+- R14 (P2, verify-all claim) — FIXED. agent.md now states the CI gates
+  are inline in build-desktop.yml and verify-all.mjs is the LOCAL
+  canonical entrypoint.
+- R15 (P3, this entry) — DONE.
+- R16 (P2, Windows acceptance staging) — FIXED. Release/ resolved
+  before the flat path; hard throw when neither exists; a post-copy
+  existence check; never SilentlyContinue.
+- R17 (P0, handshake version) — FIXED+VERIFIED. Name AND version==1
+  required before connected; the regression slot
+  handshakeRejectsWrongProtocolVersion FAILS on the v1.10.2 client
+  ("!core.connected() … a sheytan-ipc/2 core must NOT be accepted" —
+  the old client ACCEPTED v2) and PASSES on v1.10.3.
+
+Beyond the register (discovered by executing the new gates):
+
+- CoreClient HTTP framing: the v1.10.2 client had NO Content-Length
+  handling — bodies completed only on server close (any response that
+  held the socket open hung until the 20 s timeout). Reproduced in the
+  before/after QtTest run: 9 of 10 framing slots FAIL on the v1.10.2
+  client (including 20-second hangs), all PASS on v1.10.3. Oversize
+  heads/bodies refused deterministically; a completed head beyond the
+  64 KiB bound is now also refused (only the incomplete case was
+  checked before).
+- WS policy: fragmentation refused with a typed error (v1.10.2
+  silently DROPPED continuation payloads), ping→masked pong,
+  close→masked close reply + teardown, and the frame loop no longer
+  starves frames queued behind a control frame (the old loop broke on
+  ANY empty-payload frame).
+- Sessions wire contract: GET /api/sessions serves a BARE array with
+  id / title(omitempty) / msgCount — the v1.10.2 client parsed a
+  wrapped {"sessions":[…]} envelope and a messageCount field, both
+  hidden by the silent skip; the sidebar never loaded its list and
+  every session rendered "0 messages". Client + QML fixed; three Go
+  field-contract pins added (internal/api/qt_field_contract_test.go).
+- Smoke G3/G5 window selection: the Qt host maps a 1x1 helper window
+  alongside the real 1280x840 main window; the v1.10.2 `head -1` picked
+  the helper and would have failed a green build's gates. Every visible
+  window of the UI pid is now checked and G5 closes the window G3
+  verified (found by actually running the smoke end-to-end).
+
+Verification evidence (this session, hosted container — classes kept
+separate):
+
+- Go: `go build ./...`; FULL `go test ./... -run Test -count=1` PASS;
+  `go test ./internal/... -tags headless -count=1` PASS; `go vet ./...`
+  clean; `go test -race -tags headless ./internal/api ./internal/agent
+  ./internal/sessions ./internal/contextplan ./internal/histref
+  ./internal/runtime` PASS; `GOOS=windows go build ./...` +
+  `GOOS=windows go vet ./...` clean (final state re-run).
+- Qt: cmake configure + build of ui/qt green; QtTest acceptance 14/14
+  PASS with the REAL core + fixture engine (offscreen platform): the
+  two live-answer slots (chat stream with cumulative live growth while
+  Stop is visible → exactly one settle → persistence reload → repeat
+  send; AI Systems list/activate/typed-404) plus the ten framing/
+  contract slots. Before/after proof recorded above.
+- Native: `native/engine` cmake Release build + ctest 13/13 PASS.
+- Frontend: npm ci; typecheck clean; oxlint 0 findings; test:units
+  236/236; test:release pass; release build + verify:web green;
+  npm audit 0 high/critical.
+- Linux smoke: scripts/qt-desktop-smoke.sh G1–G5 ALL PASS locally under
+  Xvfb + Openbox (staged debs; SMOKE_WORK/display overridden): keyed
+  handshake, core-spawned UI pid, REAL visible 1280x840 window, UI
+  holding 2 channel sockets + real session create/read through the
+  core, real WM_DELETE_WINDOW close, UI exit, core stop, no orphan
+  process, no leaked endpoint file. The no-go/missing-core abort path
+  re-proven after the fix. The G3 WM-less refusal is in place (no
+  GUI claims without a WM).
+- Hosted CI: NOT RUN from this session (Actions API rate-limited from
+  this IP; no push/PR per the operating rules). The two platform jobs
+  are wired to the REAL staged paths and required deps; the first
+  hosted run must still prove them.
+- Windows Qt hosted gate: NOT VERIFIED (requires the hosted runner);
+  the R16 staging path is repaired and compile-gated (GOOS=windows
+  build/vet green), which is the maximum provable without the runner.
+- Physical hardware: UNVERIFIED (no physical host; the native-engine
+  default stays evidence-gated; generation paths remain NOT MEASURED
+  without a real model).
+
+Stage Summary:
+- v1.10.3 closes R1–R17 (R9b/c documented-only per register), plus the
+  framing, WS, and sessions-contract defects the new gates exposed.
+- All local gates green at final state; hosted CI and physical-Windows
+  remain honestly NOT RUN / NOT VERIFIED.
+- Deliverable: download/SHEYTAN-LA-v1.10.3-FINAL.zip (complete tracked
+  tree, no .git, no build artifacts).

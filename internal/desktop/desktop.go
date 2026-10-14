@@ -159,11 +159,26 @@ func Run(cfg *config.Config) int {
         return exitCode
 }
 
-// uiExecutable resolves the packaged Qt host next to the running core.
+// uiExecutable resolves the Qt host to launch. v1.10.3 (R13) the EXPLICIT
+// SHEYTAN_UI_EXECUTABLE override wins over a packaged UI next to the core —
+// the v1.10.2 next-to-core-first order silently ignored an explicit
+// override whenever any UI sat beside the core, contradicting the smoke's
+// documented resolution order (override → staged → repo tree). The "none"
+// sentinel is handled by the caller (no-spawn serving mode).
 func uiExecutable() (string, error) {
         self, err := os.Executable()
         if err != nil {
                 return "", fmt.Errorf("resolve core executable: %w", err)
+        }
+
+        if alt := os.Getenv("SHEYTAN_UI_EXECUTABLE"); alt != "" {
+                if alt == "none" {
+                        return "none", nil
+                }
+                if st, statErr := os.Stat(alt); statErr == nil && !st.IsDir() {
+                        return alt, nil
+                }
+                return "", fmt.Errorf("SHEYTAN_UI_EXECUTABLE=%s does not exist", alt)
         }
 
         name := uiExecutableNames[runtime.GOOS]
@@ -174,18 +189,6 @@ func uiExecutable() (string, error) {
         path := filepath.Join(filepath.Dir(self), name)
         if st, statErr := os.Stat(path); statErr == nil && !st.IsDir() {
                 return path, nil
-        }
-
-        // Explicit override keeps local runs testable before packaging; the
-        // "none" sentinel is handled by the caller (no-spawn serving mode).
-        if alt := os.Getenv("SHEYTAN_UI_EXECUTABLE"); alt != "" {
-                if alt == "none" {
-                        return "none", nil
-                }
-                if st, statErr := os.Stat(alt); statErr == nil && !st.IsDir() {
-                        return alt, nil
-                }
-                return "", fmt.Errorf("SHEYTAN_UI_EXECUTABLE=%s does not exist", alt)
         }
 
         return "", fmt.Errorf("Qt host %s not found next to the core (%s) — set SHEYTAN_UI_EXECUTABLE for development runs", name, filepath.Dir(self))

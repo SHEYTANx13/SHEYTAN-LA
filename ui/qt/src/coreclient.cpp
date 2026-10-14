@@ -12,6 +12,7 @@
 #include <QJsonObject>
 #include <QRandomGenerator>
 #include <QRegularExpression>
+#include <QUrl>
 
 #include <functional>
 
@@ -20,6 +21,14 @@ namespace {
 constexpr int kMaxHeaderBytes = 64 * 1024;     // bounded response header
 constexpr qint64 kMaxBodyBytes = 8 << 20;      // bounded response body (8 MiB)
 constexpr int kMaxWsFrame = 512 * 1024;        // bounded activity frame
+
+// encodeSegment percent-encodes one URL path/query segment (v1.10.3, R8):
+// ids are interpolated into request lines, and the store's id charset —
+// though currently URL-safe ("default", "sys-" + lowercase hex) — must
+// never be trusted on the wire. Encoded defensively, verified by test.
+QString encodeSegment(const QString &raw) {
+    return QString::fromLatin1(QUrl::toPercentEncoding(raw));
+}
 
 QByteArray randomKey16() {
     QByteArray raw(16, Qt::Uninitialized);
@@ -65,10 +74,7 @@ QLocalSocket *CoreClient::openSocket() {
 CoreClient::CoreClient(QObject *parent) : QObject(parent) {}
 
 CoreClient::~CoreClient() {
-    if (m_wsSock) {
-        m_wsSock->close();
-        m_wsSock->deleteLater();
-    }
+    closeWsStream();
 }
 
 void CoreClient::setError(const QString &msg) {
@@ -105,6 +111,7 @@ int CoreClient::request(const QString &method, const QString &path,
     sock->setProperty("reqId", id);
     sock->setProperty("resHead", false);
     sock->setProperty("buf", QByteArray());
+    sock->setProperty("contentLen", qint64(-1));
     sock->setProperty("replyFn",
                       QVariant::fromValue<void *>(new std::function<void(int, const QByteArray &)>(onReply)));
 
@@ -173,6 +180,13 @@ void CoreClient::pumpSocket(QLocalSocket *sock) {
             }
             return;
         }
+        // v1.10.3: a head that COMPLETES beyond the bound is still a
+        // violation — the v1.10.2 code only checked the incomplete case, so
+        // a completed oversized head was parsed and accepted.
+        if (headEnd > kMaxHeaderBytes) {
+            finishRequest(sock->property("reqId").toInt(), sock, false, QByteArray("header too large"));
+            return;
+        }
 
         const QByteArray head = buf.left(headEnd);
         const QList<QByteArray> lines = head.split('\n');
@@ -184,11 +198,70 @@ void CoreClient::pumpSocket(QLocalSocket *sock) {
         sock->setProperty("status", parts.size() > 1 ? parts[1].toInt() : 0);
         sock->setProperty("resHead", true);
         buf = buf.mid(headEnd + 4);
+
+        // v1.10.3: parse the response body framing. The v1.10.2 client had
+        // NO Content-Length handling — the body completed only when the
+        // server closed the channel, so any response that kept the socket
+        // open hung until the request timeout and looked truncated. Now:
+        //
+        //   - Content-Length present → the body completes as soon as that
+        //     many bytes arrived; the close (whenever it comes) is noise.
+        //   - A DECLARED length beyond the body bound is refused
+        //     deterministically BEFORE buffering it.
+        //   - No Content-Length → close-delimited completion (the client
+        //     always sends Connection: close, matching HTTP/1.1 §6.3).
+        //   - Transfer-Encoding: chunked is not claimed by this client
+        //     (the Go core's small JSON answers always carry
+        //     Content-Length; net/http buffers them). A chunked body would
+        //     fail JSON parsing upstream — a typed error, not a hang.
+        qint64 declared = -1;
+        for (const QByteArray &line : lines) {
+            const int colon = int(line.indexOf(':'));
+            if (colon <= 0) continue;
+            const QByteArray name = line.left(colon).trimmed().toLower();
+            if (name == "content-length") {
+                bool okNum = false;
+                const qint64 v = QByteArray(line.mid(colon + 1).trimmed()).toLongLong(&okNum);
+                if (okNum && v >= 0) declared = v;
+                break;
+            }
+        }
+        if (declared >= 0) {
+            if (declared > kMaxBodyBytes) {
+                finishRequest(sock->property("reqId").toInt(), sock, false,
+                              QByteArray("declared body too large"));
+                return;
+            }
+            sock->setProperty("contentLen", declared);
+        } else {
+            sock->setProperty("contentLen", qint64(-1));
+        }
     }
 
-    // Body accumulates until the server closes the channel (Connection:
-    // close request semantics) — bounded by kMaxBodyBytes above.
+    // Content-Length framing: satisfied → the request finishes NOW (the
+    // socket close is not waited for).
+    const qint64 want = sock->property("contentLen").toLongLong();
+    if (want >= 0) {
+        if (qint64(buf.size()) >= want) {
+            finishRequest(sock->property("reqId").toInt(), sock, true, buf.left(int(want)));
+        } else {
+            sock->setProperty("buf", buf);
+        }
+        return;
+    }
+
+    // Close-delimited body: accumulates until the server closes the
+    // channel — bounded by kMaxBodyBytes above (the disconnected handler
+    // delivers the completed response).
     sock->setProperty("buf", buf);
+}
+
+// transportReason renders a non-HTTP failure (status 0) with its typed
+// reason so surfaced errors name the actual framing problem instead of a
+// meaningless "status 0".
+static QString transportReason(int status, const QByteArray &body) {
+    if (status == 0 && !body.isEmpty()) return QString::fromLatin1(body);
+    return QStringLiteral("status %1").arg(status);
 }
 
 // --- API surface -----------------------------------------------------------
@@ -202,7 +275,15 @@ void CoreClient::connectToCore(const QString &endpoint, const QString &key) {
             [this](int status, const QByteArray &body) {
                 bool ok = false;
                 const QVariantMap hs = toMap(body, &ok);
-                if (status == 200 && ok && hs.value("protocol").toString() == "sheytan-ipc") {
+                // v1.10.3 (R17): STRICT handshake identity — the protocol
+                // NAME and the protocol VERSION must both match. The
+                // v1.10.2 happy path checked the name only, so a core
+                // speaking sheytan-ipc/2 was accepted as connected(). A
+                // version bump means a wire-contract change; the client
+                // refuses it visibly instead of guessing.
+                const bool nameOk = status == 200 && ok && hs.value("protocol").toString() == QStringLiteral("sheytan-ipc");
+                const bool versionOk = nameOk && hs.value("protocolVersion").toInt() == 1;
+                if (nameOk && versionOk) {
                     m_coreVersion = hs.value("coreVersion").toString();
                     m_connected = true;
                     emit handshakeDone();
@@ -224,10 +305,30 @@ void CoreClient::connectToCore(const QString &endpoint, const QString &key) {
 
 void CoreClient::refreshSessions() {
     request("GET", "/api/sessions", QByteArray(), [this](int status, const QByteArray &body) {
-        if (status != 200) return;
-        bool ok = false;
-        const auto list = toList(body, "sessions", &ok);
-        if (!ok) return;
+        // v1.10.3: no silent swallowing — a failed list refresh is a typed,
+        // visible error instead of a stale/empty sidebar. Transport-level
+        // failures (status 0) carry their framing reason.
+        if (status != 200) {
+            setError(QStringLiteral("sessions refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        // v1.10.3 field contract: the core serves GET /api/sessions as a
+        // BARE JSON ARRAY of session stubs (id, title omitempty, msgCount —
+        // internal/sessions stubOf). The v1.10.2 client parsed a wrapped
+        // {"sessions":[…]} envelope that the core never sends; the silent
+        // return hid the drift and the sidebar never loaded its list. The
+        // wrapped shape is still accepted defensively, anything else is a
+        // typed malformed-payload error.
+        QVariantList list;
+        const auto doc = QJsonDocument::fromJson(body);
+        if (doc.isArray()) {
+            list = doc.array().toVariantList();
+        } else if (doc.isObject()) {
+            list = doc.object().toVariantMap().value("sessions").toList();
+        } else {
+            setError(QStringLiteral("sessions refresh failed (malformed payload)"));
+            return;
+        }
         m_sessions = list;
         emit sessionsChanged();
     });
@@ -244,7 +345,7 @@ void CoreClient::applySession(const QVariantMap &sess) {
 }
 
 void CoreClient::openSession(const QString &id) {
-    request("GET", QString("/api/sessions/") + id, QByteArray(),
+    request("GET", QStringLiteral("/api/sessions/") + encodeSegment(id), QByteArray(),
             [this, id](int status, const QByteArray &body) {
                 if (status != 200) {
                     setError(QStringLiteral("open session failed (status %1)").arg(status));
@@ -274,9 +375,12 @@ void CoreClient::newSession(const QString &name) {
 }
 
 void CoreClient::deleteSession(const QString &id) {
-    request("DELETE", QString("/api/sessions/") + id, QByteArray(),
+    request("DELETE", QStringLiteral("/api/sessions/") + encodeSegment(id), QByteArray(),
             [this, id](int status, const QByteArray &) {
-                if (status != 200) return;
+                if (status != 200) {
+                    setError(QStringLiteral("session delete failed (status %1)").arg(status));
+                    return;
+                }
                 if (m_sessionId == id) {
                     m_sessionId.clear();
                     m_currentSession = QVariantMap();
@@ -329,6 +433,10 @@ void CoreClient::stop() {
             [this](int, const QByteArray &) {}, 5000);
 }
 
+// Not migrated on purpose (v1.10.3 honesty note): the settings surface
+// carries NO live config values — refreshConfig is an explicit stub and the
+// QML renders no config property, so nothing here can claim data it does
+// not have. Loading /api/config happens with the settings migration only.
 void CoreClient::refreshConfig() {}
 
 void CoreClient::patchConfig(const QVariantMap &patch) {
@@ -342,10 +450,19 @@ void CoreClient::patchConfig(const QVariantMap &patch) {
 
 void CoreClient::refreshSystems() {
     request("GET", "/api/systems", QByteArray(), [this](int status, const QByteArray &body) {
-        if (status != 200) return;
+        // v1.10.3 (R7): a failed refresh is a TYPED, visible error. The
+        // v1.10.2 silent return left the drawer showing stale/empty data
+        // with no indication anything failed.
+        if (status != 200) {
+            setError(QStringLiteral("systems refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
         bool ok = false;
         const QVariantMap m = toMap(body, &ok);
-        if (!ok) return;
+        if (!ok) {
+            setError(QStringLiteral("systems refresh failed (malformed payload)"));
+            return;
+        }
         m_systems = m.value("systems").toList();
         const QString active = m.value("activeSystemId").toString();
         if (active != m_activeSystemId) {
@@ -358,7 +475,9 @@ void CoreClient::refreshSystems() {
 
 void CoreClient::activateSystem(const QString &id) {
     if (id.isEmpty()) return;
-    request("POST", QStringLiteral("/api/systems/%1/activate").arg(id), QByteArray(),
+    // v1.10.3 (R8): the id is percent-encoded into the path segment —
+    // never interpolated raw into the request line.
+    request("POST", QStringLiteral("/api/systems/%1/activate").arg(encodeSegment(id)), QByteArray(),
             [this, id](int status, const QByteArray &) {
                 if (status != 200) {
                     setError(QStringLiteral("system activation failed (status %1)").arg(status));
@@ -399,13 +518,7 @@ static void sendWsFrameControl(QLocalSocket *sock, quint8 opcode, const QByteArr
 
 void CoreClient::openActivityStream() {
     if (m_sessionId.isEmpty()) return;
-    if (m_wsSock) {
-        m_wsSock->close();
-        m_wsSock->deleteLater();
-        m_wsSock = nullptr;
-        m_wsUp = false;
-        m_wsBuf.clear();
-    }
+    closeWsStream();
 
     auto *sock = new QLocalSocket(this);
     m_wsSock = sock;
@@ -415,7 +528,7 @@ void CoreClient::openActivityStream() {
         const QByteArray key = randomKey16();
         sock->setProperty("wsKey", key);
         QByteArray req;
-        req += "GET /ws/activity?sessionId=" + m_sessionId.toUtf8() + " HTTP/1.1\r\n";
+        req += "GET /ws/activity?sessionId=" + encodeSegment(m_sessionId).toUtf8() + " HTTP/1.1\r\n";
         req += "Host: sheytan-core\r\n";
         req += "Upgrade: websocket\r\n";
         req += "Connection: Upgrade\r\n";
@@ -435,7 +548,7 @@ void CoreClient::openActivityStream() {
             const QByteArray head = m_wsBuf.left(headEnd);
             if (!head.startsWith("HTTP/1.1 101")) {
                 setError(QStringLiteral("activity stream refused"));
-                sock->close();
+                closeWsStream();
                 return;
             }
             m_wsBuf = m_wsBuf.mid(headEnd + 4);
@@ -446,7 +559,8 @@ void CoreClient::openActivityStream() {
         bool ok = true;
         while (ok) {
             const QByteArray frame = readWsFrame(sock, ok);
-            if (!ok || frame.isEmpty()) break;
+            if (!ok) break;                 // incomplete, terminal, or closed
+            if (frame.isEmpty()) continue;  // control frame handled — KEEP PUMPING (the v1.10.2 loop broke on ping/pong, starving the frames behind them)
             handleActivityFrame(frame);
         }
     });
@@ -454,6 +568,36 @@ void CoreClient::openActivityStream() {
     sock->connectToServer(m_endpoint);
 }
 
+// closeWsStream tears down the activity channel on ANY terminal stream
+// condition (close handshake, fatal frame error, refused upgrade). The
+// v1.10.2 code left the socket open and silent after fatal frame errors —
+// a zombie stream no gate could observe.
+void CoreClient::closeWsStream() {
+    if (m_wsSock) {
+        // Flush BEFORE closing: the close-reply frame (and any pong) must
+        // reach the peer — a discarded reply would break the RFC6455
+        // close handshake the tests pin.
+        m_wsSock->flush();
+        m_wsSock->close();
+        m_wsSock->deleteLater();
+        m_wsSock = nullptr;
+    }
+    m_wsUp = false;
+    m_wsBuf.clear();
+}
+
+// readWsFrame implements the client's FRAGMENTATION POLICY (documented,
+// v1.10.3):
+//   - only COMPLETE text frames (FIN=1, opcode 0x1) carry activity events;
+//   - fragmented frames (FIN=0 or a continuation opcode 0x0) are REFUSED
+//     with a typed error and close the stream — the core's activity hub
+//     emits whole text messages, and silent reassembly (or the v1.10.2
+//     silent DROP of continuation payloads) would hide a contract drift;
+//   - ping is answered with a masked pong (payload echoed);
+//   - pong (0xA) and binary (0x2) frames are never mistaken for activity;
+//   - close (0x8) is answered with a masked close reply (RFC6455 §5.5.1)
+//     and ends the stream;
+//   - any frame above kMaxWsFrame refuses and closes the stream.
 QByteArray CoreClient::readWsFrame(QLocalSocket *sock, bool &ok) {
     ok = true;
     if (m_wsBuf.size() < 2) { ok = false; return {}; }
@@ -461,6 +605,8 @@ QByteArray CoreClient::readWsFrame(QLocalSocket *sock, bool &ok) {
     const quint8 b0 = quint8(m_wsBuf.at(0));
     const quint8 b1 = quint8(m_wsBuf.at(1));
     const bool masked = (b1 & 0x80) != 0;
+    const bool fin = (b0 & 0x80) != 0;
+    const quint8 opcode = b0 & 0x0F;
     quint64 len = b1 & 0x7F;
     int off = 2;
 
@@ -478,6 +624,7 @@ QByteArray CoreClient::readWsFrame(QLocalSocket *sock, bool &ok) {
     if (len > quint64(kMaxWsFrame)) {
         setError(QStringLiteral("activity frame exceeds bound"));
         ok = false;
+        closeWsStream();
         return {};
     }
 
@@ -497,18 +644,28 @@ QByteArray CoreClient::readWsFrame(QLocalSocket *sock, bool &ok) {
     }
     m_wsBuf.remove(0, off + int(len));
 
-    const quint8 opcode = b0 & 0x0F;
-    if (opcode == 0x8) { // close
+    if (opcode == 0x8) { // close → masked close reply, stream ends
+        sendWsFrameControl(sock, 0x88, QByteArray());
         ok = false;
+        closeWsStream();
         return {};
     }
     if (opcode == 0x9) { // ping → masked pong
         sendWsFrameControl(sock, 0x8A, payload);
         return {};
     }
-    if (opcode != 0x1 && opcode != 0x2 && opcode != 0xA) return {}; // pong/other
-
-    return payload;
+    if (opcode == 0xA) return {};                    // pong: never activity
+    if (opcode == 0x0 || !fin) {                     // fragmentation refused
+        setError(QStringLiteral("activity stream: fragmented frames not supported"));
+        ok = false;
+        closeWsStream();
+        return {};
+    }
+    if (opcode == 0x1) return payload;               // complete text frame
+    setError(QStringLiteral("activity stream: unsupported frame opcode %1").arg(opcode));
+    ok = false;
+    closeWsStream();
+    return {};
 }
 
 void CoreClient::handleActivityFrame(const QByteArray &text) {
