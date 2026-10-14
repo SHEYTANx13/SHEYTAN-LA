@@ -1,6 +1,6 @@
 # SHEYTAN-Local-Agent — Architecture Truth Table
 
-Current for **v1.10.2**. This document states the architecture that IS
+Current for **v1.10.4**. This document states the architecture that IS
 implemented and verified in this repository. Future R&D is NOT described as
 implemented; the roadmap (`ROADMAP.md`) owns the future. Historical
 release-specific architecture notes were consolidated at the end.
@@ -224,12 +224,13 @@ monotonic per-run sequence and folds it into `runLive` BEFORE broadcast;
 WebSocket replay is snapshot-at-seq-N plus events > N (gapless,
 duplicate-free).
 
-**Desktop activity transport (v1.9.5):** packaged desktop builds serve
-the webview through the platform's resource-request interception, which
-carries HTTP only — WebSocket handshakes never reach the Go handler
-there (Windows WebView2 forwards just `http://wails.localhost`; Linux
-production serves the `wails://` custom scheme). The desktop process
-therefore ALSO mounts the activity upgrade on a loopback-only ephemeral
+**Desktop activity transport (v1.9.5 — RETIRED with the Wails shell; kept
+as history).** Packaged Wails-era desktop builds served the webview
+through the platform's resource-request interception, which
+carries HTTP only — WebSocket handshakes never reached the Go handler
+there (Windows WebView2 forwards just `http://wails.localhost`; the
+Linux Wails shell served the `wails://` custom scheme). That shell's
+desktop process ALSO mounted the activity upgrade on a loopback-only ephemeral
 listener (`internal/api/loopback.go`) that serves EXACTLY ONE route —
 `/ws/activity`, the SAME `handleActivityWS` authority (the full REST
 surface is deliberately NOT reachable there; any other path is 404).
@@ -238,6 +239,11 @@ capability token (constant-time compared, delivered ONLY through
 `GET /api/ws-origin` over the intercepted surface, never logged), a
 non-empty Origin the existing authority accepts (an absent Origin can
 never bypass the loopback authentication) and the exact listener Host.
+**v1.10.1+ truth: the production desktop is the native Qt client over
+`internal/localipc` and mounts NO loopback WebSocket listener**
+(`internal/desktop/desktop.go`: "no WebView2/WebKit, no loopback
+WebSocket transport"); the browser/headless serving mode serves activity
+over the ordinary HTTP surface.
 `GET /api/ws-origin` publishes `{origin, token}` (empty = same-origin —
 the unchanged browser/headless contract, which has no token). The
 client validates strictly (`src/loopback-origin.ts`: exact normalized
@@ -301,11 +307,14 @@ host/model/method/limitation metadata, hosted-CI labeling, targets
 reported as measured gaps); the v1.10.0 baseline artifact is
 `baselines/perf-hosted-ci-v1.10.0.json`.
 
-**The Qt/IPC seam (v1.10.0 — DEFINED, not shipped).** The contract a
-future Qt (C++/QML) shell will use to talk to the UNCHANGED Go core.
-Nothing in v1.10.0 implements it; no Qt code ships; the Wails shell
-remains the production UI. The seam is specified now so the Phase 2
-shell can be built without inventing a second authority:
+**The Qt/IPC seam (v1.10.0 — DEFINED there; SHIPPED since v1.10.1).** The contract a
+future Qt (C++/QML) shell would use to talk to the UNCHANGED Go core.
+v1.10.0 only specified it. **v1.10.1 SHIPPED this seam: `ui/qt` is the
+production desktop client and the Wails shell is removed**; v1.10.2
+migrated the AI Systems drawer; v1.10.3 hardened the framing (Content-Length
+completion, oversize refusals), the strict `sheytan-ipc/1` handshake and
+the wire field contracts. The seam is specified so the shell can evolve
+without inventing a second authority:
 
 - **Transport:** ONE secured local transport per concern — a local
   socket / named pipe for control (typed request/response) and

@@ -1,34 +1,69 @@
-# UPDATE.md — v1.10.3 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.10.4 Release Notes & Maintenance Behavior
 
-**Release:** `v1.10.3` (canonical application version; single version
+**Release:** `v1.10.4` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ 1d3b1f2` (`v1.10.2`) · **Date:** 2026-10-14
-**Package:** `SHEYTAN-LA-v1.10.3-FINAL.zip` (complete repository tree)
+**Base:** `main @ b0b3aba` (`v1.10.3`) · **Date:** 2026-10-14
+**Package:** `SHEYTAN-LA-v1.10.4-FINAL.zip` (complete repository tree)
 **R&D authority:** `Parsaetak/Contents`, branch `Research-and-Development`,
 `SHEYTAN-LA-2026-10-11.md` (linked, not copied — the R&D document stays in
 its source repository).
 
 The authoritative per-release history lives in `changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
-behavior. v1.10.3 is the Qt IPC hardening release after the v1.10.2
-commit audit: it makes the CoreClient's HTTP and WebSocket paths correct
-under real framing (Content-Length completion, deterministic oversize
-refusals, strict sheytan-ipc/1 handshake, typed error surfacing, the
-real sessions wire contract), makes the Linux smoke abort and clean up
-correctly and refuse WM-less GUI claims, makes the two platform CI jobs
-runnable again (dependencies, real staged paths, MSVC Release/ staging),
-repairs the launcher override order, fixes the measurement flake, and
-reconciles the evidence narrative (the artifact re-measured with the
-code SHA stamped; the docs quote it character for character). The R&D
-Phase 1 engine gate is honestly untouched: the physical-Windows
-warm-TTFT / native-vs-managed comparison remains NOT MEASURED (no
-physical hardware was available in this session), and the native C++
-engine default stays evidence-gated. The remaining Qt surfaces (Goals,
-Coding Lab, Net Search, edit/import of AI Systems, repository index,
-tasks/automations, downloads/diagnostics) are NOT claimed migrated.
+behavior. v1.10.4 is the reliability release on top of the v1.10.3 Qt
+IPC hardening: it turns the Linux stress gate green by retargeting the
+one stale pin the v1.10.1 Qt migration left behind, states the Windows
+verification evidence class honestly, and aligns every product document
+with the Qt desktop reality. It adds NO new product surface and flips NO
+default. The v1.10.3 notes below remain the parent-release record: the
+framing, handshake, sessions contract, smoke and packaging behavior they
+describe is unchanged in v1.10.4.
 
-## What v1.10.3 changes
+## What v1.10.4 changes
+
+1. **P0 — the Linux `release_surface` stress gate is retargeted to the
+   current CI contract (run 38569081029, step 18).** The scenario still
+   REQUIRED the retired Wails-era packages (`libgtk-4-dev`,
+   `libwebkitgtk-6.0-dev`) that v1.10.1 removed from the workflow when
+   the desktop became the native Qt client — the gate failed on every
+   v1.10.1+ hosted run while the workflow itself was correct (the
+   "stress scenario assumes a retired transport" class). The pin now
+   REQUIRES the Qt-era dependency set the workflow actually installs
+   (libx11-dev, the four libxcb runtime pieces, libxkbcommon-x11-0,
+   openbox, xvfb, xdotool, x11-utils) and BANS the whole retired
+   GTK/WebKit stack in both Wails generations (libgtk-3-dev,
+   libwebkit2gtk-4.1-dev, libgtk-4-dev, libwebkitgtk-6.0-dev).
+   Coverage is STRENGTHENED (11 must-exist pins instead of 2, 4 banned
+   packages instead of 2). Fail-before/pass-after: the exact CI command
+   (`go build ./scripts/stress-main` + `stress`) exited 1 with
+   `release_surface FAIL … libgtk-4-dev missing` before the fix and
+   passes 47/47 with exit 0 after it, plus a clean `-race` pass on the
+   stress-exercised packages.
+2. **P1 — the Windows `Go verification` evidence class is stated
+   honestly (run 38569081029, step 13).** The step's full log is NOT
+   retrievable without repository-admin authentication (the Actions
+   log-download API refuses anonymous access; unauthenticated API calls
+   were rate-limited all session). Everything provable without the log
+   was proven at b0b3aba and re-proven at v1.10.4: `GOOS=windows`
+   compile AND full test-binary LINK of every package (±headless tags,
+   CGO_ENABLED=0 — the exact step-13 environment) is clean; `go vet`
+   under the same cross-compilation is clean; the IDENTICAL three
+   commands pass on Linux CI; and every test file changed since v1.10.1
+   was reviewed for Windows-runtime portability with no defect found.
+   The failing assertion therefore cannot be identified from this
+   environment, and v1.10.4 makes NO speculative Windows change and
+   NO test weakening. WINDOWS GO VERIFICATION remains NOT VERIFIED
+   until a hosted rerun; the run's own log is the arbiter.
+3. **P2 — documentation truth alignment.** The architecture doc now
+   marks the v1.9.5 loopback activity transport RETIRED (the Qt desktop
+   mounts no loopback WebSocket listener) and marks the Qt/IPC seam
+   SHIPPED (since v1.10.1) instead of "defined, not shipped"; the
+   roadmap names v1.10.4 as the shipped baseline; the stress-main
+   header comment no longer describes the removed Wails shell;
+   identity surfaces are consistent at 1.10.4.
+
+## What v1.10.3 changed (parent release — unchanged behavior)
 
 1. **P0 — CoreClient HTTP + WebSocket framing repaired and pinned.**
    Content-Length completion (no hang when the server holds the socket

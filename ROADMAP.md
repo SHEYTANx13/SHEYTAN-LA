@@ -19,9 +19,11 @@ Motto: **"The model proposes. The tools execute. The laboratory verifies."**
 
 ## Shipped baseline (compact)
 
-**v1.10.3 is the shipped baseline; release evidence is in changelog.md.**
-(v1.10.2 is the parent release — the Qt architecture hardening + the AI
-Systems surface migration; its evidence stays in changelog.md.)
+**v1.10.4 is the shipped baseline; release evidence is in changelog.md.**
+(v1.10.4 is the reliability release: it repairs the Linux stress gate's
+retired Wails-era dependency pin and states the Windows verification
+evidence class honestly; v1.10.3 — the Qt IPC framing/handshake
+hardening — is its parent release; its evidence stays in changelog.md.)
 
 v1.8 delivered, with per-release evidence in `changelog.md`: the adaptive
 runtime (task classification, tier system, context planning), the staged
@@ -161,6 +163,18 @@ acceptance staging resolves the MSVC Release/ layout and throws when
 absent. Windows CI remains NOT VERIFIED until a green hosted run exists
 (the v1.10.2 leftovers that would have failed the first run — R1, R3,
 R4, R16 — are repaired; nothing here flips that status without a run).
+v1.10.4 STATUS: the first hosted run after v1.10.3 (run 38569081029)
+proved the Linux Go verification + audit gates GREEN at b0b3aba; the
+Linux `Stress suite` failed on the stale Wails-era dependency pin
+(§3f) — FIXED in v1.10.4 with fail-before/pass-after evidence (exact
+CI command, 47/47 scenarios, -race clean) and the Windows `Go
+verification` failure remains UNIDENTIFIED (the step log is
+admin-gated; compile/link/vet are proven clean cross-platform, the
+identical commands pass on Linux CI, and a package-by-package review
+of every test file changed since v1.10.1 found no Windows-runtime
+defect — no speculative change, no test weakening). Windows CI remains
+NOT VERIFIED until a green hosted run of v1.10.4 exists; the run's own
+step log is the arbiter.
 Remaining surfaces NOT yet migrated to Qt (honest): AI Systems
 editing/import, Goals,
 Coding Lab, Net Search page, repository index, tasks/automations,

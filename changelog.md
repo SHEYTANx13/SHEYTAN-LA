@@ -11,6 +11,67 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.10.4 — 2026-10-14 — the reliability release: the stress gate tracks the Qt-era CI contract, the Windows evidence class stated honestly
+
+Focus: turn the two red hosted-CI gates of run 38569081029 (v1.10.3 @
+b0b3aba) into an honest state — fix what was provably broken, prove
+everything provable, and label exactly what this environment cannot
+prove. No new surface, no default flip, no test weakening.
+
+**Linux `Stress suite` (step 18) — FIXED with fail-before/pass-after
+evidence.** Root cause: the `release_surface` scenario
+(`cmd/stress_release_surface.go` §3f) still REQUIRED the Wails-era
+packages `libgtk-4-dev` + `libwebkitgtk-6.0-dev` — the exact stack
+v1.10.1 removed from the workflow when the desktop became the native
+Qt client. The scenario failed on every v1.10.1+ hosted run (the first
+hosted run that executed the stress binary after the Qt migration was
+38569081029) while the workflow itself was correct: the classic
+"stress scenario assumes a retired transport" regression. The pin now
+REQUIRES the Qt-era set the workflow installs (libx11-dev for the
+smoke's `cc -lX11` build of closewin.c, the four libxcb runtime
+pieces, libxkbcommon-x11-0, openbox as the REAL window manager for the
+G3/G5 gates, xvfb, xdotool, x11-utils) and BANS the retired GTK/WebKit
+stack in both Wails generations (libgtk-3-dev, libwebkit2gtk-4.1-dev,
+libgtk-4-dev, libwebkitgtk-6.0-dev). Coverage strengthened: 11
+must-exist pins (was 2), 4 banned packages (was 2). Evidence: the exact
+CI command (`go build -trimpath -ldflags="-s -w" -o /tmp/sheytan-stress
+./scripts/stress-main && /tmp/sheytan-stress stress`, CGO_ENABLED=1)
+failed before the fix (`release_surface FAIL … libgtk-4-dev missing`,
+exit 1) and passes after it (47/47, exit 0), with a clean `-race` pass
+on the stress-exercised packages (cmd, sessions, memory, sandbox,
+tools, agent).
+
+**Windows `Go verification` (step 13) — evidence class recorded, NOT
+claimed fixed.** The step's full log is not retrievable from this
+environment: the Actions log-download API requires repository-admin
+authentication and the unauthenticated API was rate-limited all
+session. Everything provable without the log was proven at b0b3aba and
+re-proven at v1.10.4: `GOOS=windows GOARCH=amd64 CGO_ENABLED=0`
+compile AND full test-binary LINK of every package with and without
+the headless tag (the exact step-13 build mode — `go vet` type-checks
+but never links, so the link check closes the one hole vet leaves);
+`GOOS=windows go vet ./...` clean in both tag modes; the IDENTICAL
+three step-13 commands pass on Linux CI and locally; and a
+package-by-package review of every test file changed since v1.10.1
+(internal/api qt field contract, internal/desktop launcher resolution,
+internal/perf host classification, internal/localipc endpoint,
+internal/engcheck PE sniffing, internal/llm import lock, internal/updater
+variant naming, internal/native/engine liveness probe) found no
+Windows-runtime defect. The failing assertion therefore cannot be
+identified without the hosted log, and v1.10.4 makes NO speculative
+Windows change. WINDOWS GO VERIFICATION remains NOT VERIFIED until a
+hosted rerun of this commit; the run's own step log is the arbiter.
+
+**Also in v1.10.4:** the architecture doc marks the v1.9.5 loopback
+activity transport RETIRED (the Qt desktop mounts no loopback WebSocket
+listener — `internal/desktop/desktop.go`) and the Qt/IPC seam SHIPPED
+(since v1.10.1); the roadmap names v1.10.4 as the shipped baseline;
+the stress-main header comment no longer describes the removed Wails
+shell; canonical identity is 1.10.4 on every surface (package.json →
+release-version.mjs → config.go / build/config.yml / SIGNATURE).
+
+---
+
 ## v1.10.3 — 2026-10-14 — the Qt IPC hardening release: real framing, strict handshake, runnable CI, honest evidence
 
 Focus: close the real defects and untested risk surfaces the v1.10.2

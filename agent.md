@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.2 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.4 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -7,8 +7,12 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.10.3 — the Qt IPC hardening release (framing,
-handshake, CI runnability, evidence reconciliation).** The production
+**Current release: v1.10.4 — the reliability release (the Linux stress
+gate retargeted to the Qt-era CI contract; the Windows evidence class
+stated honestly; identity + docs aligned at 1.10.4).** Its parent,
+v1.10.3 — the Qt IPC hardening release (framing, handshake, CI
+runnability, evidence reconciliation) — established the current
+behavior below. The production
 desktop UI is the native Qt Quick/QML host (`ui/qt`), an IPC CLIENT of
 the unchanged Go core over `internal/localipc` (per-user Unix socket /
 named pipe, transport-level identity checks, versioned keyed handshake

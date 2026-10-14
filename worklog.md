@@ -1919,3 +1919,101 @@ Stage Summary:
   remain honestly NOT RUN / NOT VERIFIED.
 - Deliverable: download/SHEYTAN-LA-v1.10.3-FINAL.zip (complete tracked
   tree, no .git, no build artifacts).
+
+---
+
+Task ID: 1 (single-agent session)
+Agent: Super Z (GLM engineering session, hosted Linux container)
+Task: v1.10.4 — turn the two red hosted-CI gates of run 38569081029 into an
+honest state (fix what is provably broken, prove everything provable, label
+what cannot be proven here), align the docs with the Qt reality, deliver the
+clean-room source ZIP under download/.
+
+Work Log:
+- INSPECT: cloned live main HEAD = b0b3aba (v1.10.3, exactly the failing
+  run's head_sha; clean worktree). Confirmed run 38569081029 jobs via the
+  Actions API BEFORE the rate limit hit: audit success; Windows job
+  115870797382 failed step 13 (Go verification); Linux job 115870797589
+  failed step 18 (Stress suite) while its Go verification (step 15) PASSED;
+  publish skipped. Version surfaces read at 1.10.3.
+- LOG EXTRACTION BLOCKED: the Actions job-log download API returns 403
+  "Must have admin rights to Repository" for anonymous callers; the
+  unauthenticated API rate pool was exhausted for the session's egress IPs;
+  the legacy checks log endpoint 404s. The exact Windows error line is
+  therefore UNOBTAINABLE from this environment (documented, not guessed).
+- REPRODUCE (Linux stress, exact CI command): CGO_ENABLED=1
+  `go build -trimpath -ldflags="-s -w" -o /tmp/sheytan-stress
+  ./scripts/stress-main && /tmp/sheytan-stress stress` → FAIL-BEFORE
+  captured: `release_surface FAIL: Linux CI dependencies missing
+  "libgtk-4-dev" — Wails v3 needs GTK4 + WebKitGTK 6.0`, 46 pass / 1 fail,
+  exit 1. (An earlier run from a foreign CWD also failed on
+  `internal/sessions/sessions.go missing` — a CWD artifact of the sandbox,
+  not a product defect; the scenario correctly gates repo checks on
+  finding .gitignore in the CWD.)
+- ROOT CAUSE (Linux): cmd/stress_release_surface.go §3f still REQUIRED the
+  Wails-era GTK stack that v1.10.1 removed from the workflow when the
+  desktop became the native Qt client. The workflow was correct; the stress
+  contract was stale — the "stress scenario assumes a retired transport"
+  class the mission predicted.
+- FIX (Linux): §3f retargeted to the CURRENT Qt-era contract — REQUIRE
+  libx11-dev, libxkbcommon-x11-0, libxcb-{cursor0,icccm4,keysyms1,image0,
+  render-util0}, openbox, xvfb, xdotool, x11-utils (11 pins, was 2); BAN
+  libgtk-4-dev, libwebkitgtk-6.0-dev, libgtk-3-dev, libwebkit2gtk-4.1-dev
+  (4 bans, was 2). No coverage weakened; coverage strengthened.
+  PASS-AFTER: exact CI command → 47 pass / 0 fail, exit 0; `-race` clean on
+  cmd, sessions, memory, sandbox, tools, agent.
+- REPRODUCE (Windows): compile/link PROVEN clean at b0b3aba AND at v1.10.4:
+  `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...`, `go vet ./...`
+  with AND without `-tags headless` (the exact step-13 environment), plus a
+  FULL test-binary LINK check for every package (`go test -run XXXNONE`)
+  — zero build failures. The identical three step-13 commands pass on
+  Linux CI (step 15 of the failing run) and locally. A user-space Wine
+  10.0 attempt (no sudo; deb extraction into a relocated loader layout) was
+  made to EXECUTE the Windows test binaries and abandoned within budget —
+  wine's wineserver/ntdll lookup cannot be satisfied relocated.
+- WINDOWS DISPOSITION: every test file changed since v1.10.1 reviewed
+  package-by-package for Windows-runtime portability (api qt field
+  contract, desktop launcher resolution, perf host classification, localipc
+  endpoint, engcheck PE sniffing, llm import lock, updater variant naming,
+  native/engine liveness probe) — no defect found; the failure class is a
+  Windows-host runtime assertion that cannot be identified without the
+  admin-gated log. v1.10.4 makes NO speculative Windows change and NO test
+  weakening; WINDOWS GO VERIFICATION stays NOT VERIFIED until a hosted
+  rerun.
+- IDENTITY: package.json → 1.10.4; release-version.mjs synced config.go,
+  build/config.yml, SIGNATURE; `--check` green.
+- DOC TRUTH: README current-release block → v1.10.4; ARCHITECTURE currency
+  header → v1.10.4, v1.9.5 loopback activity transport marked RETIRED (the
+  Qt desktop mounts NO loopback WS listener — desktop.go), Qt/IPC seam
+  marked SHIPPED since v1.10.1; ROADMAP shipped baseline → v1.10.4 with the
+  accurate Windows verification label; UPDATE.md retitled with the
+  v1.10.4 notes (v1.10.3 kept as parent record); changelog.md v1.10.4 entry
+  added (canonical history); agent.md handoff → v1.10.4; stress-main header
+  comment no longer describes the removed Wails shell.
+- REGRESSION (v1.10.3 wins re-verified): qt_field_contract tests green (in
+  the full suite); Main.qml binds modelData.msgCount (the messageCount hit
+  is the defect-history comment); smoke script G1–G5 gates + WM requirement
+  unchanged; workflow staging pins now ENFORCED by the retargeted
+  release_surface scenario; sessions/systems wire contracts green.
+- FULL GATES (local, this session): Go — internal headless CGO=0 (64 pkgs
+  ok), full `./... -run Test` CGO=0 (0 FAIL), vet CGO=0, internal headless
+  CGO=1 (0 FAIL), -race on stress packages, stress exact command 47/47;
+  GOOS=windows build + vet(±headless) + full test-binary link (0 build
+  failures). Frontend — npm ci, typecheck, oxlint 0/0, test:units 236/236,
+  test:release, build, verify:web, embedded index.html, npm audit 0
+  vulnerabilities. Native — cmake 3.31.6 (user-space) fresh configure +
+  Release build + ctest 13/13 PASS.
+- NOT RUN HERE (evidence classes kept separate): Qt host cmake build +
+  QtTest acceptance + Linux qt-desktop-smoke.sh G1–G5 (no Qt 6.8/Xvfb/WM in
+  this container; ui/qt and scripts/qt-desktop-smoke.sh are UNCHANGED since
+  the v1.10.3 session where they passed locally); hosted CI (no push/PR/tag
+  per the operating rules); browser E2E (optional, cut for budget).
+
+Stage Summary:
+- v1.10.4 = the honest reliability bridge: Linux stress gate FIXED
+  (proven), Windows gate evidence recorded (NOT claimed fixed), zero
+  surface migration, zero default flips, zero test weakening.
+- All local gates green at final state; hosted CI NOT RUN from this
+  session; Windows Qt + physical hardware remain NOT VERIFIED.
+- Deliverable: download/SHEYTAN-LA-v1.10.4-FINAL.zip (complete tracked
+  tree, single top-level SHEYTAN-LA/, no .git, no build artifacts).
