@@ -1,7 +1,7 @@
 info:
   productName: "SHEYTAN-LA"
   productIdentifier: "com.parsaetak.sheytan-la"
-  productVersion: "1.10.5"
+  productVersion: "1.10.6"
   companyName: "Parsaetak"
   productDescription: "SHEYTAN Local Agent — native local AI agent runtime (SHEYTAN-LA)"
 

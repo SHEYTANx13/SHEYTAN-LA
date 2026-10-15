@@ -272,7 +272,16 @@ jobs:
 
           go version
 
-          go test -race -tags headless -count=1 ./internal/api ./internal/agent ./internal/sessions ./internal/contextplan ./internal/histref ./internal/runtime
+          mkdir -p ci-logs
+
+          # v1.10.6 FAILURE-VISIBILITY: every Go-verification command tees to
+          # a log file. The if:failure() steps at the end of this job append
+          # the failing test names + a 200-line tail per failing command to
+          # $GITHUB_STEP_SUMMARY (publicly visible without login — this is
+          # how a credential-less agent reads the next failure) and upload
+          # the full logs via actions/upload-artifact. No secrets/keys are
+          # ever written to these outputs.
+          go test -race -tags headless -count=1 ./internal/api ./internal/agent ./internal/sessions ./internal/contextplan ./internal/histref ./internal/runtime 2>&1 | tee ci-logs/audit-go-race.log
 
           echo "Race gate passed."
 
@@ -310,6 +319,48 @@ jobs:
 
           test -x native/engine/build/shtn-engine-host
           echo "Native engine verification passed."
+
+      # v1.10.6 FAILURE-VISIBILITY (runs on ANY failure in this job): the
+      # summary excerpts ARE the readable log for the next cycle — no
+      # credentials needed. Fenced blocks keep the output copy-pasteable;
+      # no secrets/keys appear here (test logs carry no capability tokens,
+      # runIds or sessionIds).
+      - name: Failure summary (audit job)
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "## Audit job FAILED"
+            echo ""
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY" || true
+
+          if [ -d ci-logs ]; then
+            for f in ci-logs/*.log; do
+              [ -f "$f" ] || continue
+              {
+                echo ""
+                echo "### $f — failing test names"
+                echo '```'
+                grep -E '^(--- FAIL|FAIL|panic:|fatal error:)' "$f" | head -60 || true
+                echo '```'
+                echo ""
+                echo "### $f — last 200 lines"
+                echo '```'
+                tail -n 200 "$f" || true
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY" || true
+            done
+          fi
+
+      - name: Upload verification logs (audit job)
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: audit-verification-logs-attempt${{ github.run_attempt }}
+          path: ci-logs/*.log
+          if-no-files-found: ignore
+          retention-days: 14
 
   build-windows:
     name: Windows x64
@@ -552,18 +603,70 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           function Invoke-Gate {
-            param([scriptblock]$Command, [string]$Label)
-            & $Command
+            param([scriptblock]$Command, [string]$Label, [string]$LogFile)
+            # v1.10.6 FAILURE-VISIBILITY: the command's full output is teed
+            # to its OWN log file so a red run can name the exact failing
+            # command and tests. Tee-Object passes output through; the
+            # $LASTEXITCODE below still belongs to the native command.
+            & $Command 2>&1 | Tee-Object -FilePath $LogFile
             if ($LASTEXITCODE -ne 0) {
-              throw "[gate] $Label failed with exit code $LASTEXITCODE."
+              throw "[gate] $Label failed with exit code $LASTEXITCODE (log: $LogFile)."
             }
           }
 
           go version
 
-          Invoke-Gate { go test ./internal/... -tags headless -count=1 } "go test ./internal/... (headless)"
-          Invoke-Gate { go test ./... -run Test -count=1 } "go test ./... (full)"
-          Invoke-Gate { go vet ./... } "go vet ./..."
+          New-Item -ItemType Directory -Force -Path "ci-logs" | Out-Null
+
+          # Each Go-verification command tees SEPARATELY: the failure
+          # summary names the exact failing command and its failing tests.
+          Invoke-Gate { go test ./internal/... -tags headless -count=1 } "go test ./internal/... (headless)" "ci-logs/win-go-test-headless.log"
+          Invoke-Gate { go test ./... -run Test -count=1 } "go test ./... (full)" "ci-logs/win-go-test-full.log"
+          Invoke-Gate { go vet ./... } "go vet ./..." "ci-logs/win-go-vet.log"
+
+      # v1.10.6 FAILURE-VISIBILITY: on failure, append the failing test
+      # names + a 200-line tail per failing command to $GITHUB_STEP_SUMMARY
+      # (publicly visible without login — the log is admin-gated, this is
+      # not). This is how a credential-less agent reads the next failure.
+      # No secrets/keys are ever written here.
+      - name: Go verification failure summary (Windows)
+        if: failure()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+
+          $summaryPath = $env:GITHUB_STEP_SUMMARY
+          if ([string]::IsNullOrEmpty($summaryPath)) { exit 0 }
+
+          $lines = @()
+          $lines += "## Windows Go verification FAILED"
+          $lines += ""
+          $lines += "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+
+          foreach ($log in Get-ChildItem "ci-logs" -Filter "*.log" -ErrorAction SilentlyContinue) {
+            $text = @(Get-Content $log.FullName -ErrorAction SilentlyContinue)
+            $lines += ""
+            $lines += "### $($log.Name) — failing test names"
+            $failing = @($text | Where-Object { $_ -match '^(--- FAIL|FAIL|panic:|fatal error:)' })
+            $lines += '```'
+            if ($failing.Count -gt 0) { $lines += ($failing | Select-Object -First 60) } else { $lines += "(no FAIL lines captured)" }
+            $lines += '```'
+            $lines += "### $($log.Name) — last 200 lines"
+            $lines += '```'
+            $lines += ($text | Select-Object -Last 200)
+            $lines += '```'
+          }
+
+          Add-Content -Path $summaryPath -Value ($lines -join [Environment]::NewLine)
+
+      - name: Upload Go verification logs (Windows)
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-go-verification-logs-attempt${{ github.run_attempt }}
+          path: ci-logs/*.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       # v1.6.2 — WINDOWS ENGINE VARIANT ASSET VALIDATION through the
       # AUTHORITATIVE production resolver (no duplicated release-tag
@@ -1536,9 +1639,16 @@ jobs:
 
           go version
 
-          go test ./internal/... -tags headless -count=1
-          go test ./... -run Test -count=1
-          go vet ./...
+          mkdir -p ci-logs
+
+          # v1.10.6 FAILURE-VISIBILITY: each Go-verification command tees to
+          # its own log; the if:failure() follow-ups publish failing test
+          # names + tails to $GITHUB_STEP_SUMMARY and upload the full logs.
+          # pipefail keeps the gate strict: a failing go test still fails
+          # the step through the tee pipeline.
+          go test ./internal/... -tags headless -count=1 2>&1 | tee ci-logs/linux-go-test-headless.log
+          go test ./... -run Test -count=1 2>&1 | tee ci-logs/linux-go-test-full.log
+          go vet ./... 2>&1 | tee ci-logs/linux-go-vet.log
 
           # v1.10.1: Wails is REMOVED — the dependency graph must stay
           # free of it. The check asserts ABSENCE (a `go list -m` hit here
@@ -1739,6 +1849,17 @@ jobs:
           export LD_LIBRARY_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           export QT_QPA_PLATFORM_PLUGIN_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/plugins/platforms"
 
+          # v1.10.6 (L1, run 38714950052 step 23): Qt Quick cannot create a
+          # GL scene-graph context under Xvfb on a headless hosted runner —
+          # the classic first-run failure. Force the SOFTWARE renderer for
+          # the UI process. The smoke script exports the same defaults; the
+          # explicit exports here keep the workflow self-documenting. The
+          # UI inherits the core's environment (desktop.Run passes
+          # os.Environ() to the Qt child), so these reach the real renderer.
+          export QT_QUICK_BACKEND=software
+          export QT_OPENGL=software
+          export LIBGL_ALWAYS_SOFTWARE=1
+
           # v1.10.3 (R4): the REAL staged paths. The v1.10.2 step passed
           # CORE_BIN=.../SHEYTAN-LA while the build stages the core as
           # SHEYTAN-Local-Agent (and never staged UI_BIN at all) — both
@@ -1754,6 +1875,51 @@ jobs:
           XTOOLS="$(command -v xdotool >/dev/null && dirname "$(command -v xdotool)")" \
           XLIBS="" \
           bash scripts/qt-desktop-smoke.sh
+
+      # v1.10.6 FAILURE-VISIBILITY: the smoke's core.log / ui.log /
+      # xvfb.log / wm.log / engine.log tails are appended to
+      # $GITHUB_STEP_SUMMARY (public without login) and the full logs are
+      # uploaded as artifacts. ui.log now EXISTS (the smoke captures the
+      # UI's real output), so a red smoke prints real QML/Qt evidence —
+      # never an empty file again. No IPC keys: the smoke reads the key
+      # from the child environment and never logs it (rule enforced in the
+      # script itself).
+      - name: Qt smoke failure summary (Linux)
+        if: failure()
+        shell: bash
+        run: |
+          work="$RUNNER_TEMP/sheytan-qt-smoke"
+
+          {
+            echo "## Qt desktop acceptance smoke FAILED"
+            echo ""
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY" || true
+
+          mkdir -p ci-logs
+          if [ -d "$work" ]; then
+            for f in "$work"/*.log; do
+              [ -f "$f" ] || continue
+              base="$(basename "$f")"
+              {
+                echo ""
+                echo "### smoke log: $base — last 200 lines"
+                echo '```'
+                tail -n 200 "$f" || true
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY" || true
+              cp -f "$f" "ci-logs/smoke-$base" 2>/dev/null || true
+            done
+          fi
+
+      - name: Upload verification logs (Linux)
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-verification-logs-attempt${{ github.run_attempt }}
+          path: ci-logs/*.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       # v1.10.1 LIVE-ANSWER ACCEPTANCE — the QtTest suite drives the REAL
       # Main.qml against the REAL core (offscreen platform for CI): send →

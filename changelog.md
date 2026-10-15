@@ -11,6 +11,150 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.10.6 — 2026-10-15 — the hosted-truth release: the Windows named-pipe IPC defect class fixed in one sweep, the Linux Qt smoke hardened for headless runners, and CI failure-visibility installed so no future red run is invisible
+
+Focus: break the three-run pattern of docs-only fixes. Run 38714950052
+(v1.10.5) repeats the identical failure shape: Windows x64 fails at step
+13 "Go verification" for the FIFTH consecutive run, and Linux x64 fails
+at step 23 "Qt desktop acceptance smoke" — the first hosted execution of
+`scripts/qt-desktop-smoke.sh`. v1.10.4 and v1.10.5 contained zero Windows
+code; the hosted job logs are admin-gated and no GitHub credentials exist
+in the repair environment, so each previous cycle retreated into
+documentation. v1.10.6 removes that excuse: every VERIFIED defect class
+is fixed in code without needing the log, and CI failure-visibility makes
+any future red run publish its own diagnosis.
+
+**Windows named-pipe IPC transport (W1–W4) — the full defect class fixed
+in `internal/localipc/listener_windows.go`.** Verified at HEAD
+(8d8e660): (W1) `listenEndpoint()` returned with NO pipe instance — the
+first `CreateNamedPipe` happened lazily inside `Accept()`, so `Serve()`
+returned before the endpoint existed and an immediately dialing client
+hit `ERROR_FILE_NOT_FOUND`; (W2) `Accept()` waited on
+`ConnectNamedPipe` in a 5000 ms window and returned the timeout as a
+FATAL accept error — `http.Serve` exits on accept errors, so the Windows
+IPC endpoint DIED after 5 idle seconds; (W3) `Close()` never cancelled a
+pending overlapped accept (`CancelIoEx`), so a clean `Stop` could hang on
+the accept; (W4) `TestCredAllowedDeniesForeignUid` was vacuous on
+Windows (`os.Getuid() == -1` degenerated every assert), the SID identity
+path (`verifyClientIsCurrentUser`) had zero test coverage, and the
+malformed/oversized tests re-dialed racing the next instance creation.
+The repair: `listenEndpoint` creates the FIRST pipe instance
+synchronously (Serve returns only when the pipe exists — Unix bind
+semantics); `Accept` waits on the overlapped connect INDEFINITELY (a
+connect timeout is no longer an error class; `connectTimeoutMS` is gone)
+and only `Close` ends the wait, via `CancelIoEx` on the published pending
+overlapped state plus the closed-channel signal; a fresh instance is
+created AHEAD of demand (immediately after a client connects, before the
+SID check and before the connection is handed to `http.Serve`) so re-dials
+never race instance creation; `ERROR_NO_DATA` (client vanished mid-race)
+is transient, not fatal; the identity decision is extracted into
+`sidAllowed` (a pure, fail-closed comparison against the real token SID —
+empty/blank client SIDs are denied) with windows-only regression tests
+(`internal/localipc/listener_windows_test.go`): own-SID allowed (real
+token, no forged identity), foreign SID denied, empty denied, endpoint
+survives 6.5 s idle (the exact former fatal window), a zero-delay
+10-dial burst never races instance creation, and `Stop` completes while
+an accept is pending. `TestCredAllowedDeniesForeignUid` now documents
+its platform split honestly (the uid model is genuinely Unix-only; the
+Windows equivalent is the SID contract above). The current-user DACL and
+the post-connect SID check remain fail-closed and unchanged.
+
+**Windows candidate sweep (W5) — classified by inspection at HEAD, with
+the evidence quoted in `worklog.md`:** `net.Listen("unix")` exists only
+behind the `PathSeparator` skip guard (serve_test.go); `/proc` readers
+are platform-suffixed production files or Skipf/OS-guarded tests
+(phase5_bench_test.go, cim_parse_test.go); test-side unix-tool exec is
+git-only (present on windows-latest); `internal/sandbox` Job-Object
+tests DO NOT EXIST (no test files in the package); the v1.10.0-era
+`t.TempDir`/RemoveAll teardown race class in internal/api already
+carries the cleanup-LIFO repair (verified ordering at HEAD). CGO_ENABLED=0
+(the Windows verification environment) is NOT the cause: the localipc
+path is pure `golang.org/x/sys/windows`, no cgo. No W5 fix was fabricated
+where no defect reproduces or exists by inspection — the honest classes
+are recorded in worklog.md.
+
+**Linux Qt desktop smoke (L1–L3) — hardened for the headless hosted
+runner, G1–G5 untouched.** (L1) Qt Quick cannot create a GL scene-graph
+context under Xvfb — the classic first-run failure — so the software
+renderer is forced for the UI process (`QT_QUICK_BACKEND=software`,
+`QT_OPENGL=software`, `LIBGL_ALWAYS_SOFTWARE=1`), exported in both the
+workflow smoke step and the script; the UI provably inherits them
+(`desktop.Run` passes `os.Environ()` to the Qt child). (L2) the smoke's
+own `ui.log` never existed — the product launcher streams the UI's
+output into the core's log streams — so every failure path catted an
+EMPTY file; the smoke now creates `ui.log` up front and routes the UI's
+stdout/stderr into it via a smoke-owned wrapper that execs the REAL UI
+binary UNCHANGED (same argv, same env, same PID after `exec` — G2/G3/G4/
+G5 still observe the real child), and every failure path (core boot, G2,
+G3, G5) now prints real UI evidence. (L3) the openbox readiness `sleep 1`
+is replaced by a bounded poll of the root-window
+`_NET_SUPPORTING_WM_CHECK` property (the ICCCM WM-ownership contract);
+the fallback `sleep` path is explicitly non-authoritative — G3 still
+gates real geometry either way. No gate was weakened, no threshold
+moved, no timeout expanded: the L-class changes harden the ENVIRONMENT
+and the DIAGNOSTICS only (L4 constraint held).
+
+**CI failure-visibility — installed in the same release.** Every
+Go-verification command now tees to its own log file: the Windows job
+teed separately for `go test ./internal/... -tags headless`,
+`go test ./...` and `go vet`; the Linux job tees the same three plus the
+race gate in the audit job. On failure, follow-up `if: failure()` steps
+append the failing test names (grep of `--- FAIL` / `FAIL` / `panic:`)
+and a 200-line tail per failing command to `$GITHUB_STEP_SUMMARY` —
+publicly visible without login, which is exactly how a credential-less
+agent reads the next failure — and upload the full logs via
+`actions/upload-artifact`. The smoke run's failure step appends the last
+200 lines of every smoke log (core.log, ui.log, xvfb.log, wm.log,
+engine.log) to the summary and uploads them. No IPC keys, capability
+tokens, runIds, sessionIds or model content are written to these outputs
+(the smoke reads the handshake key from the child environment and never
+logs it). The gates are unchanged in strictness: tee is pass-through,
+`pipefail` keeps the pipeline failure-true, and the exit-code assertion
+discipline of v1.4.0 is preserved.
+
+**Legacy purge — proof before delete.** (P1) the `ws@8.22.0`
+devDependency is removed: zero `require("ws")`/`from "ws"` imports
+existed anywhere at HEAD (the only `"ws"` hits are a URL-scheme literal
+in `src/LogViewer.tsx`, a Go URL prefix in `runregistry_test.go` and a
+directory name in `markdown_test.go` — the frontend uses the
+browser-native WebSocket); `package-lock.json` regenerated, `npm ci`
+clean, 0 vulnerabilities — the GHSA advisory class is permanently dead.
+(P2) `e2e/repro-stream.mjs` deleted: the v1.8.2 pure-diagnostics harness
+asserted nothing and was referenced by no workflow step, no package.json
+script and no `verify-all.mjs` entry (only historical worklog/changelog
+mentions remain, which are protected); `e2e/fixtures/sheytan-server.ts`
+SURVIVES (shared with the spec files). (P3) the whole-tree Wails sweep
+found 21 files: every mention is a gate (the Wails-absence check, the
+stress gate's GTK-stack ban), origin-REJECTION security code
+(`loopback-origin`, the retired-origin handling in `ws.go`), retired-era
+comments, or protected historical doc mentions — nothing outside the
+allowed classes, nothing deleted blindly; the one stale architecture
+comment (`internal/llm/backend.go`) was corrected to the Qt-client chain.
+PROTECTED files all survive: SHEYTAN-LA.bat, build/config.yml,
+build/sheytan.ico, gen-syso, packaging/nsis/installer.nsi, src/web/vite,
+scripts/sync-web.mjs, verify-all.mjs, gen-license.go, gen-signature.go,
+the Wails-absence gate, and the historical mentions.
+
+**Preserved gains:** every v1.10.3/v1.10.4/v1.10.5 surface is intact —
+the strict typed handshake, the field pins, the stress-gate Qt contract,
+the CoreClient WS fragmentation reassembly, the apt OpenGL dev-stack fix,
+and the desktop override order (SHEYTAN_UI_EXECUTABLE wins over
+next-to-core).
+
+**Hosted truth (the honesty boundary of this release).** Windows x64
+failed step 13 "Go verification" in five consecutive hosted runs
+through run 38714950052 (v1.10.5, commit 8d8e660); Linux x64 failed step
+23 "Qt desktop acceptance smoke" on the smoke's first hosted execution.
+The v1.10.6 repairs are local-evidence: `GOOS=windows` build + vet
+clean, the Linux localipc suite unchanged and green, and the defect
+classes above fixed by construction — NOT hosted green. The repair
+environment has no GitHub credentials, so this release could not push or
+execute a hosted run; the failure-visibility install is part of this
+release precisely so that the NEXT hosted run — red or green — publishes
+its own diagnosis where everyone can read it. No hosted green is claimed
+for v1.10.6 anywhere in this repository.
+
+
 ## v1.10.5 — 2026-10-14 — the live-stream + Qt-host-build release: the activity fragmentation defect fixed with byte-level evidence, the Linux Qt host build dependency gap closed
 
 Focus: make the Linux `Build Qt host (Linux)` gate green (run 38584769607

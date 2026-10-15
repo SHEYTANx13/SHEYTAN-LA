@@ -2108,3 +2108,62 @@ Stage Summary:
   evidence, all local gates green, hosted-Windows honestly NOT VERIFIED.
 - Deliverable: download/SHEYTAN-LA-v1.10.5-FINAL.zip (complete tracked
   tree, single top-level SHEYTAN-LA/, no .git, no build artifacts).
+
+---
+
+## v1.10.6 REGISTER RE-VERIFICATION (live HEAD == 8d8e660, main)
+
+Verified against live main HEAD (identical to baseline 8d8e660; no drift):
+
+- W1 VERIFIED — internal/localipc/listener_windows.go:47-75: listenEndpoint() returns with NO pipe instance; first CreateNamedPipe is lazy inside Accept() (line 141). Immediate dial → ERROR_FILE_NOT_FOUND. Unix binds synchronously (listener_unix.go); Windows must too.
+- W2 VERIFIED — listener_windows.go:251-257 (connectTimeoutMS=5000 at line 27): Accept returns the 5s connect timeout as a FATAL error → http.Serve exits → Windows IPC endpoint dies after 5 idle seconds.
+- W3 VERIFIED — listener_windows.go:189-205: Close() never CancelIoExes a pending overlapped ConnectNamedPipe; a clean Stop can hang on the accept.
+- W4 VERIFIED — serve_test.go:95-105 TestCredAllowedDeniesForeignUid is vacuous on Windows (os.Getuid()==-1 degenerates both asserts); verifyClientIsCurrentUser (listener_windows.go:264-295) has zero test coverage; malformed/oversized tests (serve_test.go:262,288) re-dial racing the next pipe instance creation.
+- W5 CLASSIFIED BY INSPECTION (HEAD):
+  - net.Listen("unix") — serve_test.go:117 only; PathSeparator skip guard present. SAFE.
+  - /proc reads — production readers are platform-suffixed (perf_linux.go, governor/cpu_linux.go, proc/alive_unix.go, proc/identity_unix.go, resources_other.go) with honest fallbacks; test reachability guarded (phase5_bench_test.go:177 Skipf; cim_parse_test.go:126 OS=="linux" guard). SAFE.
+  - exec of unix tools in tests — git only (releasegate_test.go, repoindex_test.go); git ships on windows-latest. SAFE.
+  - internal/sandbox Job-Object tests — NO test files exist in internal/sandbox. NOT-PRESENT.
+  - t.TempDir/RemoveAll teardown races — v1.10.0-era internal/api WS class already repaired (cleanup LIFO: srv.Close before TempDir RemoveAll; WS conns closed per-test); spot-checks confirm correct ordering at HEAD. SAFE as-found.
+  - CGO_ENABLED=0 (Windows Go-verification env) — localipc is pure golang.org/x/sys/windows; no cgo on this path. NOT the cause.
+- L1 CLASSIFIED — Qt Quick scene-graph GL context under Xvfb: software-rendering exports (QT_QUICK_BACKEND=software, QT_OPENGL=software, LIBGL_ALWAYS_SOFTWARE=1) must be set for the UI process. Env reaches the UI by construction: desktop.go:112 passes os.Environ() to the Qt child.
+- L2 VERIFIED — scripts/qt-desktop-smoke.sh: UI stdout/stderr inherit the core's streams (desktop.go:118-119 → core.log line 190); $WORK/ui.log is never created, so failure paths at lines 210/273/325 cat an empty file.
+- L3 VERIFIED — qt-desktop-smoke.sh:137: openbox readiness is a fixed `sleep 1`, not an event.
+- L4 CONFIRMED — workflow smoke step wiring (LD_LIBRARY_PATH, QT_QPA_PLATFORM_PLUGIN_PATH, staged CORE_BIN/UI_BIN, xvfb/openbox/xdotool/x11-utils install) is correct; harden environment + diagnostics only; G1-G5 unchanged.
+- P1 PROVEN AT HEAD — package.json:44 "ws": "8.22.0"; zero require("ws")/from "ws" imports tree-wide (hits are a URL-scheme literal src/LogViewer.tsx:90, a Go URL prefix runregistry_test.go:135, a dir name markdown_test.go:119). Frontend uses the browser-native WebSocket.
+- P2 PROVEN AT HEAD — e2e/repro-stream.mjs referenced only by worklog.md:589 + changelog.md:2008 (both historical mentions, allowed residue), no workflow step, no package.json script, no verify-all.mjs entry. e2e/fixtures/sheytan-server.ts is shared with spec files and SURVIVES.
+- P3 SWEEP AT HEAD — 21 files mention wails: all are (a) gates (verify-all.mjs absence gate, cmd/stress_release_surface.go GTK-stack ban, releasegate_test.go), (b) origin-REJECTION security code (src/loopback-origin.ts, internal/api/ws.go retired-origin handling + their tests/bundle), (c) retired-era comments (desktop.go, headless.go, gen-syso, backend.go, server.go), or (d) historical changelog/worklog/docs mentions. Nothing outside the protected classes; no blind deletion required. internal/llm/backend.go:13 carries a stale architecture comment — corrected to the Qt-client chain in this release.
+- D1 VERIFIED — UPDATE.md/agent.md/changelog.md describe gates as fixed/runnable while Windows failed five consecutive hosted runs (through run 38714950052) and the Linux smoke had never run hosted until its first failure. v1.10.6 docs state the run truth with URLs and the failure-visibility mechanism.
+
+OUTCOME REGISTER (v1.10.6 code actions):
+- W1-W4: full transport repair in listener_windows.go (synchronous first instance; indefinite accept wait aborted by CancelIoEx on Close; next-instance pre-creation ahead of demand; sidAllowed seam + windows-only tests; TestCredAllowedDeniesForeignUid gets a documented platform split).
+- W5: classifications above (no code change justified beyond the transport tests; all candidates SAFE/NOT-PRESENT with the evidence quoted).
+- L1/L2/L3: smoke hardening (software-rendering exports, ui.log capture via a smoke-owned exec wrapper around the REAL UI binary, event-based xprop WM-readiness poll).
+- CI: failure-visibility install (tee to logs; if:failure steps append failing-test names + log tails to $GITHUB_STEP_SUMMARY and upload artifacts; no secrets/keys in outputs).
+- P1/P2: purge executed after the proofs above.
+- D1: docs rewritten with run URLs + visibility mechanism; hosted result for v1.10.6 itself is recorded honestly (this environment has no GitHub credentials — push not possible; hosted green for v1.10.6 is NOT claimed).
+
+---
+
+## v1.10.6 IMPLEMENTATION OUTCOMES (evidence per item)
+
+LOCAL EVIDENCE (this environment, Go 1.26.9 / Node 24 / linux amd64):
+- W1–W4 transport repair: `CGO_ENABLED=0 GOOS=windows go build ./...` PASS; `CGO_ENABLED=0 GOOS=windows go vet ./...` PASS (compile proof ONLY — never runtime proof). Linux `go build ./...` + `-tags headless` PASS; `go vet ./...` PASS.
+- Linux localipc suite unchanged and green: default tags 9/9 PASS (incl. TestCredAllowedDeniesForeignUid platform split, TestStaleEndpointRemovedLiveEndpointKept, TestStopIsCleanAndIdempotent), headless tags PASS.
+- Full local regression: `go test ./internal/... -tags headless -count=1` — 71 packages, ALL PASS (api 89.9s, llm 65.9s, agent 20.9s, native/engine 16.4s); `go test ./... -run Test -count=1` — 77 packages, ALL PASS; race gate `-race -tags headless` on api/agent/sessions/contextplan/histref/runtime ALL PASS (CGO_ENABLED=1); stress suite 47 pass / 0 fail / 0 hangs / 0 crashes.
+- Frontend: npm ci clean (0 vulnerabilities), typecheck PASS, lint 0 warnings/errors, test:units PASS (fail 0), test:release PASS (fail 0), npm run build PASS, verify-static-assets --dist PASS, verify:web PASS.
+- verify-all.mjs: PASS with 2 environment-limited NOT RUNs (native CTest — no cmake binary in this environment; Qt host suites — no Qt6 CMake package).
+- Browser E2E: NOT RUN (environment-limited) — the harness honestly refuses without the REAL native engine host; cmake is unavailable here so `native/engine/build/shtn-engine-host` cannot be built locally ("The browser suite proves the REAL stack; it never runs green without it."). Hosted Linux builds the engine before E2E; the suite is unchanged.
+- Qt desktop smoke G1–G5: NOT RUN locally (no Xvfb WM/xdotool/openbox/Qt 6.8.2 in this environment); the script is bash -n validated and its environment hardening (L1–L3) is the hosted-run fix. qt-desktop-smoke.sh syntax PASS.
+- Windows-only tests (TestSIDAllowed*, TestServeSurvivesIdleBeyondFormerConnectTimeout, TestBurstDialsNeverRaceInstanceCreation, TestStopDoesNotHangOnPendingAccept): compile-verified via GOOS=windows vet/build; they EXECUTE in the hosted Windows job — runtime proof belongs to that run, per the evidence-class rule.
+
+PURGE OUTCOMES:
+- P1 ws removed from package.json + package-lock.json regenerated (npm install --package-lock-only; zero "ws" entries; npm ci clean; 0 vulnerabilities).
+- P2 e2e/repro-stream.mjs deleted (git rm) after the zero-reference proof at HEAD; e2e/fixtures/sheytan-server.ts untouched (shared fixture).
+- P3 no deletions: all remaining wails mentions classified gates/security-rejection/retired-era-comments/protected-historical (see register above). internal/llm/backend.go stale architecture comment corrected. ui/qt/CMakeLists.txt project version aligned 1.10.3 → 1.10.6 (no gate reads it; identity consistency).
+
+IDENTITY: package.json 1.10.6 → release-version.mjs repaired config.go AppVersion, build/config.yml productVersion, SIGNATURE first line; `--check` PASS ("release metadata consistent").
+
+HOSTED (not executable from this environment — no GitHub credentials):
+- Push to main: NOT POSSIBLE from the repair environment (credential-less). The failure-visibility install ships in this tree so the next hosted run publishes its own diagnosis to $GITHUB_STEP_SUMMARY + artifacts.
+- No hosted green is claimed for v1.10.6. The gate table in the final report marks hosted rows accordingly.

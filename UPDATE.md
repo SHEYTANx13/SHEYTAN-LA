@@ -1,26 +1,95 @@
-# UPDATE.md — v1.10.5 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.10.6 Release Notes & Maintenance Behavior
 
-**Release:** `v1.10.5` (canonical application version; single version
+**Release:** `v1.10.6` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ 354122d` (`v1.10.4`) · **Date:** 2026-10-14
-**Package:** `SHEYTAN-LA-v1.10.5-FINAL.zip` (complete repository tree)
+**Base:** `main @ 8d8e660` (`v1.10.5`) · **Date:** 2026-10-15
+**Package:** `SHEYTAN-LA-v1.10.6-FINAL.zip` (complete repository tree)
 **R&D authority:** `Parsaetak/Contents`, branch `Research-and-Development`,
 `SHEYTAN-LA-2026-10-11.md` (linked, not copied — the R&D document stays in
 its source repository).
 
 The authoritative per-release history lives in `changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
-behavior. v1.10.5 is the live-stream + Qt-host-build release on top of
-the v1.10.4 reliability bridge: it closes the Linux Qt host build's
-missing OpenGL development dependency (the run 38584769607 step 22
-blocker) and fixes the one REAL product defect the locally-reproduced Qt
-acceptance exposed — the activity-stream fragmentation refusal that
-froze the desktop live bubble on every real long-context generation.
-It adds NO new product surface and flips NO default. The v1.10.4 notes
-below remain the parent-release record: the stress retarget, the honest
-Windows evidence class and the Qt desktop reality they describe is
-unchanged in v1.10.5.
+behavior. v1.10.6 is the hosted-truth release: it breaks the docs-only
+cycle of v1.10.4/v1.10.5 by fixing every VERIFIED defect class in CODE —
+the Windows named-pipe IPC transport (W1–W4, the five-run "Go
+verification" failure shape ending at run
+https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38714950052), the
+Linux Qt smoke's headless environment (L1–L3, the step-23 failure of the
+same run) — and by installing CI failure-visibility so any future red run
+publishes its own diagnosis to `$GITHUB_STEP_SUMMARY` (public without
+login) plus uploaded log artifacts. It adds NO new product surface and
+flips NO default.
+
+## What v1.10.6 changes
+
+1. **W1 — the endpoint now exists before `Serve` returns.**
+   `listenEndpoint` creates the first pipe instance synchronously;
+   an immediately dialing client can no longer hit
+   `ERROR_FILE_NOT_FOUND`. Unix bind semantics, mirrored.
+2. **W2 — the endpoint no longer dies after 5 idle seconds.** `Accept`
+   waits on the overlapped connect indefinitely; the former
+   5000 ms fatal timeout (which killed `http.Serve` — and the whole IPC
+   endpoint — after 5 idle seconds) is gone. `connectTimeoutMS` no
+   longer exists.
+3. **W3 — a clean `Stop` cannot hang.** `Close` cancels a pending
+   overlapped accept via `CancelIoEx` (the pending state is published by
+   the listener) and signals through the closed channel.
+4. **W4 — the identity path is tested; the re-dial races are closed.**
+   The SID decision is the pure, fail-closed `sidAllowed` (own token SID
+   allowed, foreign denied, empty denied), covered by windows-only
+   regression tests; a fresh instance is created ahead of demand so the
+   malformed/oversized re-dials (and the real UI's rapid requests) never
+   race instance creation; `TestCredAllowedDeniesForeignUid` documents
+   its honest platform split instead of passing vacuously.
+5. **L1–L3 — the smoke proves the UI on a headless runner.** Software
+   rendering is forced for the UI process; the smoke captures the REAL
+   UI's output into its own `ui.log` (via a wrapper that execs the real
+   binary unchanged — same PID, same env) and prints it on every failure
+   path; openbox readiness is the bounded `_NET_SUPPORTING_WM_CHECK`
+   event poll, not a fixed sleep. G1–G5 are byte-for-byte as strict as
+   before.
+6. **CI failure-visibility — the next red run is readable.** Every
+   Go-verification command (Windows ×3, Linux ×3, audit race gate) tees
+   to its own log; `if: failure()` steps append failing test names +
+   200-line tails to `$GITHUB_STEP_SUMMARY` and upload the full logs.
+   The smoke's logs (core, ui, xvfb, wm, engine) are summarized and
+   uploaded the same way. No secrets, keys, runIds or sessionIds are
+   ever written to these outputs.
+7. **Legacy purge with proof.** `ws@8.22.0` removed (zero imports
+   tree-wide; lockfile regenerated; `npm ci` clean; 0 vulnerabilities —
+   the GHSA class is dead); `e2e/repro-stream.mjs` deleted (asserted
+   nothing, referenced by no entry point; the shared fixture survives);
+   the Wails sweep found only gates, origin-rejection security code,
+   retired-era comments and protected historical mentions.
+
+## Run truth and evidence classes
+
+* Windows x64 failed step 13 "Go verification" in FIVE consecutive
+  hosted runs through run
+  https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38714950052
+  (v1.10.5, commit 8d8e660). The hosted log is admin-gated; the defect
+  register verified at HEAD names the cause set above. The v1.10.6
+  transport repair is local evidence: `GOOS=windows` build + vet clean
+  and the defect classes fixed by construction — it is NOT hosted
+  green, and no hosted green is claimed for v1.10.6 anywhere in this
+  repository. The repair environment has no GitHub credentials, so this
+  release could not push or execute a hosted run; the failure-visibility
+  install exists precisely so the NEXT hosted run publishes its own
+  diagnosis.
+* Linux x64 failed step 23 "Qt desktop acceptance smoke" on the smoke's
+  first hosted execution (same run). The hardening above is the
+  software-rendering + real-UI-logs + event-based-readiness answer; the
+  G1–G5 gates themselves are unchanged.
+* Physical-hardware claims are unchanged from v1.10.4/v1.10.5: GPU
+  runtime behavior remains PHYSICAL HARDWARE UNVERIFIED in CI; the
+  Windows Qt GUI window proof remains a hosted-runner-only evidence
+  class (WINDOWS QT NOT VERIFIED outside the hosted job that runs it).
+
+The v1.10.5 notes below remain the parent-release record: the live-stream
+fragmentation fix, the OpenGL dev-stack dependency fix and the Qt host
+build reality they describe are unchanged in v1.10.6.
 
 ## What v1.10.5 changes
 

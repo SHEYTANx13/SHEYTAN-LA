@@ -36,6 +36,16 @@ XLIBS="${XLIBS:-}"
 [ -n "$XTOOLS" ] && export PATH="$XTOOLS:$PATH"
 [ -n "$XLIBS" ] && export LD_LIBRARY_PATH="$XLIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+# v1.10.6 (L1, run 38714950052 step 23): Qt Quick cannot create a GL
+# scene-graph context under Xvfb on headless hosted runners — the classic
+# first-run failure. Force the SOFTWARE renderer for the UI process.
+# The UI inherits the core's environment (desktop.Run passes os.Environ()
+# to the Qt child), so exports here reach the real renderer. Overridable
+# for a developer machine that wants to exercise GL on purpose.
+export QT_QUICK_BACKEND="${QT_QUICK_BACKEND:-software}"
+export QT_OPENGL="${QT_OPENGL:-software}"
+export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
+
 CORE_BIN="${CORE_BIN:-$WORK/sheytan-core}"
 # UI resolution: explicit override → staged copy → the repo's developer
 # build tree. The smoke never builds the Qt host itself (that is the Qt
@@ -103,6 +113,30 @@ pkill -f "$UI_BIN" 2>/dev/null || true
 pkill -f "$REPO/ui/qt/build/sheytan-ui" 2>/dev/null || true
 sleep 0.5
 
+# v1.10.6 (L2): the smoke's OWN ui.log. The product launcher (desktop.Run)
+# streams the Qt child's stdout/stderr into the CORE's log streams, so the
+# former script's failure paths catted a ui.log that NEVER EXISTED and the
+# real QML/Qt failure evidence was buried in core.log (or lost entirely).
+# Create it up front and route the UI's output into it via a smoke-owned
+# wrapper that execs the REAL UI binary UNCHANGED — same argv, same env,
+# same PID after exec (G2/G3/G4/G5 observe the real child); only the
+# output streams are captured. Deliberately created AFTER the pkill sweep
+# above so the stale-process patterns still match the REAL binary path.
+UI_LOG="$WORK/ui.log"
+: > "$UI_LOG"
+if [ -x "$UI_BIN" ]; then
+  REAL_UI_BIN="$UI_BIN"
+  UI_WRAPPER="$WORK/ui-wrapper.sh"
+  cat > "$UI_WRAPPER" <<WRAPPER
+#!/usr/bin/env bash
+# Smoke-owned diagnostics wrapper (v1.10.6 L2): exec the REAL UI binary
+# unchanged; capture its stdout/stderr into the smoke's ui.log.
+exec "$REAL_UI_BIN" >>"$UI_LOG" 2>&1
+WRAPPER
+  chmod +x "$UI_WRAPPER"
+  UI_BIN="$UI_WRAPPER"
+fi
+
 # --- display + window manager (smoke-OWNED, not product-owned) ---------------
 # Clean any stale lock/socket from a previous run (bounded, display-scoped).
 rm -f "/tmp/.X${DISPLAY_NUM}-lock" "/tmp/.X11-unix/X${DISPLAY_NUM}" 2>/dev/null || true
@@ -134,7 +168,32 @@ if [ -n "$WINMGR_BIN" ] && [ -x "$WINMGR_BIN" ]; then
   export XDG_CONFIG_DIRS="$WM_PREFIX/etc/xdg${XDG_CONFIG_DIRS:+:$XDG_CONFIG_DIRS}"
   DISPLAY=:$DISPLAY_NUM "$WINMGR_BIN" >"$WORK/wm.log" 2>&1 &
   WM_PID=$!
-  sleep 1
+  # v1.10.6 (L3): event-based WM readiness — poll the root-window
+  # _NET_SUPPORTING_WM_CHECK property (the ICCCM WM-ownership contract a
+  # real WM publishes when it has claimed the display) instead of the
+  # former fixed `sleep 1`. Bounded: a WM that never claims the root keeps
+  # the run alive but G3 still refuses geometry — no gate is weakened.
+  if command -v xprop >/dev/null 2>&1; then
+    wm_ready=""
+    for i in $(seq 1 20); do
+      kill -0 $WM_PID 2>/dev/null || break
+      if DISPLAY=:$DISPLAY_NUM xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q "window id"; then
+        wm_ready="yes"
+        break
+      fi
+      sleep 0.5
+    done
+    if [ -n "$wm_ready" ]; then
+      echo "WM: ownership of the root confirmed via _NET_SUPPORTING_WM_CHECK"
+    else
+      echo "WM: readiness property never appeared (continuing; G3 still gates real geometry)"
+    fi
+  else
+    # xprop unavailable (developer machine without x11-utils): bounded
+    # legacy settle. G3 still gates REAL geometry either way — this is
+    # not a correctness path.
+    sleep 1
+  fi
   if kill -0 $WM_PID 2>/dev/null; then
     echo "WM: $WINMGR_BIN-owned display (pid $WM_PID)"
     WM_PRESENT="yes"
@@ -193,7 +252,7 @@ CORE_PID=$!
 # instead of a fixed sleep; a core that dies at boot fails fast WITH its log.
 core_ready=""
 for i in $(seq 1 40); do
-  kill -0 $CORE_PID 2>/dev/null || { cat "$WORK/core.log"; fail "core died at boot"; }
+  kill -0 $CORE_PID 2>/dev/null || { cat "$WORK/core.log"; echo "--- ui log ---"; cat "$WORK/ui.log" 2>/dev/null || true; fail "core died at boot"; }
   ENDPOINT=$(grep -oE 'core endpoint: .*' "$WORK/core.log" | head -1 | sed 's/core endpoint: //')
   [ -n "$ENDPOINT" ] && { core_ready="yes"; break; }
   sleep 0.5

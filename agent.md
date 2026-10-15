@@ -391,6 +391,19 @@ tools execute. The laboratory verifies."**
 
 ## Linux / Windows evidence boundaries
 
+* v1.10.6 RUN TRUTH (do not overstate in any future edit): Windows x64
+  failed step 13 "Go verification" in five consecutive hosted runs
+  through https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38714950052
+  (v1.10.5, commit 8d8e660); Linux x64 failed step 23 "Qt desktop
+  acceptance smoke" on the smoke's first hosted execution in the same
+  run. v1.10.6 fixes the verified defect classes in code (the named-pipe
+  transport W1–W4, the smoke environment L1–L3) and installs CI
+  failure-visibility: every Go-verification command tees to its own log
+  and on failure appends failing test names + log tails to
+  $GITHUB_STEP_SUMMARY (public without login) plus uploaded artifacts —
+  that summary output, not the admin-gated log, is the authoritative
+  read for a credential-less agent. No hosted green is claimed for
+  v1.10.6; local GOOS=windows build/vet is compile proof only.
 * Linux CI path: source/frontend audit → Go verification (headless) →
   native engine build/tests → Browser E2E (real headless server + real
   engine + fixture GGUF) → stress → executable build → version smoke →
