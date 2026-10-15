@@ -62,8 +62,6 @@ func allowedOrigin(origin, host string) bool {
 		}
 	}
 
-
-
 	// Local development frontends.
 	switch originHost {
 	case "localhost:3000",

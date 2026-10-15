@@ -66,7 +66,7 @@ func TestNativeIncompatibleModelRefusedOnNativeOnly(t *testing.T) {
 	in := baseInput()
 	in.Backend = "native"
 	in.Caps = &llm.ModelCapabilities{
-		Arch:         "llama",
+		Arch:          "llama",
 		NativeBackend: false,
 		NativeReason:  "architecture not implemented in the native engine",
 	}
@@ -157,8 +157,8 @@ func TestEngineClampIsWarningNotRefusal(t *testing.T) {
 
 func TestUnknownDataStaysUnknown(t *testing.T) {
 	in := baseInput()
-	in.Caps = nil        // no readable capabilities
-	in.Card = nil        // no GGUF facts
+	in.Caps = nil                // no readable capabilities
+	in.Card = nil                // no GGUF facts
 	in.Sys.AvailableRAMBytes = 0 // deep probe not ready
 
 	report := Evaluate(in)

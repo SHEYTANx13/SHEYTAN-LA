@@ -49,25 +49,25 @@ const (
 
 // SubtaskSpec is one bounded, executable delegation.
 type SubtaskSpec struct {
-	SubtaskID   string   `json:"subtaskId"`   // deterministic merge key
-	Role        Role     `json:"role"`        // researcher/architect/... (advisory profile reused)
-	Objective   string   `json:"objective"`
+	SubtaskID    string   `json:"subtaskId"` // deterministic merge key
+	Role         Role     `json:"role"`      // researcher/architect/... (advisory profile reused)
+	Objective    string   `json:"objective"`
 	AllowedTools []string `json:"allowedTools,omitempty"`
 	// ReadOnly restricts the subtask to read-only tools (the executor
 	// constrains the orchestrator surface accordingly).
-	ReadOnly  bool          `json:"readOnly,omitempty"`
-	WorkspaceScope string   `json:"workspaceScope,omitempty"` // advisory scope hint
-	MaxContextTokens int   `json:"maxContextTokens,omitempty"`
-	Deadline  time.Duration `json:"deadline,omitempty"`
-	EvidenceRequirement string `json:"evidenceRequirement,omitempty"`
+	ReadOnly            bool          `json:"readOnly,omitempty"`
+	WorkspaceScope      string        `json:"workspaceScope,omitempty"` // advisory scope hint
+	MaxContextTokens    int           `json:"maxContextTokens,omitempty"`
+	Deadline            time.Duration `json:"deadline,omitempty"`
+	EvidenceRequirement string        `json:"evidenceRequirement,omitempty"`
 }
 
 // SubtaskEvidence is one compact structured record (spec §17).
 type SubtaskEvidence struct {
-	Action  string `json:"action"`
-	Target  string `json:"target,omitempty"`
-	Status  string `json:"status"`
-	Detail  string `json:"detail,omitempty"`
+	Action string `json:"action"`
+	Target string `json:"target,omitempty"`
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // SubtaskResult is the structured outcome of one subtask.

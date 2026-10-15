@@ -31,8 +31,8 @@ func writeMinimalGGUF(t *testing.T, path string, size int) {
 
 	buf := make([]byte, size)
 	copy(buf, "GGUF")
-	buf[4] = 3 // version
-	buf[8] = 0 // tensor count
+	buf[4] = 3  // version
+	buf[8] = 0  // tensor count
 	buf[12] = 0 // kv count
 
 	if err := os.WriteFile(path, buf, 0o644); err != nil {

@@ -1,26 +1,130 @@
-# UPDATE.md — v1.10.6 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.10.7 Release Notes & Maintenance Behavior
 
-**Release:** `v1.10.6` (canonical application version; single version
+**Release:** `v1.10.7` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ 8d8e660` (`v1.10.5`) · **Date:** 2026-10-15
-**Package:** `SHEYTAN-LA-v1.10.6-FINAL.zip` (complete repository tree)
+**Base:** `main @ 48cee27` (`v1.10.6`) · **Date:** 2026-10-16
+**Package:** `SHEYTAN-LA-v1.10.7-FINAL.zip` (complete repository tree)
 **R&D authority:** `Parsaetak/Contents`, branch `Research-and-Development`,
 `SHEYTAN-LA-2026-10-11.md` (linked, not copied — the R&D document stays in
 its source repository).
 
-The authoritative per-release history lives in `changelog.md`; this file
+The authoritative per-release history lives in `docs/changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
-behavior. v1.10.6 is the hosted-truth release: it breaks the docs-only
-cycle of v1.10.4/v1.10.5 by fixing every VERIFIED defect class in CODE —
-the Windows named-pipe IPC transport (W1–W4, the five-run "Go
-verification" failure shape ending at run
-https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38714950052), the
-Linux Qt smoke's headless environment (L1–L3, the step-23 failure of the
-same run) — and by installing CI failure-visibility so any future red run
-publishes its own diagnosis to `$GITHUB_STEP_SUMMARY` (public without
-login) plus uploaded log artifacts. It adds NO new product surface and
-flips NO default.
+behavior. v1.10.7 is the EVIDENCE-DRIVEN gate repair: run
+https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38731387959 (v1.10.6,
+commit 48cee27) was the healthiest run since v1.10.1 — the audit job green,
+the Linux Go verification gate green for the first time, the stress suite and
+the Qt host build green — with two named failures left: Windows step 13 "Go
+verification" (output line 138, six consecutive runs) and Linux step 23 "Qt
+desktop acceptance smoke" (output line 55, both v1.10.5 and v1.10.6). The
+check-run annotations of that run carry bare exit codes only ("Process
+completed with exit code 1." on both failing jobs — read anonymously this
+cycle, proving the V-A capability), so v1.10.7 consumes what the failure
+channel held, fixes the defect classes the register had verified in source,
+upgrades the failure channel itself to CI Visibility 2.0 (machine-readable
+`::error::` annotations naming failing tests, gates and log tails), restores
+gofmt cleanliness tree-wide with a required gate on BOTH platforms, and
+reshapes the repository to the operator's specification (docs/
+consolidation, `cmd/sheytan-local-agent/`, `packaging/`) without breaking a
+single gate.
+
+## What v1.10.7 changes
+
+1. **W-TRANSPORT — the Windows client pipe handle now satisfies the
+   overlapped-IO contract.** `dialEndpoint`
+   (internal/localipc/listener_windows.go) opened the CLIENT side of the
+   named pipe with `dwFlagsAndAttributes = 0` — a SYNCHRONOUS handle —
+   while `pipeConn.Read/Write` issue overlapped IO (Overlapped structs,
+   events, `GetOverlappedResult`) on EVERY connection, client-side
+   included. Issuing overlapped IO on a handle not opened with
+   `FILE_FLAG_OVERLAPPED` is outside the Windows contract (MSDN: the
+   results are unpredictable); the canonical pipe client (x/sys winio
+   `DialPipe`) opens with `FILE_FLAG_OVERLAPPED` for exactly this reason.
+   The defect is present since v1.10.1 (verified in `git show cb11a23`) —
+   matching the six-run Windows-only failure whose Linux counterpart
+   (`net.Listen` UDS transport) never touches this path. Evidence class:
+   read-verified source defect + boundary (the run-38731387959 failing
+   test names are inside the auth-walled failure artifacts; the
+   anonymous annotation channel carries bare exit codes only — see Run
+   truth below).
+2. **W-DEADLINE — read deadlines are now enforced while a read is
+   pending.** `SetReadDeadline` only cancelled in-flight overlapped reads
+   when the deadline was ALREADY expired at set time; a future deadline
+   never fired during a pending `ReadFile` (the wait is unbounded), which
+   made `http.Server`'s `ReadHeaderTimeout: 10s` (serve.go) dead code on
+   the Windows transport — a silent peer hung a read forever. A future
+   deadline now arms a bounded `time.AfterFunc` cancel (`CancelIoEx`),
+   and an aborted read answers `os.ErrDeadlineExceeded` when the deadline
+   has passed. Evidence class: read-verified contract violation in the
+   same file.
+3. **L-SMOKE — the dependency set the xcb platform plugin loads is now
+   pinned explicitly.** The first-hand reproduction of the smoke on
+   Qt 6.8.2 + Xvfb + openbox + software rendering showed the EXACT
+   line-55 failure shape: a UI platform-plugin load failure kills the UI
+   at boot, the core exits with it, and the smoke dumps
+   core.log + ui.log before `SMOKE FAIL` — the v1.10.5/v1.10.6 signature.
+   With the full xcb dependency set present, ALL GATES PASS first-hand on
+   the same Qt minor as CI (G1 handshake, G2 core-spawned host, G3 real
+   1280x840 visible window, G4 session round-trip + channel sockets, G5
+   WM_DELETE close) — the v1.10.6 hardening is verified sound by
+   EXECUTION, not only inspection. The workflow's apt step now installs
+   the complete canonical xcb set (cursor, icccm, keysyms, image,
+   render-util, render, shape, randr, shm, xfixes, xinerama, xinput,
+   xkb, sync, dri3, xkbcommon) so the plugin's dependency closure is
+   deterministic, not image-luck. G1–G5 stay byte-for-byte as strict.
+4. **VISIBILITY 2.0 — the next red run is machine-readable without any
+   login.** Every failure-summary step (audit, Windows Go verification,
+   Linux smoke) now ALSO emits `::error::` workflow-command annotations:
+   Windows names the failing command and the first failing test names;
+   Linux names the failing gate (the smoke now writes a
+   `smoke-fail.txt` marker on EVERY abort path) plus bounded ui.log /
+   core.log tails; audit names the failing gates and test names. Caps
+   respect the 10-annotations-per-step limit; long lines truncate; no
+   secrets (the same lines already publish to the public step summary).
+   The check-run annotations API is anonymously readable — verified
+   against run 38731387959 this cycle.
+5. **GOFMT GATE — hygiene joins the battery on BOTH platforms.** The
+   editing pipeline had mangled tabs to spaces across 143 Go files (the
+   register named three; `gofmt -l` proved the damage tree-wide). The
+   tree is reformatted (whitespace-only, builds byte-identical), and
+   `gofmt -l .` output must now be EMPTY inside both Go verification
+   steps — a violation fails the job, names every offending file in its
+   own log (`win-gofmt.log` / `linux-gofmt.log`), and emits the first
+   files as `::error::` annotations. No gate was weakened: the battery
+   grew.
+6. **REPOSITORY SHAPE (operator specification).** All documentation
+   moved into `docs/` (ARCHITECTURE.md, CONTRIBUTING.md, ROADMAP.md,
+   UPDATE.md, agent.md, changelog.md, worklog.md); the root shows only
+   README.md, LICENSE.md and SECURITY.md as visible documentation files;
+   the core entry moved into `cmd/sheytan-local-agent/`
+   (main.go, main_headless.go, main_other.go, main_stderr.go,
+   main_windows.go — the build-tag suffix contracts preserved); the
+   launcher script source moved to `packaging/SHEYTAN-LA.bat`. Every
+   reference was swept in the same change set: the workflow's Windows and
+   Linux build commands, the headless smoke build, the smoke's core
+   fallback build, the Windows staging step (agent.md → AI-CONTEXT.md,
+   SHEYTAN-LA.bat), the audit job's repository-shape check (now
+   two-sided: new paths must exist, old root paths must be GONE), the
+   stress gate's release-surface scenario (same two-sided philosophy,
+   plus the workflow build-path strings), the license classification
+   table (internal/brand + the regenerated LICENSE.md), the license
+   contract test's allowed-references map, README and cross-document
+   links, and the native engine's documentation references. The
+   build-mandated root files stay (justified per-file in
+   `docs/worklog.md`): go.mod, go.sum, package.json, package-lock.json,
+   index.html, vite.config.ts, tsconfig.json, tsconfig.app.json,
+   tsconfig.node.json, SIGNATURE, .gitignore, .oxlintrc.json,
+   .prettierignore — the Go/npm/Vite/release contracts.
+7. **Preserved gains.** Strict handshake, field pins, stress-gate Qt
+   contract, WS fragmentation reassembly, the W1–W4 pipe transport
+   repair, the failure-visibility install and the ws purge all remain
+   byte-for-byte; no test was weakened, no gate deleted, no timeout
+   expanded, no default flipped.
+
+The v1.10.6 notes below remain the parent-release record: the W1–W4
+transport contract, the L1–L3 smoke hardening, the failure-visibility
+install and the legacy purge they describe are unchanged in v1.10.7.
 
 ## What v1.10.6 changes
 
@@ -66,18 +170,41 @@ flips NO default.
 
 ## Run truth and evidence classes
 
+**v1.10.7 hosted truth (the operator pushes; this environment cannot):**
+run 38731387959 (v1.10.6, commit 48cee27) — audit SUCCEEDED (3m7s),
+Windows x64 FAILED at step 13 "Go verification" (8m18s; step-13 output
+line 138), Linux x64 FAILED at step 23 "Qt desktop acceptance smoke (real
+core + Qt UI under Xvfb)" (9m22s; step-23 output line 55), publish job
+skipped. Both failing jobs' check-run annotations read anonymously this
+cycle carry exactly one error each: "Process completed with exit code 1."
+— bare exit codes, no test names, no gate names; the two failure
+artifacts (windows-go-verification-logs-attempt1, 1.53 KB;
+linux-verification-logs-attempt1, 3.11 KB) are auth-walled from a
+credential-less environment. v1.10.7's fixes therefore carry an honest
+evidence split: the Windows transport and deadline defects are
+read-verified in source (present since v1.10.1, matching the six-run
+Windows-only failure split), the Linux smoke gates G1–G5 are verified
+GREEN first-hand on the same Qt 6.8.2 minor with the full battery
+locally (build, vet, suites, race, stress 47/47, npm, smoke), and the
+consumed failure-summary contents are NOT quotable from this
+environment — the boundary is recorded in `docs/worklog.md`. v1.10.7's
+OWN hosted result is recorded here only after the operator's push
+executes the run; until that run is green, no hosted green is claimed
+for v1.10.7 anywhere in this repository.
+
 * Windows x64 failed step 13 "Go verification" in FIVE consecutive
   hosted runs through run
   https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38714950052
-  (v1.10.5, commit 8d8e660). The hosted log is admin-gated; the defect
-  register verified at HEAD names the cause set above. The v1.10.6
-  transport repair is local evidence: `GOOS=windows` build + vet clean
-  and the defect classes fixed by construction — it is NOT hosted
-  green, and no hosted green is claimed for v1.10.6 anywhere in this
-  repository. The repair environment has no GitHub credentials, so this
-  release could not push or execute a hosted run; the failure-visibility
-  install exists precisely so the NEXT hosted run publishes its own
-  diagnosis.
+  (v1.10.5, commit 8d8e660), and again in run 38731387959 (v1.10.6,
+  commit 48cee27) — six in total. The hosted log is admin-gated; the
+  defect register verified at HEAD names the cause set above. The
+  v1.10.6/v1.10.7 transport repair is local evidence:
+  `GOOS=windows` build + vet clean and the defect classes fixed by
+  construction — it is NOT hosted green, and no hosted green is claimed
+  for v1.10.6 anywhere in this repository. The repair environment has no
+  GitHub credentials, so this release could not push or execute a hosted
+  run; the failure-visibility install exists precisely so the NEXT
+  hosted run publishes its own diagnosis.
 * Linux x64 failed step 23 "Qt desktop acceptance smoke" on the smoke's
   first hosted execution (same run). The hardening above is the
   software-rendering + real-UI-logs + event-based-readiness answer; the

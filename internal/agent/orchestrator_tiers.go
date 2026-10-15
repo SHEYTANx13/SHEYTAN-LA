@@ -1015,7 +1015,6 @@ func (o *Orchestrator) recallProvider() Recaller {
 	return o.recaller
 }
 
-
 // filterSkillsBySystem (v1.9.0) narrows matched skills to the AI System's
 // enabled-skills surface. An empty allow list keeps every match (the
 // pre-v1.9 behavior); a non-empty list is the user-owned surface — skills

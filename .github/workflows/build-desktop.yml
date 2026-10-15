@@ -121,6 +121,26 @@ jobs:
           test -f src/styles.css
           test ! -e web/package.json
 
+          # v1.10.7 REPOSITORY SHAPE (R-A/R-B, operator specification): the
+          # root shows ONLY README.md / LICENSE.md / SECURITY.md as visible
+          # documentation; all other documentation lives in docs/; the core
+          # entry lives in cmd/sheytan-local-agent/; the launcher script
+          # source lives in packaging/. Two-sided: the moved files must
+          # EXIST at their new paths, and the old root paths must be GONE.
+          for f in docs/ARCHITECTURE.md docs/CONTRIBUTING.md docs/ROADMAP.md \
+                   docs/UPDATE.md docs/agent.md docs/changelog.md docs/worklog.md \
+                   cmd/sheytan-local-agent/main.go cmd/sheytan-local-agent/main_headless.go \
+                   cmd/sheytan-local-agent/main_other.go cmd/sheytan-local-agent/main_stderr.go \
+                   cmd/sheytan-local-agent/main_windows.go \
+                   packaging/SHEYTAN-LA.bat; do
+            test -f "$f" || { echo "::error::repository shape: missing $f (v1.10.7 reshape contract)"; exit 1; }
+          done
+          for f in ARCHITECTURE.md CONTRIBUTING.md ROADMAP.md UPDATE.md agent.md \
+                   changelog.md worklog.md main.go main_headless.go main_other.go \
+                   main_stderr.go main_windows.go SHEYTAN-LA.bat; do
+            test ! -e "$f" || { echo "::error::repository shape: $f must live at its v1.10.7 relocated path, not the repo root"; exit 1; }
+          done
+
           node --version
           npm --version
 
@@ -325,6 +345,12 @@ jobs:
       # credentials needed. Fenced blocks keep the output copy-pasteable;
       # no secrets/keys appear here (test logs carry no capability tokens,
       # runIds or sessionIds).
+      #
+      # v1.10.7 VISIBILITY 2.0 (V-A): this step ALSO emits ::error::
+      # annotations naming the failing audit gate(s) and the first failing
+      # test names, machine-readable via the check-run annotations API
+      # without any login (verified against run 38731387959). Capped at the
+      # 10-annotations-per-step limit; no secrets (rule 7).
       - name: Failure summary (audit job)
         if: failure()
         shell: bash
@@ -335,14 +361,16 @@ jobs:
             echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } >> "$GITHUB_STEP_SUMMARY" || true
 
+          emitted=0
           if [ -d ci-logs ]; then
             for f in ci-logs/*.log; do
               [ -f "$f" ] || continue
+              failing="$(grep -E '^(--- FAIL|FAIL|panic:|fatal error:)' "$f" | head -60 || true)"
               {
                 echo ""
                 echo "### $f — failing test names"
                 echo '```'
-                grep -E '^(--- FAIL|FAIL|panic:|fatal error:)' "$f" | head -60 || true
+                printf '%s\n' "$failing"
                 echo '```'
                 echo ""
                 echo "### $f — last 200 lines"
@@ -350,7 +378,19 @@ jobs:
                 tail -n 200 "$f" || true
                 echo '```'
               } >> "$GITHUB_STEP_SUMMARY" || true
+              if [ -n "$failing" ]; then
+                while IFS= read -r line; do
+                  [ "$emitted" -lt 10 ] || break
+                  msg="$(basename "$f"): $line"
+                  [ ${#msg} -le 250 ] || msg="${msg:0:247}..."
+                  echo "::error::$msg"
+                  emitted=$((emitted + 1))
+                done <<< "$failing"
+              fi
             done
+          fi
+          if [ "$emitted" -eq 0 ]; then
+            echo "::error::Audit job failed with no FAIL-prefixed lines captured — read the step summary and the audit-verification-logs artifact"
           fi
 
       - name: Upload verification logs (audit job)
@@ -618,6 +658,25 @@ jobs:
 
           New-Item -ItemType Directory -Force -Path "ci-logs" | Out-Null
 
+          # v1.10.7 GOFMT GATE (W-B, run 38731387959 class):
+          # the editing pipeline mangled tabs to spaces across the tree and
+          # nothing caught it — hygiene joins the battery as a REQUIRED
+          # gate, fast-fail before the expensive suites. The listing IS
+          # the fix list: every file named in the log needs `gofmt -w`.
+          # No gate is weakened: this grows the battery.
+          $gofmtOut = @(gofmt -l . 2>&1)
+          $gofmtOut | Tee-Object -FilePath "ci-logs/win-gofmt.log" | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            throw "[gate] gofmt -l . failed to run (exit $LASTEXITCODE)."
+          }
+          if ($gofmtOut.Count -gt 0) {
+            foreach ($f in ($gofmtOut | Select-Object -First 8)) {
+              Write-Host "::error::gofmt violation: $f (run gofmt -w . )"
+            }
+            throw "[gate] gofmt -l . is not clean: $($gofmtOut.Count) file(s) violate gofmt (log: ci-logs/win-gofmt.log)."
+          }
+          Write-Host "gofmt: clean"
+
           # Each Go-verification command tees SEPARATELY: the failure
           # summary names the exact failing command and its failing tests.
           Invoke-Gate { go test ./internal/... -tags headless -count=1 } "go test ./internal/... (headless)" "ci-logs/win-go-test-headless.log"
@@ -629,6 +688,14 @@ jobs:
       # (publicly visible without login — the log is admin-gated, this is
       # not). This is how a credential-less agent reads the next failure.
       # No secrets/keys are ever written here.
+      #
+      # v1.10.7 VISIBILITY 2.0 (V-A): the summary steps ALSO emit
+      # ::error:: workflow-command annotations — anonymously machine-readable
+      # via the check-run annotations API without any login (verified against
+      # run 38731387959 this cycle). Windows names the failing command and
+      # the first failing test names. Caps respect the 10-annotations-per-step
+      # limit; long lines are truncated; no secrets (rule 7) — the same lines
+      # already publish to the public step summary.
       - name: Go verification failure summary (Windows)
         if: failure()
         shell: pwsh
@@ -658,6 +725,31 @@ jobs:
           }
 
           Add-Content -Path $summaryPath -Value ($lines -join [Environment]::NewLine)
+
+          # v1.10.7 VISIBILITY 2.0: machine-readable error annotations.
+          $emitted = 0
+          foreach ($log in Get-ChildItem "ci-logs" -Filter "*.log" -ErrorAction SilentlyContinue) {
+            if ($emitted -ge 10) { break }
+            $text = @(Get-Content $log.FullName -ErrorAction SilentlyContinue)
+            $failing = @($text | Where-Object { $_ -match '^(--- FAIL|FAIL|panic:|fatal error:)' })
+            foreach ($line in ($failing | Select-Object -First 10)) {
+              if ($emitted -ge 10) { break }
+              $msg = "$($log.BaseName): $line"
+              if ($msg.Length -gt 250) { $msg = $msg.Substring(0, 247) + "..." }
+              Write-Host "::error::$msg"
+              $emitted++
+            }
+          }
+          if ($emitted -eq 0) {
+            $gofmtLog = "ci-logs/win-gofmt.log"
+            if ((Test-Path $gofmtLog) -and (Get-Content $gofmtLog -ErrorAction SilentlyContinue)) {
+              $first = @(Get-Content $gofmtLog | Select-Object -First 8)
+              foreach ($f in $first) { Write-Host "::error::gofmt violation: $f (run gofmt -w . )" }
+              Write-Host "::error::Windows Go verification failed at the gofmt gate — $($first.Count)+ file(s) listed in win-gofmt.log"
+            } else {
+              Write-Host "::error::Windows Go verification failed with no FAIL-prefixed lines captured — read the step summary and the windows-go-verification-logs artifact"
+            }
+          }
 
       - name: Upload Go verification logs (Windows)
         if: failure()
@@ -733,11 +825,12 @@ jobs:
 
           # v1.4.0: each go build asserts its exit code — a failed first
           # build must never be masked by a successful second one.
+          # v1.10.7 (R-B): the core entry moved to cmd/sheytan-local-agent/.
           go build `
             -trimpath `
             -ldflags="-s -w -H=windowsgui" `
             -o "$appRoot/SHEYTAN-LA.exe" `
-            .
+            ./cmd/sheytan-local-agent
 
           if ($LASTEXITCODE -ne 0) {
             throw "[gate] go build (SHEYTAN-LA.exe) failed with exit code $LASTEXITCODE."
@@ -747,7 +840,7 @@ jobs:
             -trimpath `
             -ldflags="-s -w" `
             -o "dist/windows/sheytan-version-smoke.exe" `
-            .
+            ./cmd/sheytan-local-agent
 
           if ($LASTEXITCODE -ne 0) {
             throw "[gate] go build (console smoke probe) failed with exit code $LASTEXITCODE."
@@ -1137,17 +1230,19 @@ jobs:
             Copy-Item "README.md" "$root/README.md" -Force
           }
 
-          if (Test-Path "agent.md") {
-            Copy-Item "agent.md" "$root/AI-CONTEXT.md" -Force
+          if (Test-Path "docs/agent.md") {
+            # v1.10.7 (R-B): the canonical handoff document moved to docs/.
+            Copy-Item "docs/agent.md" "$root/AI-CONTEXT.md" -Force
           }
 
           if (Test-Path "SIGNATURE") {
             Copy-Item "SIGNATURE" "$root/SIGNATURE" -Force
           }
 
-          if (Test-Path "SHEYTAN-LA.bat") {
+          if (Test-Path "packaging/SHEYTAN-LA.bat") {
+            # v1.10.7 (R-B): the launcher script source moved to packaging/.
             Copy-Item `
-              "SHEYTAN-LA.bat" `
+              "packaging/SHEYTAN-LA.bat" `
               "$root/SHEYTAN-LA.bat" `
               -Force
           }
@@ -1509,6 +1604,7 @@ jobs:
             libegl-dev \
             mesa-common-dev \
             libxkbcommon-dev \
+            libxkbcommon0 \
             libx11-dev \
             libxkbcommon-x11-0 \
             libxcb-cursor0 \
@@ -1516,6 +1612,16 @@ jobs:
             libxcb-keysyms1 \
             libxcb-image0 \
             libxcb-render-util0 \
+            libxcb-render0 \
+            libxcb-shape0 \
+            libxcb-randr0 \
+            libxcb-shm0 \
+            libxcb-xfixes0 \
+            libxcb-xinerama0 \
+            libxcb-xinput0 \
+            libxcb-xkb1 \
+            libxcb-sync1 \
+            libxcb-dri3-0 \
             openbox \
             xvfb \
             xdotool \
@@ -1650,7 +1756,7 @@ jobs:
           go test ./... -run Test -count=1 2>&1 | tee ci-logs/linux-go-test-full.log
           go vet ./... 2>&1 | tee ci-logs/linux-go-vet.log
 
-          # v1.10.1: Wails is REMOVED — the dependency graph must stay
+          # v1.10.7 Wails is REMOVED — the dependency graph must stay
           # free of it. The check asserts ABSENCE (a `go list -m` hit here
           # fails the job).
           if go list -m all 2>/dev/null | grep -q wails; then
@@ -1658,6 +1764,20 @@ jobs:
             exit 1
           fi
           echo "dependency graph: no Wails (verified)"
+
+          # v1.10.7 GOFMT GATE (W-B, run 38731387959 class): hygiene joins
+          # the battery as a REQUIRED gate on BOTH platforms. The listing
+          # IS the fix list; each violating file is additionally emitted as
+          # an anonymously readable ::error:: annotation (capped). No gate
+          # is weakened: this grows the battery.
+          gofmt_out="$(gofmt -l .)"
+          if [ -n "$gofmt_out" ]; then
+            printf '%s\n' "$gofmt_out" | tee ci-logs/linux-gofmt.log
+            printf '%s\n' "$gofmt_out" | head -8 | sed 's/^/::error::gofmt violation: /'
+            echo "::error::gofmt -l . is not clean: $(printf '%s\n' "$gofmt_out" | wc -l) file(s) violate gofmt (log: ci-logs/linux-gofmt.log)"
+            exit 1
+          fi
+          echo "gofmt: clean"
 
       # v1.5.0 (run 36083843376): the E2E fixture generator is a REAL
       # Python program (e2e/make-e2e-model.py → the canonical GGUF writer
@@ -1735,11 +1855,12 @@ jobs:
           # Staging root derives from the canonical LINUX_PKG_ROOT.
           mkdir -p "dist/linux/app/${LINUX_PKG_ROOT}"
 
+          # v1.10.7 (R-B): the core entry moved to cmd/sheytan-local-agent/.
           go build \
             -trimpath \
             -ldflags="-s -w" \
             -o "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent" \
-            .
+            ./cmd/sheytan-local-agent
 
       - name: Verify Linux executable
         shell: bash
@@ -1884,6 +2005,14 @@ jobs:
       # never an empty file again. No IPC keys: the smoke reads the key
       # from the child environment and never logs it (rule enforced in the
       # script itself).
+      #
+      # v1.10.7 VISIBILITY 2.0 (V-A): this step ALSO emits ::error::
+      # annotations — the failing gate name (the smoke writes a
+      # smoke-fail.txt marker on every abort path) plus bounded ui.log /
+      # core.log tails — so the next red run is machine-readable via the
+      # check-run annotations API without any login. Caps respect the
+      # 10-annotations-per-step limit; no secrets (rule 7): these lines
+      # already publish to the public step summary.
       - name: Qt smoke failure summary (Linux)
         if: failure()
         shell: bash
@@ -1910,6 +2039,24 @@ jobs:
               } >> "$GITHUB_STEP_SUMMARY" || true
               cp -f "$f" "ci-logs/smoke-$base" 2>/dev/null || true
             done
+          fi
+
+          # v1.10.7 VISIBILITY 2.0: named gate + bounded evidence tails as
+          # ::error:: annotations (9 of the 10-per-step budget).
+          gate=""
+          if [ -f "$work/smoke-fail.txt" ]; then
+            gate="$(tail -n 1 "$work/smoke-fail.txt" 2>/dev/null || true)"
+          fi
+          if [ -n "$gate" ]; then
+            echo "::error::$gate"
+          else
+            echo "::error::Qt desktop acceptance smoke failed before a gate marker was written — read the step summary and the linux-verification-logs artifact"
+          fi
+          if [ -f "$work/ui.log" ]; then
+            tail -n 4 "$work/ui.log" 2>/dev/null | tr -d '\r' | cut -c1-200 | sed 's/^/::error::ui.log| /'
+          fi
+          if [ -f "$work/core.log" ]; then
+            tail -n 4 "$work/core.log" 2>/dev/null | tr -d '\r' | cut -c1-200 | sed 's/^/::error::core.log| /'
           fi
 
       - name: Upload verification logs (Linux)
@@ -1944,7 +2091,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          go build -tags headless -o "$RUNNER_TEMP/sheytan-headless" .
+          go build -tags headless -o "$RUNNER_TEMP/sheytan-headless" ./cmd/sheytan-local-agent
 
           smokeDir="$(mktemp -d)"
           dataDir="$smokeDir/data"

@@ -22,17 +22,17 @@ package engine
 // engine.
 
 import (
-        "context"
-        "fmt"
-        "os"
-        "path/filepath"
-        "runtime"
-        "strings"
-        "sync"
-        "testing"
-        "time"
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
 
-        "github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
 )
 
 // nativeFixturePath resolves a fixture relative to the repository's
@@ -48,36 +48,36 @@ import (
 // from the package's own source location, which is separator-correct
 // on every platform.
 func nativeFixturePath(t *testing.T, name string) string {
-        t.Helper()
+	t.Helper()
 
-        // This file lives at <repo>/internal/native/engine/; the C++ tree
-        // is at <repo>/native/engine/tests/fixtures/.
-        _, thisFile, _, ok := runtime.Caller(0)
-        if !ok {
-                t.Fatal("cannot locate the test source file for fixture resolution")
-        }
+	// This file lives at <repo>/internal/native/engine/; the C++ tree
+	// is at <repo>/native/engine/tests/fixtures/.
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate the test source file for fixture resolution")
+	}
 
-        pkgDir := filepath.Dir(thisFile)
+	pkgDir := filepath.Dir(thisFile)
 
-        // thisFile = <repo>/internal/native/engine/phase5_integration_test.go
-        // → four Dir levels reach the repository root (engine → native →
-        // internal → root). The result is validated: a directory that does
-        // not contain go.mod is a build artifact (e.g. a trimpath-compiled
-        // relative path), and the fixture lookup must FAIL LOUDLY rather
-        // than probe nonsense locations.
-        repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(pkgDir)))
+	// thisFile = <repo>/internal/native/engine/phase5_integration_test.go
+	// → four Dir levels reach the repository root (engine → native →
+	// internal → root). The result is validated: a directory that does
+	// not contain go.mod is a build artifact (e.g. a trimpath-compiled
+	// relative path), and the fixture lookup must FAIL LOUDLY rather
+	// than probe nonsense locations.
+	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(pkgDir)))
 
-        if _, err := os.Stat(filepath.Join(repoRoot, "go.mod")); err != nil {
-                t.Fatalf(
-                        "fixture resolution could not locate the repository root from %s (go.mod not found at %s) — real-fixture tests require a source checkout",
-                        thisFile, repoRoot,
-                )
-        }
+	if _, err := os.Stat(filepath.Join(repoRoot, "go.mod")); err != nil {
+		t.Fatalf(
+			"fixture resolution could not locate the repository root from %s (go.mod not found at %s) — real-fixture tests require a source checkout",
+			thisFile, repoRoot,
+		)
+	}
 
-        return filepath.Join(
-                repoRoot,
-                "native", "engine", "tests", "fixtures", name,
-        )
+	return filepath.Join(
+		repoRoot,
+		"native", "engine", "tests", "fixtures", name,
+	)
 }
 
 // startRealHost boots the REAL C++ host binary and returns the engine.
@@ -92,39 +92,39 @@ func nativeFixturePath(t *testing.T, name string) string {
 //
 // The lifecycle rule is therefore structural, not advisory:
 //
-//      tests that write GGUF fixtures into a temp tree MUST acquire that tree
-//      through startRealHostWithScratch (or create t.TempDir() BEFORE
-//      startRealHost), so the engine stop — registered LATER — always runs
-//      FIRST and the temp tree is removed only after the host process has
-//      been asked to shut down, been killed if needed, and been fully
-//      reaped (Stop waits for the reap goroutine).
+//	tests that write GGUF fixtures into a temp tree MUST acquire that tree
+//	through startRealHostWithScratch (or create t.TempDir() BEFORE
+//	startRealHost), so the engine stop — registered LATER — always runs
+//	FIRST and the temp tree is removed only after the host process has
+//	been asked to shut down, been killed if needed, and been fully
+//	reaped (Stop waits for the reap goroutine).
 //
 // No sleeps, no retry loops, no swallowed cleanup errors: the ordering
 // itself is what makes the removal safe.
 func startRealHost(t *testing.T) *Engine {
-        t.Helper()
+	t.Helper()
 
-        bin := realHostBinaryPath()
-        if !fileExists(bin) {
-                t.Skipf("C++ host binary not built (%s); build native/engine with CMake to enable", bin)
-        }
+	bin := realHostBinaryPath()
+	if !fileExists(bin) {
+		t.Skipf("C++ host binary not built (%s); build native/engine with CMake to enable", bin)
+	}
 
-        e := New(bin)
+	e := New(bin)
 
-        ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-        defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-        if err := e.Start(ctx); err != nil {
-                t.Fatalf("start real host: %v", err)
-        }
+	if err := e.Start(ctx); err != nil {
+		t.Fatalf("start real host: %v", err)
+	}
 
-        t.Cleanup(func() {
-                stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
-                defer stopCancel()
-                _ = e.Stop(stopCtx)
-        })
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopCancel()
+		_ = e.Stop(stopCtx)
+	})
 
-        return e
+	return e
 }
 
 // startRealHostWithScratch boots the REAL C++ host with a scratch
@@ -133,31 +133,31 @@ func startRealHost(t *testing.T) *Engine {
 // GGUF fixtures. The scratch tree is deleted only after the engine is
 // stopped and reaped; model files written into it may be loaded freely.
 func startRealHostWithScratch(t *testing.T) (*Engine, string) {
-        t.Helper()
+	t.Helper()
 
-        // Registered FIRST → runs LAST (LIFO): the tree outlives the engine.
-        scratch := t.TempDir()
+	// Registered FIRST → runs LAST (LIFO): the tree outlives the engine.
+	scratch := t.TempDir()
 
-        e := startRealHost(t)
+	e := startRealHost(t)
 
-        return e, scratch
+	return e, scratch
 }
 
 // loadRealFixture loads one of the fixture models on the engine.
 func loadRealFixture(t *testing.T, e *Engine, name string) {
-        t.Helper()
+	t.Helper()
 
-        ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-        defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-        path := nativeFixturePath(t, name)
-        if !fileExists(path) {
-                t.Fatalf("fixture missing: %s (regenerate: python3 native/engine/tests/reference/make_fixture.py)", path)
-        }
+	path := nativeFixturePath(t, name)
+	if !fileExists(path) {
+		t.Fatalf("fixture missing: %s (regenerate: python3 native/engine/tests/reference/make_fixture.py)", path)
+	}
 
-        if err := e.LoadModel(ctx, ModelSpec{Path: path}); err != nil {
-                t.Fatalf("load fixture %s: %v", name, err)
-        }
+	if err := e.LoadModel(ctx, ModelSpec{Path: path}); err != nil {
+		t.Fatalf("load fixture %s: %v", name, err)
+	}
 }
 
 // TestRealCppHostPhase5EndToEndGeneration is the Phase 5 acceptance
@@ -165,126 +165,126 @@ func loadRealFixture(t *testing.T, e *Engine, name string) {
 // complete Go↔C++ boundary → streamed chunks → decoded text → measured
 // metrics → honest KV accounting.
 func TestRealCppHostPhase5EndToEndGeneration(t *testing.T) {
-        e := startRealHost(t)
-        loadRealFixture(t, e, "tiny-llama-f32.gguf")
+	e := startRealHost(t)
+	loadRealFixture(t, e, "tiny-llama-f32.gguf")
 
-        ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-        defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-        // The capability verdict must be live before generation.
-        if !e.NativeGenerationCapable() {
-                t.Fatal("real fixture must report generation capable")
-        }
+	// The capability verdict must be live before generation.
+	if !e.NativeGenerationCapable() {
+		t.Fatal("real fixture must report generation capable")
+	}
 
-        var mu sync.Mutex
-        var text strings.Builder
-        var chunkCount int
+	var mu sync.Mutex
+	var text strings.Builder
+	var chunkCount int
 
-        result, err := e.StreamGeneration(ctx, GenerationRequest{
-                RequestID: "e2e-1",
-                Prompt:    "hello",
-                MaxTokens: 8,
-        }, func(chunk GenerationChunk) error {
-                mu.Lock()
-                defer mu.Unlock()
-                chunkCount++
-                text.WriteString(chunk.Text)
-                return nil
-        })
-        if err != nil {
-                t.Fatalf("native generation: %v", err)
-        }
+	result, err := e.StreamGeneration(ctx, GenerationRequest{
+		RequestID: "e2e-1",
+		Prompt:    "hello",
+		MaxTokens: 8,
+	}, func(chunk GenerationChunk) error {
+		mu.Lock()
+		defer mu.Unlock()
+		chunkCount++
+		text.WriteString(chunk.Text)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("native generation: %v", err)
+	}
 
-        if result.FinishReason != FinishLength {
-                t.Fatalf("finish reason = %q, want length", result.FinishReason)
-        }
-        if result.GeneratedTokens != 8 {
-                t.Fatalf("generated tokens = %d, want 8", result.GeneratedTokens)
-        }
-        if result.PromptTokens != 5 {
-                t.Fatalf("prompt tokens = %d, want 5 (BOS + ▁ + he + ll + o)", result.PromptTokens)
-        }
+	if result.FinishReason != FinishLength {
+		t.Fatalf("finish reason = %q, want length", result.FinishReason)
+	}
+	if result.GeneratedTokens != 8 {
+		t.Fatalf("generated tokens = %d, want 8", result.GeneratedTokens)
+	}
+	if result.PromptTokens != 5 {
+		t.Fatalf("prompt tokens = %d, want 5 (BOS + ▁ + he + ll + o)", result.PromptTokens)
+	}
 
-        // MEASURED metrics (monotonic clock; never fabricated).
-        if result.Metrics.TTFTSeconds <= 0 {
-                t.Fatalf("TTFT not measured: %+v", result.Metrics)
-        }
-        if result.Metrics.TotalSeconds < result.Metrics.TTFTSeconds {
-                t.Fatalf("total (%f) < TTFT (%f)", result.Metrics.TotalSeconds, result.Metrics.TTFTSeconds)
-        }
-        if result.Metrics.TokensPerSecond <= 0 {
-                t.Fatalf("tokens/sec not measured: %+v", result.Metrics)
-        }
-        if result.Metrics.KVPositionsUsed != 12 { // 5 prompt + 7 fed back
-                t.Fatalf("kv positions used = %d, want 12", result.Metrics.KVPositionsUsed)
-        }
+	// MEASURED metrics (monotonic clock; never fabricated).
+	if result.Metrics.TTFTSeconds <= 0 {
+		t.Fatalf("TTFT not measured: %+v", result.Metrics)
+	}
+	if result.Metrics.TotalSeconds < result.Metrics.TTFTSeconds {
+		t.Fatalf("total (%f) < TTFT (%f)", result.Metrics.TotalSeconds, result.Metrics.TTFTSeconds)
+	}
+	if result.Metrics.TokensPerSecond <= 0 {
+		t.Fatalf("tokens/sec not measured: %+v", result.Metrics)
+	}
+	if result.Metrics.KVPositionsUsed != 12 { // 5 prompt + 7 fed back
+		t.Fatalf("kv positions used = %d, want 12", result.Metrics.KVPositionsUsed)
+	}
 
-        if chunkCount < 1 {
-                t.Fatalf("no streamed chunks received")
-        }
-        if text.Len() == 0 {
-                t.Fatal("no generated text")
-        }
+	if chunkCount < 1 {
+		t.Fatalf("no streamed chunks received")
+	}
+	if text.Len() == 0 {
+		t.Fatal("no generated text")
+	}
 
-        // Deterministic greedy continuation: same request → same text.
-        var text2 strings.Builder
-        result2, err := e.StreamGeneration(ctx, GenerationRequest{
-                RequestID: "e2e-2",
-                Prompt:    "hello",
-                MaxTokens: 8,
-        }, func(chunk GenerationChunk) error {
-                text2.WriteString(chunk.Text)
-                return nil
-        })
-        if err != nil {
-                t.Fatalf("second native generation: %v", err)
-        }
-        if text2.String() != text.String() {
-                t.Fatalf("greedy generation is not deterministic: %q vs %q", text2.String(), text.String())
-        }
-        if result2.GeneratedTokens != result.GeneratedTokens {
-                t.Fatalf("token counts differ across identical requests")
-        }
+	// Deterministic greedy continuation: same request → same text.
+	var text2 strings.Builder
+	result2, err := e.StreamGeneration(ctx, GenerationRequest{
+		RequestID: "e2e-2",
+		Prompt:    "hello",
+		MaxTokens: 8,
+	}, func(chunk GenerationChunk) error {
+		text2.WriteString(chunk.Text)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("second native generation: %v", err)
+	}
+	if text2.String() != text.String() {
+		t.Fatalf("greedy generation is not deterministic: %q vs %q", text2.String(), text.String())
+	}
+	if result2.GeneratedTokens != result.GeneratedTokens {
+		t.Fatalf("token counts differ across identical requests")
+	}
 
-        // The engine state cycled ready → busy → ready (existing vocabulary).
-        if e.State() != llm.StateReady {
-                t.Fatalf("state = %q, want ready after generation", e.State())
-        }
+	// The engine state cycled ready → busy → ready (existing vocabulary).
+	if e.State() != llm.StateReady {
+		t.Fatalf("state = %q, want ready after generation", e.State())
+	}
 
-        // KV cache: REAL population reported through kv_cache_info.
-        kv, err := e.KVCacheInfo(ctx)
-        if err != nil {
-                t.Fatalf("kv cache info: %v", err)
-        }
-        if !kv.Allocated {
-                t.Fatal("KV cache must be allocated after generation")
-        }
-        // 2 layers, ctx 64, kv_dim 16 → 2*2*64*16*2 = 8192 bytes.
-        if kv.CapacityBytes != 8192 {
-                t.Fatalf("KV capacity = %d, want 8192", kv.CapacityBytes)
-        }
-        // Last request used 12 positions; per-position bytes = 2*layers*kv_dim*2 = 128.
-        if kv.UsedPositions != 12 {
-                t.Fatalf("KV used positions = %d, want 12", kv.UsedPositions)
-        }
-        if kv.UsedBytes != 12*128 {
-                t.Fatalf("KV used bytes = %d, want %d", kv.UsedBytes, 12*128)
-        }
+	// KV cache: REAL population reported through kv_cache_info.
+	kv, err := e.KVCacheInfo(ctx)
+	if err != nil {
+		t.Fatalf("kv cache info: %v", err)
+	}
+	if !kv.Allocated {
+		t.Fatal("KV cache must be allocated after generation")
+	}
+	// 2 layers, ctx 64, kv_dim 16 → 2*2*64*16*2 = 8192 bytes.
+	if kv.CapacityBytes != 8192 {
+		t.Fatalf("KV capacity = %d, want 8192", kv.CapacityBytes)
+	}
+	// Last request used 12 positions; per-position bytes = 2*layers*kv_dim*2 = 128.
+	if kv.UsedPositions != 12 {
+		t.Fatalf("KV used positions = %d, want 12", kv.UsedPositions)
+	}
+	if kv.UsedBytes != 12*128 {
+		t.Fatalf("KV used bytes = %d, want %d", kv.UsedBytes, 12*128)
+	}
 
-        // Scheduler: REAL execution counts.
-        sched, err := e.SchedulerInfo(ctx)
-        if err != nil {
-                t.Fatalf("scheduler info: %v", err)
-        }
-        if sched.TotalSubmitted < 2 {
-                t.Fatalf("scheduler submitted = %d, want ≥ 2", sched.TotalSubmitted)
-        }
-        if sched.TotalCompleted < 2 {
-                t.Fatalf("scheduler completed = %d, want ≥ 2", sched.TotalCompleted)
-        }
-        if sched.ActiveRequests != 0 {
-                t.Fatalf("scheduler active = %d, want 0 after completion", sched.ActiveRequests)
-        }
+	// Scheduler: REAL execution counts.
+	sched, err := e.SchedulerInfo(ctx)
+	if err != nil {
+		t.Fatalf("scheduler info: %v", err)
+	}
+	if sched.TotalSubmitted < 2 {
+		t.Fatalf("scheduler submitted = %d, want ≥ 2", sched.TotalSubmitted)
+	}
+	if sched.TotalCompleted < 2 {
+		t.Fatalf("scheduler completed = %d, want ≥ 2", sched.TotalCompleted)
+	}
+	if sched.ActiveRequests != 0 {
+		t.Fatalf("scheduler active = %d, want 0 after completion", sched.ActiveRequests)
+	}
 }
 
 // TestRealCppHostPhase5Cancellation proves REAL cancellation through the
@@ -292,98 +292,98 @@ func TestRealCppHostPhase5EndToEndGeneration(t *testing.T) {
 // cancelled from Go; the native loop observes it (per token), the final
 // frame reports "cancelled", and the engine stays reusable.
 func TestRealCppHostPhase5Cancellation(t *testing.T) {
-        e := startRealHost(t)
-        loadRealFixture(t, e, "tiny-llama-slow.gguf")
+	e := startRealHost(t)
+	loadRealFixture(t, e, "tiny-llama-slow.gguf")
 
-        ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-        defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 
-        var mu sync.Mutex
-        var chunks int
-        sawFirstToken := make(chan struct{})
-        var once sync.Once
+	var mu sync.Mutex
+	var chunks int
+	sawFirstToken := make(chan struct{})
+	var once sync.Once
 
-        var wg sync.WaitGroup
-        wg.Add(1)
+	var wg sync.WaitGroup
+	wg.Add(1)
 
-        var genErr error
-        var result GenerationResult
+	var genErr error
+	var result GenerationResult
 
-        go func() {
-                defer wg.Done()
-                result, genErr = e.StreamGeneration(ctx, GenerationRequest{
-                        RequestID: "cancel-e2e",
-                        Prompt:    "hello",
-                        MaxTokens: 200,
-                        Seed:      7,
-                }, func(chunk GenerationChunk) error {
-                        mu.Lock()
-                        chunks++
-                        mu.Unlock()
-                        once.Do(func() { close(sawFirstToken) })
-                        return nil
-                })
-        }()
+	go func() {
+		defer wg.Done()
+		result, genErr = e.StreamGeneration(ctx, GenerationRequest{
+			RequestID: "cancel-e2e",
+			Prompt:    "hello",
+			MaxTokens: 200,
+			Seed:      7,
+		}, func(chunk GenerationChunk) error {
+			mu.Lock()
+			chunks++
+			mu.Unlock()
+			once.Do(func() { close(sawFirstToken) })
+			return nil
+		})
+	}()
 
-        // Wait for the first streamed token (decode phase underway), then
-        // cancel through the REAL cancel op.
-        select {
-        case <-sawFirstToken:
-        case <-time.After(20 * time.Second):
-                t.Error("no first token within 20 s")
-        }
+	// Wait for the first streamed token (decode phase underway), then
+	// cancel through the REAL cancel op.
+	select {
+	case <-sawFirstToken:
+	case <-time.After(20 * time.Second):
+		t.Error("no first token within 20 s")
+	}
 
-        if err := e.Cancel(ctx, "cancel-e2e"); err != nil {
-                t.Fatalf("cancel: %v", err)
-        }
+	if err := e.Cancel(ctx, "cancel-e2e"); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
 
-        wg.Wait()
+	wg.Wait()
 
-        if genErr != nil {
-                t.Fatalf("cancelled generation returned error: %v", genErr)
-        }
-        if result.FinishReason != FinishCancelled {
-                t.Fatalf("finish reason = %q, want cancelled", result.FinishReason)
-        }
-        if result.GeneratedTokens == 0 || result.GeneratedTokens >= 200 {
-                t.Fatalf("generated tokens = %d, want partial (0 < n < 200)", result.GeneratedTokens)
-        }
+	if genErr != nil {
+		t.Fatalf("cancelled generation returned error: %v", genErr)
+	}
+	if result.FinishReason != FinishCancelled {
+		t.Fatalf("finish reason = %q, want cancelled", result.FinishReason)
+	}
+	if result.GeneratedTokens == 0 || result.GeneratedTokens >= 200 {
+		t.Fatalf("generated tokens = %d, want partial (0 < n < 200)", result.GeneratedTokens)
+	}
 
-        // Engine reusable after the cancellation.
-        sched, err := e.SchedulerInfo(ctx)
-        if err != nil {
-                t.Fatalf("scheduler info: %v", err)
-        }
-        if sched.TotalCancelled < 1 {
-                t.Fatalf("scheduler cancelled = %d, want ≥ 1", sched.TotalCancelled)
-        }
-        if sched.ActiveRequests != 0 {
-                t.Fatalf("scheduler active = %d, want 0", sched.ActiveRequests)
-        }
+	// Engine reusable after the cancellation.
+	sched, err := e.SchedulerInfo(ctx)
+	if err != nil {
+		t.Fatalf("scheduler info: %v", err)
+	}
+	if sched.TotalCancelled < 1 {
+		t.Fatalf("scheduler cancelled = %d, want ≥ 1", sched.TotalCancelled)
+	}
+	if sched.ActiveRequests != 0 {
+		t.Fatalf("scheduler active = %d, want 0", sched.ActiveRequests)
+	}
 
-        followUp, err := e.StreamGeneration(ctx, GenerationRequest{
-                RequestID: "after-cancel",
-                Prompt:    "hello",
-                MaxTokens: 2,
-        }, func(chunk GenerationChunk) error { return nil })
-        if err != nil {
-                t.Fatalf("generation after cancellation: %v", err)
-        }
-        // The slow fixture's greedy continuation may legitimately sample EOS
-        // as its first token (generated 0, finish eos) — both outcomes prove
-        // the engine executed a fresh, unpoisoned request after the cancel.
-        switch followUp.FinishReason {
-        case FinishLength:
-                if followUp.GeneratedTokens != 2 {
-                        t.Fatalf("follow-up tokens = %d, want 2 (length)", followUp.GeneratedTokens)
-                }
-        case FinishEOS:
-                if followUp.GeneratedTokens != 0 {
-                        t.Fatalf("follow-up tokens = %d, want 0 (eos)", followUp.GeneratedTokens)
-                }
-        default:
-                t.Fatalf("follow-up finish = %q (poisoned state after cancel?)", followUp.FinishReason)
-        }
+	followUp, err := e.StreamGeneration(ctx, GenerationRequest{
+		RequestID: "after-cancel",
+		Prompt:    "hello",
+		MaxTokens: 2,
+	}, func(chunk GenerationChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("generation after cancellation: %v", err)
+	}
+	// The slow fixture's greedy continuation may legitimately sample EOS
+	// as its first token (generated 0, finish eos) — both outcomes prove
+	// the engine executed a fresh, unpoisoned request after the cancel.
+	switch followUp.FinishReason {
+	case FinishLength:
+		if followUp.GeneratedTokens != 2 {
+			t.Fatalf("follow-up tokens = %d, want 2 (length)", followUp.GeneratedTokens)
+		}
+	case FinishEOS:
+		if followUp.GeneratedTokens != 0 {
+			t.Fatalf("follow-up tokens = %d, want 0 (eos)", followUp.GeneratedTokens)
+		}
+	default:
+		t.Fatalf("follow-up finish = %q (poisoned state after cancel?)", followUp.FinishReason)
+	}
 }
 
 // TestRealCppHostPhase5PromptOwnership is the Go-side regression for CI
@@ -396,75 +396,75 @@ func TestRealCppHostPhase5Cancellation(t *testing.T) {
 // CONCURRENT burst of DISTINCT prompts through the REAL host and
 // verifies every request reports the token count of ITS OWN prompt.
 func TestRealCppHostPhase5PromptOwnership(t *testing.T) {
-        e := startRealHost(t)
-        loadRealFixture(t, e, "tiny-llama-f32.gguf")
+	e := startRealHost(t)
+	loadRealFixture(t, e, "tiny-llama-f32.gguf")
 
-        ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-        defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 
-        // Distinct prompts, distinct expected token counts on the fixture
-        // vocab (▁ + a-z singles + "he"/"ll" merges, BOS auto-prepended):
-        // "z"→3, "ab"→4, "abcd"→6, "abcdef"→8, "hello"→5 (merges REQUIRED),
-        // "abcdefgh"→10. Any cross-request contamination or stack corruption
-        // produces a mismatched count.
-        type burstReq struct {
-                id      string
-                prompt  string
-                wantTok uint32
-        }
-        burst := []burstReq{
-                {"own-a", "z", 3},
-                {"own-b", "ab", 4},
-                {"own-c", "abcd", 6},
-                {"own-d", "abcdef", 8},
-                {"own-e", "hello", 5},
-                {"own-f", "abcdefgh", 10},
-        }
+	// Distinct prompts, distinct expected token counts on the fixture
+	// vocab (▁ + a-z singles + "he"/"ll" merges, BOS auto-prepended):
+	// "z"→3, "ab"→4, "abcd"→6, "abcdef"→8, "hello"→5 (merges REQUIRED),
+	// "abcdefgh"→10. Any cross-request contamination or stack corruption
+	// produces a mismatched count.
+	type burstReq struct {
+		id      string
+		prompt  string
+		wantTok uint32
+	}
+	burst := []burstReq{
+		{"own-a", "z", 3},
+		{"own-b", "ab", 4},
+		{"own-c", "abcd", 6},
+		{"own-d", "abcdef", 8},
+		{"own-e", "hello", 5},
+		{"own-f", "abcdefgh", 10},
+	}
 
-        type burstResult struct {
-                idx    int
-                result GenerationResult
-                err    error
-        }
+	type burstResult struct {
+		idx    int
+		result GenerationResult
+		err    error
+	}
 
-        results := make(chan burstResult, len(burst))
-        var wg sync.WaitGroup
-        for i, br := range burst {
-                wg.Add(1)
-                go func(idx int, req burstReq) {
-                        defer wg.Done()
-                        res, err := e.StreamGeneration(ctx, GenerationRequest{
-                                RequestID: req.id,
-                                Prompt:    req.prompt,
-                                MaxTokens: 2,
-                        }, func(chunk GenerationChunk) error { return nil })
-                        results <- burstResult{idx: idx, result: res, err: err}
-                }(i, br)
-        }
-        wg.Wait()
-        close(results)
+	results := make(chan burstResult, len(burst))
+	var wg sync.WaitGroup
+	for i, br := range burst {
+		wg.Add(1)
+		go func(idx int, req burstReq) {
+			defer wg.Done()
+			res, err := e.StreamGeneration(ctx, GenerationRequest{
+				RequestID: req.id,
+				Prompt:    req.prompt,
+				MaxTokens: 2,
+			}, func(chunk GenerationChunk) error { return nil })
+			results <- burstResult{idx: idx, result: res, err: err}
+		}(i, br)
+	}
+	wg.Wait()
+	close(results)
 
-        seen := make(map[string]bool, len(burst))
-        for r := range results {
-                br := burst[r.idx]
-                if r.err != nil {
-                        t.Fatalf("burst %q (%q): %v", br.id, br.prompt, r.err)
-                }
-                if r.result.RequestID != br.id {
-                        t.Fatalf("burst result id = %q, want %q", r.result.RequestID, br.id)
-                }
-                if r.result.PromptTokens != br.wantTok {
-                        t.Fatalf("burst %q: prompt %q encoded to %d tokens, want %d (cross-request prompt corruption)",
-                                br.id, br.prompt, r.result.PromptTokens, br.wantTok)
-                }
-                if r.result.GeneratedTokens != 2 {
-                        t.Fatalf("burst %q: generated %d tokens, want 2", br.id, r.result.GeneratedTokens)
-                }
-                seen[br.id] = true
-        }
-        if len(seen) != len(burst) {
-                t.Fatalf("collected %d burst results, want %d", len(seen), len(burst))
-        }
+	seen := make(map[string]bool, len(burst))
+	for r := range results {
+		br := burst[r.idx]
+		if r.err != nil {
+			t.Fatalf("burst %q (%q): %v", br.id, br.prompt, r.err)
+		}
+		if r.result.RequestID != br.id {
+			t.Fatalf("burst result id = %q, want %q", r.result.RequestID, br.id)
+		}
+		if r.result.PromptTokens != br.wantTok {
+			t.Fatalf("burst %q: prompt %q encoded to %d tokens, want %d (cross-request prompt corruption)",
+				br.id, br.prompt, r.result.PromptTokens, br.wantTok)
+		}
+		if r.result.GeneratedTokens != 2 {
+			t.Fatalf("burst %q: generated %d tokens, want 2", br.id, r.result.GeneratedTokens)
+		}
+		seen[br.id] = true
+	}
+	if len(seen) != len(burst) {
+		t.Fatalf("collected %d burst results, want %d", len(seen), len(burst))
+	}
 }
 
 // TestRealCppHostPhase5LaneRecycling verifies the host retires finished
@@ -473,77 +473,77 @@ func TestRealCppHostPhase5PromptOwnership(t *testing.T) {
 // everything with "too many concurrent requests" even while idle. Twenty
 // sequential generations on one engine must all succeed.
 func TestRealCppHostPhase5LaneRecycling(t *testing.T) {
-        e := startRealHost(t)
-        loadRealFixture(t, e, "tiny-llama-f32.gguf")
+	e := startRealHost(t)
+	loadRealFixture(t, e, "tiny-llama-f32.gguf")
 
-        ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-        defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
 
-        for i := 0; i < 20; i++ {
-                result, err := e.StreamGeneration(ctx, GenerationRequest{
-                        RequestID: fmt.Sprintf("recycle-%d", i),
-                        Prompt:    "hello",
-                        MaxTokens: 2,
-                }, func(chunk GenerationChunk) error { return nil })
-                if err != nil {
-                        t.Fatalf("generation %d failed (lane not retired?): %v", i+1, err)
-                }
-                if result.PromptTokens != 5 {
-                        t.Fatalf("generation %d: prompt tokens = %d, want 5", i+1, result.PromptTokens)
-                }
-                if result.GeneratedTokens != 2 {
-                        t.Fatalf("generation %d: tokens = %d, want 2", i+1, result.GeneratedTokens)
-                }
-        }
+	for i := 0; i < 20; i++ {
+		result, err := e.StreamGeneration(ctx, GenerationRequest{
+			RequestID: fmt.Sprintf("recycle-%d", i),
+			Prompt:    "hello",
+			MaxTokens: 2,
+		}, func(chunk GenerationChunk) error { return nil })
+		if err != nil {
+			t.Fatalf("generation %d failed (lane not retired?): %v", i+1, err)
+		}
+		if result.PromptTokens != 5 {
+			t.Fatalf("generation %d: prompt tokens = %d, want 5", i+1, result.PromptTokens)
+		}
+		if result.GeneratedTokens != 2 {
+			t.Fatalf("generation %d: tokens = %d, want 2", i+1, result.GeneratedTokens)
+		}
+	}
 }
 
 // TestRealCppHostPhase5ContextOverflow proves the context-bound REJECT
 // policy (prompt + max_tokens > context → explicit error, no silent
 // truncation) and that the engine stays reusable.
 func TestRealCppHostPhase5ContextOverflow(t *testing.T) {
-        e := startRealHost(t)
-        loadRealFixture(t, e, "tiny-llama-f32.gguf")
+	e := startRealHost(t)
+	loadRealFixture(t, e, "tiny-llama-f32.gguf")
 
-        ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-        defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-        // ctx=64, prompt=5 tokens → 59 fits exactly, 60 does not.
-        _, err := e.StreamGeneration(ctx, GenerationRequest{
-                RequestID: "fits",
-                Prompt:    "hello",
-                MaxTokens: 59,
-        }, func(chunk GenerationChunk) error { return nil })
-        if err != nil {
-                t.Fatalf("fitting request failed: %v", err)
-        }
+	// ctx=64, prompt=5 tokens → 59 fits exactly, 60 does not.
+	_, err := e.StreamGeneration(ctx, GenerationRequest{
+		RequestID: "fits",
+		Prompt:    "hello",
+		MaxTokens: 59,
+	}, func(chunk GenerationChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("fitting request failed: %v", err)
+	}
 
-        _, err = e.StreamGeneration(ctx, GenerationRequest{
-                RequestID: "overflow",
-                Prompt:    "hello",
-                MaxTokens: 60,
-        }, func(chunk GenerationChunk) error { return nil })
-        if err == nil {
-                t.Fatal("overflowing request must be rejected")
-        }
-        if !IsContextExhausted(err) {
-                t.Fatalf("error = %v, want a ContextExhaustedError", err)
-        }
-        if !strings.Contains(err.Error(), "exceeds the model context window") {
-                t.Fatalf("error detail = %v", err)
-        }
+	_, err = e.StreamGeneration(ctx, GenerationRequest{
+		RequestID: "overflow",
+		Prompt:    "hello",
+		MaxTokens: 60,
+	}, func(chunk GenerationChunk) error { return nil })
+	if err == nil {
+		t.Fatal("overflowing request must be rejected")
+	}
+	if !IsContextExhausted(err) {
+		t.Fatalf("error = %v, want a ContextExhaustedError", err)
+	}
+	if !strings.Contains(err.Error(), "exceeds the model context window") {
+		t.Fatalf("error detail = %v", err)
+	}
 
-        // Reusable after the rejection.
-        result, err := e.StreamGeneration(ctx, GenerationRequest{
-                RequestID: "post-reject",
-                Prompt:    "hello",
-                MaxTokens: 2,
-        }, func(chunk GenerationChunk) error { return nil })
-        if err != nil {
-                t.Fatalf("generation after rejection: %v", err)
-        }
-        if result.GeneratedTokens != 2 {
-                t.Fatalf("tokens = %d, want 2", result.GeneratedTokens)
-        }
+	// Reusable after the rejection.
+	result, err := e.StreamGeneration(ctx, GenerationRequest{
+		RequestID: "post-reject",
+		Prompt:    "hello",
+		MaxTokens: 2,
+	}, func(chunk GenerationChunk) error { return nil })
+	if err != nil {
+		t.Fatalf("generation after rejection: %v", err)
+	}
+	if result.GeneratedTokens != 2 {
+		t.Fatalf("tokens = %d, want 2", result.GeneratedTokens)
+	}
 }
 
 // TestRealCppHostPhase5UnsupportedModel proves the fallback signal: a
@@ -561,47 +561,47 @@ func TestRealCppHostPhase5ContextOverflow(t *testing.T) {
 // failed with "Access is denied", and failed the whole test during
 // cleanup on the Windows runner.
 func TestRealCppHostPhase5UnsupportedModel(t *testing.T) {
-        e, scratch := startRealHostWithScratch(t)
+	e, scratch := startRealHostWithScratch(t)
 
-        ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-        defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-        // The Phase 4 BPE fixture declares llama metadata but has NO llama
-        // tensors beyond a dummy token_embd — generation must be rejected
-        // with a clear reason.
-        model := writeBPEGGUF(t, scratch, "bpe.gguf")
+	// The Phase 4 BPE fixture declares llama metadata but has NO llama
+	// tensors beyond a dummy token_embd — generation must be rejected
+	// with a clear reason.
+	model := writeBPEGGUF(t, scratch, "bpe.gguf")
 
-        if err := e.LoadModel(ctx, ModelSpec{Path: model}); err != nil {
-                t.Fatalf("load: %v", err)
-        }
+	if err := e.LoadModel(ctx, ModelSpec{Path: model}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
 
-        if e.NativeGenerationCapable() {
-                t.Fatal("non-executable model must not report generation capable")
-        }
+	if e.NativeGenerationCapable() {
+		t.Fatal("non-executable model must not report generation capable")
+	}
 
-        reason := e.NativeGenerationReason()
-        if reason == "" {
-                t.Fatal("an inspectable fallback reason is required")
-        }
+	reason := e.NativeGenerationReason()
+	if reason == "" {
+		t.Fatal("an inspectable fallback reason is required")
+	}
 
-        _, err := e.StreamGeneration(ctx, GenerationRequest{
-                RequestID: "unsupported",
-                Prompt:    "hello",
-                MaxTokens: 4,
-        }, func(chunk GenerationChunk) error { return nil })
-        if err == nil {
-                t.Fatal("generation must fail for an unsupported model")
-        }
-        if !strings.Contains(err.Error(), "natively executable") &&
-                !strings.Contains(err.Error(), "unsupported") {
-                t.Fatalf("error = %v, want the unsupported-model signal", err)
-        }
+	_, err := e.StreamGeneration(ctx, GenerationRequest{
+		RequestID: "unsupported",
+		Prompt:    "hello",
+		MaxTokens: 4,
+	}, func(chunk GenerationChunk) error { return nil })
+	if err == nil {
+		t.Fatal("generation must fail for an unsupported model")
+	}
+	if !strings.Contains(err.Error(), "natively executable") &&
+		!strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("error = %v, want the unsupported-model signal", err)
+	}
 
-        // The llama.cpp fallback stays functional: the model concern itself
-        // remains healthy (this engine just cannot generate).
-        if e.State() != llm.StateReady {
-                t.Fatalf("state = %q, want ready (failed generation is not an engine fault)", e.State())
-        }
+	// The llama.cpp fallback stays functional: the model concern itself
+	// remains healthy (this engine just cannot generate).
+	if e.State() != llm.StateReady {
+		t.Fatalf("state = %q, want ready (failed generation is not an engine fault)", e.State())
+	}
 }
 
 // TestRealCppHostPhase5BackendContract drives the llm.Backend adapter
@@ -609,67 +609,67 @@ func TestRealCppHostPhase5UnsupportedModel(t *testing.T) {
 // StreamGenerate with REAL inference, llm.StreamEvent conversion and
 // PerfStats from measured metrics.
 func TestRealCppHostPhase5BackendContract(t *testing.T) {
-        e := startRealHost(t)
+	e := startRealHost(t)
 
-        ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-        defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-        b := NewBackend(e)
+	b := NewBackend(e)
 
-        if b.GenerationCapable() {
-                t.Fatal("no model loaded yet — must not be capable")
-        }
+	if b.GenerationCapable() {
+		t.Fatal("no model loaded yet — must not be capable")
+	}
 
-        if err := b.LoadModel(ctx, llm.ModelSpec{Path: nativeFixturePath(t, "tiny-llama-f32.gguf")}); err != nil {
-                t.Fatalf("load: %v", err)
-        }
+	if err := b.LoadModel(ctx, llm.ModelSpec{Path: nativeFixturePath(t, "tiny-llama-f32.gguf")}); err != nil {
+		t.Fatalf("load: %v", err)
+	}
 
-        if !b.GenerationCapable() {
-                t.Fatal("real fixture model must be generation capable")
-        }
+	if !b.GenerationCapable() {
+		t.Fatal("real fixture model must be generation capable")
+	}
 
-        req := &llm.ChatRequest{
-                MaxTokens: 6,
-                Messages: []llm.Message{
-                        {Role: "system", Content: "You are a test."},
-                        {Role: "user", Content: "hello"},
-                },
-        }
+	req := &llm.ChatRequest{
+		MaxTokens: 6,
+		Messages: []llm.Message{
+			{Role: "system", Content: "You are a test."},
+			{Role: "user", Content: "hello"},
+		},
+	}
 
-        // Non-streaming generate.
-        resp, err := b.Generate(ctx, req)
-        if err != nil {
-                t.Fatalf("generate: %v", err)
-        }
-        if len(resp.Choices) != 1 || resp.Choices[0].Message.Content == "" {
-                t.Fatalf("generate response: %+v", resp)
-        }
-        if resp.Usage.CompletionTokens != 6 {
-                t.Fatalf("completion tokens = %d, want 6", resp.Usage.CompletionTokens)
-        }
+	// Non-streaming generate.
+	resp, err := b.Generate(ctx, req)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if len(resp.Choices) != 1 || resp.Choices[0].Message.Content == "" {
+		t.Fatalf("generate response: %+v", resp)
+	}
+	if resp.Usage.CompletionTokens != 6 {
+		t.Fatalf("completion tokens = %d, want 6", resp.Usage.CompletionTokens)
+	}
 
-        // Streaming generate with llm.StreamEvent conversion.
-        var events []llm.StreamEvent
-        perf, err := b.StreamGenerate(ctx, req, func(ev llm.StreamEvent) error {
-                events = append(events, ev)
-                return nil
-        })
-        if err != nil {
-                t.Fatalf("stream generate: %v", err)
-        }
-        if len(events) < 2 {
-                t.Fatalf("events = %d, want ≥ 2 (content + terminal)", len(events))
-        }
-        if events[len(events)-1].FinishReason != "length" {
-                t.Fatalf("terminal finish = %q", events[len(events)-1].FinishReason)
-        }
-        if perf.Tokens != 6 {
-                t.Fatalf("perf tokens = %d, want 6", perf.Tokens)
-        }
-        if perf.TTFTMs < 0 || perf.WallMs < 0 {
-                t.Fatalf("perf stats negative: %+v", perf)
-        }
-        if perf.TokensPerSec <= 0 {
-                t.Fatalf("perf tokens/sec not measured: %+v", perf)
-        }
+	// Streaming generate with llm.StreamEvent conversion.
+	var events []llm.StreamEvent
+	perf, err := b.StreamGenerate(ctx, req, func(ev llm.StreamEvent) error {
+		events = append(events, ev)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("stream generate: %v", err)
+	}
+	if len(events) < 2 {
+		t.Fatalf("events = %d, want ≥ 2 (content + terminal)", len(events))
+	}
+	if events[len(events)-1].FinishReason != "length" {
+		t.Fatalf("terminal finish = %q", events[len(events)-1].FinishReason)
+	}
+	if perf.Tokens != 6 {
+		t.Fatalf("perf tokens = %d, want 6", perf.Tokens)
+	}
+	if perf.TTFTMs < 0 || perf.WallMs < 0 {
+		t.Fatalf("perf stats negative: %+v", perf)
+	}
+	if perf.TokensPerSec <= 0 {
+		t.Fatalf("perf tokens/sec not measured: %+v", perf)
+	}
 }

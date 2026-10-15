@@ -6,7 +6,7 @@ Thank you for your interest in contributing to SHEYTAN-Local-Agent.
 
 SHEYTAN-Local-Agent uses a **conservative mixed licensing model**
 (the complete picture — classification, notices, and both full legal
-texts — lives in the sole licensing artifact `LICENSE.md`):
+texts — lives in the sole licensing artifact `../LICENSE.md`):
 
 - `internal/humanize/` is designated **Apache-2.0** open.
 - Everything else is **Proprietary** under the Parsaetak Proprietary
@@ -22,7 +22,7 @@ texts — lives in the sole licensing artifact `LICENSE.md`):
 2. Do not copy code from other projects into proprietary components
    unless its license (e.g. MIT/BSD) permits relicensing into the
    proprietary tree AND you preserve the upstream attribution (add the
-   upstream notice to `LICENSE.md` §3).
+   upstream notice to `../LICENSE.md` §3).
 3. Code copied into the Apache-2.0-designated components must itself be
    Apache-2.0-compatible and carry the upstream license header when
    required.
@@ -70,7 +70,7 @@ Beyond green CI, the project's core rules:
 
 1. Fork / branch from `main`.
 2. Make the change with tests that fail without it.
-3. Update the affected documentation — `README.md`, `ARCHITECTURE.md`,
+3. Update the affected documentation — `../README.md`, `ARCHITECTURE.md`,
    `agent.md`, and `ROADMAP.md` are part of the deliverable, not
    afterthoughts (ROADMAP.md is the forward plan the next session reads
    first).
@@ -82,7 +82,7 @@ Beyond green CI, the project's core rules:
 
 ## Reporting problems
 
-- Security: see `SECURITY.md` (do not open public issues for security
+- Security: see `../SECURITY.md` (do not open public issues for security
   reports).
 - Bugs and defects: open an issue with runtime evidence (logs from
   Advanced diagnostics, engine stderr, repro steps).

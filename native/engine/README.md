@@ -34,7 +34,7 @@ streaming / cancellation / sampling coverage evidence. Until that
 evidence exists this engine is an ALTERNATIVE backend with proven
 parity tests — never described as primary in docs or claims.
 
-## Status (read literally — ARCHITECTURE.md Part III truth standard)
+## Status (read literally — docs/ARCHITECTURE.md Part III truth standard)
 
 **IMPLEMENTED + TESTED in Phase 1:**
 
@@ -155,7 +155,7 @@ Fixtures (checked in, deterministic — regenerate with
 tensor types F32/F16/Q4_0/Q4_1/Q5_0/Q5_1/Q8_0 only; rope.freq_scale 1.0
 only; no chat-template interpretation (plain prompts); the forward pass
 is portable scalar C++ — measured SLOWER than llama.cpp on the Phase-5
-fixtures (see worklog.md Phase 5 performance table) — correctness was
+fixtures (see docs/worklog.md Phase 5 performance table) — correctness was
 the priority; optimization remains future work and is never claimed
 without fresh comparable measurements.
 

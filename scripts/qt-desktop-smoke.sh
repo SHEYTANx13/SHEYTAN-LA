@@ -27,7 +27,18 @@ DISPLAY_NUM="${SMOKE_DISPLAY:-77}"
 # existed; with set -u only (no set -e), the abort printed "command not
 # found" and the smoke CONTINUED with a missing core, dying later with a
 # confusing empty-log error. Every abort path must end the run here.
-fail() { echo "SMOKE FAIL: $1"; exit 1; }
+#
+# v1.10.7 VISIBILITY 2.0 (V-A): every abort path also writes a
+# machine-readable marker file naming the failed gate. The workflow's
+# Qt smoke failure summary step reads it and re-emits it as an
+# anonymously readable ::error:: annotation (check-run annotations API),
+# so the next red run names its gate without any login. Best-effort
+# write: a missing/unwritable WORK dir must never mask the real failure.
+fail() {
+  echo "SMOKE FAIL: $1"
+  printf '%s\n' "SMOKE FAIL: $1" > "${SMOKE_FAIL_FILE:-$WORK/smoke-fail.txt}" 2>/dev/null || true
+  exit 1
+}
 # X11 helpers (xdotool, xwininfo) come from the SYSTEM PATH by default.
 # XTOOLS/XLIBS remain as opt-in overrides for hosts that keep private
 # tool prefixes (no machine-specific path is baked into the script).
@@ -71,7 +82,8 @@ fi
 if [ ! -x "$CORE_BIN" ]; then
   if command -v go >/dev/null 2>&1; then
     echo "core binary not staged — building it from the repo with go"
-    (cd "$REPO" && go build -o "$CORE_BIN" .) || fail "go build of the core failed"
+    # v1.10.7 (R-B): the core entry moved to cmd/sheytan-local-agent/.
+    (cd "$REPO" && go build -o "$CORE_BIN" ./cmd/sheytan-local-agent) || fail "go build of the core failed"
   else
     fail "core binary $CORE_BIN missing and no 'go' on PATH to build it"
   fi

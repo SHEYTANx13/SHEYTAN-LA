@@ -14,70 +14,70 @@
 package localipc
 
 import (
-        "net/http"
-        "testing"
-        "time"
+	"net/http"
+	"testing"
+	"time"
 )
 
 // TestSIDAllowedOwnSIDAllowed: the real token SID of this process must be
 // allowed (kernel-backed currentSID — no forged identity).
 func TestSIDAllowedOwnSIDAllowed(t *testing.T) {
-        own, err := currentSID()
-        if err != nil {
-                t.Fatalf("currentSID: %v", err)
-        }
-        if own == "" {
-                t.Fatal("own SID must not be empty")
-        }
+	own, err := currentSID()
+	if err != nil {
+		t.Fatalf("currentSID: %v", err)
+	}
+	if own == "" {
+		t.Fatal("own SID must not be empty")
+	}
 
-        ok, err := sidAllowed(own)
-        if err != nil {
-                t.Fatalf("sidAllowed(own): %v", err)
-        }
-        if !ok {
-                t.Fatalf("own SID %q must be allowed", own)
-        }
+	ok, err := sidAllowed(own)
+	if err != nil {
+		t.Fatalf("sidAllowed(own): %v", err)
+	}
+	if !ok {
+		t.Fatalf("own SID %q must be allowed", own)
+	}
 }
 
 // TestSIDAllowedDeniesForeignSID: a syntactically valid SID that is NOT
 // the current user's must be denied (the DACL + post-connect check pair
 // must reject foreign/elevated processes in the same session).
 func TestSIDAllowedDeniesForeignSID(t *testing.T) {
-        own, err := currentSID()
-        if err != nil {
-                t.Fatalf("currentSID: %v", err)
-        }
+	own, err := currentSID()
+	if err != nil {
+		t.Fatalf("currentSID: %v", err)
+	}
 
-        // A well-formed non-current SID (a foreign account SID shape). If this
-        // ever equals the real own SID the test binary is running as that
-        // account — then the deny assertion is meaningless and must be
-        // re-derived, never faked.
-        foreign := "S-1-5-21-3623811015-3361044348-30300820-1013"
-        if foreign == own {
-                t.Skip("test process unexpectedly runs as the fixture SID; deny assertion would be vacuous")
-        }
+	// A well-formed non-current SID (a foreign account SID shape). If this
+	// ever equals the real own SID the test binary is running as that
+	// account — then the deny assertion is meaningless and must be
+	// re-derived, never faked.
+	foreign := "S-1-5-21-3623811015-3361044348-30300820-1013"
+	if foreign == own {
+		t.Skip("test process unexpectedly runs as the fixture SID; deny assertion would be vacuous")
+	}
 
-        ok, err := sidAllowed(foreign)
-        if err != nil {
-                t.Fatalf("sidAllowed(foreign): %v", err)
-        }
-        if ok {
-                t.Fatalf("foreign SID %q must be denied", foreign)
-        }
+	ok, err := sidAllowed(foreign)
+	if err != nil {
+		t.Fatalf("sidAllowed(foreign): %v", err)
+	}
+	if ok {
+		t.Fatalf("foreign SID %q must be denied", foreign)
+	}
 }
 
 // TestSIDAllowedFailsClosedOnEmpty: an unidentifiable peer must never be
 // accepted.
 func TestSIDAllowedFailsClosedOnEmpty(t *testing.T) {
-        for _, empty := range []string{"", "   "} {
-                ok, err := sidAllowed(empty)
-                if err != nil {
-                        t.Fatalf("sidAllowed(%q): %v", empty, err)
-                }
-                if ok {
-                        t.Fatalf("empty/blank client SID %q must fail closed", empty)
-                }
-        }
+	for _, empty := range []string{"", "   "} {
+		ok, err := sidAllowed(empty)
+		if err != nil {
+			t.Fatalf("sidAllowed(%q): %v", empty, err)
+		}
+		if ok {
+			t.Fatalf("empty/blank client SID %q must fail closed", empty)
+		}
+	}
 }
 
 // TestServeSurvivesIdleBeyondFormerConnectTimeout is THE W2 regression:
@@ -87,20 +87,20 @@ func TestSIDAllowedFailsClosedOnEmpty(t *testing.T) {
 // the reproduction of a time-based defect — it is the probe, not a
 // correctness crutch.
 func TestServeSurvivesIdleBeyondFormerConnectTimeout(t *testing.T) {
-        srv, cfg := newCore(t)
-        ipc := startIPC(t, srv, cfg, "")
-        client := ipcClient(ipc.Endpoint())
+	srv, cfg := newCore(t)
+	ipc := startIPC(t, srv, cfg, "")
+	client := ipcClient(ipc.Endpoint())
 
-        time.Sleep(6500 * time.Millisecond)
+	time.Sleep(6500 * time.Millisecond)
 
-        resp, err := client.Get("http://localipc/api/health")
-        if err != nil {
-                t.Fatalf("health after >5s idle: %v (the former fatal-timeout defect)", err)
-        }
-        defer resp.Body.Close()
-        if resp.StatusCode != http.StatusOK {
-                t.Fatalf("health after idle status = %d, want 200", resp.StatusCode)
-        }
+	resp, err := client.Get("http://localipc/api/health")
+	if err != nil {
+		t.Fatalf("health after >5s idle: %v (the former fatal-timeout defect)", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("health after idle status = %d, want 200", resp.StatusCode)
+	}
 }
 
 // TestBurstDialsNeverRaceInstanceCreation pins W1/W4: Serve must return
@@ -108,24 +108,24 @@ func TestServeSurvivesIdleBeyondFormerConnectTimeout(t *testing.T) {
 // client dialing repeatedly with zero delay must always find a listening
 // instance (next instance created ahead of demand, never lazily).
 func TestBurstDialsNeverRaceInstanceCreation(t *testing.T) {
-        srv, cfg := newCore(t)
-        ipc := startIPC(t, srv, cfg, "")
+	srv, cfg := newCore(t)
+	ipc := startIPC(t, srv, cfg, "")
 
-        client := ipcClient(ipc.Endpoint())
+	client := ipcClient(ipc.Endpoint())
 
-        // Zero-delay burst: each request dials the pipe immediately. Before
-        // the v1.10.6 repair the first dial raced the lazy instance creation
-        // (ERROR_FILE_NOT_FOUND) and every re-dial raced the next instance.
-        for i := 0; i < 10; i++ {
-                resp, err := client.Get("http://localipc/api/health")
-                if err != nil {
-                        t.Fatalf("burst dial %d: %v", i, err)
-                }
-                resp.Body.Close()
-                if resp.StatusCode != http.StatusOK {
-                        t.Fatalf("burst dial %d: status = %d", i, resp.StatusCode)
-                }
-        }
+	// Zero-delay burst: each request dials the pipe immediately. Before
+	// the v1.10.6 repair the first dial raced the lazy instance creation
+	// (ERROR_FILE_NOT_FOUND) and every re-dial raced the next instance.
+	for i := 0; i < 10; i++ {
+		resp, err := client.Get("http://localipc/api/health")
+		if err != nil {
+			t.Fatalf("burst dial %d: %v", i, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("burst dial %d: status = %d", i, resp.StatusCode)
+		}
+	}
 }
 
 // TestStopDoesNotHangOnPendingAccept is THE W3 regression: Stop must
@@ -133,24 +133,24 @@ func TestBurstDialsNeverRaceInstanceCreation(t *testing.T) {
 // the overlapped ConnectNamedPipe). Bounded proof: the whole Stop must
 // finish well inside 5 seconds.
 func TestStopDoesNotHangOnPendingAccept(t *testing.T) {
-        srv, cfg := newCore(t)
+	srv, cfg := newCore(t)
 
-        ipc, err := Serve(srv, cfg, "")
-        if err != nil {
-                t.Fatalf("localipc.Serve: %v", err)
-        }
+	ipc, err := Serve(srv, cfg, "")
+	if err != nil {
+		t.Fatalf("localipc.Serve: %v", err)
+	}
 
-        done := make(chan struct{})
-        go func() {
-                ipc.Stop()
-                ipc.Stop() // idempotent
-                close(done)
-        }()
+	done := make(chan struct{})
+	go func() {
+		ipc.Stop()
+		ipc.Stop() // idempotent
+		close(done)
+	}()
 
-        select {
-        case <-done:
-                // clean Stop with a pending accept — W3 closed
-        case <-time.After(8 * time.Second):
-                t.Fatal("Stop hung on a pending accept (W3 defect) — the overlapped connect was not cancelled")
-        }
+	select {
+	case <-done:
+		// clean Stop with a pending accept — W3 closed
+	case <-time.After(8 * time.Second):
+		t.Fatal("Stop hung on a pending accept (W3 defect) — the overlapped connect was not cancelled")
+	}
 }

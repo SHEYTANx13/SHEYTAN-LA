@@ -32,224 +32,224 @@ package api
 //      (run under -race in the CI race gate).
 
 import (
-        "fmt"
-        "sync"
-        "testing"
-        "time"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
 
-        "github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
 )
 
 // fillSubscriber wedges one subscriber: capacity + extra offers with NO
 // reads, so the queue is at its conflation boundary.
 func fillSubscriber(t *testing.T, extra int) *activitySub {
-        t.Helper()
+	t.Helper()
 
-        sub := newActivitySub(subscriberQueueCap)
+	sub := newActivitySub(subscriberQueueCap)
 
-        for i := 0; i < subscriberQueueCap+extra; i++ {
-                sub.offer(agent.Activity{
-                        Type:    "response",
-                        RunID:   "run-1",
-                        Seq:     int64(i + 1),
-                        Caption: fmt.Sprintf("snapshot-%d", i),
-                })
-        }
+	for i := 0; i < subscriberQueueCap+extra; i++ {
+		sub.offer(agent.Activity{
+			Type:    "response",
+			RunID:   "run-1",
+			Seq:     int64(i + 1),
+			Caption: fmt.Sprintf("snapshot-%d", i),
+		})
+	}
 
-        return sub
+	return sub
 }
 
 // TestSubscriberConflatesNewestSurvives proves the core v1.8.5 contract:
 // a full queue under sustained publication RETAINS the newest cumulative
 // snapshot (drop-newest is gone).
 func TestSubscriberConflatesNewestSurvives(t *testing.T) {
-        sub := fillSubscriber(t, 64)
+	sub := fillSubscriber(t, 64)
 
-        // Deterministic drain boundary: closure is reported only after the
-        // queue is empty, so a bounded drain needs the close first.
-        sub.close()
+	// Deterministic drain boundary: closure is reported only after the
+	// queue is empty, so a bounded drain needs the close first.
+	sub.close()
 
-        var last agent.Activity
-        count := 0
+	var last agent.Activity
+	count := 0
 
-        for {
-                ev, ok := sub.next()
-                if !ok {
-                        break
-                }
+	for {
+		ev, ok := sub.next()
+		if !ok {
+			break
+		}
 
-                count++
-                last = ev
-        }
+		count++
+		last = ev
+	}
 
-        // The newest snapshot MUST be the last delivered event — the exact
-        // frame the drop-newest policy used to discard.
-        if last.Caption != "snapshot-191" {
-                t.Fatalf("newest snapshot lost: last=%q (want snapshot-191)", last.Caption)
-        }
+	// The newest snapshot MUST be the last delivered event — the exact
+	// frame the drop-newest policy used to discard.
+	if last.Caption != "snapshot-191" {
+		t.Fatalf("newest snapshot lost: last=%q (want snapshot-191)", last.Caption)
+	}
 
-        if count != subscriberQueueCap {
-                t.Fatalf("unexpected survivor count: %d (want %d)", count, subscriberQueueCap)
-        }
+	if count != subscriberQueueCap {
+		t.Fatalf("unexpected survivor count: %d (want %d)", count, subscriberQueueCap)
+	}
 }
 
 // TestSubscriberTerminalEventSurvivesFullQueue proves a terminal marker is
 // never preferentially evicted: with a full conflatable queue, the done
 // frame enqueue survives and is delivered LAST (after the newest snapshot).
 func TestSubscriberTerminalEventSurvivesFullQueue(t *testing.T) {
-        sub := fillSubscriber(t, 8)
+	sub := fillSubscriber(t, 8)
 
-        sub.offer(agent.Activity{
-                Type:    "done",
-                RunID:   "run-1",
-                Seq:     subscriberQueueCap + 9,
-                Caption: "Completed",
-        })
+	sub.offer(agent.Activity{
+		Type:    "done",
+		RunID:   "run-1",
+		Seq:     subscriberQueueCap + 9,
+		Caption: "Completed",
+	})
 
-        sub.close()
+	sub.close()
 
-        var last agent.Activity
-        var lastResponse agent.Activity
+	var last agent.Activity
+	var lastResponse agent.Activity
 
-        for {
-                ev, ok := sub.next()
-                if !ok {
-                        break
-                }
+	for {
+		ev, ok := sub.next()
+		if !ok {
+			break
+		}
 
-                last = ev
-                if ev.Type == "response" {
-                        lastResponse = ev
-                }
-        }
+		last = ev
+		if ev.Type == "response" {
+			lastResponse = ev
+		}
+	}
 
-        if last.Type != "done" || last.Caption != "Completed" {
-                t.Fatalf("terminal event lost or reordered: %+v", last)
-        }
+	if last.Type != "done" || last.Caption != "Completed" {
+		t.Fatalf("terminal event lost or reordered: %+v", last)
+	}
 
-        if lastResponse.Caption != "snapshot-135" {
-                t.Fatalf("newest response snapshot lost: %q", lastResponse.Caption)
-        }
+	if lastResponse.Caption != "snapshot-135" {
+		t.Fatalf("newest response snapshot lost: %q", lastResponse.Caption)
+	}
 }
 
 // TestSubscriberOrderPreservedAmongSurvivors proves relative delivery order
 // is preserved after conflation (survivors stay in seq order).
 func TestSubscriberOrderPreservedAmongSurvivors(t *testing.T) {
-        sub := newActivitySub(subscriberQueueCap)
+	sub := newActivitySub(subscriberQueueCap)
 
-        // Interleave conflatable + non-conflatable events, then overflow.
-        total := subscriberQueueCap + 40
+	// Interleave conflatable + non-conflatable events, then overflow.
+	total := subscriberQueueCap + 40
 
-        for i := 0; i < total; i++ {
-                kind := "response"
-                if i%4 == 3 {
-                        kind = "tool_start"
-                }
+	for i := 0; i < total; i++ {
+		kind := "response"
+		if i%4 == 3 {
+			kind = "tool_start"
+		}
 
-                sub.offer(agent.Activity{
-                        Type:    kind,
-                        RunID:   "run-1",
-                        Seq:     int64(i + 1),
-                        Caption: fmt.Sprintf("ev-%d", i),
-                })
-        }
+		sub.offer(agent.Activity{
+			Type:    kind,
+			RunID:   "run-1",
+			Seq:     int64(i + 1),
+			Caption: fmt.Sprintf("ev-%d", i),
+		})
+	}
 
-        sub.close()
+	sub.close()
 
-        prevSeq := int64(0)
-        seen := 0
+	prevSeq := int64(0)
+	seen := 0
 
-        for {
-                ev, ok := sub.next()
-                if !ok {
-                        break
-                }
+	for {
+		ev, ok := sub.next()
+		if !ok {
+			break
+		}
 
-                if ev.Seq <= prevSeq {
-                        t.Fatalf("order violated: seq %d after %d", ev.Seq, prevSeq)
-                }
+		if ev.Seq <= prevSeq {
+			t.Fatalf("order violated: seq %d after %d", ev.Seq, prevSeq)
+		}
 
-                prevSeq = ev.Seq
-                seen++
-        }
+		prevSeq = ev.Seq
+		seen++
+	}
 
-        // The highest seq must have been delivered (the newest survives).
-        if prevSeq != int64(total) {
-                t.Fatalf("newest event lost: highest delivered seq=%d (want %d)", prevSeq, total)
-        }
+	// The highest seq must have been delivered (the newest survives).
+	if prevSeq != int64(total) {
+		t.Fatalf("newest event lost: highest delivered seq=%d (want %d)", prevSeq, total)
+	}
 }
 
 // TestSubscriberPublishNeverBlocks proves offering to a wedged (never
 // drained) subscriber returns promptly — the run goroutine is never
 // blocked by a slow consumer.
 func TestSubscriberPublishNeverBlocks(t *testing.T) {
-        sub := newActivitySub(4)
+	sub := newActivitySub(4)
 
-        done := make(chan struct{})
+	done := make(chan struct{})
 
-        go func() {
-                defer close(done)
+	go func() {
+		defer close(done)
 
-                // Far beyond capacity, zero reads.
-                for i := 0; i < 20_000; i++ {
-                        sub.offer(agent.Activity{
-                                Type:    "response",
-                                Seq:     int64(i),
-                                Caption: "x",
-                        })
-                }
-        }()
+		// Far beyond capacity, zero reads.
+		for i := 0; i < 20_000; i++ {
+			sub.offer(agent.Activity{
+				Type:    "response",
+				Seq:     int64(i),
+				Caption: "x",
+			})
+		}
+	}()
 
-        select {
-        case <-done:
-                // The publisher completed — never blocked.
-        case <-time.After(5 * time.Second):
-                t.Fatal("offer blocked on a wedged subscriber")
-        }
+	select {
+	case <-done:
+		// The publisher completed — never blocked.
+	case <-time.After(5 * time.Second):
+		t.Fatal("offer blocked on a wedged subscriber")
+	}
 
-        sub.mu.Lock()
-        bound := len(sub.buf)
-        sub.mu.Unlock()
+	sub.mu.Lock()
+	bound := len(sub.buf)
+	sub.mu.Unlock()
 
-        if bound > subscriberQueueCap {
-                t.Fatalf("queue unbounded: %d entries (cap %d)", bound, subscriberQueueCap)
-        }
+	if bound > subscriberQueueCap {
+		t.Fatalf("queue unbounded: %d entries (cap %d)", bound, subscriberQueueCap)
+	}
 }
 
 // TestSubscriberCloseDrainsFirst proves every survivor is delivered before
 // closure is reported — a lagging reader ends on the newest snapshot.
 func TestSubscriberCloseDrainsFirst(t *testing.T) {
-        sub := newActivitySub(subscriberQueueCap)
+	sub := newActivitySub(subscriberQueueCap)
 
-        for i := 0; i < 10; i++ {
-                sub.offer(agent.Activity{
-                        Type:    "response",
-                        Seq:     int64(i + 1),
-                        Caption: fmt.Sprintf("snap-%d", i),
-                })
-        }
+	for i := 0; i < 10; i++ {
+		sub.offer(agent.Activity{
+			Type:    "response",
+			Seq:     int64(i + 1),
+			Caption: fmt.Sprintf("snap-%d", i),
+		})
+	}
 
-        sub.close()
+	sub.close()
 
-        var lastSeq int64
+	var lastSeq int64
 
-        for {
-                ev, ok := sub.next()
-                if !ok {
-                        break
-                }
+	for {
+		ev, ok := sub.next()
+		if !ok {
+			break
+		}
 
-                lastSeq = ev.Seq
-        }
+		lastSeq = ev.Seq
+	}
 
-        if lastSeq != 10 {
-                t.Fatalf("close drained early: last seq=%d (want 10)", lastSeq)
-        }
+	if lastSeq != 10 {
+		t.Fatalf("close drained early: last seq=%d (want 10)", lastSeq)
+	}
 
-        // A closed empty queue reports closure immediately.
-        if _, ok := sub.next(); ok {
-                t.Fatal("closed queue delivered an event")
-        }
+	// A closed empty queue reports closure immediately.
+	if _, ok := sub.next(); ok {
+		t.Fatal("closed queue delivered an event")
+	}
 }
 
 // TestHubConflationEndToEnd proves the hub-level contract: two subscribers,
@@ -257,204 +257,204 @@ func TestSubscriberCloseDrainsFirst(t *testing.T) {
 // still ends up holding the newest snapshot, the healthy one receives
 // everything, and publish never blocks.
 func TestHubConflationEndToEnd(t *testing.T) {
-        hub := newActivityHub()
+	hub := newActivityHub()
 
-        _, healthy, healthyUnsub := hub.subscribe()
-        _, wedged, wedgedUnsub := hub.subscribe()
+	_, healthy, healthyUnsub := hub.subscribe()
+	_, wedged, wedgedUnsub := hub.subscribe()
 
-        defer healthyUnsub()
-        defer wedgedUnsub()
+	defer healthyUnsub()
+	defer wedgedUnsub()
 
-        const total = subscriberQueueCap + 200
+	const total = subscriberQueueCap + 200
 
-        for i := 0; i < total; i++ {
-                hub.publish(agent.Activity{
-                        Type:    "response",
-                        RunID:   "run-1",
-                        Seq:     int64(i + 1),
-                        Caption: fmt.Sprintf("text-%d", i),
-                })
+	for i := 0; i < total; i++ {
+		hub.publish(agent.Activity{
+			Type:    "response",
+			RunID:   "run-1",
+			Seq:     int64(i + 1),
+			Caption: fmt.Sprintf("text-%d", i),
+		})
 
-                // The healthy subscriber drains as events arrive.
-                ev, ok := healthy.next()
-                if !ok {
-                        t.Fatalf("healthy subscriber starved at event %d", i)
-                }
+		// The healthy subscriber drains as events arrive.
+		ev, ok := healthy.next()
+		if !ok {
+			t.Fatalf("healthy subscriber starved at event %d", i)
+		}
 
-                if ev.Seq != int64(i+1) {
-                        t.Fatalf("healthy subscriber lost event %d (got seq %d)", i, ev.Seq)
-                }
-        }
+		if ev.Seq != int64(i+1) {
+			t.Fatalf("healthy subscriber lost event %d (got seq %d)", i, ev.Seq)
+		}
+	}
 
-        hub.publish(agent.Activity{
-                Type:    "done",
-                RunID:   "run-1",
-                Seq:     total + 1,
-                Caption: "Completed",
-        })
+	hub.publish(agent.Activity{
+		Type:    "done",
+		RunID:   "run-1",
+		Seq:     total + 1,
+		Caption: "Completed",
+	})
 
-        // The wedged subscriber drains NOW: the newest snapshot + terminal
-        // marker must be the tail. Close first so the drain has a deterministic
-        // boundary.
-        wedgedUnsub()
+	// The wedged subscriber drains NOW: the newest snapshot + terminal
+	// marker must be the tail. Close first so the drain has a deterministic
+	// boundary.
+	wedgedUnsub()
 
-        var lastResponse string
-        var terminal string
+	var lastResponse string
+	var terminal string
 
-        for {
-                ev, ok := wedged.next()
-                if !ok {
-                        break
-                }
+	for {
+		ev, ok := wedged.next()
+		if !ok {
+			break
+		}
 
-                if ev.Type == "response" {
-                        lastResponse = ev.Caption
-                }
+		if ev.Type == "response" {
+			lastResponse = ev.Caption
+		}
 
-                if ev.Type == "done" {
-                        terminal = ev.Caption
-                }
-        }
+		if ev.Type == "done" {
+			terminal = ev.Caption
+		}
+	}
 
-        if lastResponse != fmt.Sprintf("text-%d", total-1) {
-                t.Fatalf("wedged subscriber lost the newest snapshot: %q", lastResponse)
-        }
+	if lastResponse != fmt.Sprintf("text-%d", total-1) {
+		t.Fatalf("wedged subscriber lost the newest snapshot: %q", lastResponse)
+	}
 
-        if terminal != "Completed" {
-                t.Fatalf("wedged subscriber lost the terminal marker: %q", terminal)
-        }
+	if terminal != "Completed" {
+		t.Fatalf("wedged subscriber lost the terminal marker: %q", terminal)
+	}
 }
 
 // TestHubCloseReleasesReaders proves a blocked next() returns after the
 // hub closes (deterministic teardown — no goroutine leak).
 func TestHubCloseReleasesReaders(t *testing.T) {
-        hub := newActivityHub()
+	hub := newActivityHub()
 
-        _, sub, unsub := hub.subscribe()
-        defer unsub()
+	_, sub, unsub := hub.subscribe()
+	defer unsub()
 
-        released := make(chan struct{})
+	released := make(chan struct{})
 
-        go func() {
-                defer close(released)
+	go func() {
+		defer close(released)
 
-                for {
-                        if _, ok := sub.next(); !ok {
-                                return
-                        }
-                }
-        }()
+		for {
+			if _, ok := sub.next(); !ok {
+				return
+			}
+		}
+	}()
 
-        // The reader is parked (no events, not closed).
-        select {
-        case <-released:
-                t.Fatal("reader released before close")
-        case <-time.After(50 * time.Millisecond):
-        }
+	// The reader is parked (no events, not closed).
+	select {
+	case <-released:
+		t.Fatal("reader released before close")
+	case <-time.After(50 * time.Millisecond):
+	}
 
-        hub.close()
+	hub.close()
 
-        select {
-        case <-released:
-        case <-time.After(5 * time.Second):
-                t.Fatal("close did not release the parked reader")
-        }
+	select {
+	case <-released:
+	case <-time.After(5 * time.Second):
+		t.Fatal("close did not release the parked reader")
+	}
 }
 
 // TestSubscriberConcurrentPublishers proves concurrent offers are safe and
 // lossless-per-seq-order under -race (the run goroutine + engine watchers
 // both publish through the same hub).
 func TestSubscriberConcurrentPublishers(t *testing.T) {
-        sub := newActivitySub(subscriberQueueCap)
+	sub := newActivitySub(subscriberQueueCap)
 
-        const publishers = 8
-        const each = 500
+	const publishers = 8
+	const each = 500
 
-        var wg sync.WaitGroup
+	var wg sync.WaitGroup
 
-        for p := 0; p < publishers; p++ {
-                wg.Add(1)
+	for p := 0; p < publishers; p++ {
+		wg.Add(1)
 
-                go func() {
-                        defer wg.Done()
+		go func() {
+			defer wg.Done()
 
-                        for i := 0; i < each; i++ {
-                                sub.offer(agent.Activity{
-                                        Type:    "response",
-                                        Caption: "concurrent",
-                                })
-                        }
-                }()
-        }
+			for i := 0; i < each; i++ {
+				sub.offer(agent.Activity{
+					Type:    "response",
+					Caption: "concurrent",
+				})
+			}
+		}()
+	}
 
-        wg.Wait()
+	wg.Wait()
 
-        sub.close()
+	sub.close()
 
-        count := 0
+	count := 0
 
-        for {
-                if _, ok := sub.next(); !ok {
-                        break
-                }
+	for {
+		if _, ok := sub.next(); !ok {
+			break
+		}
 
-                count++
-        }
+		count++
+	}
 
-        // Conflation may evict older entries, but the queue must stay bounded
-        // and every delivered entry must be a real offered event (never a
-        // duplicated slot or a corrupted one).
-        if count == 0 || count > subscriberQueueCap {
-                t.Fatalf("unexpected delivery count after concurrent offers: %d", count)
-        }
+	// Conflation may evict older entries, but the queue must stay bounded
+	// and every delivered entry must be a real offered event (never a
+	// duplicated slot or a corrupted one).
+	if count == 0 || count > subscriberQueueCap {
+		t.Fatalf("unexpected delivery count after concurrent offers: %d", count)
+	}
 }
 
 // TestSubscriberEvictsOldestConflatableFirst proves the eviction policy:
 // a full queue evicts the OLDEST conflatable entry (not the oldest entry
 // when that one is non-conflatable, and never the incoming event).
 func TestSubscriberEvictsOldestConflatableFirst(t *testing.T) {
-        sub := newActivitySub(subscriberQueueCap)
+	sub := newActivitySub(subscriberQueueCap)
 
-        // Head of the queue: a NON-conflatable lifecycle event.
-        sub.offer(agent.Activity{Type: "engine", Caption: "engine-ready", Seq: 1})
+	// Head of the queue: a NON-conflatable lifecycle event.
+	sub.offer(agent.Activity{Type: "engine", Caption: "engine-ready", Seq: 1})
 
-        // Then conflatable snapshots up to capacity.
-        for i := 0; i < subscriberQueueCap-1; i++ {
-                sub.offer(agent.Activity{
-                        Type:    "response",
-                        Seq:     int64(i + 2),
-                        Caption: fmt.Sprintf("snap-%d", i),
-                })
-        }
+	// Then conflatable snapshots up to capacity.
+	for i := 0; i < subscriberQueueCap-1; i++ {
+		sub.offer(agent.Activity{
+			Type:    "response",
+			Seq:     int64(i + 2),
+			Caption: fmt.Sprintf("snap-%d", i),
+		})
+	}
 
-        // Overflow: the oldest CONFLATABLE (seq 2) is evicted, NOT the engine
-        // event and NOT the incoming event.
-        sub.offer(agent.Activity{Type: "response", Seq: 200, Caption: "newest"})
+	// Overflow: the oldest CONFLATABLE (seq 2) is evicted, NOT the engine
+	// event and NOT the incoming event.
+	sub.offer(agent.Activity{Type: "response", Seq: 200, Caption: "newest"})
 
-        sub.close()
+	sub.close()
 
-        first, ok := sub.next()
-        if !ok {
-                t.Fatal("queue closed unexpectedly")
-        }
+	first, ok := sub.next()
+	if !ok {
+		t.Fatal("queue closed unexpectedly")
+	}
 
-        if first.Type != "engine" {
-                t.Fatalf("non-conflatable head evicted: %+v", first)
-        }
+	if first.Type != "engine" {
+		t.Fatalf("non-conflatable head evicted: %+v", first)
+	}
 
-        // Drain to the tail.
-        var last agent.Activity
+	// Drain to the tail.
+	var last agent.Activity
 
-        for {
-                ev, ok := sub.next()
-                if !ok {
-                        break
-                }
+	for {
+		ev, ok := sub.next()
+		if !ok {
+			break
+		}
 
-                last = ev
-        }
+		last = ev
+	}
 
-        if last.Caption != "newest" {
-                t.Fatalf("incoming event lost: %+v", last)
-        }
+	if last.Caption != "newest" {
+		t.Fatalf("incoming event lost: %+v", last)
+	}
 }

@@ -75,7 +75,7 @@ func (s *Server) goalRunFunc() goal.RunFunc {
 				// bound, so activities are intentionally not streamed.
 				// The durable evidence is the goal document itself.
 			},
-			
+
 			// v1.9.0: goal runs install the approval gate — a
 			// call whose deterministic risk class requires ask
 			// under the goal's AI System policy is DENIED
@@ -84,7 +84,7 @@ func (s *Server) goalRunFunc() goal.RunFunc {
 			// interactive approval path is the ask-all
 			// pre-step parking above; nothing risky ever
 			// executes silently.
-			
+
 		)
 		if err != nil {
 			return goal.RunOutcome{}, err

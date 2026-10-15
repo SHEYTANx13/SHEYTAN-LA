@@ -40,12 +40,12 @@ package llm
 // to the model picker and to import's own collision scans. Import
 // remains streaming and atomic — nothing about the copy changes.
 import (
-        "errors"
-        "fmt"
-        "os"
-        "path/filepath"
-        "sync"
-        "time"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
 )
 
 // importLockFileName is the advisory lock file inside the models dir.
@@ -70,68 +70,68 @@ var importMutexes sync.Map // string -> *sync.Mutex
 // REFUSED rather than run un-serialized (the un-serialized path is
 // exactly the race being fixed).
 func lockModelsDir(modelsDir string) (func(), error) {
-        abs, absErr := filepath.Abs(modelsDir)
-        if absErr != nil {
-                return nil, fmt.Errorf("import: resolve models dir: %w", absErr)
-        }
-        key := filepath.Clean(abs)
+	abs, absErr := filepath.Abs(modelsDir)
+	if absErr != nil {
+		return nil, fmt.Errorf("import: resolve models dir: %w", absErr)
+	}
+	key := filepath.Clean(abs)
 
-        // Layer 1: in-process mutex. Held until release().
-        muAny, _ := importMutexes.LoadOrStore(key, &sync.Mutex{})
-        mu := muAny.(*sync.Mutex)
+	// Layer 1: in-process mutex. Held until release().
+	muAny, _ := importMutexes.LoadOrStore(key, &sync.Mutex{})
+	mu := muAny.(*sync.Mutex)
 
-        if !mu.TryLock() {
-                // Another goroutine in THIS process holds it. Bounded wait so a
-                // wedged in-process import cannot deadlock the API forever.
-                deadline := time.Now().Add(importLockAcquireTimeout)
-                for !mu.TryLock() {
-                        if time.Now().After(deadline) {
-                                return nil, fmt.Errorf(
-                                        "import: another import into %s is still in progress — retry when it completes",
-                                        key,
-                                )
-                        }
-                        time.Sleep(25 * time.Millisecond)
-                }
-        }
+	if !mu.TryLock() {
+		// Another goroutine in THIS process holds it. Bounded wait so a
+		// wedged in-process import cannot deadlock the API forever.
+		deadline := time.Now().Add(importLockAcquireTimeout)
+		for !mu.TryLock() {
+			if time.Now().After(deadline) {
+				return nil, fmt.Errorf(
+					"import: another import into %s is still in progress — retry when it completes",
+					key,
+				)
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
 
-        // Layer 2: cross-process advisory file lock. The mutex guarantees a
-        // single in-process contender for the file lock at any time.
-        var f *os.File
+	// Layer 2: cross-process advisory file lock. The mutex guarantees a
+	// single in-process contender for the file lock at any time.
+	var f *os.File
 
-        release := func() {
-                if f != nil {
-                        _ = f.Close() // closing the fd drops the flock / LockFileEx range
-                        f = nil
-                }
-                mu.Unlock()
-        }
+	release := func() {
+		if f != nil {
+			_ = f.Close() // closing the fd drops the flock / LockFileEx range
+			f = nil
+		}
+		mu.Unlock()
+	}
 
-        if err := os.MkdirAll(key, 0o755); err != nil {
-                release()
-                return nil, fmt.Errorf("import: models dir: %w", err)
-        }
+	if err := os.MkdirAll(key, 0o755); err != nil {
+		release()
+		return nil, fmt.Errorf("import: models dir: %w", err)
+	}
 
-        lockFile, openErr := os.OpenFile(filepath.Join(key, importLockFileName), os.O_CREATE|os.O_RDWR, 0o644)
-        if openErr != nil {
-                release()
-                return nil, fmt.Errorf("import: open import lock: %w", openErr)
-        }
-        f = lockFile
+	lockFile, openErr := os.OpenFile(filepath.Join(key, importLockFileName), os.O_CREATE|os.O_RDWR, 0o644)
+	if openErr != nil {
+		release()
+		return nil, fmt.Errorf("import: open import lock: %w", openErr)
+	}
+	f = lockFile
 
-        if err := lockImportFile(f); err != nil {
-                _ = f.Close()
-                f = nil
-                release()
+	if err := lockImportFile(f); err != nil {
+		_ = f.Close()
+		f = nil
+		release()
 
-                if errors.Is(err, errImportLockTimeout) {
-                        return nil, fmt.Errorf(
-                                "import: another process is importing into %s — retry when it completes (%w)",
-                                key, err,
-                        )
-                }
-                return nil, fmt.Errorf("import: acquire import lock: %w", err)
-        }
+		if errors.Is(err, errImportLockTimeout) {
+			return nil, fmt.Errorf(
+				"import: another process is importing into %s — retry when it completes (%w)",
+				key, err,
+			)
+		}
+		return nil, fmt.Errorf("import: acquire import lock: %w", err)
+	}
 
-        return release, nil
+	return release, nil
 }

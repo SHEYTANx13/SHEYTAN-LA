@@ -137,6 +137,16 @@ func pipeName(endpoint string) string {
 	return `\\.\pipe\` + strings.TrimPrefix(endpoint, `\`)
 }
 
+// v1.10.7 (run 38731387959 class, W-C root cause): the client handle MUST be
+// opened with FILE_FLAG_OVERLAPPED. pipeConn.Read/Write speak the overlapped
+// contract (Overlapped structs + events + GetOverlappedResult) on EVERY conn,
+// server- and client-side alike; issuing overlapped IO on a handle opened
+// without FILE_FLAG_OVERLAPPED is outside the Windows contract (MSDN: the
+// results are unpredictable). The canonical pipe client (x/sys winio
+// DialPipe) opens with FILE_FLAG_OVERLAPPED for exactly this reason. The
+// synchronous open here silently broke every client-side pipe round-trip on
+// Windows while the Linux transport (net.Listen) never touches this path —
+// the six-run Windows-only "Go verification" red.
 func dialEndpoint(endpoint string) (net.Conn, error) {
 	handle, err := windows.CreateFile(
 		windows.StringToUTF16Ptr(pipeName(endpoint)),
@@ -144,7 +154,7 @@ func dialEndpoint(endpoint string) (net.Conn, error) {
 		0,   // exclusive
 		nil, // no security attributes on the client side
 		windows.OPEN_EXISTING,
-		0,
+		windows.FILE_FLAG_OVERLAPPED,
 		0,
 	)
 	if err != nil {
@@ -157,16 +167,16 @@ func dialEndpoint(endpoint string) (net.Conn, error) {
 // Accept anyway. A pre-created instance always sits between Accepts so a
 // dialing client never races instance creation (W1/W4).
 type pipeListener struct {
-	name    string
-	sa      windows.SecurityAttributes
-	dial    func() (net.Conn, error)
-	mu      sync.Mutex
-	handle  windows.Handle // pre-created instance awaiting a client
+	name      string
+	sa        windows.SecurityAttributes
+	dial      func() (net.Conn, error)
+	mu        sync.Mutex
+	handle    windows.Handle // pre-created instance awaiting a client
 	hasHandle bool
-	handleErr error          // deferred instance-creation failure (surfaced by the next Accept)
-	conns   map[*pipeConn]struct{}
-	closed  chan struct{}
-	once    sync.Once
+	handleErr error // deferred instance-creation failure (surfaced by the next Accept)
+	conns     map[*pipeConn]struct{}
+	closed    chan struct{}
+	once      sync.Once
 
 	// The pending accept's overlapped state, published so Close can
 	// CancelIoEx it (W3).
@@ -438,8 +448,10 @@ func (a pipeAddr) String() string  { return string(a) }
 // --- pipeConn: net.Conn over an overlapped named-pipe handle ---
 //
 // Deadline support follows the CancelIoEx convention: SetReadDeadline with
-// a past/zero-due time cancels a pending read; timed-out waits translate to
-// os.ErrDeadlineExceeded.
+// a past-due time cancels a pending read immediately; a FUTURE deadline arms
+// a bounded timer that cancels the in-flight read when it passes; timed-out
+// waits translate to os.ErrDeadlineExceeded (v1.10.7: deadlines are now
+// enforced while a read is pending, not only before it starts).
 
 type pipeConn struct {
 	handle       windows.Handle
@@ -447,6 +459,14 @@ type pipeConn struct {
 	once         sync.Once
 	muDeadline   sync.RWMutex
 	readDeadline time.Time
+	// v1.10.7: a FUTURE read deadline must fire while a ReadFile is
+	// pending. CancelIoEx is the only mechanism that unblocks an
+	// in-flight overlapped read, so the deadline arms a bounded timer
+	// that cancels the IO when the deadline passes (the pre-v1.10.7
+	// code only cancelled when the deadline was ALREADY expired at
+	// set time, which made http.Server's ReadHeaderTimeout dead code
+	// on the Windows transport).
+	readTimer *time.Timer
 }
 
 func newPipeConn(handle windows.Handle) (*pipeConn, error) {
@@ -555,6 +575,18 @@ func (c *pipeConn) Read(p []byte) (int, error) {
 		return int(n), nil
 	case err == windows.ERROR_BROKEN_PIPE || err == windows.ERROR_NO_DATA:
 		return 0, ioEOF
+	case errors.Is(err, windows.ERROR_OPERATION_ABORTED):
+		// v1.10.7: the read was cancelled. A passed deadline is the
+		// canonical net.Conn timeout answer; an abort WITHOUT a passed
+		// deadline (pipeConn.Close) is a real error the server must
+		// see as such.
+		c.muDeadline.RLock()
+		expired := !c.readDeadline.IsZero() && time.Now().After(c.readDeadline)
+		c.muDeadline.RUnlock()
+		if expired {
+			return 0, os.ErrDeadlineExceeded
+		}
+		return 0, fmt.Errorf("localipc: read aborted: %w", err)
 	default:
 		return 0, fmt.Errorf("localipc: read: %w", err)
 	}
@@ -629,11 +661,32 @@ func (c *pipeConn) SetWriteDeadline(t time.Time) error { return nil }
 func (c *pipeConn) SetReadDeadline(t time.Time) error {
 	c.muDeadline.Lock()
 	c.readDeadline = t
-	c.muDeadline.Unlock()
-
-	if !t.IsZero() && time.Now().After(t) {
-		// Already expired: unblock any pending read.
+	if c.readTimer != nil {
+		c.readTimer.Stop()
+		c.readTimer = nil
+	}
+	now := time.Now()
+	switch {
+	case t.IsZero():
+		// Deadline cleared: leave any pending read alone.
+		c.muDeadline.Unlock()
+	case now.After(t):
+		// Already expired: unblock any pending read immediately.
+		c.muDeadline.Unlock()
 		_ = windows.CancelIoEx(c.handle, nil)
+	default:
+		// Future deadline: arm the bounded cancel that unblocks an
+		// in-flight overlapped read exactly when the deadline passes.
+		handle := c.handle
+		c.readTimer = time.AfterFunc(t.Sub(now), func() {
+			c.muDeadline.RLock()
+			armed := c.readDeadline.Equal(t) && time.Now().After(t)
+			c.muDeadline.RUnlock()
+			if armed {
+				_ = windows.CancelIoEx(handle, nil)
+			}
+		})
+		c.muDeadline.Unlock()
 	}
 	return nil
 }

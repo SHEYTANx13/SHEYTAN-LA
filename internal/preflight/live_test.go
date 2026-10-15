@@ -41,12 +41,12 @@ func TestLiveMonitorThresholdsAndHysteresis(t *testing.T) {
 	// Sequence: ok → ok → warning×1 → ok (flap, never accepted) →
 	// warning×2 (accepted) → critical×2 (accepted).
 	sampler.samples = []Sample{
-		ramSample(total, total),                    // ok
-		ramSample(total, total),                    // ok
-		ramSample(total, int64(float64(total)*0.2)), // warning (1st)
-		ramSample(total, total),                    // flap back
-		ramSample(total, int64(float64(total)*0.2)), // warning (1st of 2)
-		ramSample(total, int64(float64(total)*0.2)), // warning (2nd → ACCEPT)
+		ramSample(total, total),                      // ok
+		ramSample(total, total),                      // ok
+		ramSample(total, int64(float64(total)*0.2)),  // warning (1st)
+		ramSample(total, total),                      // flap back
+		ramSample(total, int64(float64(total)*0.2)),  // warning (1st of 2)
+		ramSample(total, int64(float64(total)*0.2)),  // warning (2nd → ACCEPT)
 		ramSample(total, int64(float64(total)*0.05)), // critical (1st)
 		ramSample(total, int64(float64(total)*0.05)), // critical (2nd → ACCEPT)
 	}

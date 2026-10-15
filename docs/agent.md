@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.5 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.7 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -7,16 +7,20 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.10.5 — the live-stream + Qt-host-build release
-(the Linux Qt host build's missing OpenGL development dependency closed
-— the run 38584769607 step 22 blocker; the Qt host activity stream now
-reassembles RFC6455 fragmented frames, the defect that froze the live
-bubble on real long-context runs; identity + docs aligned at 1.10.5).**
-Its parent, v1.10.4 — the reliability release (the Linux stress gate
-retargeted to the Qt-era CI contract; the Windows evidence class stated
-honestly) — and v1.10.3 — the Qt IPC hardening release (framing,
-handshake, CI runnability, evidence reconciliation) — established the
-current behavior below. The production
+**Current release: v1.10.7 — the evidence-driven gate repair + CI
+Visibility 2.0 + repository shape (the Windows named-pipe client now
+satisfies the overlapped-IO contract — the six-run "Go verification"
+failure's read-verified root cause; read deadlines are enforced while a
+read is pending; the Linux smoke's xcb platform-plugin dependency
+closure is pinned and G1–G5 are verified green first-hand on the CI Qt
+6.8.2 minor; every failure-summary step emits anonymously readable
+::error:: annotations; gofmt cleanliness is tree-wide and gated on BOTH
+platforms; all documentation lives in docs/, the core entry in
+cmd/sheytan-local-agent/, the launcher source in packaging/).** Its
+parent, v1.10.6 — the hosted-truth release (the Windows named-pipe IPC
+defect class fixed in one sweep; the smoke hardened for headless
+runners) — and v1.10.5 — the live-stream + Qt-host-build release —
+established the current behavior below. The production
 desktop UI is the native Qt Quick/QML host (`ui/qt`), an IPC CLIENT of
 the unchanged Go core over `internal/localipc` (per-user Unix socket /
 named pipe, transport-level identity checks, versioned keyed handshake
@@ -391,9 +395,34 @@ tools execute. The laboratory verifies."**
 
 ## Linux / Windows evidence boundaries
 
-* v1.10.6 RUN TRUTH (do not overstate in any future edit): Windows x64
-  failed step 13 "Go verification" in five consecutive hosted runs
-  through https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38714950052
+* v1.10.7 RUN TRUTH (do not overstate in any future edit): run
+  https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38731387959
+  (v1.10.6, commit 48cee27) — audit SUCCEEDED (3m7s), the Linux Go
+  verification gate GREEN for the first time, the stress suite and the
+  Qt host build green; Windows x64 FAILED step 13 "Go verification"
+  (output line 138, the SIXTH consecutive run) and Linux x64 FAILED
+  step 23 "Qt desktop acceptance smoke" (output line 55, identical in
+  v1.10.5 and v1.10.6); the publish job never ran. Both failing jobs'
+  check-run annotations read anonymously carry bare exit codes only
+  ("Process completed with exit code 1.") — the failing test names and
+  gate identity live in the two auth-walled failure artifacts, NOT in
+  any anonymously readable channel, so v1.10.7's Windows fixes are
+  read-verified source defects (the client pipe handle opened without
+  FILE_FLAG_OVERLAPPED while pipeConn IO is overlapped — present since
+  v1.10.1; plus the never-enforced future read deadline) and its Linux
+  fixes are first-hand reproductions on the same Qt 6.8.2 minor (the
+  smoke passes ALL of G1–G5 locally once the xcb plugin dependency set
+  is complete). v1.10.7 installs CI Visibility 2.0 on top of the
+  v1.10.6 failure-visibility: the failure-summary steps emit ::error::
+  annotations (failing test names on Windows, the failing gate +
+  ui.log/core.log tails on Linux, failing gates on audit) that are
+  anonymously machine-readable via the check-run annotations API — the
+  next red run diagnoses itself for a credential-less agent. No hosted
+  green is claimed for v1.10.7: its own hosted result is recorded here
+  only after the operator's push executes the run.
+* v1.10.6 RUN TRUTH (parent record): Windows x64 failed step 13 "Go
+  verification" in five consecutive hosted runs through
+  https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38714950052
   (v1.10.5, commit 8d8e660); Linux x64 failed step 23 "Qt desktop
   acceptance smoke" on the smoke's first hosted execution in the same
   run. v1.10.6 fixes the verified defect classes in code (the named-pipe

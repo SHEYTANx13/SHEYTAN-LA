@@ -97,11 +97,11 @@ func (s *Server) handleHandshake(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSONIpc(w, map[string]any{
-		"protocol":       ProtocolName,
+		"protocol":        ProtocolName,
 		"protocolVersion": ProtocolVersion,
-		"coreVersion":    config.AppVersion,
-		"api":            "v1",
-		"authenticated":  true,
+		"coreVersion":     config.AppVersion,
+		"api":             "v1",
+		"authenticated":   true,
 	})
 }
 

@@ -443,8 +443,8 @@ func TestNoLiveReferencesToDeletedLicenseFiles(t *testing.T) {
 	allowed := map[string]bool{
 		"internal/releasecontract/license_contract_test.go": true,
 		"scripts/gen-license.go":                            true,
-		"UPDATE.md":                                         true, // changelog: history of the migration
-		"worklog.md":                                        true, // engineering log: history
+		"docs/UPDATE.md":                                    true, // changelog: history of the migration (moved to docs/ in v1.10.7)
+		"docs/worklog.md":                                   true, // engineering log: history (moved to docs/ in v1.10.7)
 	}
 
 	type violation struct {

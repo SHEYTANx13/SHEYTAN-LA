@@ -197,7 +197,7 @@ func TestImportModelRejectsInvalidSources(t *testing.T) {
 		want  string
 	}{
 		{
-			name: "empty path",
+			name:  "empty path",
 			setup: func(t *testing.T) string { return "" },
 			want:  "empty",
 		},

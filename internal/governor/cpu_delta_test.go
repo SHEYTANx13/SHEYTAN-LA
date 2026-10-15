@@ -18,116 +18,116 @@ package governor
 //     is the only producer, but tests prove no race).
 
 import (
-        "sync"
-        "sync/atomic"
-        "testing"
+	"sync"
+	"sync/atomic"
+	"testing"
 )
 
 func TestCPUDeltaFirstSamplePrimes(t *testing.T) {
-        var tr cpuDeltaTracker
+	var tr cpuDeltaTracker
 
-        pct, ok := tr.observe(100, 100, true)
-        if ok {
-                t.Fatalf("the first sample must prime, not measure (got %f)", pct)
-        }
+	pct, ok := tr.observe(100, 100, true)
+	if ok {
+		t.Fatalf("the first sample must prime, not measure (got %f)", pct)
+	}
 
-        // The SECOND sample measures.
-        pct, ok = tr.observe(200, 300, true)
-        if !ok {
-                t.Fatal("the second sample must measure a real delta")
-        }
+	// The SECOND sample measures.
+	pct, ok = tr.observe(200, 300, true)
+	if !ok {
+		t.Fatal("the second sample must measure a real delta")
+	}
 
-        // delta: idle +100, busy +200 → busy fraction 2/3.
-        if pct < 66.6 || pct > 66.7 {
-                t.Fatalf("delta percentage = %f, want ~66.67", pct)
-        }
+	// delta: idle +100, busy +200 → busy fraction 2/3.
+	if pct < 66.6 || pct > 66.7 {
+		t.Fatalf("delta percentage = %f, want ~66.67", pct)
+	}
 }
 
 func TestCPUDeltaFailureStaysUnknown(t *testing.T) {
-        var tr cpuDeltaTracker
+	var tr cpuDeltaTracker
 
-        tr.observe(100, 100, true) // prime
+	tr.observe(100, 100, true) // prime
 
-        if _, ok := tr.observe(0, 0, false); ok {
-                t.Fatal("a failed read must stay unknown")
-        }
+	if _, ok := tr.observe(0, 0, false); ok {
+		t.Fatal("a failed read must stay unknown")
+	}
 
-        // The baseline is KEPT: the next successful read computes the delta
-        // across the failure gap (cumulative counters keep it valid).
-        pct, ok := tr.observe(300, 700, true)
-        if !ok {
-                t.Fatal("the post-failure delta must be measurable")
-        }
+	// The baseline is KEPT: the next successful read computes the delta
+	// across the failure gap (cumulative counters keep it valid).
+	pct, ok := tr.observe(300, 700, true)
+	if !ok {
+		t.Fatal("the post-failure delta must be measurable")
+	}
 
-        // delta: idle +200, busy +600 → busy fraction 3/4.
-        if pct != 75 {
-                t.Fatalf("delta percentage = %f, want 75", pct)
-        }
+	// delta: idle +200, busy +600 → busy fraction 3/4.
+	if pct != 75 {
+		t.Fatalf("delta percentage = %f, want 75", pct)
+	}
 }
 
 func TestCPUDeltaZeroElapsedStaysUnknown(t *testing.T) {
-        var tr cpuDeltaTracker
+	var tr cpuDeltaTracker
 
-        tr.observe(100, 100, true) // prime
+	tr.observe(100, 100, true) // prime
 
-        // Identical counters: zero elapsed time — not measurable.
-        if _, ok := tr.observe(100, 100, true); ok {
-                t.Fatal("a zero-elapsed window must stay unknown")
-        }
+	// Identical counters: zero elapsed time — not measurable.
+	if _, ok := tr.observe(100, 100, true); ok {
+		t.Fatal("a zero-elapsed window must stay unknown")
+	}
 
-        // Counters moving again → measured again.
-        if _, ok := tr.observe(110, 190, true); !ok {
-                t.Fatal("a moving window must measure")
-        }
+	// Counters moving again → measured again.
+	if _, ok := tr.observe(110, 190, true); !ok {
+		t.Fatal("a moving window must measure")
+	}
 }
 
 func TestCPUDeltaPercentPure(t *testing.T) {
-        if _, ok := cpuDeltaPercent(0, 0, 0, 0); ok {
-                t.Fatal("zero total is not measurable")
-        }
+	if _, ok := cpuDeltaPercent(0, 0, 0, 0); ok {
+		t.Fatal("zero total is not measurable")
+	}
 
-        if pct, ok := cpuDeltaPercent(10, 10, 20, 40); !ok || pct != 75 {
-                t.Fatalf("cpuDeltaPercent = (%f, %t), want (75, true)", pct, ok)
-        }
+	if pct, ok := cpuDeltaPercent(10, 10, 20, 40); !ok || pct != 75 {
+		t.Fatalf("cpuDeltaPercent = (%f, %t), want (75, true)", pct, ok)
+	}
 
-        // Regressive counters (system reboot / counter wrap): unknown, never
-        // a negative fabrication.
-        if _, ok := cpuDeltaPercent(100, 100, 50, 50); ok {
-                t.Fatal("regressive counters must stay unknown")
-        }
+	// Regressive counters (system reboot / counter wrap): unknown, never
+	// a negative fabrication.
+	if _, ok := cpuDeltaPercent(100, 100, 50, 50); ok {
+		t.Fatal("regressive counters must stay unknown")
+	}
 }
 
 func TestCPUDeltaSeamConcurrency(t *testing.T) {
-        var calls atomic.Int64
+	var calls atomic.Int64
 
-        seam := newCPUDeltaSeam(func() (float64, float64, bool) {
-                c := calls.Add(1)
-                // Deterministic monotonic counters.
-                return float64(100 + c), float64(100 + 2*c), true
-        })
+	seam := newCPUDeltaSeam(func() (float64, float64, bool) {
+		c := calls.Add(1)
+		// Deterministic monotonic counters.
+		return float64(100 + c), float64(100 + 2*c), true
+	})
 
-        var wg sync.WaitGroup
+	var wg sync.WaitGroup
 
-        var measured atomic.Int64
+	var measured atomic.Int64
 
-        for i := 0; i < 32; i++ {
-                wg.Add(1)
+	for i := 0; i < 32; i++ {
+		wg.Add(1)
 
-                go func() {
-                        defer wg.Done()
+		go func() {
+			defer wg.Done()
 
-                        if _, ok := seam.load(); ok {
-                                measured.Add(1)
-                        }
-                }()
-        }
+			if _, ok := seam.load(); ok {
+				measured.Add(1)
+			}
+		}()
+	}
 
-        wg.Wait()
+	wg.Wait()
 
-        // Exactly one priming call means at most 31 measured — the exact count
-        // is scheduling-dependent, but a FABRICATED measurement can never
-        // appear before the second call.
-        if m := measured.Load(); m > 31 {
-                t.Fatalf("measured %d of 32 calls — more than possible after one prime", m)
-        }
+	// Exactly one priming call means at most 31 measured — the exact count
+	// is scheduling-dependent, but a FABRICATED measurement can never
+	// appear before the second call.
+	if m := measured.Load(); m > 31 {
+		t.Fatalf("measured %d of 32 calls — more than possible after one prime", m)
+	}
 }

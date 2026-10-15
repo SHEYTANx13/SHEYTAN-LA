@@ -1,6 +1,6 @@
 // types.h — plain C data structures crossing the engine boundary.
 //
-// RULES (see ARCHITECTURE.md Part III):
+// RULES (see docs/ARCHITECTURE.md Part III):
 //   - every value in these structs is DETECTED, MEASURED, READ or
 //     DERIVED; unknowns are zero/empty, never guessed;
 //   - no vendor assumptions are hardcoded anywhere;

@@ -20,13 +20,13 @@ package api
 // settlement path runs for REAL against a local backend.
 
 import (
-        "encoding/json"
-        "fmt"
-        "net"
-        "net/http"
-        "os"
-        "strconv"
-        "testing"
+	"encoding/json"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"strconv"
+	"testing"
 )
 
 // ---------------------------------------------------------------------------
@@ -57,159 +57,159 @@ const v181FakeEngineHelp = `usage: llama-server [options]
 //   - the serving role is armed by SHEYTAN_FAKE_LLAMA=1 (inherited by
 //     the spawned engine subprocess through the parent environment).
 func runFakeLlamaEngineV181() bool {
-        if len(os.Args) > 1 {
-                switch os.Args[1] {
-                case "--version":
-                        fmt.Println("version: 4818 (abcdef12)")
-                        return true
-                case "--help":
-                        fmt.Print(v181FakeEngineHelp)
-                        return true
-                case "--list-devices":
-                        fmt.Print("Available devices:\n" +
-                                "  Vulkan0: Fake Local Graphics (2048 MiB)\n")
-                        return true
-                }
-        }
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--version":
+			fmt.Println("version: 4818 (abcdef12)")
+			return true
+		case "--help":
+			fmt.Print(v181FakeEngineHelp)
+			return true
+		case "--list-devices":
+			fmt.Print("Available devices:\n" +
+				"  Vulkan0: Fake Local Graphics (2048 MiB)\n")
+			return true
+		}
+	}
 
-        if os.Getenv("SHEYTAN_FAKE_LLAMA") == "1" {
-                runFakeLlamaServerV181()
-                return true
-        }
+	if os.Getenv("SHEYTAN_FAKE_LLAMA") == "1" {
+		runFakeLlamaServerV181()
+		return true
+	}
 
-        return false
+	return false
 }
 
 // runFakeLlamaServerV181 serves the full local-engine HTTP contract
 // until the parent kills the subprocess.
 func runFakeLlamaServerV181() {
-        port := 0
+	port := 0
 
-        for i, a := range os.Args {
-                if a == "--port" && i+1 < len(os.Args) {
-                        port, _ = strconv.Atoi(os.Args[i+1])
-                        break
-                }
-        }
+	for i, a := range os.Args {
+		if a == "--port" && i+1 < len(os.Args) {
+			port, _ = strconv.Atoi(os.Args[i+1])
+			break
+		}
+	}
 
-        if port == 0 {
-                os.Exit(2)
-        }
+	if port == 0 {
+		os.Exit(2)
+	}
 
-        // The chat-request evidence recorder: the E2E test asserts the run
-        // REALLY reached the generation backend by reading this file.
-        requestLog := os.Getenv("SHEYTAN_V181_REQUEST_LOG")
+	// The chat-request evidence recorder: the E2E test asserts the run
+	// REALLY reached the generation backend by reading this file.
+	requestLog := os.Getenv("SHEYTAN_V181_REQUEST_LOG")
 
-        mux := http.NewServeMux()
+	mux := http.NewServeMux()
 
-        mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-                w.WriteHeader(http.StatusOK)
-                _, _ = w.Write([]byte(`{"status":"ok"}`))
-        })
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
 
-        mux.HandleFunc("/v1/models", func(w http.ResponseWriter, _ *http.Request) {
-                w.Header().Set("Content-Type", "application/json")
-                _, _ = w.Write([]byte(`{"object":"list","data":[{"id":"gemma-4-E2B-it-Q4_K_M.gguf"}]}`))
-        })
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"gemma-4-E2B-it-Q4_K_M.gguf"}]}`))
+	})
 
-        mux.HandleFunc("/props", func(w http.ResponseWriter, _ *http.Request) {
-                w.Header().Set("Content-Type", "application/json")
-                _, _ = w.Write([]byte(`{"default_generation_settings":{"n_ctx":16384}}`))
-        })
+	mux.HandleFunc("/props", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"default_generation_settings":{"n_ctx":16384}}`))
+	})
 
-        mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
-                // Record the request evidence: the body's message count and the
-                // model field — proof the run reached the generation backend.
-                var body struct {
-                        Model    string `json:"model"`
-                        Messages []struct {
-                                Role    string `json:"role"`
-                                Content string `json:"content"`
-                        } `json:"messages"`
-                        Stream bool `json:"stream"`
-                }
-                _ = json.NewDecoder(r.Body).Decode(&body)
+	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+		// Record the request evidence: the body's message count and the
+		// model field — proof the run reached the generation backend.
+		var body struct {
+			Model    string `json:"model"`
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+			Stream bool `json:"stream"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
 
-                if requestLog != "" {
-                        entry := fmt.Sprintf("chat model=%s messages=%d stream=%v\n",
-                                body.Model, len(body.Messages), body.Stream)
-                        f, err := os.OpenFile(requestLog,
-                                os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-                        if err == nil {
-                                _, _ = f.WriteString(entry)
-                                _ = f.Close()
-                        }
-                }
+		if requestLog != "" {
+			entry := fmt.Sprintf("chat model=%s messages=%d stream=%v\n",
+				body.Model, len(body.Messages), body.Stream)
+			f, err := os.OpenFile(requestLog,
+				os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+			if err == nil {
+				_, _ = f.WriteString(entry)
+				_ = f.Close()
+			}
+		}
 
-                if !body.Stream {
-                        http.Error(w, "fake engine serves stream=true only", http.StatusBadRequest)
-                        return
-                }
+		if !body.Stream {
+			http.Error(w, "fake engine serves stream=true only", http.StatusBadRequest)
+			return
+		}
 
-                // A genuine multi-chunk SSE generation: the cumulative snapshots
-                // the orchestrator emits prove streaming BEFORE completion.
-                chunks := []string{"Hello", "!", " How", " can", " I", " help", " you", " today", "?"}
+		// A genuine multi-chunk SSE generation: the cumulative snapshots
+		// the orchestrator emits prove streaming BEFORE completion.
+		chunks := []string{"Hello", "!", " How", " can", " I", " help", " you", " today", "?"}
 
-                w.Header().Set("Content-Type", "text/event-stream")
-                w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
 
-                flusher, canFlush := w.(http.Flusher)
+		flusher, canFlush := w.(http.Flusher)
 
-                for _, c := range chunks {
-                        payload, _ := json.Marshal(map[string]any{
-                                "id":      "chatcmpl-v181",
-                                "object":  "chat.completion.chunk",
-                                "choices": []map[string]any{{
-                                        "index":         0,
-                                        "delta":         map[string]any{"content": c},
-                                        "finish_reason": nil,
-                                }},
-                        })
-                        _, _ = w.Write([]byte("data: " + string(payload) + "\n\n"))
-                        if canFlush {
-                                flusher.Flush()
-                        }
-                }
+		for _, c := range chunks {
+			payload, _ := json.Marshal(map[string]any{
+				"id":     "chatcmpl-v181",
+				"object": "chat.completion.chunk",
+				"choices": []map[string]any{{
+					"index":         0,
+					"delta":         map[string]any{"content": c},
+					"finish_reason": nil,
+				}},
+			})
+			_, _ = w.Write([]byte("data: " + string(payload) + "\n\n"))
+			if canFlush {
+				flusher.Flush()
+			}
+		}
 
-                donePayload, _ := json.Marshal(map[string]any{
-                        "id":      "chatcmpl-v181",
-                        "object":  "chat.completion.chunk",
-                        "choices": []map[string]any{{
-                                "index":         0,
-                                "delta":         map[string]any{},
-                                "finish_reason": "stop",
-                        }},
-                        "usage": map[string]int{
-                                "prompt_tokens":     9,
-                                "completion_tokens": len(chunks),
-                                "total_tokens":      9 + len(chunks),
-                        },
-                })
-                _, _ = w.Write([]byte("data: " + string(donePayload) + "\n\n"))
-                _, _ = w.Write([]byte("data: [DONE]\n\n"))
-                if canFlush {
-                        flusher.Flush()
-                }
-        })
+		donePayload, _ := json.Marshal(map[string]any{
+			"id":     "chatcmpl-v181",
+			"object": "chat.completion.chunk",
+			"choices": []map[string]any{{
+				"index":         0,
+				"delta":         map[string]any{},
+				"finish_reason": "stop",
+			}},
+			"usage": map[string]int{
+				"prompt_tokens":     9,
+				"completion_tokens": len(chunks),
+				"total_tokens":      9 + len(chunks),
+			},
+		})
+		_, _ = w.Write([]byte("data: " + string(donePayload) + "\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		if canFlush {
+			flusher.Flush()
+		}
+	})
 
-        server := &http.Server{
-                Addr:    fmt.Sprintf("127.0.0.1:%d", port),
-                Handler: mux,
-        }
+	server := &http.Server{
+		Addr:    fmt.Sprintf("127.0.0.1:%d", port),
+		Handler: mux,
+	}
 
-        _ = server.ListenAndServe()
-        os.Exit(0)
+	_ = server.ListenAndServe()
+	os.Exit(0)
 }
 
 // v181FreePort reserves an unused local TCP port.
 func v181FreePort(t *testing.T) int {
-        t.Helper()
+	t.Helper()
 
-        l, err := net.Listen("tcp", "127.0.0.1:0")
-        if err != nil {
-                t.Fatalf("free port: %v", err)
-        }
-        defer l.Close()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("free port: %v", err)
+	}
+	defer l.Close()
 
-        return l.Addr().(*net.TCPAddr).Port
+	return l.Addr().(*net.TCPAddr).Port
 }

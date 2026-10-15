@@ -30,21 +30,21 @@ import (
 
 // customToolView is the deterministic API shape for one definition.
 type customToolView struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	ShortDesc   string                 `json:"shortDescription"`
-	Description string                 `json:"description"`
-	Params      []customtools.Param    `json:"inputParameters"`
-	ExecType    string                 `json:"executionType"`
-	HTTP        *customtools.HTTPExec  `json:"http,omitempty"`
+	ID          string                   `json:"id"`
+	Name        string                   `json:"name"`
+	ShortDesc   string                   `json:"shortDescription"`
+	Description string                   `json:"description"`
+	Params      []customtools.Param      `json:"inputParameters"`
+	ExecType    string                   `json:"executionType"`
+	HTTP        *customtools.HTTPExec    `json:"http,omitempty"`
 	Command     *customtools.CommandExec `json:"command,omitempty"`
-	Permission  string                 `json:"permission"`
-	TimeoutSec  int                    `json:"timeoutSeconds"`
-	OutputLimit int                    `json:"outputLimitBytes"`
-	Enabled     bool                   `json:"enabled"`
-	Registered  bool                   `json:"registered"`
-	CreatedAt   time.Time              `json:"createdAt"`
-	UpdatedAt   time.Time              `json:"updatedAt"`
+	Permission  string                   `json:"permission"`
+	TimeoutSec  int                      `json:"timeoutSeconds"`
+	OutputLimit int                      `json:"outputLimitBytes"`
+	Enabled     bool                     `json:"enabled"`
+	Registered  bool                     `json:"registered"`
+	CreatedAt   time.Time                `json:"createdAt"`
+	UpdatedAt   time.Time                `json:"updatedAt"`
 }
 
 func viewOf(d *customtools.Definition, registered bool) customToolView {

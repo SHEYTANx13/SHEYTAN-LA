@@ -233,10 +233,10 @@ func TestVariantRollbackStopsCandidateBeforeRestore(t *testing.T) {
 // survives.
 func TestVariantRollbackRestoresLastKnownGoodPackage(t *testing.T) {
 	var (
-		srv       *LlamaServer
-		cfg       *config.Config
-		err       error
-		lkgHash   string
+		srv         *LlamaServer
+		cfg         *config.Config
+		err         error
+		lkgHash     string
 		snapshotted bool
 	)
 

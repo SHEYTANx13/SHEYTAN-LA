@@ -1,7 +1,7 @@
 info:
   productName: "SHEYTAN-LA"
   productIdentifier: "com.parsaetak.sheytan-la"
-  productVersion: "1.10.6"
+  productVersion: "1.10.7"
   companyName: "Parsaetak"
   productDescription: "SHEYTAN Local Agent — native local AI agent runtime (SHEYTAN-LA)"
 
@@ -9,5 +9,5 @@ info:
 # version) + SIGNATURE (release identity) + this file's productVersion.
 # The desktop build is now the Go core plus the native Qt Quick/QML host
 # under ui/qt (CMake); the Wails task runner configuration is retired with
-# the Wails dependency itself. See ARCHITECTURE.md for the boundary
+# the Wails dependency itself. See docs/ARCHITECTURE.md for the boundary
 # contract and .github/workflows/build-desktop.yml for the build flow.

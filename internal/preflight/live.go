@@ -88,8 +88,8 @@ type LiveMonitor struct {
 	hysteresis int // consecutive samples required to change level
 
 	level       PressureLevel
-	streak      int            // consecutive agreeing samples
-	pending     PressureLevel  // level the streak is voting for
+	streak      int           // consecutive agreeing samples
+	pending     PressureLevel // level the streak is voting for
 	last        Sample
 	onCritical  []func(Sample)
 	onAnyChange []func(Sample)

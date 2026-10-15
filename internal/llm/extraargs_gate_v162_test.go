@@ -96,8 +96,8 @@ func TestValidateExtraArgsAcceptsValidValues(t *testing.T) {
 		"",
 		"   ",
 		"--temp 0.7",
-		"--temp 2.5",           // unusual but valid (finite, >= 0)
-		"--temp=0.9",           // equals form
+		"--temp 2.5", // unusual but valid (finite, >= 0)
+		"--temp=0.9", // equals form
 		"--top-k 40",
 		"--top-k 0",
 		"--repeat-penalty 1.1",
@@ -112,10 +112,10 @@ func TestValidateExtraArgsAcceptsValidValues(t *testing.T) {
 		"--n-predict -1",
 		"--draft-max 16",
 		"--ctx-size 8192 --batch-size 512",
-		"--some-unknown-flag value",            // engine authority, not ours
+		"--some-unknown-flag value", // engine authority, not ours
 		"--another-unknown=whatever",
-		"--mlock --jinja --no-webui",           // non-numeric flags untouched
-		"--verbose",                            // bare unknown flag
+		"--mlock --jinja --no-webui", // non-numeric flags untouched
+		"--verbose",                  // bare unknown flag
 	} {
 		if problems := config.ValidateExtraArgs(args); len(problems) > 0 {
 			t.Errorf("ValidateExtraArgs(%q) must accept, got %v", args, problems)

@@ -62,13 +62,13 @@ area):
 
 | Area | Paths | Classification rationale |
 |---|---|---|
-| SHEYTAN product implementation | internal/ (all packages except the Open components above), cmd/, main*.go, web/ | The product-specific implementation: engine lifecycle, sampling gate, model-selection state machine, accelerator resolver, transactional updater/installer, agent orchestrator, research engine, coding lab, sessions, vision, calibration. |
+| SHEYTAN product implementation | internal/ (all packages except the Open components above), cmd/ (including cmd/sheytan-local-agent/), web/ | The product-specific implementation: engine lifecycle, sampling gate, model-selection state machine, accelerator resolver, transactional updater/installer, agent orchestrator, research engine, coding lab, sessions, vision, calibration. |
 | Native C++ engine | native/engine/ | SHEYTAN-specific proprietary inference engine implementation, tokenizer, scheduler, GGUF loader. |
 | Frontend (UI/UX) | src/, index.html, vite.config.ts, tsconfig*.json, styles | Product-specific implementation and interface designs. |
 | Brand, assets and designs | internal/brand/ (logo SVG and identity constants), build/ (icon, packaging art), scripts/gen-syso/logo-512.png | Trademarked assets and designs. |
-| Product documentation | README.md, ARCHITECTURE.md, UPDATE.md, agent.md, ROADMAP.md, REPORT.md, internal/aicontext/AI-CONTEXT.md, worklog.md, native/engine/README.md | Product documentation and engineering records. |
+| Product documentation | README.md, docs/ARCHITECTURE.md, docs/UPDATE.md, docs/agent.md, docs/ROADMAP.md, docs/REPORT.md, internal/aicontext/AI-CONTEXT.md, docs/worklog.md, native/engine/README.md | Product documentation and engineering records. |
 | Build, release and CI machinery | scripts/, packaging/, .github/, e2e/ (harness), Makefiles | Product-specific delivery pipeline. |
-| Governance files | LICENSE.md, CONTRIBUTING.md, SECURITY.md, SIGNATURE | Legal and governance material. |
+| Governance files | LICENSE.md, docs/CONTRIBUTING.md, SECURITY.md, SIGNATURE | Legal and governance material. |
 | Test suites | all *_test.go, e2e/*.spec.ts, fixtures except where a component is designated Open | Product verification records exercising proprietary components. |
 
 ### How to determine the license of a file

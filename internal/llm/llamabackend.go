@@ -12,20 +12,20 @@ package llm
 // duplicated here — the backend is the seam, not a second engine.
 
 import (
-        "context"
-        "fmt"
-        "path/filepath"
-        "time"
+	"context"
+	"fmt"
+	"path/filepath"
+	"time"
 
-        "github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-        "github.com/Parsaetak/SHEYTAN-local-agent/internal/resources"
-        "github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/resources"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
 )
 
 // LlamaBackend is the managed llama.cpp engine behind the Backend contract.
 type LlamaBackend struct {
-        server *LlamaServer
-        client *Client
+	server *LlamaServer
+	client *Client
 }
 
 // compile-time contract check.
@@ -34,7 +34,7 @@ var _ Backend = (*LlamaBackend)(nil)
 // NewLlamaBackend wraps an existing LlamaServer + Client pair. Both must
 // share the same config.Source (they do in every runtime wiring).
 func NewLlamaBackend(server *LlamaServer, client *Client) *LlamaBackend {
-        return &LlamaBackend{server: server, client: client}
+	return &LlamaBackend{server: server, client: client}
 }
 
 // Server exposes the wrapped LlamaServer for the legacy concrete paths
@@ -55,36 +55,36 @@ func (b *LlamaBackend) Name() string { return config.BackendLlama }
 // the boot itself keeps progressing in the background exactly like
 // Stack.EnsureLLMContext does today.
 func (b *LlamaBackend) Start(ctx context.Context) error {
-        if err := ctx.Err(); err != nil {
-                return err
-        }
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
-        if b.server.IsRunning() {
-                return nil
-        }
+	if b.server.IsRunning() {
+		return nil
+	}
 
-        errCh := make(chan error, 1)
+	errCh := make(chan error, 1)
 
-        go func() {
-                errCh <- b.server.Start()
-        }()
+	go func() {
+		errCh <- b.server.Start()
+	}()
 
-        select {
-        case err := <-errCh:
-                return err
-        case <-ctx.Done():
-                return fmt.Errorf("engine startup still in progress: %w", ctx.Err())
-        }
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		return fmt.Errorf("engine startup still in progress: %w", ctx.Err())
+	}
 }
 
 // Stop implements Backend (graceful SIGTERM → bounded grace → kill, the
 // v1.1.4 path unchanged).
 func (b *LlamaBackend) Stop(ctx context.Context) error {
-        // Stop is bounded internally (4 s grace); ctx is honored as a
-        // pre-check only — a partially-stopped engine must still finish
-        // tearing down deterministically.
-        _ = ctx
-        return b.server.Stop()
+	// Stop is bounded internally (4 s grace); ctx is honored as a
+	// pre-check only — a partially-stopped engine must still finish
+	// tearing down deterministically.
+	_ = ctx
+	return b.server.Stop()
 }
 
 // Health implements Backend with a REAL probe: LlamaServer.ProbeHealth
@@ -92,16 +92,16 @@ func (b *LlamaBackend) Stop(ctx context.Context) error {
 // healthy when the authoritative state machine also says the subprocess
 // is alive.
 func (b *LlamaBackend) Health(ctx context.Context) (HealthReport, error) {
-        err := b.server.ProbeHealth(ctx)
+	err := b.server.ProbeHealth(ctx)
 
-        report := HealthReport{
-                State:     b.server.State(),
-                Alive:     b.server.IsRunning(),
-                Detail:    b.server.Detail(),
-                Timestamp: time.Now().UTC(),
-        }
+	report := HealthReport{
+		State:     b.server.State(),
+		Alive:     b.server.IsRunning(),
+		Detail:    b.server.Detail(),
+		Timestamp: time.Now().UTC(),
+	}
 
-        return report, err
+	return report, err
 }
 
 // LoadModel implements Backend by persisting the model choice through the
@@ -109,47 +109,47 @@ func (b *LlamaBackend) Health(ctx context.Context) (HealthReport, error) {
 // binds the model at process start). A stopped engine just persists the
 // choice for the next Start.
 func (b *LlamaBackend) LoadModel(ctx context.Context, spec ModelSpec) error {
-        if spec.Path == "" {
-                return fmt.Errorf("model spec path is empty")
-        }
+	if spec.Path == "" {
+		return fmt.Errorf("model spec path is empty")
+	}
 
-        cfg := b.server.src.Load()
+	cfg := b.server.src.Load()
 
-        if _, err := ResolveModelPath(cfg.ModelsDir, spec.Path); err != nil {
-                return fmt.Errorf("model not found: %w", err)
-        }
+	if _, err := ResolveModelPath(cfg.ModelsDir, spec.Path); err != nil {
+		return fmt.Errorf("model not found: %w", err)
+	}
 
-        next := b.server.src.Update(func(c *config.Config) {
-                c.Model = spec.Path
-        })
+	next := b.server.src.Update(func(c *config.Config) {
+		c.Model = spec.Path
+	})
 
-        if err := config.Save(next.ConfigPath(), next); err != nil {
-                return fmt.Errorf("persist model selection: %w", err)
-        }
+	if err := config.Save(next.ConfigPath(), next); err != nil {
+		return fmt.Errorf("persist model selection: %w", err)
+	}
 
-        if b.server.IsRunning() {
-                return b.server.Restart()
-        }
+	if b.server.IsRunning() {
+		return b.server.Restart()
+	}
 
-        return nil
+	return nil
 }
 
 // UnloadModel implements Backend. llama.cpp cannot unload a model without
 // terminating the server, so this stops the engine.
 func (b *LlamaBackend) UnloadModel(ctx context.Context) error {
-        return b.server.Stop()
+	return b.server.Stop()
 }
 
 // Generate implements Backend via the existing non-streaming client path
 // (retries, transient-error classification, logging — unchanged).
 func (b *LlamaBackend) Generate(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
-        return b.client.Chat(ctx, req)
+	return b.client.Chat(ctx, req)
 }
 
 // StreamGenerate implements Backend via StreamChatDetailed (stall watchdog,
 // retry-before-first-token, busy hook, perf stats — unchanged).
 func (b *LlamaBackend) StreamGenerate(ctx context.Context, req *ChatRequest, onEvent func(StreamEvent) error) (PerfStats, error) {
-        return b.client.StreamChatDetailed(ctx, req, onEvent)
+	return b.client.StreamChatDetailed(ctx, req, onEvent)
 }
 
 // Cancel implements Backend. The llama backend cancels generation through
@@ -157,55 +157,55 @@ func (b *LlamaBackend) StreamGenerate(ctx context.Context, req *ChatRequest, onE
 // SSE stream); there is no server-side request id to cancel, so callers
 // get ErrCancelContextBased instead of a fake success.
 func (b *LlamaBackend) Cancel(ctx context.Context, requestID string) error {
-        _ = ctx
-        _ = requestID
-        return ErrCancelContextBased
+	_ = ctx
+	_ = requestID
+	return ErrCancelContextBased
 }
 
 // ModelInfo implements Backend from measured values: the resolved loaded
 // model path, the engine's own /v1/models listing when alive, and the GGUF
 // card of the loaded file when parseable.
 func (b *LlamaBackend) ModelInfo(ctx context.Context) (ModelInfo, error) {
-        _ = ctx
+	_ = ctx
 
-        info := ModelInfo{
-                Backend: b.Name(),
-                Loaded:  b.server.IsRunning(),
-        }
+	info := ModelInfo{
+		Backend: b.Name(),
+		Loaded:  b.server.IsRunning(),
+	}
 
-        loaded := b.server.LoadedModel()
+	loaded := b.server.LoadedModel()
 
-        if loaded != "" {
-                info.ModelPath = loaded
+	if loaded != "" {
+		info.ModelPath = loaded
 
-                if card, err := ReadModelCard(loaded); err == nil && card != nil {
-                        info.Architecture = card.Arch
-                        info.Quantization = card.Quant
-                        info.ContextLength = card.ContextLength
-                        info.Parameters = card.FormatParams()
-                }
-        } else if cfg := b.server.src.Load(); cfg.Model != "" {
-                if resolved, err := ResolveModelPath(cfg.ModelsDir, cfg.Model); err == nil {
-                        info.ModelPath = resolved
-                } else {
-                        info.ModelPath = cfg.Model
-                }
-        }
+		if card, err := ReadModelCard(loaded); err == nil && card != nil {
+			info.Architecture = card.Arch
+			info.Quantization = card.Quant
+			info.ContextLength = card.ContextLength
+			info.Parameters = card.FormatParams()
+		}
+	} else if cfg := b.server.src.Load(); cfg.Model != "" {
+		if resolved, err := ResolveModelPath(cfg.ModelsDir, cfg.Model); err == nil {
+			info.ModelPath = resolved
+		} else {
+			info.ModelPath = cfg.Model
+		}
+	}
 
-        if b.server.IsRunning() {
-                if ids, err := b.server.ListLoadedModels(); err == nil {
-                        info.LoadedIDs = ids
-                }
-        }
+	if b.server.IsRunning() {
+		if ids, err := b.server.ListLoadedModels(); err == nil {
+			info.LoadedIDs = ids
+		}
+	}
 
-        return info, nil
+	return info, nil
 }
 
 // HardwareInfo implements Backend from the sysinfo probe (CIM-first on
 // Windows, nvidia-smi/CL on Linux — real detected values only).
 func (b *LlamaBackend) HardwareInfo(ctx context.Context) (HardwareInfo, error) {
-        _ = ctx
-        return hardwareFromSysInfo(sysinfo.Probe(), b.Name()), nil
+	_ = ctx
+	return hardwareFromSysInfo(sysinfo.Probe(), b.Name()), nil
 }
 
 // Metrics implements Backend from measured lifecycle facts only: engine
@@ -214,36 +214,36 @@ func (b *LlamaBackend) HardwareInfo(ctx context.Context) (HardwareInfo, error) {
 // PerfStats on the client path, not engine lifetime values, so they are
 // omitted here rather than faked.
 func (b *LlamaBackend) Metrics(ctx context.Context) (Metrics, error) {
-        _ = ctx
+	_ = ctx
 
-        m := Metrics{
-                Backend:     b.Name(),
-                EngineState: b.server.State(),
-                Pid:         b.server.Pid(),
-                Restarts:    b.server.Restarts(),
-        }
+	m := Metrics{
+		Backend:     b.Name(),
+		EngineState: b.server.State(),
+		Pid:         b.server.Pid(),
+		Restarts:    b.server.Restarts(),
+	}
 
-        if loaded := b.server.LoadedModel(); loaded != "" {
-                m.Model = filepath.Base(loaded)
-        }
+	if loaded := b.server.LoadedModel(); loaded != "" {
+		m.Model = filepath.Base(loaded)
+	}
 
-        if started := b.server.StartedAt(); !started.IsZero() {
-                m.UptimeSeconds = time.Since(started).Seconds()
-        }
+	if started := b.server.StartedAt(); !started.IsZero() {
+		m.UptimeSeconds = time.Since(started).Seconds()
+	}
 
-        // v1.8.6 (§8 real engine memory evidence): the ENGINE process's
-        // resident set, MEASURED through the existing OS sampling path
-        // (resources.ProcRAM — the same authority the live monitor uses for
-        // the Go process). A failed read leaves the field unset (an honest
-        // unknown — the Metrics contract never fakes a measurement). This is
-        // what feeds the Governor's engine-RSS fact through the Stack wiring.
-        if pid := m.Pid; pid > 0 {
-                if rss, err := resources.ProcRAM(pid); err == nil && rss > 0 {
-                        m.ProcessRSSBytes = uint64(rss)
-                }
-        }
+	// v1.8.6 (§8 real engine memory evidence): the ENGINE process's
+	// resident set, MEASURED through the existing OS sampling path
+	// (resources.ProcRAM — the same authority the live monitor uses for
+	// the Go process). A failed read leaves the field unset (an honest
+	// unknown — the Metrics contract never fakes a measurement). This is
+	// what feeds the Governor's engine-RSS fact through the Stack wiring.
+	if pid := m.Pid; pid > 0 {
+		if rss, err := resources.ProcRAM(pid); err == nil && rss > 0 {
+			m.ProcessRSSBytes = uint64(rss)
+		}
+	}
 
-        return m, nil
+	return m, nil
 }
 
 // hardwareFromSysInfo converts the sysinfo probe result into the
@@ -251,37 +251,37 @@ func (b *LlamaBackend) Metrics(ctx context.Context) (Metrics, error) {
 // are populated; GPUs without VRAM detection keep zero; accelerators stay
 // empty until a detector exists.
 func hardwareFromSysInfo(si *sysinfo.SysInfo, backend string) HardwareInfo {
-        if si == nil {
-                return HardwareInfo{Backend: backend}
-        }
+	if si == nil {
+		return HardwareInfo{Backend: backend}
+	}
 
-        hw := HardwareInfo{
-                Backend:      backend,
-                Architecture: si.Arch,
-                OS:           si.OS,
-                CPU: CPUHardware{
-                        Name:          si.CPU.Name,
-                        PhysicalCores: si.CPU.PhysicalCores,
-                        LogicalCores:  si.CPU.LogicalCores,
-                        FrequencyMHz:  si.CPU.FrequencyMHz,
-                },
-                RAM: RAMHardware{
-                        TotalBytes:     si.RAM.TotalBytes,
-                        AvailableBytes: si.RAM.Available,
-                },
-                DetectedBy: []string{"sysinfo"},
-        }
+	hw := HardwareInfo{
+		Backend:      backend,
+		Architecture: si.Arch,
+		OS:           si.OS,
+		CPU: CPUHardware{
+			Name:          si.CPU.Name,
+			PhysicalCores: si.CPU.PhysicalCores,
+			LogicalCores:  si.CPU.LogicalCores,
+			FrequencyMHz:  si.CPU.FrequencyMHz,
+		},
+		RAM: RAMHardware{
+			TotalBytes:     si.RAM.TotalBytes,
+			AvailableBytes: si.RAM.Available,
+		},
+		DetectedBy: []string{"sysinfo"},
+	}
 
-        for _, gpu := range si.GPU {
-                hw.GPUs = append(hw.GPUs, GPUHardware{
-                        Vendor:        gpu.Vendor,
-                        Name:          gpu.Name,
-                        VRAMBytes:     gpu.VRAMBytes,
-                        DriverVersion: gpu.DriverVer,
-                })
-        }
+	for _, gpu := range si.GPU {
+		hw.GPUs = append(hw.GPUs, GPUHardware{
+			Vendor:        gpu.Vendor,
+			Name:          gpu.Name,
+			VRAMBytes:     gpu.VRAMBytes,
+			DriverVersion: gpu.DriverVer,
+		})
+	}
 
-        return hw
+	return hw
 }
 
 // BackendCapabilities implements llm.CapabilityReporter (v1.7.1 §5.3):
@@ -290,24 +290,24 @@ func hardwareFromSysInfo(si *sysinfo.SysInfo, backend string) HardwareInfo {
 // ENGINE-VERIFIED value (0 until the engine has proven one); the Vulkan
 // variant distinguishes itself through the managed binary's runtime.
 func (b *LlamaBackend) BackendCapabilities() BackendCapabilities {
-        caps := BackendCapabilities{
-                Identity:               "llama.cpp-cpu",
-                GenerationCapable:      true,
-                SupportedArchitectures: "llama graph family (llama.cpp)",
-                Streaming:              true,
-                Cancellation:           true,
-                Readiness:              b.server.State(),
-        }
-        if b.server != nil {
-                if b.server.hasVulkanBackend(b.server.src.Load()) {
-                        caps.Identity = "llama.cpp-vulkan"
-                        caps.Devices = "vulkan"
-                } else {
-                        caps.Devices = "cpu"
-                }
-                if limit := b.server.EngineContextLimit(); limit > 0 {
-                        caps.ContextCapability = limit
-                }
-        }
-        return caps
+	caps := BackendCapabilities{
+		Identity:               "llama.cpp-cpu",
+		GenerationCapable:      true,
+		SupportedArchitectures: "llama graph family (llama.cpp)",
+		Streaming:              true,
+		Cancellation:           true,
+		Readiness:              b.server.State(),
+	}
+	if b.server != nil {
+		if b.server.hasVulkanBackend(b.server.src.Load()) {
+			caps.Identity = "llama.cpp-vulkan"
+			caps.Devices = "vulkan"
+		} else {
+			caps.Devices = "cpu"
+		}
+		if limit := b.server.EngineContextLimit(); limit > 0 {
+			caps.ContextCapability = limit
+		}
+	}
+	return caps
 }

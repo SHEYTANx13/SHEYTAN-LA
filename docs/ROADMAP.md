@@ -11,7 +11,7 @@ it in this repository.
 Artifact truth (single authority per artifact):
 
 * `changelog.md` is the ONLY canonical release-history artifact;
-* `README.md` describes the CURRENT product only (no release history);
+* `../README.md` describes the CURRENT product only (no release history);
 * `UPDATE.md` carries the CURRENT release notes and maintenance behavior;
 * `ARCHITECTURE.md` remains the architecture truth for what IS built.
 

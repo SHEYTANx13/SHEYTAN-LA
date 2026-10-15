@@ -11,6 +11,161 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.10.7 — 2026-10-16 — the evidence-driven gate repair: the Windows overlapped-IO client contract fixed at its root, the Linux smoke verified green first-hand on the CI Qt version, CI Visibility 2.0 (anonymous machine-readable failure annotations), the gofmt gate on both platforms, and the repository reshaped to the operator's specification
+
+Focus: consume the run 38731387959 evidence boundary honestly and end the
+six-run Windows failure. Run
+https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38731387959
+(v1.10.6, commit 48cee27) was the healthiest run since v1.10.1 — audit
+SUCCEEDED (3m7s), the Linux Go verification gate GREEN for the first time,
+the stress suite and the Qt host build green — with exactly two named
+failures left: Windows x64 step 13 "Go verification" (output line 138, the
+SIXTH consecutive run) and Linux x64 step 23 "Qt desktop acceptance smoke"
+(output line 55, identical in v1.10.5 and v1.10.6); the publish job never
+ran. The run's check-run annotations — read ANONYMOUSLY this cycle,
+re-proving the V-A capability — carry bare exit codes only ("Process
+completed with exit code 1." on both failing jobs), and the two failure
+artifacts (`windows-go-verification-logs-attempt1` 1.53 KB,
+`linux-verification-logs-attempt1` 3.11 KB) are auth-walled from a
+credential-less environment. The register's boundary rule applied, and this
+release converted it into STRONGER evidence than inference: it reproduced
+the Linux smoke FIRST-HAND on the same Qt 6.8.2 minor CI pins, and
+read-verified the Windows defect in source back to v1.10.1.
+
+**Windows transport — the client handle now satisfies the overlapped-IO
+contract (`internal/localipc/listener_windows.go`).** Since v1.10.1
+(verified in `git show cb11a23:internal/localipc/listener_windows.go`),
+`dialEndpoint` opened the CLIENT pipe handle with `dwFlagsAndAttributes =
+0` — a synchronous handle — and handed it to the same `pipeConn` whose
+`Read`/`Write` issue overlapped IO (Overlapped structs, events,
+`GetOverlappedResult`) on every connection. Issuing overlapped IO on a
+handle not opened with `FILE_FLAG_OVERLAPPED` is outside the Windows
+contract (MSDN CreateFile: the results are unpredictable); the canonical
+pipe client (x/sys winio `DialPipe`) opens with `FILE_FLAG_OVERLAPPED` for
+exactly this reason. Every Windows pipe round-trip in the hosted Go
+verification job traverses this path (handshake, tunnel, health,
+malformed-garbage re-dial, 2 MiB oversized-header write, burst dials,
+idle survival); the Linux transport (`net.Listen` UDS) never touches it —
+matching the six-run Windows-only red split. The fix is one line at the
+root: `windows.FILE_FLAG_OVERLAPPED` on the client `CreateFile`. The
+register's W1–W4 repairs are untouched; no assertion weakened, no bound
+expanded. Evidence class: read-verified source defect + channel boundary
+(the run's failing test names are inside the auth-walled artifacts) —
+labeled per the operating rules.
+
+**Windows transport — read deadlines are enforced while a read is
+pending.** `SetReadDeadline` only cancelled an in-flight overlapped read
+when the deadline was ALREADY expired at set time; a future deadline never
+fired during a pending `ReadFile` (the overlapped wait is unbounded), so
+`http.Server`'s `ReadHeaderTimeout: 10s` (serve.go) was dead code on the
+Windows transport — a silent peer hung a read forever. A future deadline
+now arms a bounded `time.AfterFunc` cancel (`CancelIoEx` on the handle),
+and an `ERROR_OPERATION_ABORTED` read answers `os.ErrDeadlineExceeded`
+when the deadline passed (a genuine close-abort still surfaces as an
+error). Evidence class: read-verified contract violation, same file.
+
+**Linux smoke — the xcb platform-plugin dependency closure is pinned, and
+the G1–G5 battery is verified green by first-hand execution.** The
+first-hand reproduction (Debian trixie, aqt Qt 6.8.2 linux_gcc_64 — the
+SAME minor CI pins — Xvfb :77, openbox, xdotool/x11-utils, software
+rendering) reproduced the EXACT step-23 line-55 failure shape: a Qt
+platform-plugin load failure ("Could not load the Qt platform plugin
+xcb ... even though it was found") kills the UI at boot, the core exits
+with its child, and the smoke dumps core.log + ui.log before
+`SMOKE FAIL: core died at boot` — the v1.10.5/v1.10.6 signature. With the
+xcb dependency set present, ALL GATES PASS first-hand: G1 typed keyed
+handshake (sheytan-ipc/1), G2 core-spawned Qt host alive, G3 a real
+1280x840 visible top-level window under openbox, G4 the session
+round-trip over the channel plus channel sockets held, G5 the
+WM_DELETE_WINDOW close with clean exit — and again after the repository
+reshape, with the smoke's own core fallback building the new
+`cmd/sheytan-local-agent/` entry. The v1.10.6 hardening (software
+rendering, wrapper log capture, WM readiness poll) is verified sound by
+EXECUTION, not only inspection. The workflow's apt step now installs the
+complete canonical xcb set (libxcb-cursor0/icccm4/keysyms1/image0/
+render-util0/render0/shape0/randr0/shm0/xfixes0/xinerama0/xinput0/xkb1/
+sync1/dri3-0, libxkbcommon-x11-0, libxkbcommon0) so the plugin's
+dependency closure is deterministic rather than runner-image luck. G1–G5
+stay byte-for-byte as strict.
+
+**CI Visibility 2.0 — the next red run is machine-readable without any
+login (V-A).** Every failure-summary step now ALSO emits `::error::`
+workflow-command annotations, anonymously readable via the check-run
+annotations API (verified this cycle by reading run 38731387959's
+annotations without credentials): Windows names the failing command and
+the first failing test names (`--- FAIL` extraction from each gate's
+teed log); Linux names the failing gate — the smoke now writes a
+`smoke-fail.txt` marker on EVERY abort path (best-effort, never masking
+the real failure) — plus bounded ui.log / core.log tails; the audit job
+names the failing gates and first failing test names. Caps respect the
+10-annotations-per-step limit, lines truncate at 250 chars, and no
+secrets, keys, runIds or sessionIds are emitted (rule 7 — the same lines
+already publish to the public step summary). The existing job-summary
+and artifact channels are unchanged.
+
+**The gofmt gate — hygiene joins the battery on BOTH platforms (W-B).**
+The editing pipeline's tab-to-space mangling was worse than the register
+knew: the register named three files (`internal/llm/backend.go`,
+`internal/localipc/serve_test.go`,
+`internal/localipc/listener_windows_test.go`), and `gofmt -l` proved the
+damage tree-wide — 143 files. The whole tree is reformatted
+(whitespace-only; both platform builds byte-equivalent), and BOTH Go
+verification steps now require `gofmt -l .` to be EMPTY: a violation
+fails the job, tees the full offending-file list to its own log
+(`win-gofmt.log` / `linux-gofmt.log` — included in the failure summaries
+and artifacts), and emits the first files as `::error::` annotations. No
+gate weakened; the battery grew.
+
+**Repository shape (R-A/R-B/R-D, operator specification).** All seven
+documentation files moved into `docs/` (ARCHITECTURE.md, CONTRIBUTING.md,
+ROADMAP.md, UPDATE.md, agent.md, changelog.md, worklog.md); the root
+keeps exactly README.md, LICENSE.md and SECURITY.md as visible
+documentation. The core entry set (main.go, main_headless.go,
+main_other.go, main_stderr.go, main_windows.go) moved into
+`cmd/sheytan-local-agent/` with the build-tag suffix contracts preserved
+(verified: linux, linux+headless and windows builds all green); the
+launcher script source moved to `packaging/SHEYTAN-LA.bat`. Every
+reference swept in the same change set: the workflow's Windows build
+(SHEYTAN-LA.exe + console smoke probe), Linux build, headless smoke
+build, and smoke core-fallback build all target
+`./cmd/sheytan-local-agent`; the Windows staging step sources
+`docs/agent.md` (→ AI-CONTEXT.md) and `packaging/SHEYTAN-LA.bat`; the
+audit job's repository-shape check is now TWO-SIDED (new paths must
+exist, old root paths must be gone); the stress gate's release-surface
+scenario pins the same two-sided inventory plus the new workflow build
+strings; the license classification table (internal/brand/brand.go +
+the regenerated LICENSE.md via scripts/gen-license.go) and the license
+contract test's allowed-references map follow the new paths; README and
+cross-document links updated; the native engine's documentation
+references updated. Build-mandated root files stay, justified per-file
+in `docs/worklog.md`: go.mod, go.sum, package.json, package-lock.json,
+index.html, vite.config.ts, tsconfig.json, tsconfig.app.json,
+tsconfig.node.json, SIGNATURE, .gitignore, .oxlintrc.json,
+.prettierignore — the Go/npm/Vite/release contracts; moving any of them
+breaks the toolchain or forces a config refactor beyond this release.
+
+**Preserved gains (v1.10.3–v1.10.6).** Strict handshake, field pins,
+stress-gate Qt contract, WS fragmentation reassembly, the W1–W4 pipe
+transport repair, the failure-visibility install and the ws purge all
+remain byte-for-byte. No test weakened, no check deleted, no timeout
+expanded, no sleep-based correctness, the native-engine default
+untouched, Wails still absent (the module-graph gate stays green).
+
+**Local verification battery (this cycle, all green):** gofmt -l empty;
+go build ./... + `-tags headless` + GOOS=windows; go vet ./... both
+platforms; go test ./internal/... -tags headless; go test ./... -run
+Test; go test -race on the audit's six concurrency-heavy packages; npm
+ci / typecheck / lint / test:units (236 pass) / test:release / build /
+verify-static-assets; scripts/verify-all.mjs full PASS; stress suite
+47/47 including the reshaped release_surface; bash -n
+qt-desktop-smoke.sh; the Qt desktop acceptance smoke G1–G5 first-hand
+PASS (twice: pre-reshape and post-reshape); canonical identity 1.10.7
+via release-version.mjs sync + --check. Hosted result: recorded only
+after the operator's push executes the run (this environment cannot
+push; no hosted green is claimed for v1.10.7 anywhere).
+
+---
+
 ## v1.10.6 — 2026-10-15 — the hosted-truth release: the Windows named-pipe IPC defect class fixed in one sweep, the Linux Qt smoke hardened for headless runners, and CI failure-visibility installed so no future red run is invisible
 
 Focus: break the three-run pattern of docs-only fixes. Run 38714950052
@@ -1485,7 +1640,7 @@ created. Evidence in the sections below; the strategic boundary lives in
    driven backlog) — detailed v1.8.x release history now lives ONLY in
    this changelog (the accidental duplicated v1.8.5 section in the
    roadmap is gone with the restructure). `UPDATE.md` carries the v1.9.0
-   release notes only; `README.md` describes the current product;
+   release notes only; `../README.md` describes the current product;
    `ARCHITECTURE.md` documents the implemented v1.9 behavior;
    `agent.md` is the repaired v1.9.0 handoff.
 

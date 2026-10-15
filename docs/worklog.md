@@ -2167,3 +2167,245 @@ IDENTITY: package.json 1.10.6 → release-version.mjs repaired config.go AppVers
 HOSTED (not executable from this environment — no GitHub credentials):
 - Push to main: NOT POSSIBLE from the repair environment (credential-less). The failure-visibility install ships in this tree so the next hosted run publishes its own diagnosis to $GITHUB_STEP_SUMMARY + artifacts.
 - No hosted green is claimed for v1.10.6. The gate table in the final report marks hosted rows accordingly.
+
+---
+
+## v1.10.7 — 2026-10-16 — the evidence-driven gate repair + CI Visibility 2.0 + repository shape
+
+Base: main @ 48cee27 (v1.10.6) — verified LIVE HEAD at cycle start (the
+baseline commit IS the hosted HEAD; the register applied verbatim).
+
+### Evidence boundary (Phase 1, recorded per the operating rules)
+
+Run 38731387959 (v1.10.6, commit 48cee27):
+https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38731387959
+
+Captured VERBATIM from the public run page (HTTP 200, server-rendered
+HTML, fetched without credentials):
+- Jobs: "Source & frontend audit" SUCCEEDED in 3m7s; "Windows x64"
+  FAILED in 8m18s — failing step "Go verification" (step 13, output
+  line 138, per the page's own anchor `job/116411076184#step:13:138`);
+  "Linux x64" FAILED in 9m22s — failing step "Qt desktop acceptance
+  smoke (real core + Qt UI under Xvfb)" (step 23, output line 55, anchor
+  `job/116411076192#step:23:55`); "Publish and verify
+  ${{ github.ref_name }}" present and skipped (never ran).
+- Check-run annotations, read anonymously (the V-A capability, re-proven
+  this cycle): the Windows job carries exactly one error annotation —
+  step "Go verification", text "Process completed with exit code 1.";
+  the Linux job exactly one — step "Qt desktop acceptance smoke (real
+  core + Qt UI under Xvfb)", text "Process completed with exit code 1.";
+  the audit job carries none. BARE EXIT CODES ONLY: no failing test
+  names, no gate names, anywhere in the anonymously readable channel.
+- Artifacts: `windows-go-verification-logs-attempt1` (1.53 KB,
+  sha256:61e66aa60966fded2b8ef0f58ada2b57b9c135c7408cfd67de666eb074d3384a)
+  and `linux-verification-logs-attempt1` (3.11 KB) EXIST but the
+  artifact download endpoints are auth-walled (HTTP 404 anonymous) —
+  their contents are NOT quotable from this environment.
+- CHANNELS EXHAUSTED: the GitHub REST API is anonymously rate-limited
+  from this shared egress IP (first call over quota), artifact download
+  requires authentication, the HTML run/job pages carry job/step
+  metadata and annotations but not log text (logs render via
+  authenticated XHR), and the operator did not paste the failure-summary
+  text with the prompt. Per the mission's boundary rule, every fix
+  below is labeled EVIDENCE (locally reproduced or read-verified) or
+  INFERENCE (register-ranked candidate), and nothing outside a named or
+  verified cause was changed.
+
+### Per-item register outcomes
+
+- **W-A (boundary, resolved in Phase 1)**: RESOLVED AS BOUNDARY. The
+  failing Windows command/test names exist only inside the auth-walled
+  artifacts; the anonymously readable channel names only the failing
+  STEP. Evidence classes recorded per fix below; no failing test name
+  was guessed or claimed.
+- **W-B (VERIFIED hygiene)**: EXCEEDED THE REGISTER. `gofmt -l .` at
+  HEAD listed **143 files** (the register named three:
+  internal/llm/backend.go, internal/localipc/serve_test.go,
+  internal/localipc/listener_windows_test.go — all confirmed members).
+  The mangling is the tab-to-space editing-pipeline damage mode,
+  tree-wide. FIX: `gofmt -w .` (whitespace-only diff, both platform
+  builds verified byte-equivalent), and a REQUIRED gofmt gate added to
+  the Go verification step on BOTH platforms (empty `gofmt -l .` or
+  fail; full offending list teed to win-gofmt.log / linux-gofmt.log,
+  first files emitted as ::error:: annotations). Local proof: gofmt -l
+  empty; builds+vet green on linux/headless/windows before and after.
+- **W-C (candidates → root cause)**: THE WINDOWS ROOT CAUSE IS
+  READ-VERIFIED IN SOURCE, PRESENT SINCE v1.10.1. `dialEndpoint`
+  (internal/localipc/listener_windows.go) opened the CLIENT pipe handle
+  with dwFlagsAndAttributes = 0 — a SYNCHRONOUS handle — and handed it
+  to the same pipeConn whose Read/Write issue OVERLAPPED IO (Overlapped
+  structs + events + GetOverlappedResult) on every connection. Issuing
+  overlapped IO on a handle not opened with FILE_FLAG_OVERLAPPED is
+  outside the Windows contract (MSDN CreateFile: "the results are
+  unpredictable"); the canonical pipe client (x/sys winio DialPipe)
+  opens with FILE_FLAG_OVERLAPPED. Verified present at cb11a23 via
+  `git show cb11a23:internal/localipc/listener_windows.go` — matching
+  "the failure predates v1.10.6 by five runs". EVERY Windows pipe
+  round-trip in the hosted gate traverses this path (handshake, tunnel,
+  health, malformed re-dial, 2 MiB oversized-header write, burst dials,
+  idle survival); the Linux transport (net.Listen UDS) never touches it —
+  matching the six-run Windows-only split. FIX:
+  `windows.FILE_FLAG_OVERLAPPED` on the client CreateFile. Evidence
+  class: EVIDENCE (read-verified defect, git-history-verified age,
+  first-hand-informed) + INFERENCE label re: which exact test names the
+  run names (channel boundary). A SECOND read-verified defect in the
+  same file was fixed at the same time: SetReadDeadline only cancelled
+  in-flight reads when the deadline was ALREADY expired (a future
+  deadline never fired during a pending ReadFile — http.Server's
+  ReadHeaderTimeout: 10s was dead code on Windows); a future deadline
+  now arms a bounded time.AfterFunc CancelIoEx, and ERROR_OPERATION_
+  ABORTED reads answer os.ErrDeadlineExceeded when the deadline passed.
+  Windows-only regression proof remains the hosted job's to produce
+  (compile proof here: GOOS=windows build + vet green).
+- **L-A (boundary, resolved in Phase 1)**: RESOLVED AS BOUNDARY +
+  FIRST-HAND REPRODUCTION. The failing gate identity (which of G1–G5)
+  lives in the auth-walled artifacts; the anonymously readable channel
+  names only the step. The reproduction below converts the L-C ranking
+  into execution evidence.
+- **L-B (VERIFIED sound, do not re-do)**: CONFIRMED BY EXECUTION. The
+  v1.10.6 hardening (software-rendering exports in step + script,
+  wrapper execing the real UI binary with captured output, event-based
+  WM readiness poll) passed the full G1–G5 battery first-hand on
+  Qt 6.8.2 — the exact minor CI pins. Not re-done; not touched.
+- **L-C (candidates → first-hand evidence)**: THE LINE-55 FAILURE SHAPE
+  REPRODUCED FIRST-HAND. Environment: Debian trixie, aqt Qt 6.8.2
+  linux_gcc_64 (SAME minor as CI), Xvfb :77, user-space openbox +
+  xdotool + x11-utils (extracted debs), software rendering, the REAL
+  v1.10.6 smoke script and REAL core. Run 1 (without the xcb plugin
+  dependency set): `qt.qpa.plugin: From 6.5.0, xcb-cursor0 or
+  libxcb-cursor0 is needed to load the Qt xcb platform plugin.` /
+  `qt.qpa.plugin: Could not load the Qt platform plugin "xcb" in
+  ".../plugins/platforms" even though it was found.` / `This application
+  failed to start because no Qt platform plugin could be initialized.` →
+  UI dead at boot → core exits with its child → `SMOKE FAIL: core died
+  at boot` after the core.log + ui.log dump — the step-23 line-55
+  signature (a UI boot death dumps ~19+ lines before the FAIL line).
+  This is register L-C candidate (a), the QML/plugin load class, with
+  the ui.log showing it exactly as L-C predicted. Run 2 (with the full
+  xcb dependency set present): **ALL GATES PASS** — G1 PASS (typed
+  keyed handshake, sheytan-ipc/1), G2 PASS (core-spawned Qt host alive),
+  G3 PASS (visible top-level window, 1280x840, openbox-owned display),
+  G4 PASS (real core interaction, session round-trip; UI holds 2 channel
+  sockets), G5 PASS (UI exited after the WM_DELETE_WINDOW close; no
+  orphan, no leak). Run 3 (post-reshape, core built by the smoke's own
+  fallback from cmd/sheytan-local-agent/): **ALL GATES PASS** again.
+  FIX: the workflow's apt step now pins the COMPLETE canonical xcb set
+  (libxcb-cursor0/icccm4/keysyms1/image0/render-util0/render0/shape0/
+  randr0/shm0/xfixes0/xinerama0/xinput0/xkb1/sync1/dri3-0 +
+  libxkbcommon-x11-0 + libxkbcommon0) so the plugin dependency closure
+  is deterministic rather than runner-image luck. G1–G5 untouched.
+  Evidence class: EVIDENCE (first-hand reproduction on the CI Qt
+  minor); the exact CI-side ui.log remains inside the auth-walled
+  artifact, so if the hosted cause differs, the new ::error::
+  annotations will name it anonymously.
+- **V-A (VERIFIED capability)**: RE-PROVEN AND USED. The check-run
+  annotations API is anonymously readable (this cycle: run
+  38731387959's annotations, no login). VISIBILITY 2.0 INSTALLED: the
+  audit, Windows and Linux failure-summary steps now emit ::error::
+  workflow-command annotations (Windows: failing command + first
+  failing test names from each teed log; Linux: the failing gate from
+  the smoke's new smoke-fail.txt marker — written on EVERY abort path,
+  best-effort — plus bounded ui.log/core.log tails; audit: failing
+  gates + first failing test names). Caps: ≤10 per step (GitHub's
+  per-step annotation budget), 250-char truncation, no secrets (rule 7:
+  the same lines already publish to the public step summary; the key
+  never enters any log). Job-summary and artifact channels unchanged.
+- **R-A (docs consolidation)**: DONE. git mv of all seven documents
+  (ARCHITECTURE.md, CONTRIBUTING.md, ROADMAP.md, UPDATE.md, agent.md,
+  changelog.md, worklog.md) into docs/. Root visible documentation is
+  now exactly README.md, LICENSE.md, SECURITY.md.
+- **R-B (core entry + launcher)**: DONE. git mv of the five main*.go
+  files into cmd/sheytan-local-agent/ (build-tag suffix contracts
+  preserved and re-verified: linux, linux+headless, windows builds all
+  green; the GOOS-suffixed files keep their constraints inside the new
+  directory); SHEYTAN-LA.bat → packaging/. Same-change-set reference
+  sweep: workflow Windows build (SHEYTAN-LA.exe + console smoke probe →
+  ./cmd/sheytan-local-agent), Linux build, headless smoke build, smoke
+  core fallback build; Windows staging step (docs/agent.md →
+  AI-CONTEXT.md, packaging/SHEYTAN-LA.bat → staged launcher); audit
+  job's repository-shape check now TWO-SIDED (new paths exist + old
+  root paths gone); stress release_surface pins the same two-sided
+  inventory + the new workflow build strings ("./cmd/sheytan-local-agent",
+  "packaging/SHEYTAN-LA.bat"); license classification table updated in
+  internal/brand/brand.go and LICENSE.md regenerated via
+  scripts/gen-license.go (sync contract test green); license contract
+  test's allowed-references map repointed to docs/UPDATE.md and
+  docs/worklog.md; README.md document references → docs/*; docs
+  back-links to root-staying files → ../README.md etc.; native/engine
+  README + shtn/types.h references → docs/*. The runtime agent.md
+  handoff (internal/agent/handoff.go HandoffFileName) writes the USER's
+  workspace file and is NOT the repository document — untouched.
+- **R-C (protected keep-list, per-file justification)**:
+  * go.mod / go.sum — the Go module contract; the toolchain resolves
+    every package from these two root files. Moving them breaks every
+    go command (GO111MODULE root discovery).
+  * package.json / package-lock.json — the npm contract (scripts,
+    dependency graph identity); npm ci/install and the audit's identity
+    resolution read them from the root by contract.
+  * index.html — Vite's canonical entry; vite.config.ts build input
+    resolution starts here.
+  * vite.config.ts — the frontend build contract (root/index.html
+    discovery, outDir web/static, plugins); relocating forces a config
+    refactor beyond this release.
+  * tsconfig.json / tsconfig.app.json / tsconfig.node.json — the
+    TypeScript project-references root (typecheck walks app+node from
+    the root solution file); relocation breaks the typecheck contract.
+  * SIGNATURE — the release-identity artifact read by
+    release-version.mjs --check and the release contract at the root
+    path; relocating would change the identity contract.
+  * .gitignore — must be at the repository root to function (git only
+    reads it there).
+  * .oxlintrc.json / .prettierignore — linter/formatter configs
+    discovered at the root by their tools (oxlint/prettier walk-up
+    contract); relocating forces config rewrites beyond this release.
+- **R-D (reference sweep)**: DONE — enumerated under R-B; plus
+  scripts/release-version.mjs surfaceTargets (config.go, build/config.yml,
+  SIGNATURE — all root-staying, unchanged semantics), codename-gate.mjs
+  (walks the whole tree; docs/ is scanned, no exclusion needed),
+  verify-all.mjs (suite runner, no path pins), e2e/ (no path pins to
+  moved files — verified by grep). New stress-gate assertions added
+  following the gate's two-sided philosophy (see R-B).
+- **D1 (docs truth)**: DONE. changelog.md carries the v1.10.7 entry
+  quoting the consumed evidence boundary (annotation texts, artifact
+  names + digests, job/step/line positions, run URLs) and the full
+  local battery; UPDATE.md is the v1.10.7 release notes with the
+  v1.10.7 hosted-truth block (run status quoted; v1.10.7's OWN hosted
+  result explicitly deferred to the post-push run — no green claimed);
+  agent.md is the v1.10.7 handoff with the same run truth; this
+  worklog carries the per-item outcomes with evidence.
+
+### Phase 7 local regression battery (all green)
+
+- gofmt -l . → 0 files.
+- go build ./... ; go build -tags headless ./... ; GOOS=windows
+  CGO_ENABLED=0 go build ./... — ALL PASS (darwin is broken at BASELINE
+  48cee27 — unix.SO_PASSCRED in listener_unix.go — pre-existing, not a
+  CI target, untouched per the no-fix-without-cause rule).
+- go vet ./... and GOOS=windows go vet ./... — PASS.
+- go test ./internal/... -tags headless -count=1 — ALL PASS.
+- go test ./... -run Test -count=1 — ALL PASS.
+- go test -race -tags headless on ./internal/api ./internal/agent
+  ./internal/sessions ./internal/contextplan ./internal/histref
+  ./internal/runtime (the audit job's exact set, CGO_ENABLED=1) — PASS.
+- npm ci (0 vulnerabilities); typecheck; lint (0 warnings, 0 errors);
+  test:units (236 pass / 0 fail); test:release (pass, 0 fail);
+  npm run build; verify-static-assets --dist PASS.
+- scripts/verify-all.mjs --go — full PASS (all suites, zero NOT RUN).
+- Stress suite: 47 pass / 0 fail / 0 hangs / 0 crashes — including the
+  reshaped release_surface (new two-sided inventory + workflow strings).
+- bash -n scripts/qt-desktop-smoke.sh PASS; workflow YAML parse PASS.
+- Qt desktop acceptance smoke: G1–G5 first-hand PASS twice (pre-reshape
+  and post-reshape, the latter with the smoke's own fallback build from
+  cmd/sheytan-local-agent/), on aqt Qt 6.8.2 — CI's exact minor.
+- Canonical identity: package.json 1.10.7 → release-version.mjs sync
+  (config.go, build/config.yml, SIGNATURE repaired) → --check PASS.
+
+### Push boundary
+
+This environment cannot push (no credentials). The commit is prepared
+for the OPERATOR to push to main. The hosted run (~13 min) is the
+authority for hosted truth: with VISIBILITY 2.0 in place, any red step
+in that run publishes anonymously machine-readable ::error:: annotations
+naming the failing command/tests/gate — the fix-forward loop no longer
+needs credentials to read a failure. No hosted green is claimed for
+v1.10.7 anywhere in this repository.

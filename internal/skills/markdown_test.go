@@ -65,12 +65,12 @@ func TestParseValidSkillMD(t *testing.T) {
 
 func TestParseMalformedFrontmatter(t *testing.T) {
 	cases := map[string]string{
-		"no frontmatter":  "just a body, no --- block",
-		"never closed":    "---\nname: X\ndescription: Y\nbody without close",
-		"missing name":    "---\ndescription: Y\n---\nbody",
+		"no frontmatter":      "just a body, no --- block",
+		"never closed":        "---\nname: X\ndescription: Y\nbody without close",
+		"missing name":        "---\ndescription: Y\n---\nbody",
 		"missing description": "---\nname: X\n---\nbody",
-		"bad version":     "---\nname: X\ndescription: Y\nversion: abc\n---\nbody",
-		"escaping ref":    "---\nname: X\ndescription: Y\nreferences: ../../etc/passwd\n---\nbody",
+		"bad version":         "---\nname: X\ndescription: Y\nversion: abc\n---\nbody",
+		"escaping ref":        "---\nname: X\ndescription: Y\nreferences: ../../etc/passwd\n---\nbody",
 	}
 
 	for what, content := range cases {
@@ -251,9 +251,9 @@ func TestCreateValidationRejections(t *testing.T) {
 	m := NewMarkdownStore(t.TempDir(), "")
 
 	good := &MarkdownSkill{
-		Meta:    MarkdownMeta{Name: "Good", Description: "d", Triggers: []string{"go"}},
-		Body:    "steps",
-		TaskID:  "task-1",
+		Meta:   MarkdownMeta{Name: "Good", Description: "d", Triggers: []string{"go"}},
+		Body:   "steps",
+		TaskID: "task-1",
 	}
 
 	// Path-unsafe ids.

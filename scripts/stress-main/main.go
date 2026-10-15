@@ -5,16 +5,16 @@
 // wires a no-op default instead, so the stress binary builds and runs on
 // any host without the desktop surface:
 //
-//      go build -o /tmp/sheytan-stress ./scripts/stress-main
-//      SHEYTAN_DATA_DIR=/tmp/sheytan-stress-root /tmp/sheytan-stress stress
+//	go build -o /tmp/sheytan-stress ./scripts/stress-main
+//	SHEYTAN_DATA_DIR=/tmp/sheytan-stress-root /tmp/sheytan-stress stress
 package main
 
 import (
-        "os"
+	"os"
 
-        "github.com/Parsaetak/SHEYTAN-local-agent/cmd"
+	"github.com/Parsaetak/SHEYTAN-local-agent/cmd"
 )
 
 func main() {
-        os.Exit(cmd.RunWithDefaultFn(func() int { return 0 }))
+	os.Exit(cmd.RunWithDefaultFn(func() int { return 0 }))
 }

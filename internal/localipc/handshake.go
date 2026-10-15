@@ -21,8 +21,8 @@ func writeIpcError(w http.ResponseWriter, status int, message string) {
 	w.WriteHeader(status)
 
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error":   message,
-		"status":  status,
+		"error":    message,
+		"status":   status,
 		"protocol": ProtocolName,
 	})
 }

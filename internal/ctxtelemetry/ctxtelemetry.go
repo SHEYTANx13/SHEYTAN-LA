@@ -65,11 +65,11 @@ type TurnRecord struct {
 	TokensSafetyReserve int `json:"tokensSafetyReserve,omitempty"`
 
 	// 1.1.6 degradation + protection outcomes.
-	TokensElided      int  `json:"tokensElided,omitempty"`      // windowed messages (plan counter)
-	TokensCompressed  int  `json:"tokensCompressed,omitempty"`  // history + in-loop tool-result compaction
-	RolloverTriggered bool `json:"rolloverTriggered,omitempty"` // Continuum chapter rollover followed
-	OverflowPrevented bool `json:"overflowPrevented,omitempty"` // a refusal gate fired instead of an engine call
-	RecoveryTriggered bool `json:"recoveryTriggered,omitempty"` // v1.7.1: a REAL context exhaustion was recovered
+	TokensElided      int    `json:"tokensElided,omitempty"`      // windowed messages (plan counter)
+	TokensCompressed  int    `json:"tokensCompressed,omitempty"`  // history + in-loop tool-result compaction
+	RolloverTriggered bool   `json:"rolloverTriggered,omitempty"` // Continuum chapter rollover followed
+	OverflowPrevented bool   `json:"overflowPrevented,omitempty"` // a refusal gate fired instead of an engine call
+	RecoveryTriggered bool   `json:"recoveryTriggered,omitempty"` // v1.7.1: a REAL context exhaustion was recovered
 	RecoveryHandoffID string `json:"recoveryHandoffId,omitempty"` // v1.7.1: durable recovery record id
 
 	// Context deltas.

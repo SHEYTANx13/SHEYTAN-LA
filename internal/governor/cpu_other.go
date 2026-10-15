@@ -12,5 +12,5 @@ package governor
 // CPULoadPlatform reports that CPU load is not measurable on this
 // platform for live policy purposes.
 func CPULoadPlatform() (float64, bool) {
-        return 0, false
+	return 0, false
 }

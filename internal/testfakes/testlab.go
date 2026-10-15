@@ -19,9 +19,9 @@ package testfakes
 // REAL process outcome observed by the REAL runner, on every platform.
 
 import (
-        "fmt"
-        "os"
-        "time"
+	"fmt"
+	"os"
+	"time"
 )
 
 // LabModeEnv is the environment variable that turns a re-executed test
@@ -42,44 +42,44 @@ const LabFailArg = "testfakes-lab-fail"
 // terminates the process with the scripted exit code. Otherwise it
 // returns false and the caller continues as a test binary.
 func RunLabHelper(argv []string) bool {
-        mode := os.Getenv(LabModeEnv)
-        if mode == "" {
-                return false
-        }
+	mode := os.Getenv(LabModeEnv)
+	if mode == "" {
+		return false
+	}
 
-        marker := false
-        for _, a := range argv {
-                if a == LabFailArg {
-                        marker = true
-                        break
-                }
-        }
+	marker := false
+	for _, a := range argv {
+		if a == LabFailArg {
+			marker = true
+			break
+		}
+	}
 
-        if !marker {
-                return false
-        }
+	if !marker {
+		return false
+	}
 
-        switch mode {
-        case "fail":
-                fmt.Fprintln(os.Stderr, "testfakes lab helper: scripted failure (exit 1)")
-                os.Exit(1)
-        case "hang":
-                // A genuinely long-lived victim for cancellation tests: stays
-                // alive until the caller's process-tree teardown kills it.
-                for i := 0; i < 600; i++ {
-                        sleep100ms()
-                }
-                os.Exit(0)
-        default:
-                fmt.Fprintf(os.Stderr, "testfakes lab helper: unknown mode %q\n", mode)
-                os.Exit(64)
-        }
+	switch mode {
+	case "fail":
+		fmt.Fprintln(os.Stderr, "testfakes lab helper: scripted failure (exit 1)")
+		os.Exit(1)
+	case "hang":
+		// A genuinely long-lived victim for cancellation tests: stays
+		// alive until the caller's process-tree teardown kills it.
+		for i := 0; i < 600; i++ {
+			sleep100ms()
+		}
+		os.Exit(0)
+	default:
+		fmt.Fprintf(os.Stderr, "testfakes lab helper: unknown mode %q\n", mode)
+		os.Exit(64)
+	}
 
-        return true // unreachable: every behavior ends the process
+	return true // unreachable: every behavior ends the process
 }
 
 // sleep100ms pauses briefly; the hang mode loops over it while waiting
 // for the caller's bounded cancellation.
 func sleep100ms() {
-        time.Sleep(100 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 }

@@ -123,16 +123,16 @@ func TestExecutionLadderMonotoneStopsAtFirstUnprovenRung(t *testing.T) {
 		{
 			name: "fully verified",
 			in: ExecutionReportInputs{
-				DevicesKnown:              true,
-				BackendHealthy:            true,
-				BackendName:               "llama",
-				EngineTag:                 "b11205",
-				DeviceSelected:            "GPU_VULKAN",
+				DevicesKnown:               true,
+				BackendHealthy:             true,
+				BackendName:                "llama",
+				EngineTag:                  "b11205",
+				DeviceSelected:             "GPU_VULKAN",
 				SelectionExecutionVerified: true,
-				Verification:              "measured offload line",
-				VerifiedModel:             "model.gguf",
-				GenerationSamples:         3,
-				OffloadEvidence:           "offloaded 33/33 layers to GPU",
+				Verification:               "measured offload line",
+				VerifiedModel:              "model.gguf",
+				GenerationSamples:          3,
+				OffloadEvidence:            "offloaded 33/33 layers to GPU",
 			},
 			want: StageVerified,
 		},
@@ -154,16 +154,16 @@ func TestExecutionLadderMonotoneStopsAtFirstUnprovenRung(t *testing.T) {
 
 func TestExecutionLadderFullReport(t *testing.T) {
 	rep := ComposeExecutionReport(ExecutionReportInputs{
-		DevicesKnown:              true,
-		BackendHealthy:            true,
-		BackendName:               "llama",
-		EngineTag:                 "b11205",
-		DeviceSelected:            "GPU_VULKAN",
+		DevicesKnown:               true,
+		BackendHealthy:             true,
+		BackendName:                "llama",
+		EngineTag:                  "b11205",
+		DeviceSelected:             "GPU_VULKAN",
 		SelectionExecutionVerified: true,
-		Verification:              "measured offload line",
-		VerifiedModel:             "model.gguf",
-		GenerationSamples:         7,
-		OffloadEvidence:           "offloaded 33/33 layers to GPU",
+		Verification:               "measured offload line",
+		VerifiedModel:              "model.gguf",
+		GenerationSamples:          7,
+		OffloadEvidence:            "offloaded 33/33 layers to GPU",
 	})
 
 	if rep.Stage != StageVerified {

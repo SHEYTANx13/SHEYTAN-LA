@@ -89,12 +89,12 @@ func (s *Server) handleModelsImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := modelsImportResponse{
-		OK:           true,
-		Name:         result.Name,
-		Path:         result.Path,
-		SizeBytes:    result.SizeBytes,
-		Duplicate:    result.Duplicate,
-		RenamedFrom:  result.RenamedFrom,
+		OK:          true,
+		Name:        result.Name,
+		Path:        result.Path,
+		SizeBytes:   result.SizeBytes,
+		Duplicate:   result.Duplicate,
+		RenamedFrom: result.RenamedFrom,
 	}
 
 	if result.Card != nil {
