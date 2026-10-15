@@ -51,7 +51,7 @@ private slots:
     void systemsRefreshSurfacesTypedError();
     void activateSystemEncodesSegment();
     void wsControlFramesAndCloseHandshake();
-    void wsRefusesFragmentedFrames();
+    void wsReassemblesFragmentedMessages();
     void cleanupTestCase();
 
 private:
@@ -670,10 +670,19 @@ void Acceptance::wsControlFramesAndCloseHandshake() {
     QVERIFY2(core.error().isEmpty(), qPrintable(core.error()));
 }
 
-// wsRefusesFragmentedFrames: a FIN=0 text frame + continuation must be
-// REFUSED with a typed error — the v1.10.2 code silently dropped the
-// continuation payload.
-void Acceptance::wsRefusesFragmentedFrames() {
+// wsReassemblesFragmentedMessages: the v1.10.5 fragmentation contract
+// (REVISED from v1.10.3's refuse-and-close). The REAL core fragments every
+// activity event larger than its 1024-byte gorilla write buffer — the raw
+// probe captured fragment(1024, FIN=0) + continuation(1, FIN=1) on a real
+// generation — so refusing fragmentation killed the live bubble mid-run on
+// every long-context chat (the very defect chatStreamPersistRepeatAndClose
+// exposed). The client now:
+//   1. REASSEMBLES fragmented text messages and delivers them (a live
+//      event split across fragments must reach the UI intact);
+//   2. still refuses a continuation WITHOUT a first fragment with a typed
+//      error + close — protocol violations stay loud, nothing silently
+//      dropped (the v1.10.2 regression class).
+void Acceptance::wsReassemblesFragmentedMessages() {
     FakeCore fake;
     QVERIFY(fake.start(QStringLiteral("sheytan-acc-framing-wsfrag")));
     routeStandard(fake);
@@ -687,20 +696,36 @@ void Acceptance::wsRefusesFragmentedFrames() {
     QVERIFY(waitFor([&]() { return fake.lastUpgrade != nullptr; }, 8000));
 
     QLocalSocket *srv = fake.lastUpgrade;
-    // FIN=0 text fragment, then a continuation fragment: the policy says
-    // refuse + close the stream.
+    // (1) A REAL activity event split mid-JSON across a FIN=0 text fragment
+    // and a FIN=1 continuation: the reassembled event must drive liveText.
+    const QByteArray part1 = "{\"type\":\"response\",\"caption\":\"re-as";
+    const QByteArray part2 = "sembled\"}";
+    QVERIFY(part1.size() < 126 && part2.size() < 126);
     QByteArray frag;
-    frag += char(0x01); // FIN=0, text
-    frag += char(0x01);
-    frag += 'a';
-    frag += char(0x00); // continuation
-    frag += char(0x01);
-    frag += 'b';
+    frag += char(0x01);             // FIN=0, text — first fragment
+    frag += char(part1.size());     // unmasked length
+    frag += part1;
+    frag += char(0x80);             // continuation — FINAL fragment (FIN=1, opcode 0x0)
+    frag += char(part2.size());
+    frag += part2;
     srv->write(frag);
     srv->flush();
-    QVERIFY2(waitFor([&]() { return core.error().contains(QStringLiteral("fragmented frames not supported")); }, 8000),
-             qPrintable(core.error().isEmpty() ? QStringLiteral("fragmented frames were silently accepted")
-                                               : core.error()));
+    QVERIFY2(waitFor([&]() { return core.liveText() == QStringLiteral("re-assembled"); }, 8000),
+             qPrintable(QStringLiteral("liveText=%1 error=%2")
+                            .arg(core.liveText(), core.error())));
+    QVERIFY2(core.error().isEmpty(), qPrintable(core.error()));
+
+    // (2) A continuation with NO open first fragment remains a protocol
+    // violation: typed error, loud close — never a silent drop.
+    QByteArray orphan;
+    orphan += char(0x80); // continuation (FIN=1) with no open first fragment
+    orphan += char(0x01); // unmasked, 1 byte
+    orphan += 'z';
+    srv->write(orphan);
+    srv->flush();
+    QVERIFY2(waitFor([&]() { return core.error().contains(QStringLiteral("continuation without a first fragment")); }, 8000),
+             qPrintable(core.error().isEmpty() ? QStringLiteral("an orphan continuation was silently accepted")
+                                               : QStringLiteral("wrong refusal: %1").arg(core.error())));
 }
 
 QTEST_MAIN(Acceptance)

@@ -11,6 +11,74 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.10.5 — 2026-10-14 — the live-stream + Qt-host-build release: the activity fragmentation defect fixed with byte-level evidence, the Linux Qt host build dependency gap closed
+
+Focus: make the Linux `Build Qt host (Linux)` gate green (run 38584769607
+step 22) and fix the one REAL product defect a locally-reproduced Qt
+acceptance exposed. No new surface, no default flip, no test weakening.
+
+**Linux `Build Qt host (Linux)` (step 22) — ROOT-CAUSED with local
+fail-before/pass-after evidence.** Reproduced with the workflow's EXACT
+command (`cmake -S ui/qt -B ui/qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+-DCMAKE_PREFIX_PATH=$Qt6_DIR` against the workflow's pinned Qt 6.8.2
+aqtinstall layout): the configure step failed with
+`Could NOT find OpenGL (missing: OPENGL_opengl_LIBRARY OPENGL_glx_LIBRARY
+OPENGL_INCLUDE_DIR)` → `WrapOpenGL` NOT FOUND → `Qt6Gui` NOT FOUND. Root
+cause: the workflow's `Install Linux build dependencies` step installed
+only the GL RUNTIME packages (`libgl1`, `libegl1`) — no OpenGL development
+headers and no link-time `.so` symlinks, which CMake's FindOpenGL
+requires. Fix: the workflow now installs the glvnd dev stack
+(`libgl-dev`, `libglx-dev`, `libopengl-dev`, `libegl-dev`),
+`mesa-common-dev` (GL/gl.h, GL/glext.h) and `libxkbcommon-dev` (the
+pkg-config module the Qt xcb plugin's build-time lookup needs). The
+workflow matches the local reproduction exactly: after adding the same
+dev packages, the exact CI configure + build produce `sheytan-ui` AND
+`sheytan-ui-acceptance` (exit 0), and the full Qt live-answer acceptance
+suite passes against the real core.
+
+**Qt host `CoreClient` activity stream — REAL DEFECT fixed with a
+raw-socket probe as evidence.** The acceptance gate
+(`chatStreamPersistRepeatAndClose`) failed locally with `liveText()` stuck
+empty while the core's run log showed the run settling `outcome=done`
+with 20 delta events. A raw RFC6455 probe over the IPC channel proved the
+core's activity hub emits `fragment(opcode 0x1, FIN=0, 1024 bytes) +
+continuation(opcode 0x0, FIN=1)` for ANY activity event larger than 1024
+bytes — gorilla's `WriteBufferSize: 1024` fragments every oversized
+WriteMessage. The Qt client's v1.10.3 framing policy REFUSED all
+fragmentation (written under the false assumption "the hub emits whole
+text messages") and closed the stream mid-run — the live bubble froze on
+every real long-context generation, and the browser stack never noticed
+(JS clients reassemble per RFC6455 §5.4). Fix: `readWsFrame` now
+reassembles fragmented text messages (bounded by the same kMaxWsFrame
+contract, stale fragment state cleared on stream close) while protocol
+violations — a continuation without a first fragment, an interleaved
+message inside an open fragment — still fail LOUDLY with typed errors.
+The acceptance contract test was revised from
+`wsRefusesFragmentedFrames` to `wsReassemblesFragmentedMessages`: a real
+activity event split mid-JSON must reach `liveText()` intact, and an
+orphan continuation must still be refused with a typed error. No test
+was deleted or weakened; the pinned contract moved to the RFC-correct
+behavior the wire actually carries.
+
+**Windows `Go verification` (step 13) — evidence class stated honestly.**
+The step log is admin-gated for anonymous API callers (403 "Must have
+admin rights"), so the exact failing assertion remains UNOBTAINABLE from
+this environment. What IS proven at v1.10.5: `CGO_ENABLED=0
+go test ./internal/... -tags headless -count=1` (exit 0, 64 packages),
+`CGO_ENABLED=0 go test ./... -run Test -count=1` (exit 0, 65 packages),
+`CGO_ENABLED=0 go vet ./...` (exit 0) — the exact step-13 commands —
+plus `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...` (exit 0,
+full type-check of every package including test files) and a clean
+Windows build of the headless binary. The run history (v1.10.1 through
+v1.10.4, ALL four Windows jobs red at step 13 while the SAME commands
+pass on Linux CI and locally) and the clean cross-compile prove the
+failure class is a Windows-host runtime assertion that cannot be
+identified or fixed without the hosted log. Hosted Windows status stays
+NOT VERIFIED until a push proves it; nothing speculative was changed on
+the Windows path.
+
+---
+
 ## v1.10.4 — 2026-10-14 — the reliability release: the stress gate tracks the Qt-era CI contract, the Windows evidence class stated honestly
 
 Focus: turn the two red hosted-CI gates of run 38569081029 (v1.10.3 @

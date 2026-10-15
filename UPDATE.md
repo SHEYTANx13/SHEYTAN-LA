@@ -1,24 +1,65 @@
-# UPDATE.md — v1.10.4 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.10.5 Release Notes & Maintenance Behavior
 
-**Release:** `v1.10.4` (canonical application version; single version
+**Release:** `v1.10.5` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ b0b3aba` (`v1.10.3`) · **Date:** 2026-10-14
-**Package:** `SHEYTAN-LA-v1.10.4-FINAL.zip` (complete repository tree)
+**Base:** `main @ 354122d` (`v1.10.4`) · **Date:** 2026-10-14
+**Package:** `SHEYTAN-LA-v1.10.5-FINAL.zip` (complete repository tree)
 **R&D authority:** `Parsaetak/Contents`, branch `Research-and-Development`,
 `SHEYTAN-LA-2026-10-11.md` (linked, not copied — the R&D document stays in
 its source repository).
 
 The authoritative per-release history lives in `changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
-behavior. v1.10.4 is the reliability release on top of the v1.10.3 Qt
-IPC hardening: it turns the Linux stress gate green by retargeting the
-one stale pin the v1.10.1 Qt migration left behind, states the Windows
-verification evidence class honestly, and aligns every product document
-with the Qt desktop reality. It adds NO new product surface and flips NO
-default. The v1.10.3 notes below remain the parent-release record: the
-framing, handshake, sessions contract, smoke and packaging behavior they
-describe is unchanged in v1.10.4.
+behavior. v1.10.5 is the live-stream + Qt-host-build release on top of
+the v1.10.4 reliability bridge: it closes the Linux Qt host build's
+missing OpenGL development dependency (the run 38584769607 step 22
+blocker) and fixes the one REAL product defect the locally-reproduced Qt
+acceptance exposed — the activity-stream fragmentation refusal that
+froze the desktop live bubble on every real long-context generation.
+It adds NO new product surface and flips NO default. The v1.10.4 notes
+below remain the parent-release record: the stress retarget, the honest
+Windows evidence class and the Qt desktop reality they describe is
+unchanged in v1.10.5.
+
+## What v1.10.5 changes
+
+1. **P0 — the Linux `Build Qt host (Linux)` dependency gap is closed
+   (run 38584769607, step 22).** Reproduced locally with the workflow's
+   EXACT cmake/ninja command against the pinned Qt 6.8.2 aqtinstall
+   layout: `Could NOT find OpenGL (missing: OPENGL_opengl_LIBRARY
+   OPENGL_glx_LIBRARY OPENGL_INCLUDE_DIR)` → `WrapOpenGL` → `Qt6Gui` all
+   NOT FOUND. The workflow installed only the GL runtime (`libgl1`,
+   `libegl1`); CMake's FindOpenGL needs the development headers and
+   link-time `.so` symlinks. The workflow now installs `libgl-dev`,
+   `libglx-dev`, `libopengl-dev`, `libegl-dev`, `mesa-common-dev` and
+   `libxkbcommon-dev`. Fail-before/pass-after: configure fails before,
+   configure + build exit 0 after, `sheytan-ui` and
+   `sheytan-ui-acceptance` produced at the paths the later steps copy,
+   and the full Qt live-answer acceptance suite passes against the real
+   core (14/14).
+2. **P0 — the Qt host activity stream survives fragmentation
+   (RFC6455 §5.4).** A raw-socket probe over the IPC channel proved the
+   core's activity hub fragments every activity event larger than its
+   1024-byte gorilla write buffer (fragment 1024 bytes FIN=0 +
+   continuation FIN=1). The v1.10.3 client policy refused all
+   fragmentation and closed the stream mid-run, so `liveText()` never
+   grew on real generations — the acceptance
+   `chatStreamPersistRepeatAndClose` failed while the same run settled
+   `done` with 20 delta events server-side. The client now reassembles
+   fragmented text messages (bounded by kMaxWsFrame, fragment state
+   cleared on close); protocol violations still fail loudly with typed
+   errors. The contract test moved from `wsRefusesFragmentedFrames` to
+   `wsReassemblesFragmentedMessages` — revised, not weakened: the
+   orphan-continuation refusal it also pins is intact.
+3. **Windows `Go verification` evidence class — unchanged and honest.**
+   The exact step-13 commands pass locally with the step's exact
+   environment (`CGO_ENABLED=0`: internal headless 64 packages ok, full
+   `./... -run Test` 65 packages ok, `go vet ./...` clean) and
+   `GOOS=windows` type-checks every package including test files. The
+   hosted step log is admin-gated (403 for anonymous API callers), the
+   failing Windows-host assertion therefore remains UNIDENTIFIED, and
+   the hosted Windows job stays NOT VERIFIED until a push proves it.
 
 ## What v1.10.4 changes
 

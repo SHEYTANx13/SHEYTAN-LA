@@ -1384,11 +1384,28 @@ jobs:
           # REAL window manager — no WM-less GUI claims) are REQUIRED now;
           # their v1.10.2 absence made the first hosted smoke run fail
           # (missing X11 headers) or run WM-less (untrustable geometry).
+          # v1.10.5 (Blocker B, run 38584769607 step 22): the Qt host build
+          # needs the OpenGL DEVELOPMENT stack, not just the runtime libs.
+          # CMake FindOpenGL requires OPENGL_opengl_LIBRARY +
+          # OPENGL_glx_LIBRARY + OPENGL_INCLUDE_DIR; with only libgl1 /
+          # libegl1 (runtime .so.N, no headers, no dev symlinks) the
+          # configure step fails with "Could NOT find OpenGL" →
+          # WrapOpenGL NOT FOUND → Qt6Gui NOT FOUND. The glvnd dev
+          # packages provide the GL/GLX/EGL/OpenGL headers and .so
+          # link-time symlinks; mesa-common-dev provides GL/gl.h and
+          # GL/glext.h; libxkbcommon-dev provides the pkg-config module
+          # the Qt xcb platform plugin's build-time lookup needs.
           sudo apt-get install -y \
             build-essential \
             pkg-config \
             libgl1 \
             libegl1 \
+            libgl-dev \
+            libglx-dev \
+            libopengl-dev \
+            libegl-dev \
+            mesa-common-dev \
+            libxkbcommon-dev \
             libx11-dev \
             libxkbcommon-x11-0 \
             libxcb-cursor0 \

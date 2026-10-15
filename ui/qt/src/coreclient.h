@@ -121,4 +121,16 @@ private:
     QLocalSocket *m_wsSock = nullptr;
     QByteArray m_wsBuf;
     bool m_wsUp = false;
+    // v1.10.5: RFC6455 §5.4 reassembly. The core's activity hub writes
+    // with a 1024-byte gorilla write buffer, so ANY activity event larger
+    // than 1024 bytes arrives as a fragmented message (first fragment
+    // FIN=0, continuation frames opcode 0x0). Refusing fragmentation —
+    // the v1.10.2-era behavior — killed the activity stream mid-run on
+    // every real generation whose context frame crossed the buffer, so
+    // the live bubble never grew (acceptance chatStreamPersistRepeatAndClose,
+    // proven by the raw-socket probe: fragment(1024, FIN=0)+cont(1, FIN=1)).
+    // Control frames may interleave between fragments (RFC6455 §5.4) and
+    // are still answered immediately.
+    QByteArray m_wsFrag;
+    bool m_wsFragOpen = false;
 };

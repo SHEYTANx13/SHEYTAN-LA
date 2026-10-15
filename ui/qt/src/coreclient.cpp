@@ -584,15 +584,29 @@ void CoreClient::closeWsStream() {
     }
     m_wsUp = false;
     m_wsBuf.clear();
+    // v1.10.5: a closed stream also abandons any partially assembled
+    // fragmented message — stale bytes must never leak into the next
+    // stream's reassembly.
+    m_wsFrag.clear();
+    m_wsFragOpen = false;
 }
 
 // readWsFrame implements the client's FRAGMENTATION POLICY (documented,
-// v1.10.3):
-//   - only COMPLETE text frames (FIN=1, opcode 0x1) carry activity events;
-//   - fragmented frames (FIN=0 or a continuation opcode 0x0) are REFUSED
-//     with a typed error and close the stream — the core's activity hub
-//     emits whole text messages, and silent reassembly (or the v1.10.2
-//     silent DROP of continuation payloads) would hide a contract drift;
+// v1.10.3, REVISED v1.10.5):
+//   - complete text frames (FIN=1, opcode 0x1) carry activity events;
+//   - FRAGMENTED messages are REASSEMBLED per RFC6455 §5.4: the core's
+//     activity hub writes through a 1024-byte gorilla buffer, so every
+//     activity event larger than 1024 bytes arrives as
+//     fragment(opcode 0x1, FIN=0) + continuations(opcode 0x0, last FIN=1).
+//     The raw-socket probe proved this happens on every real generation
+//     (the context frame is always > 1024 bytes), so the v1.10.3
+//     refuse-and-close policy — written under the false assumption that
+//     "the hub emits whole text messages" — killed the activity stream
+//     mid-run and froze the live bubble. Reassembly stays BOUNDED: the
+//     assembled size is refused above the same kMaxWsFrame bound as a
+//     single frame, and protocol violations (continuation without a
+//     first fragment, an interleaved message inside an open fragment)
+//     still fail LOUDLY with a typed error — nothing is silently dropped;
 //   - ping is answered with a masked pong (payload echoed);
 //   - pong (0xA) and binary (0x2) frames are never mistaken for activity;
 //   - close (0x8) is answered with a masked close reply (RFC6455 §5.5.1)
@@ -655,13 +669,61 @@ QByteArray CoreClient::readWsFrame(QLocalSocket *sock, bool &ok) {
         return {};
     }
     if (opcode == 0xA) return {};                    // pong: never activity
-    if (opcode == 0x0 || !fin) {                     // fragmentation refused
-        setError(QStringLiteral("activity stream: fragmented frames not supported"));
+
+    // v1.10.5: RFC6455 §5.4 reassembly. The core's hub (gorilla
+    // WriteBufferSize 1024) fragments every activity event larger than
+    // 1024 bytes: first fragment opcode 0x1 with FIN=0, continuations
+    // opcode 0x0, the last one carrying FIN=1. Refusing fragmentation
+    // closed the stream mid-run on real generations, so the live bubble
+    // never grew. Control frames were handled ABOVE and may interleave
+    // between fragments. The reassembled message stays bounded by the
+    // same kMaxWsFrame contract as single frames.
+    if (opcode == 0x1 || opcode == 0x2) {
+        if (!fin) {
+            // First fragment of a fragmented message.
+            if (m_wsFragOpen) { // interleaved new message: protocol violation
+                setError(QStringLiteral("activity stream: unexpected new fragmented message"));
+                ok = false;
+                closeWsStream();
+                return {};
+            }
+            m_wsFragOpen = true;
+            m_wsFrag = payload;
+            return {};
+        }
+        if (m_wsFragOpen) { // single unfragmented frame while assembling: violation
+            setError(QStringLiteral("activity stream: unfragmented frame inside a fragmented message"));
+            ok = false;
+            closeWsStream();
+            return {};
+        }
+        if (opcode == 0x1) return payload;           // complete text frame
+        setError(QStringLiteral("activity stream: unsupported frame opcode %1").arg(opcode));
         ok = false;
         closeWsStream();
         return {};
     }
-    if (opcode == 0x1) return payload;               // complete text frame
+    if (opcode == 0x0) { // continuation
+        if (!m_wsFragOpen) { // continuation without a first fragment: violation
+            setError(QStringLiteral("activity stream: continuation without a first fragment"));
+            ok = false;
+            closeWsStream();
+            return {};
+        }
+        if (m_wsFrag.size() + payload.size() > kMaxWsFrame) {
+            setError(QStringLiteral("activity frame exceeds bound"));
+            ok = false;
+            closeWsStream();
+            return {};
+        }
+        m_wsFrag += payload;
+        if (!fin) return {};                         // more fragments to come
+        QByteArray assembled = m_wsFrag;
+        m_wsFrag.clear();
+        m_wsFragOpen = false;
+        return assembled;                            // the full text message
+    }
+
     setError(QStringLiteral("activity stream: unsupported frame opcode %1").arg(opcode));
     ok = false;
     closeWsStream();

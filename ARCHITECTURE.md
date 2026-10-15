@@ -1,6 +1,6 @@
 # SHEYTAN-Local-Agent — Architecture Truth Table
 
-Current for **v1.10.4**. This document states the architecture that IS
+Current for **v1.10.5**. This document states the architecture that IS
 implemented and verified in this repository. Future R&D is NOT described as
 implemented; the roadmap (`ROADMAP.md`) owns the future. Historical
 release-specific architecture notes were consolidated at the end.

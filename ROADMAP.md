@@ -19,11 +19,13 @@ Motto: **"The model proposes. The tools execute. The laboratory verifies."**
 
 ## Shipped baseline (compact)
 
-**v1.10.4 is the shipped baseline; release evidence is in changelog.md.**
-(v1.10.4 is the reliability release: it repairs the Linux stress gate's
-retired Wails-era dependency pin and states the Windows verification
-evidence class honestly; v1.10.3 — the Qt IPC framing/handshake
-hardening — is its parent release; its evidence stays in changelog.md.)
+**v1.10.5 is the shipped baseline; release evidence is in changelog.md.**
+(v1.10.5 is the live-stream + Qt-host-build release: it closes the Linux
+Qt host build's missing OpenGL development dependency — the run
+38584769607 step 22 blocker — and fixes the activity-stream
+fragmentation defect that froze the desktop live bubble on real
+generations; v1.10.4 — the stress-gate retarget — is its parent
+release; its evidence stays in changelog.md.)
 
 v1.8 delivered, with per-release evidence in `changelog.md`: the adaptive
 runtime (task classification, tier system, context planning), the staged
@@ -163,17 +165,24 @@ acceptance staging resolves the MSVC Release/ layout and throws when
 absent. Windows CI remains NOT VERIFIED until a green hosted run exists
 (the v1.10.2 leftovers that would have failed the first run — R1, R3,
 R4, R16 — are repaired; nothing here flips that status without a run).
-v1.10.4 STATUS: the first hosted run after v1.10.3 (run 38569081029)
-proved the Linux Go verification + audit gates GREEN at b0b3aba; the
-Linux `Stress suite` failed on the stale Wails-era dependency pin
-(§3f) — FIXED in v1.10.4 with fail-before/pass-after evidence (exact
-CI command, 47/47 scenarios, -race clean) and the Windows `Go
-verification` failure remains UNIDENTIFIED (the step log is
-admin-gated; compile/link/vet are proven clean cross-platform, the
-identical commands pass on Linux CI, and a package-by-package review
-of every test file changed since v1.10.1 found no Windows-runtime
-defect — no speculative change, no test weakening). Windows CI remains
-NOT VERIFIED until a green hosted run of v1.10.4 exists; the run's own
+v1.10.5 STATUS: the run 38584769607 step-22 blocker (`Build Qt host
+(Linux)`) was reproduced locally with the workflow's EXACT command
+against the pinned Qt 6.8.2 aqtinstall layout — `Could NOT find OpenGL`
+(WrapOpenGL/Qt6Gui NOT FOUND) — and root-caused to the workflow's
+missing GL development packages; the workflow now installs the glvnd
+dev stack + mesa-common-dev + libxkbcommon-dev, and the exact command
+configure+builds `sheytan-ui` and `sheytan-ui-acceptance` (exit 0) with
+the full Qt live-answer acceptance suite green against the real core
+(14/14), which ALSO exposed and fixed a REAL product defect: the Qt
+client's refusal of RFC6455 fragmented activity frames (the hub's
+1024-byte write buffer fragments every large event) froze `liveText()`
+on every real long-context run — reassembly is now implemented with
+the violation refusals kept loud. The Windows `Go verification`
+failure remains UNIDENTIFIED (the step log is admin-gated; the exact
+CGO_ENABLED=0 commands pass locally — 64+65 packages + vet — and
+GOOS=windows type-checks every package including test files; no
+speculative change, no test weakening). Windows CI remains NOT
+VERIFIED until a green hosted run of v1.10.5 exists; the run's own
 step log is the arbiter.
 Remaining surfaces NOT yet migrated to Qt (honest): AI Systems
 editing/import, Goals,
