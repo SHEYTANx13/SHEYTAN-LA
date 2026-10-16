@@ -1,0 +1,34 @@
+# SHEYTAN-LA line-ending policy (v1.10.8, W-A — run 38823624040 class)
+#
+# ROOT CAUSE this file fixes: windows-latest runners default to
+# core.autocrlf=true; with no attributes file the checkout materialized
+# every .go file as CRLF, and gofmt (which normalizes to LF) then listed
+# the whole tree at the Windows gofmt gate — even though the committed
+# tree is byte-for-byte gofmt-clean (Linux's identical gate is green on
+# the same commit 22049b9). The gate was RIGHT; the checkout was wrong.
+# This policy fixes the ENVIRONMENT, never the gate.
+#
+# SCOPE — deliberately minimal (no blanket `* text eol=lf`):
+#
+#   *.go  -> text eol=lf
+#     Every tracked .go file is stored LF in the index (verified:
+#     `git ls-files --eol -- '*.go'` reports i/lf for all 548 files), so
+#     this pin causes zero renormalization; it only guarantees the
+#     working tree gofmt observes is the same LF tree on every platform,
+#     Windows included. The gofmt gate itself is untouched.
+#
+#   *.bat -> text eol=crlf
+#     JUSTIFIED ADDITIONAL LINE (the only one): the Windows launcher
+#     packaging/SHEYTAN-LA.bat uses goto-label control flow, which
+#     cmd.exe parses reliably only with CRLF. Its historical Windows
+#     materialization was CRLF (via the runners' autocrlf=true default);
+#     the v1.10.8 Windows checkout pin (core.autocrlf=false) would
+#     otherwise silently change that to LF. This line PRESERVES the
+#     launcher's native endings; the index copy stays LF exactly as
+#     committed, so nothing is renormalized.
+#
+# Everything else (installer sources under packaging/nsis, docs, web
+# assets, baselines) keeps repository-native endings: NSIS accepts both
+# endings and no other tool in the pipeline normalizes line endings.
+*.go text eol=lf
+*.bat text eol=crlf

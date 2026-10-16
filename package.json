@@ -1,6 +1,6 @@
 {
   "name": "sheytan-local-agent",
-  "version": "1.10.7",
+  "version": "1.10.8",
   "private": true,
   "type": "module",
   "engines": {
@@ -13,7 +13,7 @@
     "build:web": "tsc -b && vite build",
     "sync:web": "node scripts/sync-web.mjs",
     "verify:web": "node scripts/verify-static-assets.mjs",
-    "build:e2e": "npm run build && go build -tags headless -o e2e/.build/sheytan-e2e-server .",
+    "build:e2e": "npm run build && go build -tags headless -o e2e/.build/sheytan-e2e-server ./cmd/sheytan-local-agent",
     "test:e2e": "playwright test -c e2e/playwright.config.ts",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",

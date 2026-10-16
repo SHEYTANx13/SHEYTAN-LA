@@ -27,6 +27,11 @@
 *.syso
 *.zip
 /local-agent
+# v1.10.8 (R-A): the local Qt-acceptance route builds the core EXPLICITLY
+# from its real entrypoint (verify-all.mjs: go build -o sheytan
+# ./cmd/sheytan-local-agent) — the reshape moved that entrypoint to
+# cmd/sheytan-local-agent and the produced binary is a build product.
+/sheytan
 /build.log
 /build1.log
 

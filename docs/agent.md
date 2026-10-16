@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.7 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.8 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -7,20 +7,23 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.10.7 — the evidence-driven gate repair + CI
+**Current release: v1.10.8 — the line-ending policy + E2E path repair + CI
+Visibility 3.0 (the Windows gofmt gate was RIGHT — the committed tree is
+gofmt-clean; the CRLF checkout class is fixed by a scoped `.gitattributes`
+(`*.go text eol=lf`) plus a Windows pre-Checkout `core.autocrlf=false` pin,
+the gate byte-identical; `build:e2e` builds `./cmd/sheytan-local-agent`
+after the reshape emptied the root package — the full E2E stack passes
+40/40 Playwright specs locally; the Browser E2E gate joins the visibility
+system with tee'd ci-logs + an if:failure() summary emitting capped
+::error:: annotations; the smoke summary distinguishes never-started from
+died-at-gate; verify-all.mjs's Qt acceptance builds the core explicitly
+from its real entrypoint and the missed-reference sweep is proven).**
+Its parents, v1.10.7 — the evidence-driven gate repair + CI
 Visibility 2.0 + repository shape (the Windows named-pipe client now
-satisfies the overlapped-IO contract — the six-run "Go verification"
-failure's read-verified root cause; read deadlines are enforced while a
-read is pending; the Linux smoke's xcb platform-plugin dependency
-closure is pinned and G1–G5 are verified green first-hand on the CI Qt
-6.8.2 minor; every failure-summary step emits anonymously readable
-::error:: annotations; gofmt cleanliness is tree-wide and gated on BOTH
-platforms; all documentation lives in docs/, the core entry in
-cmd/sheytan-local-agent/, the launcher source in packaging/).** Its
-parent, v1.10.6 — the hosted-truth release (the Windows named-pipe IPC
-defect class fixed in one sweep; the smoke hardened for headless
-runners) — and v1.10.5 — the live-stream + Qt-host-build release —
-established the current behavior below. The production
+satisfies the overlapped-IO contract; gofmt gated on BOTH platforms; all
+documentation in docs/, the core entry in cmd/sheytan-local-agent/, the
+launcher source in packaging/) — and v1.10.5 — the live-stream +
+Qt-host-build release — established the current behavior below. The production
 desktop UI is the native Qt Quick/QML host (`ui/qt`), an IPC CLIENT of
 the unchanged Go core over `internal/localipc` (per-user Unix socket /
 named pipe, transport-level identity checks, versioned keyed handshake
@@ -69,7 +72,7 @@ RAM/hostname/evidence/notes (artifacts:
 at 8.22.0 (GHSA-58qx-3vcg-4xpx / GHSA-96hv-2xvq-fx4p closed, no
 `--force`; upstream fixed them in 8.20.1 and 8.21.0 respectively —
 8.22.0 was chosen, not the smallest). Version identity is exactly
-`1.10.3` everywhere
+`1.10.8` everywhere
 (canonical gate: `node scripts/release-version.mjs --check`).
 
 R&D decision
@@ -84,8 +87,8 @@ fail-closed host classification) + `worklog.md`; the Qt/IPC seam is
 DEFINED in ARCHITECTURE.md (implemented at the chat/sessions surface
 and the AI Systems list/activation surface, not yet at every panel).
 Version identity is
-exactly `1.10.2` everywhere (canonical gate:
-`node scripts/release-version.mjs --check`). No stale 1.10.0/1.10.1
+exactly `1.10.8` everywhere (canonical gate:
+`node scripts/release-version.mjs --check`). No stale 1.10.0–1.10.7
 current-release claims exist outside `changelog.md` and the retained
 historical note sections.
 
@@ -388,14 +391,41 @@ tools execute. The laboratory verifies."**
 
 ## Code formatting convention
 
-* Go sources are SPACE-indented by repo convention (some packages were
-  converted tab→space in the 1d3b1f2 tree). CI does NOT gate gofmt/
-  gofumpt — do not run a mass reformat; match the indentation of the
-  file you are editing (v1.10.3 record, register R12).
+* Go sources are gofmt-canonical (tab-indented; the v1.10.7 tree-wide
+  reformat repaired the 1d3b1f2-era tab→space mangling). CI GATES
+  `gofmt -l .` inside the Go verification steps on BOTH platforms (a
+  violation fails the job) — v1.10.8 additionally pins the LF
+  line-ending policy (`.gitattributes` `*.go text eol=lf` + the Windows
+  `core.autocrlf=false` checkout pin) so the Windows gate observes the
+  true LF tree. Run `gofmt -w .` before committing any Go edit; match
+  the file's existing gofmt style (v1.10.3 record, register R12;
+  superseded gofmt-gate wording from the pre-v1.10.7 era is retired).
 
 ## Linux / Windows evidence boundaries
 
-* v1.10.7 RUN TRUTH (do not overstate in any future edit): run
+* v1.10.8 RUN TRUTH (do not overstate in any future edit): run
+  https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38823624040
+  (v1.10.7, commit 22049b9) — the Visibility 2.0 annotations WORKED and
+  both failures are root-caused with primary evidence: Windows step 13
+  "Go verification" failed at the gofmt gate, and the gate was RIGHT
+  (the committed tree is gofmt-clean byte-for-byte — the eight annotated
+  cmd/ files are the first eight alphabetically, a listing artifact of
+  the CRLF checkout: runner default core.autocrlf=true, no
+  .gitattributes, gofmt normalizes to LF); Linux step 17 "Browser E2E"
+  failed because build:e2e still built the emptied ROOT package
+  (reproduced locally: exit 1, "no Go files"). The Windows go test
+  suite has STILL never run hosted at the repaired transport (W1–W4 +
+  W-C) — no hosted run since v1.10.1 has executed it, and v1.10.8 does
+  not claim otherwise. v1.10.8's fixes are environment repairs and
+  path repairs, proven by local reproduction: .gitattributes + the
+  Windows checkout pin (mechanism demonstrated: CRLF working-tree file
+  → gofmt names it; LF tree → clean), the build:e2e target
+  (before: exit 1; after: exit 0 and 40/40 Playwright specs on the
+  real stack), E2E tee + failure summary, the smoke never-started
+  discrimination, and the verify-all.mjs repair with sweep proof. No
+  hosted green is claimed for v1.10.8: its own hosted result is
+  recorded here only after the operator's push executes the run.
+* v1.10.7 RUN TRUTH (parent record; do not overstate in any future edit): run
   https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38731387959
   (v1.10.6, commit 48cee27) — audit SUCCEEDED (3m7s), the Linux Go
   verification gate GREEN for the first time, the stress suite and the

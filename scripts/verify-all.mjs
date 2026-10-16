@@ -153,6 +153,20 @@ if (args.has("--qt") || (!goSelected && !args.has("--native"))) {
     }
     run("Qt host configure (CMake)", "cmake", cfgArgs);
     run("Qt host build", "cmake", ["--build", "ui/qt/build"]);
+    // v1.10.8 (R-A, reshape residue): the v1.10.7 reshape moved the core
+    // entry to cmd/sheytan-local-agent — the root package no longer
+    // exists, so `go build -o sheytan .` is a DEAD command and nothing
+    // else in this runner produces the core binary (go build ./...
+    // compiles packages without writing binaries). Build the core
+    // EXPLICITLY from its real entrypoint and point SHEYTAN_CORE_BIN at
+    // the produced binary. The skip hint now teaches the working command.
+    const coreBin = path.join(ROOT, process.platform === "win32" ? "sheytan.exe" : "sheytan");
+    run(
+      "core build (cmd/sheytan-local-agent)",
+      "go",
+      ["build", "-o", coreBin, "./cmd/sheytan-local-agent"],
+      { skip: have("go", ["version"]) ? undefined : "go toolchain unavailable" },
+    );
     run(
       "Qt host acceptance (QtTest, real core)",
       path.join("ui", "qt", "build", process.platform === "win32" ? "Release/" : "", "sheytan-ui-acceptance"),
@@ -160,13 +174,13 @@ if (args.has("--qt") || (!goSelected && !args.has("--native"))) {
       {
         env: {
           SHEYTAN_REPO: ROOT,
-          // The core executable is produced by the go build above.
-          SHEYTAN_CORE_BIN: path.join(ROOT, process.platform === "win32" ? "sheytan.exe" : "sheytan"),
+          // The core executable is produced by the explicit core build above.
+          SHEYTAN_CORE_BIN: coreBin,
           QT_QPA_PLATFORM: "offscreen",
         },
-        skip: existsSync(path.join(ROOT, process.platform === "win32" ? "sheytan.exe" : "sheytan"))
+        skip: existsSync(coreBin)
           ? undefined
-          : "core executable not built — run `go build -o sheytan .` first",
+          : "core executable not built — run `go build -o sheytan ./cmd/sheytan-local-agent` first",
       },
     );
   } else {

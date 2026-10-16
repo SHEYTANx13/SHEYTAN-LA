@@ -2409,3 +2409,190 @@ in that run publishes anonymously machine-readable ::error:: annotations
 naming the failing command/tests/gate — the fix-forward loop no longer
 needs credentials to read a failure. No hosted green is claimed for
 v1.10.7 anywhere in this repository.
+
+## v1.10.8 — 2026-10-16 — the line-ending policy + E2E path repair + CI Visibility 3.0
+
+Baseline: live main HEAD == 22049b9 (v1.10.7) — verified at session start
+(`git rev-parse HEAD` == 22049b99f9dc0f5dbeadc47738c003a780180577; no drift
+past the baseline commit, so the register was audited directly against HEAD).
+Consumed failure: run
+https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38823624040
+(v1.10.7) — Windows x64 step 13 "Go verification" failed at the gofmt gate
+(the gate lists files alphabetically; the eight annotated cmd/ files are the
+first eight alphabetically in the tree — a listing artifact, not eight
+violations); Linux x64 step 17 "Browser E2E" failed with a bare exit code 1
+before Playwright started; the smoke summary step never executed (skipped —
+the smoke never started, yet its failure-summary logic was written to blame
+a missing gate marker if it ever ran with no work directory: the false-lead
+class). Both root causes were reproduced LOCALLY in this cycle before any
+fix (Phase-2 transcripts below); the hosted annotations/summaries named the
+steps, the local reproduction named the mechanisms.
+
+### Phase 2 — reproduction transcripts (BEFORE any fix)
+
+* E-A reproduced exactly: from the repository root,
+  `go build -tags headless -o e2e/.build/sheytan-e2e-server .`
+  → EXIT CODE 1, stderr: `no Go files in /home/z/sheytan-clone`
+  (the v1.10.7 reshape emptied the root package; build:e2e still
+  targeted it). Toolchain: go1.26.3 linux/amd64 (go.mod requires go 1.26).
+* W-A mechanism verified on the committed tree: `gofmt -l .` → EMPTY
+  (exit 0) — the tree gofmt observes locally is clean, matching the
+  Linux hosted gate on the same commit; zero CR bytes in cmd/*.go
+  (`rg -c $'\r'` over every cmd/*.go → no matches); `.gitattributes`
+  ABSENT (`ls .gitattributes` → No such file); `git check-attr text eol
+  -- cmd/root.go cmd/ask.go` → `text: unspecified, eol: unspecified` for
+  both. Index census: `git ls-files --eol -- '*.go'` → all 548 files
+  `i/lf w/lf` (the policy pin therefore causes ZERO renormalization).
+  The external mechanism is primary-documented: windows-latest images
+  default `core.autocrlf=true` (the checkout materializes every text
+  file CRLF), and gofmt normalizes CRLF→LF (a CRLF tree is never clean).
+* W-A failure mode REPRODUCED mechanically: CRLF injected into a
+  working-tree cmd/root.go copy → `gofmt -l .` names exactly
+  `cmd/root.go`; file restored → `gofmt -l .` empty again. This is the
+  exact Windows-hosted failure shape, demonstrated locally.
+* R-A sweep (`rg -n "go build -o sheytan \\.|go build \\. |go run \\.|go build -o sheytan "` +
+  a broader anchored pattern over the tree, .git excluded): the ONLY
+  stale root-package build/run reference outside package.json's
+  build:e2e is scripts/verify-all.mjs:169 — the skip hint
+  `core executable not built — run \`go build -o sheytan .\` first` —
+  with SHEYTAN_CORE_BIN pointing at ROOT/sheytan (nothing produces it:
+  `go build ./...` compiles without writing binaries). No other hit.
+  package.json:16 named in the same sweep (E-A's exact defect).
+
+### Register outcomes (evidence per item)
+
+* **W-A — CLOSED (code diff: new .gitattributes + workflow Windows-job
+  checkout pin).**
+  - NEW `.gitattributes` (scoped, justified per line in the file
+    header): `*.go text eol=lf` (all 548 .go files already i/lf — zero
+    renormalization; gofmt on every platform now observes the same LF
+    tree) + `*.bat text eol=crlf` (the ONE justified additional line:
+    packaging/SHEYTAN-LA.bat uses goto-label control flow; the new
+    checkout pin would otherwise have silently changed its historical
+    CRLF materialization to LF; the index copy stays LF exactly as
+    committed). No blanket forcing — installer sources (packaging/nsis)
+    and everything else keep repository-native endings.
+  - Workflow build-windows job: NEW first step "Pin checkout to LF
+    (line-ending policy, W-A)" — `git config --global core.autocrlf
+    false` + assertion the pin took — placed BEFORE Checkout (git
+    exists on the runner image pre-checkout). The gofmt gate block is
+    byte-for-byte UNTOUCHED (fix the environment, never the gate).
+  - Local verification: `git check-attr text eol -- cmd/root.go
+    cmd/ask.go packaging/SHEYTAN-LA.bat` → text: set/eol: lf (both .go)
+    and eol: crlf (.bat); `git status` shows NO renormalization drift
+    (only the intended edits).
+* **E-A — CLOSED (code diff: package.json build:e2e target).**
+  `build:e2e` now runs `go build -tags headless -o
+  e2e/.build/sheytan-e2e-server ./cmd/sheytan-local-agent`. Proof
+  AFTER: the exact command exits 0 (23,149,084-byte server); the FULL
+  `npm run build:e2e` (tsc -b && vite build && sync:web && go build)
+  exits 0; and the complete `npm run test:e2e` passes 40/40 Playwright
+  specs in 4.4m against the REAL stack (built frontend, headless server
+  from the new entrypoint, real C++ engine via the fixture model, real
+  HTTP+WebSocket, real session lifecycle). No second defect surfaced
+  behind the build path.
+* **V-B — CLOSED (code diff: workflow E2E tee + new failure-summary
+  step).** The Browser E2E step tees `npm run build:e2e` →
+  `ci-logs/e2e-build.log` and `npm run test:e2e` →
+  `ci-logs/e2e-playwright.log` under `set -euo pipefail` (a failing
+  tee'd command still fails the step); NEW step "E2E failure summary
+  (Linux)" (if:failure()) appends failing-spec grep, the playwright
+  verdict line and 200-line tails to $GITHUB_STEP_SUMMARY, emits capped
+  ::error:: annotations (spec names first, then error lines; the cap
+  counter lives in the parent shell via process substitution — the
+  pipe-fed-while subshell class is explicitly avoided), reports a
+  missing Playwright log as "failed BEFORE Playwright ran — the
+  build:e2e stage is the failing gate", and lets the existing
+  Upload verification logs step carry both logs (path ci-logs/*.log).
+  Validated: workflow YAML parses; `bash -n` on the E2E step, the
+  summary step, the smoke summary step and the stress step — all OK;
+  `node --check scripts/verify-all.mjs` OK.
+* **V-A — CLOSED (code diff: workflow smoke-summary discrimination).**
+  "Qt smoke failure summary (Linux)" now checks the smoke work
+  directory FIRST: `[ ! -d "$work" ]` → emits
+  `::error::The Qt smoke never started — the failure is upstream of the
+  smoke` + the same statement in the job summary, and exits 0 (skips
+  the gate-marker logic and log tails entirely). With the directory
+  present, the v1.10.7 behavior (gate marker + ui.log/core.log tails +
+  the "failed before a gate marker was written" fallback) is preserved
+  byte-for-byte — that fallback is now only reachable when the smoke
+  actually STARTED, ending the false-lead class.
+* **R-A — CLOSED (code diff: verify-all.mjs Qt block + .gitignore).**
+  The Qt acceptance block now builds the core EXPLICITLY as a gated
+  runner step (`go build -o <coreBin> ./cmd/sheytan-local-agent`,
+  skipped only when the go toolchain is absent), points
+  `SHEYTAN_CORE_BIN` at the produced binary, and the skip hint teaches
+  `go build -o sheytan ./cmd/sheytan-local-agent`. `.gitignore` gains
+  anchored `/sheytan` (exact filename, cannot swallow source; the
+  releasegate no-swallow test still passes — verified in the full go
+  test run). Direct proof: the repaired command builds and the binary
+  reports `SHEYTAN-Local-Agent v1.10.8` (after the identity bump).
+  Sweep proof re-recorded: no other stale reference exists tree-wide.
+* **R-B — SOUND, NOT RE-DONE.** The workflow's build steps, the
+  headless surface smoke, the NSIS staging, the ZIP-entry checks, the
+  audit repository-shape contract and the stress release-surface gate
+  already pointed at the new layout; the Phase-2 sweep found no
+  additional stale references; the shape contract was re-verified
+  locally (both-sided assertions pass).
+* **W-B — BOUNDARY (resolves on the next hosted run, per rule).**
+  The Windows go test suite (including W1–W4 + W-C) has NEVER run
+  hosted since v1.10.1. internal/localipc/listener_windows.go and the
+  W1–W4/W-C repairs are UNTOUCHED this cycle (zero diffs — churning
+  them without hosted evidence is an automatic failure). The next
+  hosted run is their first hosted proof; if its annotations name
+  failing Windows tests, each is fixed at its named root cause with
+  quoted assertion output.
+* **D1 — CLOSED (docs + identity).** changelog.md v1.10.8 entry quotes
+  the run-38823624040 evidence and both reproduction transcripts;
+  UPDATE.md retitled to v1.10.8 with the new "What v1.10.8 changes"
+  section and the v1.10.8 hosted-truth paragraph (v1.10.7 demoted to
+  parent record); agent.md handoff updated (v1.10.8 current-release
+  paragraph; the STALE pre-v1.10.7 "CI does NOT gate gofmt" formatting
+  claim corrected — gofmt IS gated on both platforms; two stale
+  identity claims fixed: "exactly 1.10.3" and "exactly 1.10.2" →
+  1.10.8); README current-release line → v1.10.8; canonical identity
+  1.10.8 via `node scripts/release-version.mjs` (package.json →
+  config.go AppVersion, build/config.yml productVersion, SIGNATURE
+  first line repaired) and `--check` PASS.
+
+### Full local regression gate table (this environment: linux/amd64, go1.26.3, node 24.21.0, cmake 4.4.4, Qt6 ABSENT)
+
+| Gate | Command | Result |
+|---|---|---|
+| npm ci | `npm ci` | PASS (0 vulnerabilities) |
+| typecheck | `npm run typecheck` | PASS (exit 0) |
+| lint | `npm run lint` | PASS (0 warnings, 0 errors, 111 files) |
+| frontend units | `npm run test:units` | PASS (236 pass / 0 fail) |
+| release units | `npm run test:release` | PASS (38 pass / 0 fail) |
+| frontend build | `npm run build` | PASS (embedded at web/static) |
+| web verify | `npm run verify:web` | PASS (stable-asset contract) |
+| gofmt | `gofmt -l .` | PASS (empty) |
+| go vet | `go vet ./...` | PASS (exit 0) |
+| go test internal headless | `go test ./internal/... -tags headless -count=1` | PASS (exit 0) |
+| go test full | `go test ./... -run Test -count=1` | PASS (exit 0) |
+| go race | `go test -race -tags headless -count=1 ./internal/api ./internal/agent ./internal/sessions ./internal/contextplan ./internal/histref ./internal/runtime` | PASS (api 101.1s, agent 25.1s, others green) |
+| windows cross | `GOOS=windows CGO_ENABLED=0 go build ./...` + `go vet` | PASS (both exit 0) |
+| stress gate | `go build ./scripts/stress-main` + `stress` | PASS (47 pass / 0 fail / 0 hangs / 0 crashes) |
+| native engine CTest | cmake configure+build + `ctest --test-dir native/engine/build` | PASS (13/13) |
+| E2E build (E-A proof) | `npm run build:e2e` | PASS (exit 0; exact command exit 0) |
+| E2E suite (real stack) | `npm run test:e2e` | PASS (40/40 specs, 4.4m) |
+| verify-all runner | `node scripts/verify-all.mjs` | PASS (10 PASS; native+Qt NOT RUN — cmake/Qt6 absent at that run) |
+| smoke script syntax | `bash -n scripts/qt-desktop-smoke.sh` | PASS |
+| workflow validation | YAML parse + bash -n touched steps + pin-contract checks | PASS (4/4) |
+| repository shape | audit-job assertions mirrored locally | PASS (both-sided) |
+| version identity | `node scripts/release-version.mjs --check` | PASS (1.10.8 consistent) |
+| Qt host suites | cmake + Qt6 (aqt) + Xvfb smoke | NOT RUN (Qt6 toolchain absent in this environment — environment-limited, honest skip; the workflow provisions Qt 6.8.2 itself) |
+| Hosted run | the operator's push | NOT RUN (this environment cannot push; no hosted green is claimed for v1.10.8) |
+
+### Push boundary
+
+This environment cannot push (no credentials). The commit is prepared for
+the OPERATOR to push to main. The next hosted run is the FIRST-EVER hosted
+execution of: the repaired Windows transport (W1–W4 + W-C), the
+line-ending policy at the Windows checkout, the E2E at the new layout, and
+the reshaped stress gate. With Visibility 3.0 in place, any red step —
+including the Browser E2E — now publishes anonymously machine-readable
+::error:: annotations and ci-logs artifacts, and the smoke summary
+distinguishes never-started from died-at-gate. Fix forward ONLY on what
+that run's evidence names. No hosted green is claimed for v1.10.8 anywhere
+in this repository.

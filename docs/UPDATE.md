@@ -1,33 +1,90 @@
-# UPDATE.md — v1.10.7 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.10.8 Release Notes & Maintenance Behavior
 
-**Release:** `v1.10.7` (canonical application version; single version
+**Release:** `v1.10.8` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ 48cee27` (`v1.10.6`) · **Date:** 2026-10-16
-**Package:** `SHEYTAN-LA-v1.10.7-FINAL.zip` (complete repository tree)
+**Base:** `main @ 22049b9` (`v1.10.7`) · **Date:** 2026-10-16
+**Package:** `SHEYTAN-LA-v1.10.8-FINAL.zip` (complete repository tree)
 **R&D authority:** `Parsaetak/Contents`, branch `Research-and-Development`,
 `SHEYTAN-LA-2026-10-11.md` (linked, not copied — the R&D document stays in
 its source repository).
 
 The authoritative per-release history lives in `docs/changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
-behavior. v1.10.7 is the EVIDENCE-DRIVEN gate repair: run
-https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38731387959 (v1.10.6,
-commit 48cee27) was the healthiest run since v1.10.1 — the audit job green,
-the Linux Go verification gate green for the first time, the stress suite and
-the Qt host build green — with two named failures left: Windows step 13 "Go
-verification" (output line 138, six consecutive runs) and Linux step 23 "Qt
-desktop acceptance smoke" (output line 55, both v1.10.5 and v1.10.6). The
-check-run annotations of that run carry bare exit codes only ("Process
-completed with exit code 1." on both failing jobs — read anonymously this
-cycle, proving the V-A capability), so v1.10.7 consumes what the failure
-channel held, fixes the defect classes the register had verified in source,
-upgrades the failure channel itself to CI Visibility 2.0 (machine-readable
-`::error::` annotations naming failing tests, gates and log tails), restores
-gofmt cleanliness tree-wide with a required gate on BOTH platforms, and
-reshapes the repository to the operator's specification (docs/
-consolidation, `cmd/sheytan-local-agent/`, `packaging/`) without breaking a
-single gate.
+behavior. v1.10.8 is the LINE-ENDING POLICY + E2E PATH REPAIR release: run
+https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38823624040 (v1.10.7,
+commit 22049b9) was the best-instrumented run yet — the Visibility 2.0
+annotations worked and both failures are root-caused with primary evidence.
+Windows x64 failed step 13 "Go verification" at the gofmt gate, and the gate
+was RIGHT: the committed tree at 22049b9 is gofmt-clean byte-for-byte (the
+Linux gate is green on the same commit) — the windows-latest checkout
+materialized every .go file as CRLF (runner default `core.autocrlf=true`, no
+`.gitattributes`) and gofmt normalizes to LF. Linux x64 failed step 17
+"Browser E2E" for one deterministic reason: `build:e2e` still built the
+repository ROOT package, which the v1.10.7 reshape emptied of Go files
+(reproduced locally: `go build -tags headless -o e2e/.build/sheytan-e2e-server .`
+exits 1 with "no Go files"). v1.10.8 fixes the ENVIRONMENT, never the gate
+(a scoped `.gitattributes` pinning `*.go text eol=lf` plus a Windows
+pre-Checkout `core.autocrlf=false` pin — the gofmt gate byte-identical),
+repairs the E2E build target to `./cmd/sheytan-local-agent` (proven by
+reproduction: the full stack passes 40/40 Playwright specs locally), extends
+the visibility system to the last unseen gate (E2E tee + failure summary),
+teaches the smoke summary to distinguish never-started from died-at-gate,
+and closes the reshape's missed-reference class (verify-all.mjs + sweep
+proof).
+
+## What v1.10.8 changes
+
+1. **W-A — the repository line-ending policy + the Windows checkout pin.**
+   New scoped `.gitattributes`: `*.go text eol=lf` (all 548 tracked .go
+   files are `i/lf` in the index — zero renormalization, the pin only
+   makes the checkout gofmt observes the SAME tree on Windows as Linux
+   already sees) plus one justified additional line, `*.bat text
+   eol=crlf` (the launcher's goto-label control flow needs CRLF, and the
+   new checkout pin would otherwise have changed its historical CRLF
+   materialization to LF). The Windows job pins
+   `git config --global core.autocrlf false` BEFORE Checkout, asserting
+   the pin took. The gofmt gate itself is byte-for-byte untouched — fix
+   the environment, never the gate. Local mechanism proof: `gofmt -l .`
+   empty on the LF tree; CRLF injected into a working-tree file makes
+   `gofmt -l .` name exactly that file; restored → clean; check-attr
+   reports the pins.
+2. **E-A — `build:e2e` builds the real core entrypoint.** The go build
+   target becomes `./cmd/sheytan-local-agent` (the reshape left the root
+   package empty; the old command exits 1 with "no Go files" —
+   reproduced before the fix, exit 0 after). The full E2E stack is
+   proven locally: engine built (13/13 CTest), fixture generated,
+   Playwright chromium provisioned — `npm run test:e2e` 40/40 specs
+   against the real frontend + real headless server + real engine
+   generation. No second defect surfaced behind the build path.
+3. **V-B — CI Visibility 3.0 on the Browser E2E gate.** The E2E step
+   tees `build:e2e` → `ci-logs/e2e-build.log` and the Playwright run →
+   `ci-logs/e2e-playwright.log` (pipefail discipline); a new "E2E
+   failure summary (Linux)" step (if:failure()) emits capped ::error::
+   annotations with failing spec names + error lines (the Windows Go
+   verification summary pattern), appends log tails to the step
+   summary, and reports a missing Playwright log as "failed BEFORE
+   Playwright ran — the build:e2e stage is the failing gate". The
+   existing Upload verification logs step carries both logs.
+4. **V-A — the smoke summary distinguishes never-started from
+   died-at-gate.** When the smoke's work directory does not exist, the
+   summary emits "The Qt smoke never started — the failure is upstream
+   of the smoke" and skips the gate-marker logic (run 38823624040's
+   false-lead class); with the directory present the v1.10.7 behavior
+   is byte-for-byte unchanged.
+5. **R-A — the missed-reference class closed.** verify-all.mjs's Qt
+   acceptance block builds the core EXPLICITLY from
+   `./cmd/sheytan-local-agent` and points `SHEYTAN_CORE_BIN` at the
+   produced binary; the skip hint teaches the working command instead
+   of the dead `go build -o sheytan .`; `/sheytan` joins .gitignore
+   (anchored; the releasegate no-swallow test still passes). Sweep
+   proof: the only stale root-package build/run reference in the tree
+   WAS that block — no other exists.
+6. **Preserved gains.** The W1–W4 + W-C pipe transport repair, the
+   visibility install, the gofmt gates on both platforms, the repository
+   reshape, the Wails absence and the stress-gate contracts all remain
+   byte-for-byte; no test was weakened, no gate deleted, no timeout
+   expanded, no default flipped.
 
 ## What v1.10.7 changes
 
@@ -170,7 +227,31 @@ install and the legacy purge they describe are unchanged in v1.10.7.
 
 ## Run truth and evidence classes
 
-**v1.10.7 hosted truth (the operator pushes; this environment cannot):**
+**v1.10.8 hosted truth (the operator pushes; this environment cannot):**
+run https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38823624040
+(v1.10.7, commit 22049b9) — the Visibility 2.0 annotations WORKED: the
+Windows gofmt gate named eight cmd/ files (the first eight alphabetically —
+a listing artifact of a CRLF checkout, not eight violations; the committed
+tree is gofmt-clean byte-for-byte and Linux's identical gate is green on the
+same commit), and the Linux job died at step 17 "Browser E2E" with a bare
+exit code 1 while the smoke summary step was SKIPPED (the smoke never
+started — the false-lead class V-A now names). The Windows go test suite
+has STILL never run hosted at the repaired transport (W1–W4 + W-C): no
+hosted run since v1.10.1 has executed the Windows go tests, and v1.10.8
+does not claim otherwise. The next hosted run is the FIRST-EVER hosted
+execution of the repaired Windows transport, the line-ending policy at the
+Windows checkout, the E2E at the new layout, and the reshaped stress gate.
+Local evidence for v1.10.8's own fixes: both root causes reproduced BEFORE
+the fix (CRLF mechanism demonstrated on a working-tree file; the dead
+e2e build command's exact exit 1 + stderr), the repairs proven AFTER
+(build:e2e exit 0; test:e2e 40/40; gofmt clean; check-attr pins verified),
+and the full local battery green — see `docs/worklog.md` for the gate
+table. No hosted green is claimed for v1.10.8 anywhere in this repository;
+v1.10.8's OWN hosted result is recorded here only after the operator's
+push executes the run.
+
+**v1.10.7 hosted truth (parent record; the operator pushes; this environment
+cannot):**
 run 38731387959 (v1.10.6, commit 48cee27) — audit SUCCEEDED (3m7s),
 Windows x64 FAILED at step 13 "Go verification" (8m18s; step-13 output
 line 138), Linux x64 FAILED at step 23 "Qt desktop acceptance smoke (real
