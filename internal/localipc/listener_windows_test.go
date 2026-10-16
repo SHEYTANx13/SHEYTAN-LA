@@ -14,9 +14,13 @@
 package localipc
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // TestSIDAllowedOwnSIDAllowed: the real token SID of this process must be
@@ -152,5 +156,66 @@ func TestStopDoesNotHangOnPendingAccept(t *testing.T) {
 		// clean Stop with a pending accept — W3 closed
 	case <-time.After(8 * time.Second):
 		t.Fatal("Stop hung on a pending accept (W3 defect) — the overlapped connect was not cancelled")
+	}
+}
+
+// TestAcceptVanishedPeerClassification — v1.10.9 (W-A, run 38871731277
+// step 14) regression pin: the WHOLE vanished-peer completion family is
+// transient on the accept path (the malformed-garbage client connects,
+// writes, and dies without reading; the endpoint must outlive it), while a
+// genuine endpoint fault — including ERROR_OPERATION_ABORTED outside the W3
+// close path — stays fatal. The hosted assertion text for the original
+// failure lives in windows-go-verification-logs-attempt1 (operator paste
+// unavailable this cycle); the family membership is pinned here so the
+// classification cannot silently narrow again.
+func TestAcceptVanishedPeerClassification(t *testing.T) {
+	for _, err := range []error{
+		windows.ERROR_NO_DATA,
+		windows.ERROR_BROKEN_PIPE,
+		windows.ERROR_PIPE_NOT_CONNECTED,
+		fmt.Errorf("wrapped completion: %w", windows.ERROR_BROKEN_PIPE),
+	} {
+		if !isVanishedPeer(err) {
+			t.Fatalf("isVanishedPeer(%v) = false, want true (transient client-gone family)", err)
+		}
+	}
+	for _, err := range []error{
+		windows.ERROR_OPERATION_ABORTED, // endpoint fault / W3 close path, NOT transient
+		windows.ERROR_ACCESS_DENIED,
+		io.EOF,
+	} {
+		if isVanishedPeer(err) {
+			t.Fatalf("isVanishedPeer(%v) = true, want false (endpoint fault must stay fatal)", err)
+		}
+	}
+}
+
+// TestPipeConnCloseStopsReadDeadlineTimer — v1.10.9 (W-B, latent defect,
+// fixed regardless of W-A's outcome) regression pin: Close must stop the
+// timer armed by SetReadDeadline (under the deadline mutex) and clear the
+// deadline, or a stale time.AfterFunc fires CancelIoEx on a RECYCLED
+// windows.Handle value seconds later and aborts an unrelated live
+// connection's in-flight IO. Compile-verified locally (GOOS=windows);
+// executed by the hosted Windows go test job.
+func TestPipeConnCloseStopsReadDeadlineTimer(t *testing.T) {
+	conn, err := newPipeConn(0) // handle never used for IO in this pin
+	if err != nil {
+		t.Fatalf("newPipeConn: %v", err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	conn.muDeadline.RLock()
+	armed := conn.readTimer != nil
+	conn.muDeadline.RUnlock()
+	if !armed {
+		t.Fatal("a future read deadline must arm the bounded cancel timer")
+	}
+	_ = conn.Close()
+	conn.muDeadline.RLock()
+	stopped := conn.readTimer == nil && conn.readDeadline.IsZero()
+	conn.muDeadline.RUnlock()
+	if !stopped {
+		t.Fatal("Close must stop the deadline timer and clear the deadline (stale CancelIoEx on a recycled handle value)")
 	}
 }

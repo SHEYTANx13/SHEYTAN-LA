@@ -281,11 +281,19 @@ func (l *pipeListener) Accept() (net.Conn, error) {
 				return nil, net.ErrClosed
 			default:
 			}
-			// ERROR_NO_DATA: the client connected and vanished before the
-			// server side of the race resolved — transient, recreate the
-			// instance and keep serving (the endpoint must outlive rude
-			// clients; the former code killed the whole endpoint here).
-			if errors.Is(err, windows.ERROR_NO_DATA) {
+			// v1.10.9 (W-A, run 38871731277 step 14): the WHOLE vanished-peer
+			// completion family is transient here. A client that connects and
+			// dies before the overlapped ConnectNamedPipe resolves can surface
+			// ERROR_NO_DATA (client handle closed), ERROR_BROKEN_PIPE, or
+			// ERROR_PIPE_NOT_CONNECTED from the GetOverlappedResult completion
+			// — v1.10.8 treated only ERROR_NO_DATA as transient, so this
+			// family killed Accept, http.Serve, and the whole endpoint (the
+			// malformed-garbage client is the only test client that closes
+			// WITHOUT reading; its health redial then failed instantly,
+			// matching the 0.06s fast-fail). The endpoint must outlive rude
+			// clients: recreate the instance and keep serving. A genuine
+			// endpoint fault stays fatal — see isVanishedPeer.
+			if isVanishedPeer(err) {
 				continue
 			}
 			return nil, err
@@ -436,6 +444,23 @@ func (l *pipeListener) Close() error {
 		}
 	})
 	return nil
+}
+
+// isVanishedPeer reports whether err belongs to the client-gone completion
+// family on the accept path: the peer connected and vanished before the
+// overlapped connect resolved, so the completion surfaces ERROR_NO_DATA
+// (the client closed its handle), ERROR_BROKEN_PIPE, or
+// ERROR_PIPE_NOT_CONNECTED (the peer of a completed connect is already
+// gone). All three are TRANSIENT: the endpoint recreates the instance and
+// keeps serving (the malformed-garbage contract — garbage must not kill
+// the endpoint). ERROR_OPERATION_ABORTED deliberately stays fatal: it
+// means OUR IO was cancelled (the W3 close path is already filtered by
+// the l.closed select before this check), which is an endpoint fault, not
+// an idle event.
+func isVanishedPeer(err error) bool {
+	return errors.Is(err, windows.ERROR_NO_DATA) ||
+		errors.Is(err, windows.ERROR_BROKEN_PIPE) ||
+		errors.Is(err, windows.ERROR_PIPE_NOT_CONNECTED)
 }
 
 func (l *pipeListener) Addr() net.Addr { return pipeAddr(l.name) }
@@ -637,6 +662,23 @@ func (c *pipeConn) Write(p []byte) (int, error) {
 
 func (c *pipeConn) Close() error {
 	c.once.Do(func() {
+		// v1.10.9 (W-B, latent, fixed regardless of W-A's outcome):
+		// stop the deadline timer FIRST, under the deadline mutex, and
+		// clear the deadline the callback re-checks. SetReadDeadline
+		// arms time.AfterFunc(..., CancelIoEx(handle, nil)) for future
+		// deadlines; a timer that outlives this connection fires on a
+		// RECYCLED handle value seconds later and aborts an unrelated
+		// live connection's in-flight IO. Stop() is best-effort (the
+		// callback may already be running), so clearing readDeadline
+		// under the same lock also disarms an in-flight callback's
+		// armed re-check.
+		c.muDeadline.Lock()
+		if c.readTimer != nil {
+			c.readTimer.Stop()
+			c.readTimer = nil
+		}
+		c.readDeadline = time.Time{}
+		c.muDeadline.Unlock()
 		_ = windows.CancelIoEx(c.handle, nil)
 		_ = windows.CloseHandle(c.handle)
 		if c.onClose != nil {

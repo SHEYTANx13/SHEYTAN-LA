@@ -2596,3 +2596,279 @@ including the Browser E2E — now publishes anonymously machine-readable
 distinguishes never-started from died-at-gate. Fix forward ONLY on what
 that run's evidence names. No hosted green is claimed for v1.10.8 anywhere
 in this repository.
+
+---
+
+# v1.10.9 — SMOKE PATH CANONICALIZATION + EVIDENCE-NAMED WINDOWS TRANSPORT FIX
+
+## Phase 1 — LIVE STATE + EVIDENCE
+
+### Live HEAD verification
+
+- Live main HEAD at inspection: `a1041fe2ef1866eab0177b42866fbf78428753de`
+  (`git log`: a1041fe v1.10.8 ← 22049b9 v1.10.7 ← 48cee27 v1.10.6 ← …).
+- HEAD **equals** the audit baseline `a1041fe`: zero drift; every register
+  item below re-verified against the exact audited tree. 783 tracked files.
+- Baseline failing run: `https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38871731277`
+  (v1.10.8; Windows go test red on exactly one test, Linux step 24 smoke red,
+  E2E + stress + both gofmt gates green).
+
+### Evidence-class boundary (recorded BEFORE any fix was chosen)
+
+The operator-pasted `windows-go-verification-logs-attempt1` content (1.3 KB,
+the exact failing assertion line of TestServeMalformedRequestIsRejectedNotCrashing)
+was **NOT available** with this cycle's prompt: the mission text references
+the paste but no artifact content accompanied it. The anonymous annotations
+API fetch for run 38871731277 was also attempted and is NOT readable from
+this environment:
+
+```
+$ curl -s https://api.github.com/repos/SHEYTANx13/SHEYTAN-LA/actions/runs/38871731277
+{"message":"API rate limit exceeded for <egress-ip>. ..."}
+```
+
+Per the mission's own rule, the fix selection therefore proceeds from the
+register's ranked candidates with every choice labeled **INFERENCE**, and
+the hosted run remains the only runtime authority for the Windows transport.
+
+### Quoted evidence (from the register, which quotes the run's annotations)
+
+1. Windows step 14 (`win-go-test-headless`, package `internal/localipc`):
+
+   ```
+   --- FAIL: TestServeMalformedRequestIsRejectedNotCrashing (0.06s)
+   ```
+
+   Every other test in the package PASSED hosted, including
+   TestServeOversizedRequestHeadersRejected — the differential isolates the
+   garbage request line and the close-without-read (see Phase 2).
+
+2. Linux step 24 (Qt smoke), the decisive annotation lines:
+
+   ```
+   SMOKE FAIL: core died at boot
+   bash: dist/linux/app/SHEYTAN-Local-Agent: No such file or directory
+   ```
+
+   (the bash ENOENT line names the RELATIVE path executed after the cd —
+   the line-258 exec of `$CORE_BIN` from the changed working directory).
+
+3. Artifact name confirmed in the workflow source:
+   `windows-go-verification-logs-attempt${{ github.run_attempt }}`
+   (build-desktop.yml:778) — attempt 1 is the artifact the mission names.
+
+### Register re-verification against live HEAD (file:line at a1041fe)
+
+| Item | Status | Live proof |
+|------|--------|------------|
+| L-A | VERIFIED | build-desktop.yml:2107 passes `CORE_BIN="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent"` (RELATIVE; `LINUX_PKG_ROOT: "SHEYTAN-Local-Agent"` at yml:83); workflow pre-check `test -x` (yml:2103) and the script's `[ ! -x "$CORE_BIN" ]` fallback block (qt-desktop-smoke.sh:82–90) both run from the repo root and PASS; `cd "$WORK"` at sh:94; `"$CORE_BIN"` exec'd at sh:258–261 from $WORK → bash ENOENT → `fail "core died at boot"` (sh:267). UI_BIN (yml:2108) and SMOKE_WORK (yml:2105) are absolute ($RUNNER_TEMP) in the hosted run. |
+| W-A | VERIFIED (test + candidates) | serve_test.go:269–293: dial → SetDeadline(5s) → write `NOT-HTTP AT ALL\r\n\r\n` → **Close WITHOUT reading** → redial → GET /api/health. The failing assertion line itself is host-published only in the unavailable paste — candidate selection is INFERENCE (C1 primary, see Phase 2). listener_windows.go:288 classifies ONLY `windows.ERROR_NO_DATA` as transient on the accept path; ERROR_BROKEN_PIPE / ERROR_PIPE_NOT_CONNECTED from the overlapped connect completion (GetOverlappedResult at :385) propagate to `return nil, err` → Accept dies → http.Serve returns → endpoint dead → the test's health redial fails instantly (0.06s class). |
+| W-B | VERIFIED (latent) | listener_windows.go:661–690 SetReadDeadline arms `time.AfterFunc(t.Sub(now), CancelIoEx(handle, nil))` for future deadlines; pipeConn.Close (:638–647) stops NO timer and clears NO deadline — a stale timer fires on a recycled handle value seconds later and aborts an unrelated live connection's IO. Fix regardless of W-A's outcome. |
+| V-A | VERIFIED | build-desktop.yml:719 "Go verification failure summary (Windows)"; the failing-lines filters at yml:737 and yml:754 match only `^(--- FAIL|FAIL|panic:|fatal error:)` — Go assertion lines (`serve_test.go:287: ...`) never match, so run 38871731277's annotations named the test but not its statement. |
+| U-A | OPEN (by design) | First-time surfaces consumed as evidence-only after L-A/W-A land: smoke gates G1–G5 (core never booted hosted), Windows steps 16–32, Linux steps 26–33, the publish job. No prediction; fix forward on named evidence only. |
+
+## Phase 2 — ROOT-CAUSE CLASSIFICATION
+
+### L-A mechanism reproduction (two-line transcript, run in this environment)
+
+```
+$ mkdir -p dist/app && printf '#!/bin/sh\necho CORE-BOOTED\n' > dist/app/core && chmod +x dist/app/core
+$ CORE_BIN=dist/app/core; [ -x "$CORE_BIN" ] && echo "validation PASSES (workflow test -x equivalent)"
+validation PASSES (workflow test -x equivalent)
+$ mkdir -p work && cd work && "$CORE_BIN"
+/bin/bash: line 1: dist/app/core: No such file or directory
+exit=127
+```
+
+Matches the hosted step-24 evidence class verbatim (`bash:
+dist/linux/app/SHEYTAN-Local-Agent: No such file or directory` → the core
+child dies instantly → `SMOKE FAIL: core died at boot`). After
+canonicalization the identical sequence execs successfully:
+
+```
+$ CORE_BIN="$(cd "$(dirname "$CORE_BIN")" && pwd)/$(basename "$CORE_BIN")"
+/home/z/my-project/work/repro-lA/dist/app/core → CORE-BOOTED, exit=0
+```
+
+### Tree sweep proof (relative-path-after-cd core exec sites)
+
+`rg` over scripts/, e2e/, packaging/, .github/workflows/build-desktop.yml for
+CORE_BIN-class consumers (`CORE_BIN|SHEYTAN_CORE_BIN|UI_BIN|SHEYTAN_UI`):
+
+- `scripts/qt-desktop-smoke.sh` — the ONLY site that execs a CORE_BIN-class
+  variable after a `cd` (sh:94 `cd "$WORK"` → sh:261 exec). THIS FIX.
+- `.github/workflows/build-desktop.yml:1189` — `(Resolve-Path $core).Path`
+  → already absolute (Windows desktop runtime smoke).
+- `.github/workflows/build-desktop.yml:2213` — `"$(pwd)/dist/..."` → already
+  absolute (Linux acceptance chain).
+- `scripts/verify-all.mjs:163-183` — `path.join(ROOT, …)` → absolute.
+- No other script `cd`s and then execs a core-class relative path. Sweep
+  clean; the workflow may keep passing the relative CORE_BIN — the script
+  becomes immune.
+
+### W-A classification (INFERENCE — paste unavailable, per Phase 1 boundary)
+
+The failing statement is host-published only in the unavailable
+`windows-go-verification-logs-attempt1` paste. Candidate selection is
+therefore **INFERENCE, C1 primary**, per the mission's own fallback rule.
+The Windows-semantics violation, stated in one paragraph before editing:
+
+> On the accept path, `connectUntilClientOrClose` waits on the overlapped
+> `ConnectNamedPipe` and returns whatever `GetOverlappedResult` reports
+> (listener_windows.go:385). `Accept` (:277–291) classifies ONLY
+> `windows.ERROR_NO_DATA` as the transient client-gone race; the rest of the
+> vanished-peer completion family — `ERROR_BROKEN_PIPE` (109) and
+> `ERROR_PIPE_NOT_CONNECTED` (233), which a client that connects and dies
+> before the connect completion resolves can surface instead — propagates to
+> `return nil, err`, which ends `Accept`, ends `http.Serve`, and tears down
+> the whole endpoint. The malformed-garbage test is the ONLY hosted test
+> whose client closes WITHOUT reading: garbage "NOT-HTTP AT ALL\r\n\r\n",
+> instant Close, then a health redial — if the accept loop died on the
+> vanished garbage peer's completion, the redial's CreateFile finds no
+> listening instance and `client.Get` fails instantly, matching the 0.06s
+> fast-fail. The passing oversized test reads the 400/431 response before
+> closing, so its peer is still connected through the whole transport
+> window and never exercises this classification. INFERENCE: fix C1 —
+> classify the vanished-peer completion family as transient on the accept
+> path, preserving the endpoint-fault distinction (ERROR_OPERATION_ABORTED
+> outside the W3 close path and every other fault stays fatal). The hosted
+> run is the only runtime authority; if it proves otherwise, the next fix
+> consumes its assertion text (V-A's upgrade makes that text machine-
+> readable).
+
+## Phase 3 — WINDOWS TRANSPORT FIX (compile-level local proof; hosted run = runtime authority)
+
+- `internal/localipc/listener_windows.go`:
+  - **W-A / C1**: `Accept` now classifies the WHOLE vanished-peer completion
+    family via `isVanishedPeer` (`ERROR_NO_DATA`, `ERROR_BROKEN_PIPE`,
+    `ERROR_PIPE_NOT_CONNECTED`) as transient client-gone — recreate the
+    instance, keep serving. `ERROR_OPERATION_ABORTED` and every other fault
+    stay fatal (endpoint-fault distinction preserved; the W3 close path is
+    already filtered by the `l.closed` select before classification).
+  - **W-B**: `pipeConn.Close` now stops `readTimer` UNDER `muDeadline` and
+    clears `readDeadline` — a stale `time.AfterFunc(..., CancelIoEx(handle,
+    nil))` can no longer fire on a recycled handle value. Clearing the
+    deadline under the same lock also disarms an already-running callback's
+    armed re-check (Stop() is best-effort by Go contract).
+- `internal/localipc/listener_windows_test.go`: two regression pins added —
+  `TestAcceptVanishedPeerClassification` (family membership + fatal
+  boundaries) and `TestPipeConnCloseStopsReadDeadlineTimer` (timer stopped +
+  deadline cleared). Executed by the hosted Windows job; compile-verified
+  locally (this environment is Linux-only).
+- Local gate results:
+  - `gofmt -l .` → empty (clean).
+  - `go build ./...` + `go vet ./internal/localipc/` → exit 0 (Unix).
+  - `GOOS=windows CGO_ENABLED=0 go build ./...` + `GOOS=windows go vet` → exit 0.
+  - `go test ./internal/localipc/ -tags headless -count=1` → ALL PASS,
+    including `TestServeMalformedRequestIsRejectedNotCrashing` (0.00s,
+    unchanged contract) and `TestServeOversizedRequestHeadersRejected`.
+- Evidence-class boundary, stated plainly: the Windows transport CANNOT run
+  in this Linux-only environment — local proof for W-A/W-B is COMPILE-LEVEL
+  plus the unchanged Unix localipc suite (the Unix transport serves the same
+  malformed-garbage contract). The hosted Windows run is the only runtime
+  authority for the overlapped-pipe behavior.
+
+## Phase 4 — SMOKE PATH FIX + LOCAL PROOF
+
+- `scripts/qt-desktop-smoke.sh`: CORE_BIN and UI_BIN are canonicalized to
+  absolute paths at resolution time — immediately after the fallback-build
+  block, BEFORE `cd "$WORK"` — so the fallback-build check, the pkill
+  patterns, and the bottom exec all reference the same file regardless of
+  working-directory changes. A relative CORE_BIN that is missing after
+  resolution now fails LOUDLY at the canonical name instead of ENOENTing
+  silently at the exec. `bash -n` clean.
+- Local end-to-end run, workflow-shaped (relative CORE_BIN exactly as
+  build-desktop.yml:2107 passes it), from the repo root:
+  - transcript: `core binary not staged — building it from the repo with go`
+    → fallback build from the RELATIVE path → canonicalization → Xvfb up →
+    fixture engine up → **core BOOTED under the work-directory cd**:
+    `SHEYTAN-Local-Agent v1.10.8 (Qt desktop)` /
+    `core endpoint: /tmp/sheytan-la-1001/core.sock` — the endpoint line in
+    core.log, the FIRST time this script has run anywhere with the core up
+    past a work-directory cd. NO bash ENOENT line anywhere in the run.
+  - Result: `SMOKE FAIL: G2: core did not spawn a live UI child` (exit 1) —
+    the EXPECTED honest boundary: the run was invoked with
+    `SHEYTAN_UI_EXECUTABLE` = the core's own `none` sentinel because the Qt
+    6.8.2 toolchain is ABSENT in this environment. Missing tools recorded
+    exactly: openbox, xdotool, xwininfo, xprop, qmake6/aqt (Qt host), pwsh.
+    G1 was reached by the core (endpoint served), but the script's gate
+    order executes G2 first, so G1/G3/G4/G5 remain host-unproven locally —
+    never claimed otherwise.
+  - Cleanup: trap swept all children (no orphan core/Xvfb/engine). One
+    observation recorded, NOT fixed (pre-existing, outside the register,
+    no evidence named it): a G2 abort leaves `$WORK/../core.sock` behind —
+    the next boot's stale-endpoint sweep removes it (`localipc: removed
+    stale endpoint …` line in this same transcript).
+
+## Phase 5 — WINDOWS ANNOTATION UPGRADE (V-A.2)
+
+- `build-desktop.yml` "Go verification failure summary (Windows)": BOTH
+  failing-lines filters (step summary + ::error:: emission loop) extended
+  from `'^(--- FAIL|FAIL|panic:|fatal error:)'` to
+  `'^(--- FAIL|FAIL|panic:|fatal error:)' -or $_ -match '\.go:[0-9]+: '`.
+  Go assertion statements ("serve_test.go:287: ...") and compile errors
+  ("file.go:NN: ...") now publish anonymously, capped at the existing
+  10-annotation budget with the existing 250-char truncation. No gate
+  weakened; no new secrets class (rule 7 re-asserted in the step comment).
+- Pattern verification against a simulated log excerpt (mission-mandated),
+  recorded verbatim: OLD filter caught 3 lines (--- FAIL / FAIL / module
+  FAIL); NEW filter caught 5 — additionally
+  `    serve_test.go:287: health after garbage: …` (the failing STATEMENT)
+  and `listener_windows.go:123: undefined: notARealSymbol` (compile-error
+  class, desirable).
+  Environment boundary: pwsh is unavailable in this Linux environment — the
+  pattern was verified with `grep -E` and Python `re` (identical semantics
+  to .NET regex for this pattern class). The pwsh `-match` form is the same
+  expression; the hosted run is the final authority.
+- YAML validity re-confirmed after the edit (`yaml.safe_load` → OK).
+
+## Phase 6 — FULL LOCAL REGRESSION (gate table)
+
+| Gate | Command | Result |
+|------|---------|--------|
+| npm ci | `npm ci --no-audit --no-fund` | PASS (139 packages, exit 0) |
+| typecheck | `npm run typecheck` (tsc --noEmit) | PASS |
+| lint | `npm run lint` (oxlint) | PASS (0 warnings, 0 errors, 111 files) |
+| unit tests | `npm run test:units` | PASS (236/236) |
+| release tests | `npm run test:release` | PASS (38/38) |
+| frontend build | `npm run build` | PASS (exit 0) |
+| web verify | `npm run verify:web` | PASS (stable-asset contract satisfied) |
+| gofmt | `gofmt -l .` | PASS (empty) |
+| go test internal | `go test ./internal/... -tags headless -count=1` | PASS (exit 0) |
+| go test full | `go test ./... -run Test -count=1` | PASS (65 packages ok, 0 fail) |
+| go race | `go test -race -tags headless -count=1` on api/agent/sessions/contextplan/histref/runtime | PASS (api 102.6s, agent 25.2s, rest green) |
+| go vet | `go vet ./...` | PASS |
+| windows cross | `GOOS=windows CGO_ENABLED=0 go build ./...` + `go vet` | PASS (both) |
+| stress gate | `go build -o /tmp/sheytan-stress ./scripts/stress-main` + `stress` | PASS (47 pass / 0 fail / 0 hangs / 0 crashes) |
+| verify-all | `node scripts/verify-all.mjs` (go on PATH) | PASS (10 PASS; native CTest + Qt host NOT RUN — cmake/Qt6 absent, environment-limited as in v1.10.8's local run) |
+| smoke syntax | `bash -n scripts/qt-desktop-smoke.sh` | PASS |
+| repository shape | audit-job assertions mirrored locally | PASS (all present/absent as contracted) |
+| version contract | `node scripts/release-version.mjs --check` | PASS at 1.10.8 (pre-bump state) |
+| Browser E2E | `npm run test:e2e` | NOT RUN locally (PROTECTED verified-green surface — untouched this cycle; browsers not provisioned here and the mission's Phase 6 battery does not include it; the hosted run exercises it unchanged) |
+
+No Unix regression anywhere in the transport fix: the localipc malformed and
+oversized tests pass unchanged (the automatic revert-and-redo tripwire never
+fired).
+
+## Phase 7 — COMMIT + DOCS/VERSION (per-item outcomes)
+
+Version identity: `node scripts/release-version.mjs` bumped from package.json
+1.10.9 → config.go AppVersion, build/config.yml productVersion, SIGNATURE
+first line, and the tracked web bundle (`web/static/assets/index.js`, the
+version string embedded by the tracked build contract); `--check` green.
+
+Per-item outcome table (this cycle's register):
+
+| Item | Outcome | Closure class |
+|------|---------|---------------|
+| L-A | CLOSED (code) | `scripts/qt-desktop-smoke.sh` canonicalization + local workflow-shaped run with the core booted past the cd (honestly bounded at G2) + two-line reproduction transcript + tree sweep proof |
+| W-A | CLOSED (code, INFERENCE C1) | `listener_windows.go` accept-path vanished-peer family via `isVanishedPeer`; compile-level local proof (Linux-only env); hosted run = runtime authority |
+| W-B | CLOSED (code) | `pipeConn.Close` stops readTimer under muDeadline + clears deadline; regression pin test |
+| V-A | CLOSED (code) | both Windows summary filters extended with the `\.go:[0-9]+: ` class; simulated-log verification (grep -E + python re; pwsh absent locally) |
+| U-A | OPEN by design | first-time surfaces (smoke gates G1–G5, Windows steps 16–32, Linux steps 26–33, publish job) consumed as evidence-only fix-forward after the operator's push |
+| D1 | CLOSED (docs) | changelog v1.10.9 entry (evidence quoted, INFERENCE labeled), UPDATE.md/agent.md hosted-truth statements, this worklog |
+
+Commit: prepared in the working tree — this environment cannot push
+(no credentials). The OPERATOR pushes main; the hosted run of this revision
+is the first exercise of the first-time surfaces; fix forward ONLY on what
+its annotations and summaries name.

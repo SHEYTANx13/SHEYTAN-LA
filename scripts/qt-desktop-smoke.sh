@@ -89,6 +89,31 @@ if [ ! -x "$CORE_BIN" ]; then
   fi
 fi
 
+# v1.10.9 (L-A, run 38871731277 step 24): canonicalize the binary paths
+# to ABSOLUTE form here — at resolution time, BEFORE any cd. The
+# workflow passes CORE_BIN as a REPO-ROOT-RELATIVE path
+# (build-desktop.yml: CORE_BIN="dist/linux/app/${LINUX_PKG_ROOT}/..."),
+# and the validation above (plus the workflow's own test -x) ran from
+# the repo root — but every LATER use of these paths (the pkill sweep
+# and the core exec at the bottom) runs AFTER `cd "$WORK"`, where the
+# relative path is DANGLING: bash ENOENT, the core child died instantly,
+# "core died at boot" — the smoke's real gates G1–G5 never executed
+# hosted and the core never booted in any hosted smoke run. Canonical
+# paths make validation, the pkill patterns, and the exec reference the
+# same file regardless of working-directory changes. The workflow may
+# keep passing the relative path; the script becomes immune. UI_BIN is
+# canonicalized defensively (the hosted UI_BIN is already absolute; a
+# relative one would dangle the same way inside the UI wrapper's exec
+# line, and the repo-tree fallback below it is absolute already).
+if [ -x "$CORE_BIN" ]; then
+  CORE_BIN="$(cd "$(dirname "$CORE_BIN")" && pwd)/$(basename "$CORE_BIN")"
+else
+  fail "core binary $CORE_BIN missing after resolution (canonicalization refuses a dangling path)"
+fi
+if [ -x "$UI_BIN" ]; then
+  UI_BIN="$(cd "$(dirname "$UI_BIN")" && pwd)/$(basename "$UI_BIN")"
+fi
+
 rm -rf "$WORK/data"
 mkdir -p "$WORK/data"
 cd "$WORK"

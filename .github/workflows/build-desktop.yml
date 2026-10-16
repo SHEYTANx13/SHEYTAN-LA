@@ -716,6 +716,14 @@ jobs:
       # the first failing test names. Caps respect the 10-annotations-per-step
       # limit; long lines are truncated; no secrets (rule 7) — the same lines
       # already publish to the public step summary.
+      # v1.10.9 (V-A.2, run 38871731277 class): the failing-lines filter ALSO
+      # captures Go test ASSERTION lines ("serve_test.go:287: ..." — the
+      # \.go:[0-9]+:  class, unanchored so indented test-output lines match;
+      # compile errors "file.go:NN: ..." ride the same class). v1.10.8's red
+      # published the failing TEST NAME but not its STATEMENT — the next red
+      # Windows run must be fully self-describing anonymously. Capped and
+      # truncated exactly as before; assertion lines carry no IPC keys,
+      # tokens, runIds, sessionIds or model content (rule 7).
       - name: Go verification failure summary (Windows)
         if: failure()
         shell: pwsh
@@ -734,7 +742,7 @@ jobs:
             $text = @(Get-Content $log.FullName -ErrorAction SilentlyContinue)
             $lines += ""
             $lines += "### $($log.Name) — failing test names"
-            $failing = @($text | Where-Object { $_ -match '^(--- FAIL|FAIL|panic:|fatal error:)' })
+            $failing = @($text | Where-Object { $_ -match '^(--- FAIL|FAIL|panic:|fatal error:)' -or $_ -match '\.go:[0-9]+: ' })
             $lines += '```'
             if ($failing.Count -gt 0) { $lines += ($failing | Select-Object -First 60) } else { $lines += "(no FAIL lines captured)" }
             $lines += '```'
@@ -751,7 +759,7 @@ jobs:
           foreach ($log in Get-ChildItem "ci-logs" -Filter "*.log" -ErrorAction SilentlyContinue) {
             if ($emitted -ge 10) { break }
             $text = @(Get-Content $log.FullName -ErrorAction SilentlyContinue)
-            $failing = @($text | Where-Object { $_ -match '^(--- FAIL|FAIL|panic:|fatal error:)' })
+            $failing = @($text | Where-Object { $_ -match '^(--- FAIL|FAIL|panic:|fatal error:)' -or $_ -match '\.go:[0-9]+: ' })
             foreach ($line in ($failing | Select-Object -First 10)) {
               if ($emitted -ge 10) { break }
               $msg = "$($log.BaseName): $line"

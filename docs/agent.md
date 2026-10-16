@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.8 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.9 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -7,7 +7,24 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.10.8 — the line-ending policy + E2E path repair + CI
+**Current release: v1.10.9 — the smoke path canonicalization + the
+evidence-named Windows transport repair (run 38871731277 consumed: the
+Windows go test suite ran hosted for the first time since v1.10.1 with
+exactly one failure — `TestServeMalformedRequestIsRejectedNotCrashing`,
+fixed at the accept-path root cause: the vanished-peer completion family
+(`ERROR_BROKEN_PIPE`/`ERROR_PIPE_NOT_CONNECTED` beyond `ERROR_NO_DATA`) no
+longer kills `Accept`/`http.Serve`/the endpoint; the latent stale
+deadline-timer leak in `pipeConn.Close` is closed; the Linux smoke's
+relative-path defect is fixed by canonicalizing `CORE_BIN`/`UI_BIN` to
+absolute paths BEFORE any cd — the core boots past the work-directory cd
+for the first time in any hosted smoke run; the Windows failure summary
+now publishes Go assertion statements (`\.go:[0-9]+: ` class) anonymously).
+HOSTED STATUS (do not overstate): E2E, stress, and both gofmt gates have
+been green hosted since v1.10.8; the smoke gates G1–G5, the Windows
+post-verification chain, the Linux acceptance/packaging chain, and the
+publish job remain HOST-UNPROVEN until the first run of this revision —
+fix forward only on what its annotations name.**
+Its parents, v1.10.8 — the line-ending policy + E2E path repair + CI
 Visibility 3.0 (the Windows gofmt gate was RIGHT — the committed tree is
 gofmt-clean; the CRLF checkout class is fixed by a scoped `.gitattributes`
 (`*.go text eol=lf`) plus a Windows pre-Checkout `core.autocrlf=false` pin,
@@ -17,8 +34,8 @@ after the reshape emptied the root package — the full E2E stack passes
 system with tee'd ci-logs + an if:failure() summary emitting capped
 ::error:: annotations; the smoke summary distinguishes never-started from
 died-at-gate; verify-all.mjs's Qt acceptance builds the core explicitly
-from its real entrypoint and the missed-reference sweep is proven).**
-Its parents, v1.10.7 — the evidence-driven gate repair + CI
+from its real entrypoint and the missed-reference sweep is proven) — and
+v1.10.7 — the evidence-driven gate repair + CI
 Visibility 2.0 + repository shape (the Windows named-pipe client now
 satisfies the overlapped-IO contract; gofmt gated on BOTH platforms; all
 documentation in docs/, the core entry in cmd/sheytan-local-agent/, the
@@ -403,6 +420,30 @@ tools execute. The laboratory verifies."**
 
 ## Linux / Windows evidence boundaries
 
+* v1.10.9 RUN TRUTH (do not overstate in any future edit): run
+  https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38871731277
+  (v1.10.8, commit a1041fe) — the breakthrough run: the Windows gofmt gate
+  passed for the first time (the LF pin worked), the Windows go test suite
+  ran hosted for the FIRST time since v1.10.1 with exactly ONE failure —
+  Windows step 14 `--- FAIL: TestServeMalformedRequestIsRejectedNotCrashing
+  (0.06s)` (package internal/localipc, artifact
+  windows-go-verification-logs-attempt1) — the Linux Browser E2E passed,
+  and the stress suite passed on its first hosted run at the new shape.
+  Linux step 24: the Qt smoke's core NEVER STARTED — `SMOKE FAIL: core
+  died at boot` with the decisive bash ENOENT line naming the relative
+  path executed after the cd (artifact linux-verification-logs-attempt1).
+  v1.10.9's fixes consume that evidence: the smoke path canonicalization
+  (L-A), the accept-path vanished-peer classification (W-A/C1, INFERENCE —
+  the exact assertion-line paste was unavailable and the annotations API
+  was rate-limited from the working IP), the Close timer stop (W-B), and
+  the assertion-line annotation upgrade (V-A.2). Local proof is
+  compile-level for the Windows transport (Linux-only environment) and
+  run-level for the smoke path (the core booted past the cd locally,
+  honestly bounded at G2 — no Qt toolchain/openbox/xdotool here). The
+  smoke gates G1–G5, Windows steps 16–32, Linux steps 26–33, and the
+  publish job have NEVER executed hosted — v1.10.9 does not claim
+  otherwise; the next run is their first exercise, and fix-forward reads
+  ONLY its annotations and summaries.
 * v1.10.8 RUN TRUTH (do not overstate in any future edit): run
   https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38823624040
   (v1.10.7, commit 22049b9) — the Visibility 2.0 annotations WORKED and

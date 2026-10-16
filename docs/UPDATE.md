@@ -1,17 +1,35 @@
-# UPDATE.md — v1.10.8 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.10.9 Release Notes & Maintenance Behavior
 
-**Release:** `v1.10.8` (canonical application version; single version
+**Release:** `v1.10.9` (canonical application version; single version
 hierarchy: package.json → release-version.mjs → config.go /
 build/config.yml / SIGNATURE)
-**Base:** `main @ 22049b9` (`v1.10.7`) · **Date:** 2026-10-16
-**Package:** `SHEYTAN-LA-v1.10.8-FINAL.zip` (complete repository tree)
+**Base:** `main @ a1041fe` (`v1.10.8`) · **Date:** 2026-10-16
+**Package:** `SHEYTAN-LA-v1.10.9-FINAL.zip` (complete repository tree)
 **R&D authority:** `Parsaetak/Contents`, branch `Research-and-Development`,
 `SHEYTAN-LA-2026-10-11.md` (linked, not copied — the R&D document stays in
 its source repository).
 
 The authoritative per-release history lives in `docs/changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
-behavior. v1.10.8 is the LINE-ENDING POLICY + E2E PATH REPAIR release: run
+behavior. v1.10.9 is the SMOKE PATH CANONICALIZATION + EVIDENCE-NAMED
+WINDOWS TRANSPORT REPAIR release: run
+https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38871731277
+(v1.10.8, commit a1041fe) was the breakthrough run — the Windows gofmt gate
+passed for the first time (the LF pin worked), the Windows go test suite ran
+hosted for the FIRST time since v1.10.1 with exactly ONE failure (Windows
+step 14, `TestServeMalformedRequestIsRejectedNotCrashing`, package
+internal/localipc, artifact windows-go-verification-logs-attempt1), the
+Linux Browser E2E passed, and the stress suite passed on its first hosted
+run at the new shape. Linux step 24: the Qt smoke's core NEVER STARTED —
+`SMOKE FAIL: core died at boot` with the decisive bash ENOENT line naming
+the relative path executed after the cd (artifact
+linux-verification-logs-attempt1). v1.10.9 fixes exactly what that run's
+evidence names: the smoke path defect (canonicalize CORE_BIN/UI_BIN before
+any cd), the Windows accept-path vanished-peer classification (INFERENCE:
+C1 — the exact assertion-line paste was unavailable), the latent
+stale-deadline-timer leak in pipeConn.Close, and the Windows failure
+summary's missing assertion-line class. The v1.10.8 parent release was the
+line-ending policy + E2E path repair release: run
 https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38823624040 (v1.10.7,
 commit 22049b9) was the best-instrumented run yet — the Visibility 2.0
 annotations worked and both failures are root-caused with primary evidence.
@@ -32,6 +50,52 @@ the visibility system to the last unseen gate (E2E tee + failure summary),
 teaches the smoke summary to distinguish never-started from died-at-gate,
 and closes the reshape's missed-reference class (verify-all.mjs + sweep
 proof).
+
+## What v1.10.9 changes
+
+1. **L-A — the smoke path defect, fixed at the root.** The workflow passes
+   `CORE_BIN` as a repo-root-relative path; the smoke validated it from the
+   repo root, then `cd`s into its work directory and executed the
+   now-dangling relative path (bash ENOENT → "core died at boot"; the
+   smoke's real gates G1–G5 never executed hosted). The smoke script now
+   canonicalizes `CORE_BIN` and `UI_BIN` to absolute paths at resolution
+   time, BEFORE any cd — validation, the pkill patterns, and the exec all
+   reference the same file regardless of working-directory changes; a
+   missing canonical path fails loudly at resolution instead of ENOENTing
+   at the exec. Proof: a two-line mechanism reproduction (relative + cd +
+   exec → exit 127; canonicalized → exec succeeds), a tree-wide sweep (the
+   smoke is the ONLY such site), and a workflow-shaped local smoke run in
+   which the core BOOTED past the cd (the endpoint line in core.log) —
+   honestly bounded at G2 because the Qt toolchain/openbox/xdotool are
+   absent in the Linux working environment (the core's `none` sentinel
+   stood in for the Qt host; no gate result was claimed that did not
+   execute).
+2. **W-A — the Windows transport, evidence-named root cause (INFERENCE:
+   C1).** `Accept` treated only `ERROR_NO_DATA` as the transient
+   client-gone race; the rest of the vanished-peer completion family
+   (`ERROR_BROKEN_PIPE`, `ERROR_PIPE_NOT_CONNECTED` from the overlapped
+   connect completion) was fatal — it killed `Accept`, `http.Serve`, and
+   the whole endpoint, and the malformed-garbage test (the only test whose
+   client closes WITHOUT reading) failed at its instant health redial.
+   `Accept` now classifies the whole family as transient via
+   `isVanishedPeer`; genuine endpoint faults (`ERROR_OPERATION_ABORTED`
+   outside the W3 close path, everything else) stay fatal. The
+   malformed-garbage test is UNTOUCHED — no assertion weakened.
+3. **W-B — the stale deadline-timer leak (latent, fixed regardless).**
+   `pipeConn.Close` never stopped the timer `SetReadDeadline` arms for
+   future deadlines (`time.AfterFunc(..., CancelIoEx(handle, nil))`); a
+   stale timer could fire on a RECYCLED handle value and abort an
+   unrelated live connection's IO. `Close` now stops the timer under the
+   deadline mutex and clears the deadline (disarming an already-running
+   callback's re-check). Regression pins:
+   `TestAcceptVanishedPeerClassification`,
+   `TestPipeConnCloseStopsReadDeadlineTimer` (executed by the hosted
+   Windows job; compile-verified locally — Linux-only environment).
+4. **V-A.2 — the Windows failure channel carries statements.** The "Go
+   verification failure summary (Windows)" filters now ALSO match the Go
+   assertion class (`\.go:[0-9]+: ` — `serve_test.go:287: …` statements and
+   `file.go:NN:` compile errors), capped/truncated/no-secrets as before.
+   The next red Windows run publishes its failing STATEMENT anonymously.
 
 ## What v1.10.8 changes
 

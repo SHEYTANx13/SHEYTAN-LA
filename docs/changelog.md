@@ -11,6 +11,120 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.10.9 — 2026-10-16 — the smoke path canonicalization + the evidence-named Windows transport repair: the core boots past the work-directory cd for the first time in any hosted smoke run, the vanished-peer completion family stops killing the IPC endpoint, the stale deadline-timer leak is closed, and the Windows failure channel carries assertion statements anonymously
+
+Focus: consume the run 38871731277 evidence boundary (v1.10.8, commit
+a1041fe) and fix exactly what its annotations name. That run was the
+breakthrough: the Windows gofmt gate passed for the first time (the LF pin
+worked), the Windows go test suite ran hosted for the first time since
+v1.10.1 with exactly ONE failure, the Linux Browser E2E passed, and the
+stress suite passed on its first hosted run at the new shape. Two failures
+remained, both with published anonymous evidence: Windows step 14 —
+`--- FAIL: TestServeMalformedRequestIsRejectedNotCrashing (0.06s)` in
+`internal/localipc` (artifact `windows-go-verification-logs-attempt1`) — and
+Linux step 24, where the Qt smoke's core never started:
+`SMOKE FAIL: core died at boot` with the decisive bash line
+`bash: dist/linux/app/SHEYTAN-Local-Agent: No such file or directory`
+(artifact `linux-verification-logs-attempt1`). The smoke's real gates G1–G5
+had never executed hosted; the core had never booted in any hosted smoke
+run.
+
+**Evidence boundary (recorded before any fix was chosen).** The operator
+paste of `windows-go-verification-logs-attempt1` (the exact failing
+assertion line) was NOT available this cycle, and the anonymous annotations
+API fetch for run 38871731277 was rate-limited from the working IP. Per the
+cycle rule, the Windows fix selection proceeded from the register's ranked
+candidates labeled **INFERENCE** (C1 primary); the hosted run is the only
+runtime authority, and V-A.2 below guarantees the next red publishes its
+assertion statement anonymously.
+
+**L-A — the smoke path defect, fixed at the root.** The workflow passes
+`CORE_BIN` as a REPO-ROOT-RELATIVE path (build-desktop.yml:
+`CORE_BIN="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent"`); the
+script's validation and the workflow's own `test -x` ran from the repo root
+and passed, then the script `cd`s into its work directory and executed the
+now-dangling relative path — bash ENOENT, instant child death, "core died
+at boot". The repair canonicalizes `CORE_BIN` (and `UI_BIN` defensively) to
+absolute paths inside `scripts/qt-desktop-smoke.sh` at resolution time,
+BEFORE any cd, so the fallback-build check, the pkill patterns, and the
+bottom exec all reference the same file regardless of working-directory
+changes; the workflow may keep passing the relative path, the script is
+immune. Proof: a two-line local reproduction (relative + cd + exec →
+`No such file or directory`, exit 127; canonicalized → exec succeeds), a
+tree-wide sweep (the smoke is the ONLY relative-path-after-cd core-exec
+site; the workflow's other consumers already use `Resolve-Path`/`$(pwd)/`),
+and a full workflow-shaped local smoke run (relative CORE_BIN exactly as
+the workflow passes it) in which the core BOOTED past the cd —
+`core endpoint: /tmp/…/core.sock` in core.log — for the first time this
+script has run anywhere with the core up under a work-directory cd. The
+local run was honestly bounded at G2 (the Qt 6.8.2 toolchain, openbox and
+xdotool are absent in the Linux working environment; the core's own `none`
+sentinel stood in for the Qt host, so G2 failed exactly as designed and
+G1/G3/G4/G5 remain host-unproven until the run).
+
+**W-A — the Windows transport, fixed at the evidence-named root cause
+(INFERENCE: C1).** The malformed-garbage test is the only hosted test whose
+client closes WITHOUT reading (dial → SetDeadline(5s) → write
+`NOT-HTTP AT ALL\r\n\r\n` → Close → redial → GET /api/health). The accept
+path classified ONLY `ERROR_NO_DATA` as the transient client-gone race; a
+client that connects and dies before the overlapped `ConnectNamedPipe`
+resolves can surface `ERROR_BROKEN_PIPE` or `ERROR_PIPE_NOT_CONNECTED`
+from the `GetOverlappedResult` completion instead — that family propagated
+to `return nil, err`, which ended `Accept`, ended `http.Serve`, and tore
+down the whole endpoint, making the test's instant health redial fail
+(the 0.06s fast-fail). `Accept` now classifies the whole vanished-peer
+family as transient via `isVanishedPeer` — recreate the instance, keep
+serving — while a genuine endpoint fault stays fatal
+(`ERROR_OPERATION_ABORTED` outside the W3 close path, and everything else).
+The malformed-garbage contract (garbage must not kill the endpoint) is the
+product requirement; the transport serves it, not the reverse. No
+assertion was weakened; the test is untouched.
+
+**W-B — the stale deadline-timer leak, closed regardless of W-A.**
+`pipeConn.Close` stopped no timer while `SetReadDeadline` armed
+`time.AfterFunc(..., CancelIoEx(handle, nil))` for future deadlines — a
+stale timer could fire on a RECYCLED handle value seconds later and abort
+an unrelated live connection's in-flight IO. `Close` now stops the timer
+UNDER the deadline mutex and clears the deadline, which also disarms an
+already-running callback's armed re-check (Stop() is best-effort by Go
+contract). Two regression pins were added to the Windows test file
+(`TestAcceptVanishedPeerClassification`,
+`TestPipeConnCloseStopsReadDeadlineTimer`); the Windows transport remains
+compile-verified locally (Linux-only environment) and runtime-verified by
+the hosted Windows job.
+
+**V-A.2 — the Windows failure channel now carries statements.** The "Go
+verification failure summary (Windows)" filters matched only
+`^(--- FAIL|FAIL|panic:|fatal error:)`, so run 38871731277's annotations
+named the failing TEST but not its failing LINE. Both filters now also
+match the Go assertion class (`\.go:[0-9]+: ` — `serve_test.go:287: …`
+statements and `file.go:NN:` compile errors), capped at the existing
+10-annotation budget with the existing 250-char truncation and the same
+no-secrets rule. The next red Windows run is fully self-describing,
+anonymously.
+
+**Preserved untouched (protected v1.10.3–v1.10.8 gains):** the transport
+repair W1–W4 + W-C, the LF pin and `.gitattributes` policy, both gofmt
+gates, the E2E build path and its failure summary, the stress gate, the
+reshape, the Wails absence. Local battery this cycle: gofmt clean; go vet
+clean; `go test ./...` 65 packages green; `go test ./internal/... -tags
+headless` green with the malformed and oversized localipc tests UNCHANGED
+on Unix; `-race` green on the six concurrency-heavy packages; stress 47
+pass / 0 fail / 0 hangs / 0 crashes; GOOS=windows build + vet clean;
+npm ci / typecheck / lint (0 findings) / 236 unit tests / 38 release
+tests / build / verify:web green; `verify-all.mjs` 10 PASS (native CTest
++ Qt host NOT RUN, environment-limited); audit shape check mirrored
+locally and green.
+
+**Hosted boundary (do not overstate):** this cycle prepares the commit;
+the OPERATOR pushes to main. The next hosted run is the FIRST-EVER hosted
+execution of: the smoke's real gates G1–G5 (the core finally boots), the
+Windows post-verification chain (steps 16–32), the Linux
+acceptance/packaging chain (steps 26–33), and the publish job (never
+executed in any run). Nothing about those surfaces is predicted or
+claimed; fix forward ONLY on what that run's annotations and summaries
+name.
+
 ## v1.10.8 — 2026-10-16 — the line-ending policy + E2E path repair + CI Visibility 3.0: the Windows gofmt gate observes the truth (the CRLF checkout class fixed by policy, the gate byte-identical), the Browser E2E builds again at the reshaped layout, the last unseen gate joins the visibility system, the smoke summary learns never-started vs died-at-gate, and the reshape's missed-reference class is closed
 
 Focus: consume the run 38823624040 evidence boundary (v1.10.7, commit
