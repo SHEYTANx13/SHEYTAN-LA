@@ -703,91 +703,6 @@ jobs:
           Invoke-Gate { go test ./... -run Test -count=1 } "go test ./... (full)" "ci-logs/win-go-test-full.log"
           Invoke-Gate { go vet ./... } "go vet ./..." "ci-logs/win-go-vet.log"
 
-      # v1.10.6 FAILURE-VISIBILITY: on failure, append the failing test
-      # names + a 200-line tail per failing command to $GITHUB_STEP_SUMMARY
-      # (publicly visible without login — the log is admin-gated, this is
-      # not). This is how a credential-less agent reads the next failure.
-      # No secrets/keys are ever written here.
-      #
-      # v1.10.7 VISIBILITY 2.0 (V-A): the summary steps ALSO emit
-      # ::error:: workflow-command annotations — anonymously machine-readable
-      # via the check-run annotations API without any login (verified against
-      # run 38731387959 this cycle). Windows names the failing command and
-      # the first failing test names. Caps respect the 10-annotations-per-step
-      # limit; long lines are truncated; no secrets (rule 7) — the same lines
-      # already publish to the public step summary.
-      # v1.10.9 (V-A.2, run 38871731277 class): the failing-lines filter ALSO
-      # captures Go test ASSERTION lines ("serve_test.go:287: ..." — the
-      # \.go:[0-9]+:  class, unanchored so indented test-output lines match;
-      # compile errors "file.go:NN: ..." ride the same class). v1.10.8's red
-      # published the failing TEST NAME but not its STATEMENT — the next red
-      # Windows run must be fully self-describing anonymously. Capped and
-      # truncated exactly as before; assertion lines carry no IPC keys,
-      # tokens, runIds, sessionIds or model content (rule 7).
-      - name: Go verification failure summary (Windows)
-        if: failure()
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Continue"
-
-          $summaryPath = $env:GITHUB_STEP_SUMMARY
-          if ([string]::IsNullOrEmpty($summaryPath)) { exit 0 }
-
-          $lines = @()
-          $lines += "## Windows Go verification FAILED"
-          $lines += ""
-          $lines += "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
-
-          foreach ($log in Get-ChildItem "ci-logs" -Filter "*.log" -ErrorAction SilentlyContinue) {
-            $text = @(Get-Content $log.FullName -ErrorAction SilentlyContinue)
-            $lines += ""
-            $lines += "### $($log.Name) — failing test names"
-            $failing = @($text | Where-Object { $_ -match '^(--- FAIL|FAIL|panic:|fatal error:)' -or $_ -match '\.go:[0-9]+: ' })
-            $lines += '```'
-            if ($failing.Count -gt 0) { $lines += ($failing | Select-Object -First 60) } else { $lines += "(no FAIL lines captured)" }
-            $lines += '```'
-            $lines += "### $($log.Name) — last 200 lines"
-            $lines += '```'
-            $lines += ($text | Select-Object -Last 200)
-            $lines += '```'
-          }
-
-          Add-Content -Path $summaryPath -Value ($lines -join [Environment]::NewLine)
-
-          # v1.10.7 VISIBILITY 2.0: machine-readable error annotations.
-          $emitted = 0
-          foreach ($log in Get-ChildItem "ci-logs" -Filter "*.log" -ErrorAction SilentlyContinue) {
-            if ($emitted -ge 10) { break }
-            $text = @(Get-Content $log.FullName -ErrorAction SilentlyContinue)
-            $failing = @($text | Where-Object { $_ -match '^(--- FAIL|FAIL|panic:|fatal error:)' -or $_ -match '\.go:[0-9]+: ' })
-            foreach ($line in ($failing | Select-Object -First 10)) {
-              if ($emitted -ge 10) { break }
-              $msg = "$($log.BaseName): $line"
-              if ($msg.Length -gt 250) { $msg = $msg.Substring(0, 247) + "..." }
-              Write-Host "::error::$msg"
-              $emitted++
-            }
-          }
-          if ($emitted -eq 0) {
-            $gofmtLog = "ci-logs/win-gofmt.log"
-            if ((Test-Path $gofmtLog) -and (Get-Content $gofmtLog -ErrorAction SilentlyContinue)) {
-              $first = @(Get-Content $gofmtLog | Select-Object -First 8)
-              foreach ($f in $first) { Write-Host "::error::gofmt violation: $f (run gofmt -w . )" }
-              Write-Host "::error::Windows Go verification failed at the gofmt gate — $($first.Count)+ file(s) listed in win-gofmt.log"
-            } else {
-              Write-Host "::error::Windows Go verification failed with no FAIL-prefixed lines captured — read the step summary and the windows-go-verification-logs artifact"
-            }
-          }
-
-      - name: Upload Go verification logs (Windows)
-        if: failure()
-        uses: actions/upload-artifact@v6
-        with:
-          name: windows-go-verification-logs-attempt${{ github.run_attempt }}
-          path: ci-logs/*.log
-          if-no-files-found: ignore
-          retention-days: 14
-
       # v1.6.2 — WINDOWS ENGINE VARIANT ASSET VALIDATION through the
       # AUTHORITATIVE production resolver (no duplicated release-tag
       # knowledge: the v1.6.1 step hard-coded $tag = "b10642" and could
@@ -957,13 +872,48 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
+          # v1.10.13 W-VIS: every post-verification native command tees its
+          # own log into ci-logs/ and tracks RUN/OK/FAIL in
+          # ci-logs/gate-order.txt, so the end-of-job failure summary can
+          # name the failing gate anonymously (the run 39024607296 class:
+          # a post-verification failure published only the generic
+          # exit-code annotation).
+          New-Item -ItemType Directory -Force -Path "ci-logs" | Out-Null
+          Add-Content "ci-logs/gate-order.txt" "STEP Build Qt host (Windows)"
+
           $appRoot = "dist/windows/app/${env:WIN_PKG_ROOT}"
 
-          cmake -S ui/qt -B ui/qt/build -DCMAKE_BUILD_TYPE=Release
-          if ($LASTEXITCODE -ne 0) { throw "[gate] Qt host cmake configure failed ($LASTEXITCODE)." }
+          # v1.10.13 P-CMAKE: the repo's own CMake cache rule — a
+          # relocatable CMake build tree is NOT a safe cache artifact
+          # (CMakeCache.txt / CMakeFiles embed absolute paths) — applies to
+          # the Qt host exactly as to the native engine: the build dir is
+          # wiped unconditionally and reconfigured with --fresh, and the Qt
+          # prefix is PINNED from the install-qt-action environment (the
+          # green Linux twin passes -DCMAKE_PREFIX_PATH explicitly).
+          if (Test-Path "ui/qt/build") {
+            Remove-Item "ui/qt/build" -Recurse -Force
+          }
+          $qtPrefix = $env:Qt6_DIR
+          if ([string]::IsNullOrEmpty($qtPrefix)) { $qtPrefix = $env:CMAKE_PREFIX_PATH }
+          if ([string]::IsNullOrEmpty($qtPrefix)) {
+            Add-Content "ci-logs/gate-order.txt" "FAIL Qt host cmake configure"
+            throw "[gate] Qt6_DIR/CMAKE_PREFIX_PATH were not set by the Qt install action — refusing an unpinned Qt configure."
+          }
+          Write-Host "Qt prefix pinned from the install-qt-action environment: $qtPrefix"
 
-          cmake --build ui/qt/build --config Release
-          if ($LASTEXITCODE -ne 0) { throw "[gate] Qt host build failed ($LASTEXITCODE)." }
+          cmake -S ui/qt -B ui/qt/build --fresh -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$qtPrefix" 2>&1 | Tee-Object -FilePath "ci-logs/win-qt-configure.log"
+          if ($LASTEXITCODE -ne 0) {
+            Add-Content "ci-logs/gate-order.txt" "FAIL Qt host cmake configure"
+            throw "[gate] Qt host cmake configure failed ($LASTEXITCODE) (log: ci-logs/win-qt-configure.log)."
+          }
+          Add-Content "ci-logs/gate-order.txt" "OK Qt host cmake configure"
+
+          cmake --build ui/qt/build --config Release 2>&1 | Tee-Object -FilePath "ci-logs/win-qt-build.log"
+          if ($LASTEXITCODE -ne 0) {
+            Add-Content "ci-logs/gate-order.txt" "FAIL Qt host cmake build"
+            throw "[gate] Qt host build failed ($LASTEXITCODE) (log: ci-logs/win-qt-build.log)."
+          }
+          Add-Content "ci-logs/gate-order.txt" "OK Qt host cmake build"
 
           # Acceptance suite binary (QtTest; drives the REAL Main.qml
           # against the REAL core in the live-answer gate below).
@@ -979,18 +929,43 @@ jobs:
           Copy-Item $accSrc "dist/windows/"
           if (-not (Test-Path "dist/windows/sheytan-ui-acceptance.exe")) { throw "[gate] acceptance binary staging failed." }
 
-          # QML-aware deployment into the package root (core + UI pair).
-          windeployqt --qmldir ui/qt/qml --no-compiler-runtime "$appRoot/SHEYTAN-LA.exe" | Out-Null
-          Copy-Item "ui/qt/build/Release/sheytan-ui.exe" $appRoot -ErrorAction SilentlyContinue
+          # v1.10.13 P-DEPLOY: stage the Qt host into the package root
+          # FIRST, then run windeployqt against IT. Qt's documented
+          # deployment model (doc.qt.io/qt-6/windows-deployment.html)
+          # copies dependencies based on the TARGET binary's imports — the
+          # former call aimed at "$appRoot/SHEYTAN-LA.exe" (the Go core
+          # launcher, which imports zero Qt libraries) and piped to
+          # Out-Null with no $LASTEXITCODE assertion (violating the
+          # v1.4.0 gate-integrity rule), so the packaged pair could carry
+          # sheytan-ui.exe without its Qt runtime. The command is now
+          # teed, its exit code asserted, and the deployment is verified
+          # by the presence of the Qt runtime (Qt6Core.dll) beside the
+          # host binary.
+          $uiSrc = "ui/qt/build/Release/sheytan-ui.exe"
+          if (-not (Test-Path $uiSrc)) { $uiSrc = "ui/qt/build/sheytan-ui.exe" }
+          if (-not (Test-Path $uiSrc)) {
+            Add-Content "ci-logs/gate-order.txt" "FAIL Qt host staging"
+            throw "[gate] sheytan-ui.exe was not produced (looked in ui/qt/build/Release/ and ui/qt/build/)."
+          }
+          Copy-Item $uiSrc $appRoot -Force
           if (-not (Test-Path "$appRoot/sheytan-ui.exe")) {
-            Copy-Item "ui/qt/build/sheytan-ui.exe" $appRoot
+            Add-Content "ci-logs/gate-order.txt" "FAIL Qt host staging"
+            throw "[gate] sheytan-ui.exe was not staged into the package root."
           }
 
-          if (-not (Test-Path "$appRoot/sheytan-ui.exe")) {
-            throw "[gate] sheytan-ui.exe was not deployed into the package root."
+          Add-Content "ci-logs/gate-order.txt" "RUN windeployqt"
+          windeployqt --qmldir ui/qt/qml --no-compiler-runtime "$appRoot/sheytan-ui.exe" 2>&1 | Tee-Object -FilePath "ci-logs/win-windeployqt.log"
+          if ($LASTEXITCODE -ne 0) {
+            Add-Content "ci-logs/gate-order.txt" "FAIL windeployqt"
+            throw "[gate] windeployqt failed ($LASTEXITCODE) (log: ci-logs/win-windeployqt.log)."
           }
+          if (-not (Test-Path "$appRoot/Qt6Core.dll")) {
+            Add-Content "ci-logs/gate-order.txt" "FAIL windeployqt"
+            throw "[gate] windeployqt did not deploy the Qt runtime — Qt6Core.dll is missing beside the host (log: ci-logs/win-windeployqt.log)."
+          }
+          Add-Content "ci-logs/gate-order.txt" "OK windeployqt"
 
-          Write-Host "Qt host deployed next to the Go core."
+          Write-Host "Qt host deployed next to the Go core with its Qt runtime (windeployqt against the Qt host binary, asserted)."
 
       - name: Desktop runtime smoke (real executable, process + backend init)
         shell: pwsh
@@ -1197,10 +1172,17 @@ jobs:
           $env:SHEYTAN_CORE_BIN = (Resolve-Path $core).Path
           $env:QT_QPA_PLATFORM = "offscreen"
 
-          & $acc
+          # v1.10.13 W-VIS: the acceptance run is teed into ci-logs and
+          # tracked like every other post-verification gate, so a red run
+          # names the failing gate and carries the harness output tail.
+          Add-Content "ci-logs/gate-order.txt" "STEP Windows live-answer acceptance"
+          Add-Content "ci-logs/gate-order.txt" "RUN Qt live-answer acceptance"
+          & $acc 2>&1 | Tee-Object -FilePath "ci-logs/win-qt-acceptance.log"
           if ($LASTEXITCODE -ne 0) {
-            throw "[gate] windows qt acceptance failed with exit code $LASTEXITCODE."
+            Add-Content "ci-logs/gate-order.txt" "FAIL Qt live-answer acceptance"
+            throw "[gate] windows qt acceptance failed with exit code $LASTEXITCODE (log: ci-logs/win-qt-acceptance.log)."
           }
+          Add-Content "ci-logs/gate-order.txt" "OK Qt live-answer acceptance"
 
           Write-Host "Windows live-answer acceptance PASSED: real Qt UI + real core over the local IPC channel."
 
@@ -1332,6 +1314,23 @@ jobs:
               "${env:WIN_PKG_ROOT}/models/README.txt",
               "${env:WIN_PKG_ROOT}/workspace/README.txt"
             )
+
+            # v1.10.13 P-ZIP (defensive gate): no archive entry name may
+            # contain a backslash. Compress-Archive's historical
+            # backslash-separator bug (Microsoft.PowerShell.Archive #48) is
+            # fixed in module 1.2.5, which pwsh 7.4+ ships (windows-latest
+            # qualifies), so this is a deterministic tripwire against a
+            # packaging regression — without it the forward-slash
+            # required-entry checks below would misreport the condition as
+            # "Missing ZIP entry". Offenders are printed anonymously and
+            # the gate fails loudly; the packaging itself is NOT rewritten.
+            $backslashed = @($entries | Where-Object { $_ -like '*\*' })
+            if ($backslashed.Count -gt 0) {
+              foreach ($offender in ($backslashed | Select-Object -First 10)) {
+                Write-Host "::error::ZIP entry uses a backslash separator: $offender"
+              }
+              throw "[gate] Windows ZIP contains $($backslashed.Count) backslash-separated entry name(s) — the archive is not portable."
+            }
 
             foreach ($item in $required) {
               if ($entries -notcontains $item) {
@@ -1473,16 +1472,22 @@ jobs:
 
           $installerPath = Join-Path $repoRoot "dist\${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe"
 
+          # v1.10.13 W-VIS: makensis output is teed into ci-logs and the
+          # gate is tracked like every other post-verification command.
+          Add-Content "ci-logs/gate-order.txt" "STEP Build Windows NSIS installer"
+          Add-Content "ci-logs/gate-order.txt" "RUN NSIS makensis"
           & $makensis `
             -DVERSION="$env:APP_VERSION" `
             -DEXE="SHEYTAN-LA.exe" `
             -DBUILDDIR="$stagingDir" `
             -DOUTFILE="$installerPath" `
-            "packaging\nsis\installer.nsi"
+            "packaging\nsis\installer.nsi" 2>&1 | Tee-Object -FilePath "ci-logs/win-nsis.log"
 
           if ($LASTEXITCODE -ne 0) {
-            throw "makensis exited with code $LASTEXITCODE."
+            Add-Content "ci-logs/gate-order.txt" "FAIL NSIS makensis"
+            throw "makensis exited with code $LASTEXITCODE (log: ci-logs/win-nsis.log)."
           }
+          Add-Content "ci-logs/gate-order.txt" "OK NSIS makensis"
 
           # Post-build assertions: the installer must exist, be non-empty,
           # and its version resource must carry the release identity.
@@ -1552,6 +1557,184 @@ jobs:
           path: dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip
           if-no-files-found: error
           retention-days: 30
+
+      # v1.10.6 FAILURE-VISIBILITY: on failure, append the failing test
+      # names + a 200-line tail per failing command to $GITHUB_STEP_SUMMARY
+      # (publicly visible without login — the log is admin-gated, this is
+      # not). This is how a credential-less agent reads the next failure.
+      # No secrets/keys are ever written here.
+      #
+      # v1.10.7 VISIBILITY 2.0 (V-A): the summary steps ALSO emit
+      # ::error:: workflow-command annotations — anonymously machine-readable
+      # via the check-run annotations API without any login (verified against
+      # run 38731387959 this cycle). Windows names the failing command and
+      # the first failing test names. Caps respect the 10-annotations-per-step
+      # limit; long lines are truncated; no secrets (rule 7) — the same lines
+      # already publish to the public step summary.
+      # v1.10.9 (V-A.2, run 38871731277 class): the failing-lines filter ALSO
+      # captures Go test ASSERTION lines ("serve_test.go:287: ..." — the
+      # \.go:[0-9]+:  class, unanchored so indented test-output lines match;
+      # compile errors "file.go:NN: ..." ride the same class). v1.10.8's red
+      # published the failing TEST NAME but not its STATEMENT — the next red
+      # Windows run must be fully self-describing anonymously. Capped and
+      # truncated exactly as before; assertion lines carry no IPC keys,
+      # tokens, runIds, sessionIds or model content (rule 7).
+      #
+      # v1.10.13 W-VIS (run 39024607296 class — THE POSITIONAL REPAIR): this
+      # pair MOVED from its mid-job position (immediately after Go
+      # verification) to the END of the job. GitHub evaluates a step's
+      # condition when the step is reached in sequence, so the mid-job
+      # if:failure() pair could not observe a failure in the
+      # post-verification chain that follows it — run 39024607296's step-22
+      # failure published ONLY the generic "Process completed with exit
+      # code 1." annotation while both steps reported "skipped". At the
+      # job's end, if:failure() covers the ENTIRE job. The summary is
+      # EXTENDED: every post-verification native command (cmake configure,
+      # cmake build, windeployqt, the acceptance run, NSIS makensis) tees
+      # its own log into ci-logs/ and tracks RUN/OK/FAIL in
+      # ci-logs/gate-order.txt; on failure the summary names the failing
+      # gate and emits redacted, truncated tail lines of that gate's log as
+      # anonymous annotations under the same caps (10 per step, 250 chars,
+      # no secrets — named-pipe endpoints and key-shaped assignments are
+      # redacted before anything leaves the job). The proven
+      # Go-verification summary path below is unchanged: when the failure
+      # happened at or before Go verification (no post-verification gate
+      # markers exist), the exact former logic runs.
+      - name: Failure summary (Windows)
+        if: failure()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+
+          $summaryPath = $env:GITHUB_STEP_SUMMARY
+          if ([string]::IsNullOrEmpty($summaryPath)) { exit 0 }
+
+          # v1.10.13 W-VIS: conservative redaction for lines from the NEW
+          # post-verification logs — no IPC keys, capability tokens,
+          # runIds, sessionIds or model content (rule 7). Named-pipe
+          # endpoints are redacted wholesale; key-shaped assignments are
+          # masked. The proven Go logs keep their audited byte-identical
+          # path below.
+          function Redact-Anonymous([string]$line) {
+            $r = $line -replace '\\\\\.\\pipe\\\S+', '\\.\pipe\<redacted>'
+            $r = $r -replace '(?i)(key|token|secret|password)\s*[=:]\s*\S+', '$1=<redacted>'
+            return $r
+          }
+
+          $lines = @()
+          $lines += "## Windows job FAILED"
+          $lines += ""
+          $lines += "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+
+          # v1.10.13 W-VIS: name the failing gate from the tracked markers
+          # (RUN without OK/FAIL = the gate that started and never
+          # finished; explicit FAIL = the gate that threw).
+          $goLogs = @("win-gofmt.log", "win-go-test-headless.log", "win-go-test-full.log", "win-go-vet.log")
+          $gateLogMap = @{
+            "Qt host cmake configure"   = "ci-logs/win-qt-configure.log"
+            "Qt host cmake build"       = "ci-logs/win-qt-build.log"
+            "windeployqt"               = "ci-logs/win-windeployqt.log"
+            "Qt host staging"           = "ci-logs/win-qt-build.log"
+            "Qt live-answer acceptance" = "ci-logs/win-qt-acceptance.log"
+            "NSIS makensis"             = "ci-logs/win-nsis.log"
+          }
+          $failingGate = $null
+          $lastGate = $null
+          $tracked = $false
+          $gateOrder = "ci-logs/gate-order.txt"
+          if (Test-Path $gateOrder) {
+            $markers = @(Get-Content $gateOrder -ErrorAction SilentlyContinue)
+            foreach ($m in $markers) {
+              if ($m -like "OK *") { $lastGate = $null; $tracked = $true }
+              elseif ($m -like "RUN *") { $lastGate = $m.Substring(4); $tracked = $true }
+              elseif ($m -like "FAIL *") { $failingGate = $m.Substring(5); $tracked = $true; break }
+            }
+            if (-not $failingGate -and $lastGate) { $failingGate = $lastGate }
+          }
+
+          foreach ($log in Get-ChildItem "ci-logs" -Filter "*.log" -ErrorAction SilentlyContinue) {
+            $raw = @(Get-Content $log.FullName -ErrorAction SilentlyContinue)
+            $text = if ($goLogs -contains $log.Name) { $raw } else { @($raw | ForEach-Object { Redact-Anonymous $_ }) }
+            $lines += ""
+            $lines += "### $($log.Name) — failing test names"
+            $failing = @($text | Where-Object { $_ -match '^(--- FAIL|FAIL|panic:|fatal error:)' -or $_ -match '\.go:[0-9]+: ' })
+            $lines += '```'
+            if ($failing.Count -gt 0) { $lines += ($failing | Select-Object -First 60) } else { $lines += "(no FAIL lines captured)" }
+            $lines += '```'
+            $lines += "### $($log.Name) — last 200 lines"
+            $lines += '```'
+            $lines += ($text | Select-Object -Last 200)
+            $lines += '```'
+          }
+
+          Add-Content -Path $summaryPath -Value ($lines -join [Environment]::NewLine)
+
+          # v1.10.13 W-VIS: failing-gate annotations (anonymous, redacted,
+          # capped — emitted FIRST so a cap drop can never hide them).
+          $gateEmitted = 0
+          if ($tracked) {
+            if ($failingGate) {
+              Write-Host "::error::failing gate: $failingGate"
+              $gateEmitted++
+              $gateLog = $gateLogMap[$failingGate]
+              if ($gateLog -and (Test-Path $gateLog)) {
+                $tail = @(Get-Content $gateLog -ErrorAction SilentlyContinue |
+                  ForEach-Object { Redact-Anonymous $_ } |
+                  Where-Object { $_.Trim().Length -gt 0 } |
+                  Select-Object -Last 12)
+                foreach ($line in $tail) {
+                  if ($gateEmitted -ge 10) { break }
+                  $msg = $line
+                  if ($msg.Length -gt 250) { $msg = $msg.Substring(0, 247) + "..." }
+                  Write-Host "::error::${failingGate}: $msg"
+                  $gateEmitted++
+                }
+              } else {
+                Write-Host "::error::${failingGate}: (no teed log for this gate — see the red step on the run page)"
+                $gateEmitted++
+              }
+            } else {
+              Write-Host "::error::all tracked post-verification gates passed; the failure occurred outside them — see the red step on the run page"
+              $gateEmitted++
+            }
+          }
+
+          # v1.10.7 VISIBILITY 2.0: machine-readable error annotations.
+          # This proven loop runs unchanged; when the failure is at or
+          # before Go verification (no markers) it is the ONLY annotation
+          # source, exactly as before.
+          $emitted = 0
+          foreach ($log in Get-ChildItem "ci-logs" -Filter "*.log" -ErrorAction SilentlyContinue) {
+            if ($emitted -ge 10) { break }
+            $text = @(Get-Content $log.FullName -ErrorAction SilentlyContinue)
+            $failing = @($text | Where-Object { $_ -match '^(--- FAIL|FAIL|panic:|fatal error:)' -or $_ -match '\.go:[0-9]+: ' })
+            foreach ($line in ($failing | Select-Object -First 10)) {
+              if ($emitted -ge 10) { break }
+              $msg = "$($log.BaseName): $line"
+              if ($msg.Length -gt 250) { $msg = $msg.Substring(0, 247) + "..." }
+              Write-Host "::error::$msg"
+              $emitted++
+            }
+          }
+          if ($emitted -eq 0 -and -not $tracked) {
+            $gofmtLog = "ci-logs/win-gofmt.log"
+            if ((Test-Path $gofmtLog) -and (Get-Content $gofmtLog -ErrorAction SilentlyContinue)) {
+              $first = @(Get-Content $gofmtLog | Select-Object -First 8)
+              foreach ($f in $first) { Write-Host "::error::gofmt violation: $f (run gofmt -w . )" }
+              Write-Host "::error::Windows Go verification failed at the gofmt gate — $($first.Count)+ file(s) listed in win-gofmt.log"
+            } else {
+              Write-Host "::error::Windows Go verification failed with no FAIL-prefixed lines captured — read the step summary and the windows-go-verification-logs artifact"
+            }
+          }
+
+      - name: Upload Go verification logs (Windows)
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-go-verification-logs-attempt${{ github.run_attempt }}
+          path: ci-logs/*.log
+          if-no-files-found: ignore
+          retention-days: 14
 
   build-linux:
     name: Linux x64
@@ -2696,14 +2879,37 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd "$(dirname "$WINDOWS_ZIP")"
-          sha256sum "$(basename "$WINDOWS_ZIP")" "$(basename "$INSTALLER")" > SHA256SUMS.txt
-          cd - >/dev/null
-          ( cd dist/linux && sha256sum "$(basename "$LINUX_ZIP")" >> ../SHA256SUMS.txt )
-          mv dist/SHA256SUMS.txt SHA256SUMS.txt 2>/dev/null || true
-          # Normalize: everything at repo-root-relative dist level.
-          test -s SHA256SUMS.txt
-          cat SHA256SUMS.txt
+
+          # v1.10.13 P-SUMS: ONE deterministic SHA256SUMS.txt naming ALL
+          # THREE published assets, computed from the artifacts' actual
+          # locations. The former step cd'd into the Windows ZIP's
+          # directory and hashed the installer by bare basename — but the
+          # installer artifact downloads into dist/installer/, so that
+          # operand did not resolve there (an outright `set -e` failure
+          # class); and the trailing `mv dist/SHA256SUMS.txt …` would in
+          # any case have published a file carrying only the Linux line,
+          # stranding the Windows checksums in dist/windows/. The sums
+          # file is now written once at one deterministic location and
+          # asserted to carry exactly the three published asset names
+          # before the release step runs.
+          sums="SHA256SUMS.txt"
+          : > "$sums"
+          for artifact in "$WINDOWS_ZIP" "$INSTALLER" "$LINUX_ZIP"; do
+            test -n "$artifact"
+            test -f "$artifact"
+            ( cd "$(dirname "$artifact")" && sha256sum "$(basename "$artifact")" ) >> "$sums"
+          done
+
+          test -s "$sums"
+          test "$(wc -l < "$sums")" -eq 3
+          awk -v a="$(basename "$WINDOWS_ZIP")" \
+              -v b="$(basename "$INSTALLER")" \
+              -v c="$(basename "$LINUX_ZIP")" \
+              'NF >= 2 { name[$NF]++; total++ }
+               END { exit !(total == 3 && name[a] == 1 && name[b] == 1 && name[c] == 1) }' \
+            "$sums" || { echo "::error::SHA256SUMS.txt does not name exactly the three published assets"; exit 1; }
+
+          cat "$sums"
 
       - name: Generate release manifest
         shell: bash

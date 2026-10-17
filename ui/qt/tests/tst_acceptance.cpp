@@ -76,12 +76,39 @@ void Acceptance::initTestCase() {
     // Deterministic fixture engine.
     const QString repo = qEnvironmentVariable("SHEYTAN_REPO");
     QVERIFY2(!repo.isEmpty(), "SHEYTAN_REPO must point at the checkout");
+    // v1.10.13 P-PY: resolve the fixture interpreter platform-robustly.
+    // The former hardcoded python3 is NOT contractually present on Windows
+    // runners (they expose python; python3.exe is best-effort) — had it
+    // failed to resolve, the live-answer acceptance gate would have died
+    // at waitForStarted with no named interpreter in the output.
+    // Candidates follow the repo's own e2e fixture precedent
+    // (e2e/fixtures/sheytan-server.ts uses python on win32, python3
+    // elsewhere); the chosen interpreter is ASSERTED in the harness
+    // output below. A candidate that cannot start is skipped; any LATER
+    // engine failure (script error, crash mid-run) is caught by the real
+    // gates and is never retried here.
     m_engine = new QProcess(this);
-    m_engine->setProgram(QStringLiteral("python3"));
+#ifdef Q_OS_WINDOWS
+    const QStringList candidates{
+        QStringLiteral("python"), QStringLiteral("python3")};
+#else
+    const QStringList candidates{
+        QStringLiteral("python3"), QStringLiteral("python")};
+#endif
     m_engine->setArguments({repo + QStringLiteral("/scripts/fake-remote-engine.py"),
                             QStringLiteral("18652")});
-    m_engine->start();
-    QVERIFY(m_engine->waitForStarted(5000));
+    QString chosen;
+    for (const QString &candidate : candidates) {
+        m_engine->setProgram(candidate);
+        m_engine->start();
+        if (m_engine->waitForStarted(5000)) { chosen = candidate; break; }
+        m_engine->close();
+    }
+    QVERIFY2(!chosen.isEmpty(),
+             "no fixture interpreter could start (tried python3 and python) "
+             "— the acceptance gate requires a working Python on PATH");
+    qInfo("acceptance fixture interpreter: %s (candidates tried: %s)",
+          qPrintable(chosen), qPrintable(candidates.join(QStringLiteral(", "))));
 
     // Core config: remote provider → fixture engine.
     QDir(m_data.path()).mkpath(QStringLiteral("data"));

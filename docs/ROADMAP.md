@@ -239,6 +239,28 @@ proved was the remaining client-side defect (v1.10.12 — compile-level
 local proof only; the hosted run is the runtime authority). Windows CI
 remains NOT VERIFIED until a green hosted run exists; the run's own
 step log is the arbiter.
+v1.10.13 STATUS: the hosted frontier MOVED and the evidence boundary is
+now structural. Run 39024607296 (v1.10.12, commit b8817d95) proved the
+Windows chain THROUGH STEP 21: step 14 "Go verification" green for the
+FIRST time ever (the deadline-bounded busy-retry dial budget held under
+the 8-worker burst pin in both suites — the v1.10.7–v1.10.12 transport
+repair chain is hostedly PROVEN), and steps 17–21 (engine variant
+assets, Windows resources, executable build + console smoke probe,
+executable verify, Qt 6.8.2 install) green on their FIRST execution.
+The chain is BLOCKED AT STEP 22 "Build Qt host (Windows)" — failed in
+41 s, exit 1, with NO readable evidence (one generic exit-code
+annotation at a nominal line; the step log admin-gated, 403); the exact
+failing command inside it is UNKNOWN and nothing claims otherwise,
+pending the visibility this release installs (the if:failure pair moved
+to the job's end, every post-verification command teed and asserted,
+the failing gate named in the summary and annotations — v1.10.13's
+W-VIS). The publish job executes ONLY on tag pushes
+(if: startsWith(github.ref, 'refs/tags/v')) — never in any run so far —
+so the first complete pipeline pass requires the TWO-RUN PROTOCOL: main
+green (run #1), then the v1.10.13 tag (run #2), whose publish job
+executes for the first time in the repository's history. Windows CI
+remains NOT VERIFIED until a green hosted run exists; the installed
+visibility is the arbiter of the next red.
 Remaining surfaces NOT yet migrated to Qt (honest): AI Systems
 editing/import, Goals,
 Coding Lab, Net Search page, repository index, tasks/automations,

@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.12 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.13 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -7,49 +7,71 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.10.12 — the documented busy-retry contract + the
-ROADMAP shipped-baseline completion (run 39019535982 consumed: the
-v1.10.11 kernel32 binding repair WORKED — the panic is gone, the
-proc-resolution pin passed; the Windows FULL go test suite produced no
-failing line for the SECOND consecutive run, an INFERENCE with the
-hosted run of this revision as the confirmation authority; the Windows
-HEADLESS run failed instead, on a NAMED test:
-`--- FAIL: TestMalformedBurstUnderParallelismNeverSurfacesPipeBusy
-(0.60s)` with `listener_windows_test.go:329: burst dial: localipc: dial
-\\\\.\\pipe\\sheytan-la-runneradmin-core: no listening pipe instance
-after 3 busy waits: All pipe instances are busy.` emitted twice — two
-of the eight workers hit it). The root cause is the CLIENT's fixed
-attempt-count budget, not the server: three 2000 ms waits cannot fit in
-0.60 s, so every WaitNamedPipe returned promptly — the W-INV server
-published a listening instance every cycle — and the losses were the
-CreateFile calls immediately after each wait (8 workers racing for the
-single listening instance; losing three consecutive microsecond-scale
-races under 8-way contention is normal scheduling). v1.10.12 replaces
-the 3-attempt cap with the DOCUMENTED Microsoft Named Pipe Client
-pattern: retry CreateFile while WaitNamedPipe reports an instance
-becoming available, NO attempt counter, bounded by the new
-`pipeBusyDialBudget = 10 * time.Second` total busy-dial deadline (each
-wait clamped to the remaining budget); honest early exits — a wait
-reporting ERROR_FILE_NOT_FOUND returns that error (the server is gone,
-not busy), a wait that times out with no instance or an unresolved proc
-surfaces the ORIGINAL busy error (no spin), and deadline exhaustion
-returns the typed `ErrBusyDialBudgetExhausted` naming the budget.
-`pipeBusyWaitMS = 2000` stays. The burst pin, the structural pin, the
-resolution pin, the kernel32 binding, and the whole server side stay
-BYTE-IDENTICAL. The same release completes ROADMAP.md's shipped
-baseline (the v1.9 and v1.10 delivered paragraphs in the v1.8 form,
-the stale "UNIDENTIFIED" Phase 2 sentence replaced with the verified
-v1.10.7–v1.10.12 repair chain, the header naming v1.10.12). HOSTED
-STATUS (do not overstate): Linux x64 is fully green THREE consecutive
-runs — a protected surface, do not churn the verified chain; the
-Windows FULL suite is clean two consecutive runs as an INFERENCE; the
-busy-budget fix carries compile-level local proof only (GOOS=windows
-build + vet; the Linux-only environment cannot execute the Windows
-dial path or the pins — the hosted Windows job is the runtime
-authority); Windows steps 17–32 and the publish job (never executed in
-ANY run) remain first-time surfaces — the next run is also the
-potential FIRST complete pipeline pass — fix forward only on what its
-annotations and summaries name.**
+**Current release: v1.10.13 — the post-verification visibility +
+predicted-defect clearance release.** Run 39024607296 (v1.10.12, commit
+b8817d95) made history twice and then stopped: Windows step 14 "Go
+verification" went GREEN for the FIRST time in the repository's history
+(the v1.10.12 deadline-bounded busy-retry dial budget held under the
+8-worker burst pin in both suites), steps 17–21 (engine variant assets,
+Windows resources, Windows executable build + console smoke probe,
+executable verify, Qt 6.8.2 install) went green on their FIRST execution,
+and then step 22 "Build Qt host (Windows)" failed in 41 seconds, exit 1,
+with NO readable evidence — one generic "Process completed with exit code
+1." annotation at a nominal workflow line (137), the step log admin-gated
+(403). THE EXACT FAILING COMMAND INSIDE STEP 22 IS UNKNOWN and nothing in
+this release claims otherwise. What v1.10.13 changes (all code, none of it
+asserting a root cause for run 39024607296): (1) W-VIS — the Windows
+if:failure() pair MOVED from mid-job (positions 15–16, provably blind to a
+failure at step 22 or later — run 39024607296 proved it live) to the END
+of the job so if:failure() covers the ENTIRE job; every post-verification
+native command (cmake configure, cmake build, windeployqt, the acceptance
+run, NSIS makensis) tees its own log into ci-logs/ and tracks RUN/OK/FAIL
+in ci-logs/gate-order.txt; the summary NAMES the failing gate and emits
+redacted, truncated tail annotations under the existing caps (10/step,
+250 chars, no secrets); the proven Go summary path is unchanged when no
+post-verification markers exist. (2) P-DEPLOY — windeployqt now runs
+against the staged Qt host ("$appRoot/sheytan-ui.exe") instead of the Go
+launcher, teed and exit-code-asserted, with Qt6Core.dll verified beside
+the host. (3) P-CMAKE — the Qt host configure wipes ui/qt/build,
+configures with --fresh, and pins -DCMAKE_PREFIX_PATH from the
+install-qt-action environment (the repo's own CMake cache rule + the
+green Linux twin's pattern). (4) P-PY — the acceptance harness resolves
+python3/python platform-robustly and asserts the chosen interpreter.
+(5) P-SUMS — the publish job writes ONE SHA256SUMS.txt naming all THREE
+published assets from their actual paths, asserted line-by-line before
+release. (6) P-ZIP — the "Verify Windows ZIP" no-backslash-entry tripwire.
+(7) W-QT non-defects recorded (CMake config-mode discovery honors
+Qt6_DIR/PATH prefixes; QLocalSocket accepts full \.\pipe\... names
+verbatim; Compress-Archive is in the fixed module range on pwsh 7.4+) —
+no cycle is to be spent on them. HOSTED STATUS (do not overstate): Linux
+x64 is fully green FOUR consecutive runs — a protected surface, do not
+churn the verified chain; Windows Go verification is green for the first
+time (ONE hosted run at this shape — the run of THIS revision is its
+confirmation authority); Windows steps 17–21 are green on first execution
+by the same single run; step 22 is RED with an unreadable log; the
+post-verification visibility is INSTALLED this release and has never run
+hosted yet; the publish job executes ONLY on tag pushes
+(if: startsWith(github.ref, 'refs/tags/v')) — never in any run so far;
+the TWO-RUN PROTOCOL to the first complete pipeline pass is: the operator
+pushes main (run #1 — the visibility repair's first live proving, expected
+to name the real step-22 culprit if the frontier is still red), and once
+main is green the operator pushes the v1.10.13 tag (run #2 — full matrix
+again, then the publish job's first-ever execution). Fix forward only on
+what the installed visibility names.**
+
+Its parent, v1.10.12 — the documented busy-retry contract + the ROADMAP
+shipped-baseline completion (run 39019535982 consumed: the v1.10.11
+kernel32 binding repair WORKED and the proc-resolution pin passed; the
+Windows headless run failed on the NAMED burst test with the 0.60 s
+arithmetic proving the CLIENT's fixed 3-attempt budget was the defect;
+v1.10.12 replaced the attempt counter with the DOCUMENTED Microsoft Named
+Pipe Client pattern — retry CreateFile while WaitNamedPipe reports an
+instance becoming available — bounded by `pipeBusyDialBudget = 10 *
+time.Second`, honest early exits, typed `ErrBusyDialBudgetExhausted`; the
+burst pin, the structural pin, the resolution pin, the kernel32 binding,
+and the whole server side stay BYTE-IDENTICAL; its hosted run 39024607296
+then proved step 14 green for the first time and moved the frontier to
+step 22) —
 Its parent, v1.10.11 — the kernel32 binding repair + the non-panicking
 dial path (the binding targets kernel32.dll, the documented exporting
 module — "winbase" is a header, not a DLL; `waitNamedPipe` resolves via

@@ -1,8 +1,96 @@
-# UPDATE.md — v1.10.12 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.10.13 Release Notes & Maintenance Behavior
 
 The authoritative per-release history lives in `docs/changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
-behavior. v1.10.12 is the DOCUMENTED BUSY-RETRY CONTRACT +
+behavior.
+
+v1.10.13 is the POST-VERIFICATION VISIBILITY + PREDICTED-DEFECT CLEARANCE
+release. Run 39024607296 (v1.10.12, commit b8817d95) made history twice:
+Windows step 14 "Go verification" went GREEN for the FIRST time ever —
+the v1.10.12 deadline-bounded busy-retry dial budget held under the
+8-worker burst pin in both suites — and the pipeline then advanced through
+five never-executed steps (17–21, all green on first execution) before
+step 22 "Build Qt host (Windows)" failed in 41 seconds, exit 1, with NO
+readable evidence: one generic "Process completed with exit code 1."
+annotation at a nominal line, admin-gated log (403). The exact failing
+command inside step 22 is NOT anonymously determinable, and NOTHING in
+this release claims it is. What this release DOES is what the repository
+did at v1.10.6/v1.10.7 when Go verification was a black box: install
+visibility for the new frontier, and fix the defects independent
+inspection already proves the next runs would hit.
+
+## What v1.10.13 changes
+
+1. **W-VIS — the post-verification visibility repair (code).** The
+   Windows job's two if:failure() steps sat at positions 15–16, BEFORE
+   the post-verification chain 17–32; GitHub evaluates step conditions in
+   sequence, so a failure at step 22 or later triggered NOTHING (run
+   39024607296 proved it live: both steps reported "skipped" on a failed
+   job). The pair now sits at the END of the job (after "Upload Windows
+   package") so if:failure() covers the ENTIRE job; the summary step is
+   renamed "Failure summary (Windows)" to match its whole-job scope.
+   Every post-verification native command (cmake configure, cmake build,
+   windeployqt, the acceptance run, NSIS makensis) tees its own log into
+   ci-logs/ and tracks RUN/OK/FAIL in ci-logs/gate-order.txt; on failure
+   the summary NAMES the failing gate and emits redacted, truncated tail
+   lines of that gate's log as anonymous annotations under the existing
+   caps (10 lines per step, 250 chars, no secrets — named-pipe endpoints
+   and key-shaped assignments are redacted before anything leaves the
+   job). The proven Go-verification summary path is unchanged when no
+   post-verification markers exist (including the gofmt fallback).
+2. **P-DEPLOY — windeployqt is aimed at the Qt HOST, asserted.** The
+   former call ran against the GO core launcher (which imports zero Qt
+   libraries) piped to Out-Null with no exit-code assert — Qt deploys
+   dependencies based on the TARGET binary's imports, so the packaged
+   pair could carry sheytan-ui.exe without its Qt runtime. Now:
+   sheytan-ui.exe is staged into the package root FIRST (both candidate
+   paths resolved, no SilentlyContinue), windeployqt runs against
+   "$appRoot/sheytan-ui.exe" teed into ci-logs/win-windeployqt.log with
+   an asserted exit code, and the deployment is verified by Qt6Core.dll
+   landing beside the host binary.
+3. **P-CMAKE — explicit Qt prefix + the repo's own cache rule.** The Qt
+   host configure now wipes ui/qt/build unconditionally, configures with
+   --fresh (a relocatable CMake cache is not a safe artifact — the rule
+   already governed the native engine build), and pins
+   -DCMAKE_PREFIX_PATH from the install-qt-action environment (Qt6_DIR,
+   falling back to CMAKE_PREFIX_PATH) with a named gate failure if
+   neither is set — mirroring the green Linux twin.
+4. **P-PY — the acceptance harness resolves its interpreter.**
+   tst_acceptance.cpp no longer hardcodes python3 (not contractually
+   present on Windows runners): win32 prefers python, everything else
+   prefers python3 (the repo's own e2e fixture precedent), a candidate
+   that cannot start is skipped, the chosen interpreter is ASSERTED in
+   the harness output, and a total failure to start fails with a named
+   message instead of a bare waitForStarted assert.
+5. **P-SUMS — one complete three-asset SHA256SUMS.txt.** The publish
+   job's checksum step hashed the installer from a directory it is not
+   in (an outright set -e failure class) and would in any case have
+   published a Linux-only sums file with the Windows checksums stranded
+   in dist/windows/. It now computes all THREE published artifacts into
+   ONE deterministic SHA256SUMS.txt and asserts exactly three well-formed
+   lines naming exactly the three published assets before the release
+   step runs.
+6. **P-ZIP — the no-backslash ZIP gate.** "Verify Windows ZIP" now fails
+   deterministically if any archive entry name contains a backslash
+   (Microsoft.PowerShell.Archive #48 class — fixed module range on pwsh
+   7.4+, so this is a tripwire, not a packaging rewrite).
+7. **W-QT — recorded NON-defects (do not "fix").** CMake's config-mode
+   search honors Qt6_DIR/PATH-derived prefixes; QLocalSocket accepts a
+   full \.\pipe\... name verbatim; Compress-Archive on pwsh 7.4+ is in
+   the fixed module range. No cycle is to be spent on these, and none is
+   claimed to have caused run 39024607296's failure.
+8. **THE TWO-RUN TAG PROTOCOL.** The release job runs ONLY on v* tag
+   pushes (if: startsWith(github.ref, 'refs/tags/v')) — every run in the
+   repository's history was a main push, so publish has NEVER executed,
+   by construction. The first complete pipeline pass requires the
+   operator to push main (run #1) and, once green, the v1.10.13 tag (run
+   #2): the tag run re-executes the full matrix and then publishes for
+   the FIRST time, with the P-SUMS contract in force. Canonical identity
+   is 1.10.13 (scripts/release-version.mjs --check green).
+
+## v1.10.12 notes (parent release — superseded where they describe the current release)
+
+v1.10.12 is the DOCUMENTED BUSY-RETRY CONTRACT +
 ROADMAP SHIPPED-BASELINE COMPLETION release: run
 https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/39019535982
 (v1.10.11, commit e89680b) proved three things. First: the v1.10.11

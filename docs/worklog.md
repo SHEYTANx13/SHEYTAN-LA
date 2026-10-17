@@ -3494,3 +3494,413 @@ Per-item outcome table (this cycle's register):
 | R2 | CLOSED (docs) | stale UNIDENTIFIED sentence replaced with the verified chain + NOT-VERIFIED boundary |
 | R3 | CLOSED (docs) | shipped-baseline header names v1.10.12 |
 | D1 | CLOSED (docs + identity) | changelog/UPDATE/agent/worklog entries; identity 1.10.12 --check GREEN; web bundle rebuilt |
+
+---
+Task ID: 1 (v1.10.13 session)
+Agent: v1.10.13 engineering session
+Task: v1.10.13 — POST-VERIFICATION VISIBILITY + PREDICTED-DEFECT CLEARANCE +
+the two-run tag protocol. Repair the post-verification visibility gap proven
+live by run 39024607296 (Windows if:failure() steps positioned before the
+post-verification chain), fix the five inspection-proven predicted defects
+(P-DEPLOY, P-CMAKE, P-PY, P-SUMS, P-ZIP), record the W-QT non-defects, write
+the D1 docs, bump the canonical identity to 1.10.13, run the full local
+regression, and deliver the complete source ZIP. The environment cannot push:
+the commits are prepared; the OPERATOR pushes main (run #1) and then the
+v1.10.13 tag (run #2 — the first possible complete pipeline pass, because the
+release job carries if: startsWith(github.ref, 'refs/tags/v') and can never
+execute on a main push).
+
+## Phase 1 — LIVE STATE + EVIDENCE (hosted record quoted verbatim BEFORE any fix)
+
+Live HEAD vs baseline: `git ls-remote` HEAD == b8817d953096a61c4faa647a799a212fabf5725b ==
+refs/heads/main — the local clone IS the baseline commit; zero drift, zero
+local modifications (`git status` clean). No tags exist in the repository.
+
+EVIDENCE-CLASS BOUNDARY (stated up front, per the operating rules): local
+proof for the Windows C++/Qt surface in this session is STATIC ONLY (YAML
+parse, actionlint, script review, shell syntax checks). The hosted Windows
+job is the runtime authority; local green is not hosted green. The GitHub
+REST API was re-read anonymously from this environment and returned 403
+(rate-limited for this IP — the same boundary recorded in the v1.9.5 and
+v1.10.12 sessions), so the hosted evidence below stands as the register's
+verbatim record of run 39024607296 (Build Desktop #13, push of v1.10.12,
+conclusion failure): audit job 117373016836 green; Linux x64 job
+117373537371 fully green (FOURTH consecutive); Windows x64 job
+117373537389 steps 1–14 green with step 14 "Go verification" green for the
+FIRST time in the repository's history, steps 17–21 green on first-ever
+execution, and step 22 "Build Qt host (Windows)" failed in 41 s, exit 1.
+
+Hosted annotation, job 117373537389 (W-BND-403), quoted verbatim:
+
+    "Process completed with exit code 1."
+
+— one single annotation, path ".github", line 137 (a nominal position: the
+live workflow's line 137 falls inside the audit job's "Verify repository
+shape and release identity" shape-check loop, nowhere near the failing
+Windows step — the annotation names nothing actionable). The job log
+download returns 403 "Must have admin rights to Repository." The exact
+failing command inside step 22 — cmake configure, cmake build, acceptance
+staging, or windeployqt — is NOT anonymously determinable. HONEST
+ROOT-CAUSE BOUNDARY: asserting that P-DEPLOY or any predicted defect CAUSED
+run 39024607296's failure is forbidden and no such claim is made anywhere
+in this cycle. The predicted-defect fixes are justified by their own
+inspection evidence; the W-VIS visibility repair is what will name the real
+culprit in run #1.
+
+W-NAME verification against the live tree: the step-22 script (workflow
+lines 955–993 at b8817d9) matches the register's verbatim quote
+line-for-line (comments elided): $ErrorActionPreference = "Stop"; the
+$appRoot derivation from ${env:WIN_PKG_ROOT}; cmake -S ui/qt -B
+ui/qt/build -DCMAKE_BUILD_TYPE=Release with a $LASTEXITCODE throw; cmake
+--build ... --config Release with a throw; the two-path acceptance-binary
+probe (build/Release/ then flat) with the not-produced throw; the staging
+Copy-Item with its assert; the windeployqt line aimed at
+"$appRoot/SHEYTAN-LA.exe" piped to Out-Null with NO exit-code assertion;
+the two-path sheytan-ui.exe staging with SilentlyContinue; the deployed
+assert; the closing Write-Host. ZERO drift from the register.
+
+Step-numbering reconciliation (for the record): the register uses GitHub
+UI positions (which count the "Set up job" pseudo-step); a PyYAML parse of
+the live file numbers build-windows at 31 steps: YAML 13 = UI 14 "Go
+verification" (first green), YAML 14–15 = UI 15–16 the two if:failure()
+steps, YAML 16–20 = UI 17–21 the first-execution chain, YAML 21 = UI 22
+"Build Qt host (Windows)" (the failure). The register is internally
+consistent with the live file under that mapping.
+
+W-VIS verification (workflow structure + this run's live proof): the two
+if:failure() steps ("Go verification failure summary (Windows)",
+"Upload Go verification logs (Windows)") sit at YAML positions 14–15,
+BEFORE the post-verification chain 16–31. GitHub evaluates a step's
+condition when the step is reached in sequence: at 14–15 the job was still
+green, so both reported "skipped" while the run page carried them as
+skipped, and the later failure at step 22 triggered nothing — publishing
+only the generic exit-code annotation. Proven live by run 39024607296. The
+audit job's own failure pair is correctly positioned at its END (steps
+13–14 of 14) — the pattern replicated for the Windows job this cycle. The
+Linux job carries structurally similar mid-job pairs ("E2E failure summary"
+at step 17, "Upload verification logs (Linux)" at step 25 of 32) — RECORDED
+as an observed sibling, NOT changed this cycle: the evidence does not name
+them, the Linux chain is four-times green, and churning it is forbidden.
+
+P-TAG verification: the release job ("Publish and verify
+${{ github.ref_name }}") carries needs: [build-windows, build-linux, audit]
+and if: startsWith(github.ref, 'refs/tags/v') (workflow line 2523). Every
+run in the repository's history was a push to main, so publish has NEVER
+executed — a property of the trigger discipline, not of build health. The
+two-run protocol is therefore structural: run #1 = operator pushes main;
+run #2 = operator pushes the v1.10.13 tag; the tag run re-executes the full
+matrix and then publishes for the first time.
+
+## Phase 2 — CONTRACT VERIFICATION + RULE-8 SWEEPS
+
+Contract verification: (1) Qt's documented deployment model
+(doc.qt.io/qt-6/windows-deployment.html) — windeployqt copies dependencies
+based on the TARGET binary's imports; run against the non-Qt Go launcher it
+deploys nothing useful for the Qt host, and the v1.4.0 gate-integrity rule
+(workflow header comments L21–44; the run 35996462352 repair notes at
+L650–657) forbids the silent `| Out-Null` with no $LASTEXITCODE assertion
+that the windeployqt line carries. (2) The repo's own CMake cache rule
+(L312–335 in the audit job, restated at L595–597 for the Windows native
+engine step): "a relocatable CMake build tree is NOT a safe cache artifact
+— CMakeCache.txt / CMakeFiles embed absolute paths ... wiped and
+reconfigured with --fresh on every run" — the Qt host step violates it
+(no wipe, no --fresh, no prefix). (3) The green Linux Qt twin (L2053–2060)
+passes -DCMAKE_PREFIX_PATH="$Qt6_DIR" explicitly. (4) The e2e fixture
+established the platform-robust interpreter precedent
+(e2e/fixtures/sheytan-server.ts:193: win32 → "python", else "python3").
+
+Sweep table 1 — every reader of WIN_PKG_ROOT (34 workflow references + the
+Go contract mirror): workflow-level definition L82; Windows job readers at
+L847/883/960/1000/1191/1214 (staging + smoke + acceptance), L1288/1295/
+1318/1329–1352/1375 (ZIP name + entries), L1434/1474/1511 (NSIS staging +
+installer), L1543/1544/1551/1552 (artifact upload names/paths); release-job
+readers at L2543/2549/2564/2566/2594/2782/2784 (artifact downloads + asset
+names); Go mirror internal/releasecontract/releasecontract.go
+(WorkflowWinRootEnvLine, WinRootPwsh/WinRootBash/WinRootGHA slot forms).
+NONE of these readers depends on the ORDER of steps inside the Windows job;
+moving the failure pair does not touch any reader.
+
+Sweep table 2 — every windeployqt call: exactly ONE
+(L983, the P-DEPLOY target); docs/ROADMAP.md and docs/changelog.md carry
+prose mentions only; ui/qt/CMakeLists.txt carries a deploy-script comment.
+
+Sweep table 3 — every if:failure() step and its position (7 total):
+audit L355 (step 13/14) + L397 (step 14/14) — correctly at job END;
+build-windows L728 (step 14/31) + L783 (step 15/31) — THE W-VIS DEFECT,
+moved to job END this cycle; build-linux L1877 (step 17/32, E2E-scoped) +
+L2138 (step 24/32) + L2202 (step 25/32) — mid-job, NOT named by evidence,
+RECORDED ONLY.
+
+Sweep table 4 — dependencies on current Windows step ordering: (a) the
+ci-logs/ workspace directory is created by "Go verification" (L679) and
+read by the failure summary + artifact upload — workspace state persists
+across steps, so moving the pair to the job's end preserves both; (b) the
+artifact names consumed by the release job
+(${WIN_PKG_ROOT}-Windows-x64-v…, …-installer-v…) are produced by the last
+two steps and untouched; (c) no step reads another step's console output;
+(d) GITHUB_ENV chains (APP_VERSION, WINDOWS_ZIP, LINUX_ZIP, INSTALLER) are
+produced/consumed within their own steps or the release job.
+
+Sweep table 5 — the publish job's checksum readers: "Generate SHA256
+checksums" (L2695–2706) is the only producer; consumers are the
+"Publish GitHub Release" files list (L2763) and the "Verify published
+release" asset-name assert (L2801). internal/ Go code reads
+release-manifest.json (computed independently from the artifact FILES, not
+from SHA256SUMS.txt) — no Go reader of SHA256SUMS.txt exists. REFINED
+FAILURE TRACE (recorded honestly, superseding the register's description
+of the published-file shape): the step `cd`s to dist/windows (the Windows
+ZIP's directory), then runs `sha256sum <win.zip> <installer.exe>` — but the
+installer artifact downloads to dist/installer/, so the second operand
+resolves to a NONEXISTENT path inside dist/windows; GNU sha256sum exits 1
+and `set -euo pipefail` fails the step BEFORE any mv. The step therefore
+either fails the release job outright (the trace above) or — if the
+operands happened to resolve — would publish a Linux-only sums file (the
+register's trace). Both classes are repaired by the P-SUMS rewrite: one
+deterministic file, three correct operand paths, line-count + per-asset
+assertion.
+
+Sweep table 6 — NSIS installer.nsi contract fragments at HEAD (local
+pre-flight; the workflow gate asserts them at build time): MUI_PAGE_DIRECTORY=2,
+"Create a &desktop shortcut"=2, BST_CHECKED=3, WriteUninstaller=1,
+UninstallString=1, SHEYTAN_DATA_DIR=10, "preserve user data"=2, and the
+negative contract "RMDir /r"=0. ALL PRESENT — the pre-flight passes locally;
+no hosted run is spent discovering a missing fragment.
+
+Sweep table 7 — every python3 reference under ui/qt: exactly ONE
+(ui/qt/tests/tst_acceptance.cpp:80 — the P-PY target, hardcoded
+setProgram("python3") with the QVERIFY(waitForStarted(5000)) gate at L84).
+The repo's own e2e fixture already establishes the win32 "python" fallback
+precedent.
+
+Sweep table 8 — W-QT non-defects recorded (do NOT "fix"): (1) CMake's
+documented config-mode search honors <PackageName>_DIR and PATH-derived
+prefixes with /bin stripped — install-qt-action's environment does NOT
+preclude finding Qt; no discovery gap is claimed from here. (2)
+QLocalSocket::connectToServer on Windows accepts a full \\.\pipe\... server
+name verbatim (qtbase 6.8 qlocalsocket_win.cpp uses names starting with the
+pipe prefix as-is) — no normalization work. (3) Compress-Archive on pwsh
+7.4+ is within the fixed-module range for the backslash entry bug
+(Microsoft.PowerShell.Archive #48); covered defensively by the new P-ZIP
+gate, no packaging rewrite.
+
+Boundary sentence: which command failed inside run 39024607296's step 22 is
+UNKNOWN and will be named by the visibility installed this cycle.
+
+## Phase 3 — W-VIS VISIBILITY REPAIR (closed as a CODE/WORKFLOW DIFF)
+
+Implemented in .github/workflows/build-desktop.yml, build-windows job:
+
+1. THE MOVE: the if:failure() pair left its mid-job position (YAML steps
+   14–15) and now sits at the END of the job (YAML steps 30–31 of 31,
+   after "Upload Windows package"), so if:failure() covers the ENTIRE
+   job including the post-verification chain. The summary step is
+   renamed "Failure summary (Windows)" (mirroring the audit job's
+   end-of-job pair naming); the upload step name and the artifact name
+   windows-go-verification-logs-attempt${{ github.run_attempt }} are
+   KEPT unchanged (proven surfaces, minimal churn; the artifact name
+   remains referenced verbatim by the summary's fallback message).
+2. THE TEE + ASSERT DISCIPLINE: cmake configure → ci-logs/win-qt-configure.log;
+   cmake build → ci-logs/win-qt-build.log; windeployqt →
+   ci-logs/win-windeployqt.log; the acceptance run →
+   ci-logs/win-qt-acceptance.log; NSIS makensis → ci-logs/win-nsis.log —
+   every one with 2>&1 | Tee-Object (the proven Invoke-Gate pattern from
+   the Go verification step, where $LASTEXITCODE still belongs to the
+   native command) and an explicit $LASTEXITCODE assertion whose throw
+   names the log. choco install nsis is NOT teed (not named by the
+   evidence; its failure class is caught by the existing makensis
+   existence check).
+3. THE GATE-ORDER TRACKER: each new gated step appends RUN/OK/FAIL
+   markers to ci-logs/gate-order.txt (plus STEP boundary markers). The
+   summary parses the markers: explicit FAIL wins; a RUN without
+   OK/FAIL names the gate that started and never finished; all-OK means
+   the failure happened outside the tracked gates and the summary says
+   exactly that, pointing at the run page's red step. The state machine
+   was SIMULATED locally across 7 scenarios (Go-verification failure
+   with no markers; each tracked gate failing; a tracked gate starting
+   without finishing; an untracked step failing after all gates OK; a
+   staging throw between markers) — ALL PASS.
+4. THE EXTENDED SUMMARY: header "## Windows job FAILED"; the failing
+   gate's name plus redacted, truncated tail lines (≤12 candidates,
+   ≤10 annotations total, 250-char cap) of that gate's own log emitted
+   as ::error:: annotations FIRST so a cap drop can never hide them.
+   Rule-7 redaction (Redact-Anonymous) applies to the NEW logs only:
+   named-pipe endpoints (\\.\pipe\... → \\.\pipe\<redacted>) and
+   key-shaped assignments (key|token|secret|password[=:]… → <redacted>)
+   are masked; the proven Go logs (win-gofmt.log, win-go-test-*.log,
+   win-go-vet.log) keep their audited byte-identical summary and
+   annotation path, and the gofmt fallback now runs ONLY when no
+   post-verification markers exist — the Go-verification failure path
+   is unchanged.
+5. HONEST SCOPE NOTE: Windows steps before the tracked gates (UI steps
+   17–21 — variant assets, resources, exe build, exe verify, Qt
+   install) stay BYTE-IDENTICAL (first-time-green, protected) and do
+   NOT write markers; a failure there still produces the summary with
+   the per-log sections and the exact former Go-failure annotation
+   logic (which emits nothing for non-Go failures), while the run page
+   names the red step — the same visibility class those steps had
+   before, now with whole-job summary coverage. The Linux job's
+   mid-job failure pairs are RECORDED (sweep table 3) and NOT changed
+   (evidence does not name them; the Linux chain is four-times green).
+
+New build-windows step map (31 steps; UI position = YAML+1): 1 Pin
+checkout to LF / 2 Checkout / 3 Setup Node 24 / 4 Verify Node and
+repository / 5 Synchronize release metadata / 6 Verify release metadata
+/ 7 Install frontend dependencies / 8 Frontend verification / 9 Verify
+embedded frontend / 10 Verify stable frontend asset contract / 11 Setup
+Go 1.26 / 12 Native engine (C++) build and tests / 13 Go verification /
+14 Validate engine variant assets / 15 Generate Windows resources / 16
+Build Windows executable and console smoke probe / 17 Verify Windows
+executable / 18 Build Qt host (Windows) and deploy runtime
+[install-qt-action 6.8.2] / 19 Build Qt host (Windows) [P-CMAKE +
+P-DEPLOY + tee/assert + gate tracking] / 20 Desktop runtime smoke / 21
+Windows live-answer acceptance [tee + gate tracking] / 22 Prepare
+Windows portable package / 23 Create Windows ZIP / 24 Verify Windows
+ZIP [P-ZIP gate] / 25 Verify Windows ZIP integrity / 26 Build Windows
+NSIS installer [tee + gate tracking] / 27 Verify Windows installer /
+28 Upload Windows installer / 29 Upload Windows package / 30 Failure
+summary (Windows) [MOVED, extended] / 31 Upload Go verification logs
+(Windows) [MOVED]. No duplicate step names (YAML-parsed). The register's
+UI-numbered step-22 failure target is YAML step 19 this cycle.
+
+## Phase 4 — PREDICTED-DEFECT FIXES (each closed as a CODE DIFF; each cites its register evidence in the code comments)
+
+P-DEPLOY (register: Qt's documented deployment model follows the target
+binary's imports; v1.4.0 gate-integrity forbids Out-Null without an
+assert): the deploy block inside "Build Qt host (Windows)" now stages
+sheytan-ui.exe into $appRoot FIRST (Release/ path then flat path
+resolved, throws when NEITHER exists, no SilentlyContinue), runs
+windeployqt --qmldir ui/qt/qml --no-compiler-runtime against
+"$appRoot/sheytan-ui.exe" teed to ci-logs/win-windeployqt.log with an
+asserted $LASTEXITCODE, then asserts Qt6Core.dll exists beside the host
+before declaring success. The acceptance-binary staging block above it
+is byte-identical (v1.10.3 R16 logic preserved).
+
+P-CMAKE (register: the repo's own CMake cache rule; the green Linux
+twin pins the prefix): the same step wipes ui/qt/build unconditionally
+(Remove-Item -Recurse -Force, the native-engine step's exact pattern),
+configures with --fresh, and passes
+-DCMAKE_PREFIX_PATH="$qtPrefix" where $qtPrefix = $env:Qt6_DIR with a
+fallback to $env:CMAKE_PREFIX_PATH and a NAMED throw when neither is
+set (refusing an unpinned configure). W-QT is respected: this is belt-
+and-suspenders hardening, NOT a claimed discovery repair.
+
+P-PY (register: hardcoded python3 with no fallback; e2e fixture
+precedent): ui/qt/tests/tst_acceptance.cpp resolves the fixture
+interpreter as a candidate list — Q_OS_WINDOWS prefers python then
+python3; everything else prefers python3 then python — starts the first
+candidate that reaches waitForStarted(5000), closes and skips one that
+cannot start, ASSERTS the choice with
+qInfo("acceptance fixture interpreter: %s (candidates tried: %s)"), and
+QVERIFY2-fails with a named message only when NO candidate starts.
+Later engine failures are never retried here (the real gates own them).
+
+P-SUMS (register: the stranded Windows checksums; refined trace in
+sweep table 5): the release job's "Generate SHA256 checksums" step now
+iterates the three artifacts FROM THEIR ACTUAL PATHS
+($WINDOWS_ZIP, $INSTALLER, $LINUX_ZIP), hashes each from its own
+directory via a subshell, appends into ONE SHA256SUMS.txt at the repo
+root, and asserts: non-empty, exactly 3 lines, and an awk check that
+exactly three well-formed lines name exactly the three published
+basenames (each once). The mv line is gone. The step was FUNCTIONALLY
+SIMULATED locally (positive: one file, three assets, assertion green;
+negative: a missing artifact fails the step with set -e, exit 1) — the
+first hosted execution remains the runtime authority.
+
+P-ZIP (register: defensive tripwire only, no packaging rewrite):
+"Verify Windows ZIP" collects the entry names as before, then fails
+with ::error:: offender lines (≤10 printed) when ANY entry name
+contains a backslash, before the required-entry checks that would
+otherwise misreport the same condition.
+
+Validation after all five: YAML parse clean; bash -n over EVERY bash
+run block in the file clean; the P-SUMS logic simulation green
+(positive + negative); the gate-order state machine simulation green
+(7 scenarios); duplicate step names: none. pwsh is unavailable in this
+environment (no pwsh binary, no actionlint) — the PowerShell edits are
+covered by static review only, mirroring the repo's established
+local-proof class for Windows-only scripts; the hosted Windows job is
+the runtime authority.
+
+## Phase 5 — DOCS + IDENTITY (closed as DOCS + identity surfaces)
+
+changelog.md: v1.10.13 entry prepended (run 39024607296 evidence with
+the boundary labeled; W-VIS; the five fixes; W-QT; the two-run
+protocol; the protected-surfaces list; the local-proof class). UPDATE.md:
+retitled v1.10.13, new release story + "What v1.10.13 changes" (8
+numbered items), the v1.10.12 story demoted under "v1.10.12 notes
+(parent release — superseded where they describe the current release)".
+agent.md: retitled v1.10.13 handoff; the current-release paragraph now
+states the hosted truth (Linux green FOUR consecutive; Windows Go
+verification green FIRST time; steps 17–21 green on first execution;
+step 22 red with an unreadable log; visibility installed this release;
+publish tag-gated; the two-run protocol) and v1.10.12 is demoted to
+the parent-release slot. ROADMAP.md: v1.10.13 STATUS paragraph added to
+Phase 2 (Windows chain proven through step 21, blocked at step 22
+pending visibility; publish gated to tags; two-run protocol) — the
+protected v1.10.12 paragraphs untouched. The v1.10.10 docs condensation
+is untouched. Identity: package.json 1.10.13 → release-version.mjs
+repaired internal/config/config.go, build/config.yml, SIGNATURE;
+package-lock.json synced via npm install --package-lock-only; web
+bundle rebuilt (npm run build + verify:web green); --check GREEN.
+
+## Phase 6 — FULL LOCAL REGRESSION (the gate table)
+
+| Gate | Command | Result | Class |
+|------|---------|--------|-------|
+| npm install | npm ci --no-audit --no-fund | PASS (139 pkgs) | local |
+| typecheck | tsc --noEmit | PASS | local |
+| lint | oxlint . | PASS (0 warnings, 0 errors, 111 files) | local |
+| test:units | node --test (29 suites) | PASS (0 fail) | local |
+| test:release | node --test release-version + codename-gate | PASS (38/0) | local |
+| build | tsc -b && vite build && sync:web | PASS (bundle rebuilt) | local |
+| verify:web | verify-static-assets.mjs | PASS (stable-asset contract) | local |
+| gofmt | gofmt -l . | PASS (empty) | local |
+| go vet | go vet ./... | PASS | local |
+| headless suite | go test ./internal/... -tags headless -count=1 | PASS (all pkgs ok) | local |
+| full suite | go test ./... -count=1 | PASS (65 pkgs ok, 0 FAIL lines) | local |
+| race gate | go test -race -tags headless ./internal/api ./internal/agent ./internal/sessions ./internal/contextplan ./internal/histref ./internal/runtime (the workflow's exact list) | PASS | local |
+| GOOS=windows | go build (cmd/sheytan-local-agent) + go vet ./... | PASS | local (compile-level; no Windows execution) |
+| verify-all | node scripts/verify-all.mjs | PASS (2 NOT RUN: cmake unavailable; Qt6 package not found — environment-limited, recorded) | local |
+| stress suite | go build ./scripts/stress-main + stress | PASS (47/0, hangs=0 crashes=0) | local |
+| qt smoke script | bash -n scripts/qt-desktop-smoke.sh | PASS | local |
+| identity | node scripts/release-version.mjs --check | GREEN at 1.10.13 | local |
+| workflow YAML | PyYAML parse + step map + duplicate-name check | PASS (31 Windows steps, pair at 30–31) | local |
+| workflow bash | bash -n over every bash run block | PASS | local |
+| P-SUMS logic | functional simulation + negative test | PASS / PASS | local |
+| gate-order machine | 7-scenario simulation | PASS | local |
+| pwsh syntax | pwsh -NoProfile syntax check | NOT RUN (pwsh unavailable) — static review only | local/static |
+| actionlint | actionlint | NOT RUN (unavailable) | local |
+| C++ compile of tst_acceptance.cpp | g++/Qt6 headers | NOT RUN (no Qt6 toolchain) — static review only | local/static |
+| HOSTED run #1 (main push) | operator push | NOT RUN (no push credentials in this environment) | hosted |
+| HOSTED run #2 (v1.10.13 tag) | operator push | NOT RUN (follows run #1) | hosted |
+
+## Phase 7 — COMMIT + OPERATOR HANDOFF
+
+The complete change set is committed locally on main (see the commit
+below). THIS ENVIRONMENT CANNOT PUSH (no credentials): the OPERATOR
+pushes main (hosted run #1 — the visibility repair's first live
+proving), and after it is green pushes the annotated tag v1.10.13 on
+the SAME commit (hosted run #2 — the full matrix re-executes and the
+publish job runs for the FIRST time in the repository's history, with
+the P-SUMS contract in force). Fix-forward rule for run #1: quote the
+named evidence, root-cause it, fix it as a code diff, never fix what
+the evidence does not name, never mark a gate VERIFIED without its
+green job.
+
+Per-item outcome table (this cycle's register):
+
+| Item | Outcome | Closure class |
+|------|---------|---------------|
+| W-GREEN | PRESERVED (protected diff) | Linux chain + Windows steps 1–21 + all pins untouched; `git diff` over the protected regions contains only the sanctioned W-VIS/P-item edits; no gate or assertion weakened |
+| W-NAME | CONFIRMED | the step-22 script at HEAD matches the register's verbatim quote line-for-line; hosted annotation quoted in Phase 1 |
+| W-BND-403 | OPEN (honest) | the failing command inside run 39024607296's step 22 remains UNKNOWN; no root-cause claim made anywhere; the installed visibility names it in run #1 |
+| W-VIS | CLOSED (workflow diff) | pair moved to job end; tee/assert on all five post-verification commands; gate-order tracker; failing-gate annotations (redacted, capped); Go path preserved; new step map recorded above |
+| P-DEPLOY | CLOSED (code diff) | windeployqt retargeted at the staged Qt host, teed, asserted, Qt6Core.dll verified |
+| P-CMAKE | CLOSED (code diff) | wipe + --fresh + pinned CMAKE_PREFIX_PATH with a named refusal |
+| P-PY | CLOSED (code diff) | platform-robust interpreter resolution + asserted choice |
+| P-SUMS | CLOSED (code diff + local functional simulation) | one three-asset SHA256SUMS.txt + line/asset assertions |
+| P-ZIP | CLOSED (workflow diff) | no-backslash entry tripwire; packaging untouched |
+| P-TAG | CONFIRMED + STATED (docs) | release job tag-gated (line 2523 at b8817d9); two-run protocol recorded in changelog/UPDATE/agent/ROADMAP |
+| W-QT | RECORDED (non-defects) | no fix applied to any of the three; no wasted cycles |
+| D1 | CLOSED (docs + identity) | changelog/UPDATE/agent/ROADMAP/worklog entries; identity 1.10.13 --check GREEN; web bundle rebuilt |
+| HOSTED #1/#2 | OPEN (operator) | no push credentials; fix-forward loop handed to the operator per Phase 7 |
