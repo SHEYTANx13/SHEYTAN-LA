@@ -17,9 +17,18 @@
 //     idle seconds).
 //   - W3: Close cancels a pending overlapped accept via CancelIoEx, so a
 //     clean Stop never hangs on the accept.
-//   - W1/W4: a fresh instance is created AHEAD of demand — immediately
-//     after a client connects — so the next dial never races instance
-//     creation.
+//   - W1/W4: a fresh instance is created AHEAD of demand — so the next
+//     dial never races instance creation. v1.10.10 (W-INV, run 38919925013
+//     step 14): the guarantee is now STRUCTURAL, not bookkeeping order —
+//     the replacement instance is created inside the SAME locked section
+//     that hands out the spare (takeInstance), so at least one listening
+//     instance exists at EVERY instant from Serve's return until Close.
+//     The kernel marks an instance busy at the client's CreateFile, BEFORE
+//     any userspace completion notice, so a refill deferred to the accept
+//     completion leaves a kernel-level zero-instance window — the exact
+//     shape of the W-A hosted failure ("All pipe instances are busy"). An
+//     instance created by CreateNamedPipe stays listening until a client
+//     connects to it, even while the accept loop holds it.
 //   - W4: the identity decision (sidAllowed) is a pure, unit-tested
 //     comparison against the current user's token SID; it fails closed on
 //     an empty client SID.
@@ -147,25 +156,100 @@ func pipeName(endpoint string) string {
 // synchronous open here silently broke every client-side pipe round-trip on
 // Windows while the Linux transport (net.Listen) never touches this path —
 // the six-run Windows-only "Go verification" red.
-func dialEndpoint(endpoint string) (net.Conn, error) {
-	handle, err := windows.CreateFile(
-		windows.StringToUTF16Ptr(pipeName(endpoint)),
-		windows.GENERIC_READ|windows.GENERIC_WRITE,
-		0,   // exclusive
-		nil, // no security attributes on the client side
-		windows.OPEN_EXISTING,
-		windows.FILE_FLAG_OVERLAPPED,
-		0,
-	)
+//
+// v1.10.10 (W-CLI, run 38919925013 step 14): dialEndpoint also implements the
+// documented Windows named-pipe CLIENT contract for ERROR_PIPE_BUSY — the
+// documented sequence (MSDN, Named Pipe Client): "If the pipe exists but all
+// of its instances are busy, CreateFile returns INVALID_HANDLE_VALUE and the
+// GetLastError function returns ERROR_PIPE_BUSY. When this happens, the
+// named pipe client uses the WaitNamedPipe function to wait for an instance
+// of the named pipe to become available." WaitNamedPipe is the OS's own
+// readiness notification — the wait is event-driven, never a sleep-based
+// poll. The retry is bounded (single-digit-seconds per wait, a small attempt
+// count) and exhaustion returns the real error. This serves the production
+// dial path (the real UI's transport behind http.Client), not any test: a UI
+// issuing rapid successive requests through the same endpoint benefits
+// identically. WaitNamedPipe is not exposed by golang.org/x/sys/windows, so
+// it is bound directly from winbase (WaitNamedPipeW) — the same binding the
+// canonical winio client used.
+const (
+	// pipeBusyWaitMS bounds ONE WaitNamedPipe readiness wait. Finite,
+	// single-digit seconds: long enough for a saturated server's next
+	// accept iteration to publish a listening instance, short enough that
+	// a vanished server fails fast.
+	pipeBusyWaitMS = 2000
+	// pipeBusyMaxRetries caps the CreateFile retries after a busy wait —
+	// a small bounded count, so the total dial budget stays finite and
+	// exhaustion surfaces the real error instead of looping.
+	pipeBusyMaxRetries = 3
+)
+
+var (
+	modwinbase         = windows.NewLazySystemDLL("winbase.dll")
+	procWaitNamedPipeW = modwinbase.NewProc("WaitNamedPipeW")
+)
+
+// waitNamedPipe waits for a listening instance of the named pipe to become
+// available (the OS's readiness notification — no sleeping, no polling).
+// Returns nil when an instance became available within the timeout; the
+// GetLastError value otherwise (ERROR_SEM_TIMEOUT on timeout,
+// ERROR_FILE_NOT_FOUND when no pipe instance exists at all).
+func waitNamedPipe(name string, timeoutMS uint32) error {
+	p, err := windows.UTF16PtrFromString(name)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return newPipeConn(handle)
+	r1, _, e1 := procWaitNamedPipeW.Call(uintptr(unsafe.Pointer(p)), uintptr(timeoutMS))
+	if r1 == 0 {
+		if e1 != nil && e1 != windows.ERROR_SUCCESS {
+			return e1
+		}
+		return windows.ERROR_SEM_TIMEOUT
+	}
+	return nil
+}
+
+func dialEndpoint(endpoint string) (net.Conn, error) {
+	name := pipeName(endpoint)
+	var lastBusy error
+	for attempt := 0; ; attempt++ {
+		handle, err := windows.CreateFile(
+			windows.StringToUTF16Ptr(name),
+			windows.GENERIC_READ|windows.GENERIC_WRITE,
+			0,   // exclusive
+			nil, // no security attributes on the client side
+			windows.OPEN_EXISTING,
+			windows.FILE_FLAG_OVERLAPPED,
+			0,
+		)
+		if err == nil {
+			return newPipeConn(handle)
+		}
+		if err != windows.ERROR_PIPE_BUSY {
+			return nil, err
+		}
+		lastBusy = err
+		if attempt >= pipeBusyMaxRetries {
+			break
+		}
+		// The documented client contract: wait for an instance to become
+		// available, then retry the open. A vanished endpoint
+		// (ERROR_FILE_NOT_FOUND from the wait) cannot be retried into
+		// existence — stop and surface the real error.
+		if werr := waitNamedPipe(name, pipeBusyWaitMS); werr != nil && errors.Is(werr, windows.ERROR_FILE_NOT_FOUND) {
+			break
+		}
+	}
+	return nil, fmt.Errorf("localipc: dial %s: no listening pipe instance after %d busy waits: %w", name, pipeBusyMaxRetries, lastBusy)
 }
 
 // pipeListener accepts one instance at a time; http.Serve serializes
-// Accept anyway. A pre-created instance always sits between Accepts so a
-// dialing client never races instance creation (W1/W4).
+// Accept anyway. The instance inventory is governed by mu, and the W-INV
+// invariant (v1.10.10) holds UNDER that lock: whenever an instance is
+// handed out, the replacement is created in the same locked section, so at
+// least one listening instance exists at every instant from Serve's return
+// until Close — the kernel's connect-time busy marking can never expose a
+// zero-instance window to a dialing client (W1/W4).
 type pipeListener struct {
 	name      string
 	sa        windows.SecurityAttributes
@@ -202,7 +286,8 @@ func (l *pipeListener) createInstanceLocked() (windows.Handle, error) {
 	return handle, nil
 }
 
-// preCreate ensures one listening instance exists (W1/W4).
+// preCreate ensures one listening instance exists (W1 — the synchronous
+// first instance created by listenEndpoint before Serve ever returns).
 func (l *pipeListener) preCreate() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -218,31 +303,61 @@ func (l *pipeListener) preCreate() error {
 	return nil
 }
 
-// setHandleErr defers an instance-creation failure to the next Accept so
-// the CURRENT connection is still handed to http.Serve (the endpoint does
-// not lose a live client because the NEXT instance could not be made).
-func (l *pipeListener) setHandleErr(err error) {
-	l.mu.Lock()
-	l.handleErr = err
-	l.mu.Unlock()
-}
-
-// takeInstance hands out the pre-created instance or creates one.
+// takeInstance hands out a listening instance AND creates the replacement
+// in the SAME locked section (v1.10.10 W-INV, run 38919925013 step 14).
+// The kernel marks the handed-out instance busy at the FIRST client's
+// CreateFile — before this process observes any completion — so the
+// replacement must already exist at hand-out time or a dialing client can
+// hit ERROR_PIPE_BUSY during the server goroutine's wakeup latency (the
+// exact hosted failure: "health after garbage: All pipe instances are
+// busy"). An instance created by CreateNamedPipe stays listening until a
+// client connects to it, even while the accept loop holds the handed-out
+// one, so the invariant "at least one listening instance at every instant"
+// holds by construction. A refill failure defers to the next Accept
+// (handleErr) so the CURRENT connection is still handed to http.Serve —
+// the endpoint does not lose a live client because the NEXT instance could
+// not be made. Nothing is created after Close (the endpoint must vanish
+// with the last handle).
 func (l *pipeListener) takeInstance() (windows.Handle, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	select {
+	case <-l.closed:
+		return 0, net.ErrClosed
+	default:
+	}
+
 	if l.handleErr != nil {
 		err := l.handleErr
 		l.handleErr = nil
 		return 0, err
 	}
-	if l.hasHandle {
-		l.hasHandle = false
-		handle := l.handle
-		l.handle = 0
-		return handle, nil
+
+	handle := l.handle
+	has := l.hasHandle
+	l.handle, l.hasHandle = 0, false
+	if !has {
+		// No spare exists (only possible on the very first Accept after a
+		// listenEndpoint failure path or a consumed deferred error): create
+		// the instance to hand out first.
+		var err error
+		if handle, err = l.createInstanceLocked(); err != nil {
+			return 0, err
+		}
 	}
-	return l.createInstanceLocked()
+
+	// W-INV: the refill happens HERE, inside the lock that governs the
+	// instance inventory — never after the connect completion. From this
+	// instant, one instance is listening for the next client no matter when
+	// the current one's kernel-level connect lands.
+	if h, err := l.createInstanceLocked(); err != nil {
+		l.handleErr = err // deferred to the next Accept; the hand-out proceeds
+	} else {
+		l.handle = h
+		l.hasHandle = true
+	}
+	return handle, nil
 }
 
 func (l *pipeListener) Accept() (net.Conn, error) {
@@ -307,15 +422,13 @@ func (l *pipeListener) Accept() (net.Conn, error) {
 		default:
 		}
 
-		// W1/W4: create the NEXT listening instance immediately, before
-		// the identity check and before this connection is handed to
-		// http.Serve — the very next dial finds an instance waiting, so
-		// the re-dial sequences in the malformed/oversized tests (and the
-		// real UI's rapid successive requests) never race instance
-		// creation.
-		if perr := l.preCreate(); perr != nil {
-			l.setHandleErr(perr)
-		}
+		// W-INV (v1.10.10, run 38919925013 step 14): the NEXT listening
+		// instance was already created inside takeInstance's locked
+		// hand-out — there is no post-completion refill anymore. The
+		// kernel marked the handed-out instance busy at the client's
+		// CreateFile, BEFORE this completion notice; a refill HERE would
+		// leave the zero-instance window that the hosted immediate redial
+		// hit under full-suite load ("All pipe instances are busy").
 
 		// Post-connect identity check: the DACL already restricts the
 		// namespace to the current user; this closes the remaining hole of

@@ -19,13 +19,19 @@ Motto: **"The model proposes. The tools execute. The laboratory verifies."**
 
 ## Shipped baseline (compact)
 
-**v1.10.5 is the shipped baseline; release evidence is in changelog.md.**
-(v1.10.5 is the live-stream + Qt-host-build release: it closes the Linux
-Qt host build's missing OpenGL development dependency — the run
-38584769607 step 22 blocker — and fixes the activity-stream
-fragmentation defect that froze the desktop live bubble on real
-generations; v1.10.4 — the stress-gate retarget — is its parent
-release; its evidence stays in changelog.md.)
+**v1.10.10 is the shipped baseline; release evidence is in changelog.md.**
+(v1.10.10 is the instance-invariant + client pipe-busy contract release:
+the Windows named-pipe instance race repaired on BOTH sides of the
+transport contract and the operator's docs condensation order executed;
+v1.10.9 — the smoke path canonicalization + evidence-named Windows
+transport repair, whose run 38919925013 took Linux x64 FULLY GREEN
+end-to-end for the first time — is its parent release. v1.10.5 — the
+live-stream + Qt-host-build release — closed the Linux Qt host build's
+missing OpenGL development dependency — the run 38584769607 step 22
+blocker — and fixed the activity-stream fragmentation defect that froze
+the desktop live bubble on real generations; v1.10.4 — the stress-gate
+retarget — is its parent release; the per-release evidence stays in
+changelog.md.)
 
 v1.8 delivered, with per-release evidence in `changelog.md`: the adaptive
 runtime (task classification, tier system, context planning), the staged

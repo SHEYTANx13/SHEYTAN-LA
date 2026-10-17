@@ -14,9 +14,12 @@
 package localipc
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -217,5 +220,112 @@ func TestPipeConnCloseStopsReadDeadlineTimer(t *testing.T) {
 	conn.muDeadline.RUnlock()
 	if !stopped {
 		t.Fatal("Close must stop the deadline timer and clear the deadline (stale CancelIoEx on a recycled handle value)")
+	}
+}
+
+// TestTakeInstanceRefillsSpareUnderSameLock — v1.10.10 (W-INV, run
+// 38919925013 step 14) STRUCTURAL regression pin: when takeInstance hands
+// out a listening instance, the replacement must ALREADY exist — created
+// inside the SAME locked section that governs the instance inventory. The
+// former code refilled only after the overlapped connect completion was
+// observed, but the KERNEL marks the handed-out instance busy at the
+// client's CreateFile (before any userspace completion notice), leaving a
+// zero-listening-instance window that the hosted full-suite load exposed
+// as "health after garbage: All pipe instances are busy". This pin is
+// deterministic: it inspects the inventory state immediately after the
+// hand-out, under the inventory lock, where the invariant must hold
+// unconditionally — not at the mercy of goroutine scheduling.
+func TestTakeInstanceRefillsSpareUnderSameLock(t *testing.T) {
+	srv, cfg := newCore(t)
+	ipc := startIPC(t, srv, cfg, "")
+	ln, ok := ipc.listener.(*pipeListener)
+	if !ok {
+		t.Fatalf("listener is %T, want *pipeListener", ipc.listener)
+	}
+
+	handle, err := ln.takeInstance()
+	if err != nil {
+		t.Fatalf("takeInstance: %v", err)
+	}
+	defer windows.CloseHandle(handle)
+
+	ln.mu.Lock()
+	refilled := ln.hasHandle
+	ln.mu.Unlock()
+	if !refilled {
+		t.Fatal("takeInstance must create the replacement instance inside the SAME locked section as the hand-out — a post-completion refill leaves the kernel-level zero-instance window (the v1.10.10 W-A defect)")
+	}
+}
+
+// TestMalformedBurstUnderParallelismNeverSurfacesPipeBusy — v1.10.10
+// (W-A, run 38919925013 step 14) regression pin: the EXACT W-A shape
+// (dial, write garbage, close WITHOUT reading, IMMEDIATE redial for
+// health) hammered by parallel goroutines to approach the full suite's
+// parallel package load, under which the single-threaded redial failed
+// hosted with ERROR_PIPE_BUSY ("All pipe instances are busy"). Across the
+// whole burst the endpoint must never surface ERROR_PIPE_BUSY to a
+// dialing client: the server side keeps at least one listening instance
+// at every instant (W-INV — the refill inside the inventory lock), and
+// the client side honors the documented ERROR_PIPE_BUSY contract (W-CLI —
+// WaitNamedPipe readiness wait plus bounded CreateFile retry). The
+// existing serial malformed-garbage test is NOT modified — this pin adds
+// the load dimension; the serial test remains the single-client shape.
+// Compile-verified locally (GOOS=windows); executed by the hosted Windows
+// go test job — the runtime authority for the Windows transport.
+func TestMalformedBurstUnderParallelismNeverSurfacesPipeBusy(t *testing.T) {
+	srv, cfg := newCore(t)
+	ipc := startIPC(t, srv, cfg, "")
+
+	// DisableKeepAlives forces every request to be a TRUE fresh dial —
+	// the immediate-redial shape of W-A — instead of reusing a pooled
+	// connection.
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return dialEndpoint(ipc.Endpoint())
+			},
+			DisableKeepAlives: true,
+		},
+		Timeout: 15 * time.Second,
+	}
+
+	const workers = 8
+	const cycles = 4
+
+	var wg sync.WaitGroup
+	fail := make(chan string, workers*cycles)
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < cycles; i++ {
+				// The W-A sequence, verbatim in shape: dial, garbage,
+				// close without reading, immediate redial for health.
+				conn, err := dialEndpoint(ipc.Endpoint())
+				if err != nil {
+					fail <- fmt.Sprintf("burst dial: %v (ERROR_PIPE_BUSY surfaced — the instance invariant or the client contract is broken)", err)
+					return
+				}
+				_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+				_, _ = conn.Write([]byte("NOT-HTTP AT ALL\r\n\r\n"))
+				_ = conn.Close()
+
+				resp, err := client.Get("http://localipc/api/health")
+				if err != nil {
+					fail <- fmt.Sprintf("health after garbage: %v", err)
+					return
+				}
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusOK {
+					fail <- fmt.Sprintf("health after garbage status = %d, want 200", resp.StatusCode)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(fail)
+	for msg := range fail {
+		t.Error(msg)
 	}
 }

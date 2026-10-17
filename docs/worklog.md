@@ -1,10 +1,11 @@
 # SHEYTAN-Local-Agent — Engineering Worklog
 
-Current release:  v1.10.3
-
 This worklog is a session log, not a second architecture document. The
 architecture truth lives in `ARCHITECTURE.md`, the release evidence in
-`UPDATE.md`, the future in `ROADMAP.md`.
+`UPDATE.md`, the future in `ROADMAP.md`, and the canonical version
+authority in `docs/changelog.md` (the release history — no version line
+is carried in this header; a worklog-header version is a stale-claim
+hazard by construction).
 
 ---
 Task ID: 1 (v1.9.5 session)
@@ -259,289 +260,131 @@ Stage Summary:
 
 
 ---
-Task ID: 1 (v1.8.3 session)
+Task ID: 1 (v1.8.3 session — condensed to compact form per the operator's
+v1.10.10 docs order; the full session narrative lived in the v1.8.3 cycle)
 Agent: v1.8.3 engineering session
 Task: v1.8.3 — P0 root-cause and repair of the Linux CI session-delete
 failure (Actions run 36713108772 / job 109880449134,
-e2e/sessions.spec.ts:88 "Expected: < 4, Received: 4"), P0 deterministic
-session-delete coverage, P1 roadmap evidence-ranking of the supplied
-bottleneck reports
+e2e/sessions.spec.ts:88 "Expected: < 4, Received: 4")
 
-Work Log:
-- Baseline: HEAD `c8867886` (v1.8.2). CI run 36713108772: Browser E2E
-  30/31, only e2e/sessions.spec.ts:88 failing; stress/package skipped
-  after the E2E failure. All other gates (source/frontend audit,
-  Windows x64, Linux build deps, release metadata, native C++, Go
-  verification) PASS.
-- v1.8.2 diff audit: no session create/delete/list path changed (streaming,
-  memory-evidence, self-model only) — the failure is a latent timing race,
-  not a v1.8.2 regression.
-- Reproduced with an instrumented diagnostic (request/response journal +
-  server-side authoritative list snapshots + DOM identity capture; the
-  browser's create-response delivery delayed to model CI latency): the
-  test sampled its count baseline BEFORE the asynchronous "New session"
-  create landed (its visibility gate was satisfied by pre-existing
-  items); the delete then removed the correct session (verified absent
+Summary (compact):
+- Baseline HEAD `c8867886` (v1.8.2); CI run 36713108772 Browser E2E 30/31,
+  only the session-delete test failing; the v1.8.2 diff touched no session
+  path — a latent timing race, not a regression.
+- Root cause (instrumented reproduction: request/response journal +
+  server-side authoritative list snapshots + DOM identity capture): the
+  test sampled its count baseline BEFORE the asynchronous create landed
+  in the sidebar; the delete removed the correct session (verified absent
   server-side); the late create kept the count flat; final DOM == final
-  server state. A pass of the same test = the poll catching the transient
-  count window. Product behavior correct; measurement raced the app.
-- Second, real defect found by the investigation: initializeAgentOnce
-  applied its startup GET /api/sessions response WITHOUT a sessionListGuard
-  ticket (the v1.7.5 repair covered refreshSessions only). The sidebar's
-  New-session button is actionable during init, so a create landing in
-  that window was clobbered by the stale startup list — the created
-  session vanished from the sidebar. Also: AgentSidebar's
-  `void deleteSession(id)` turned server DELETE failures into invisible
-  unhandled rejections; and createSession's unconditional prepend could
-  duplicate a row when a refresh landed between POST dispatch and
-  response.
-- P0 repairs: (1) agent-init routes the startup list write through the
-  ONE sessionListGuard (ticket before the GET; mode-change and
-  user-action detection around the eager first-install create; superseded
-  responses apply only app/loading and delegate list+selection
-  re-resolution to refreshSessions); (2) deleteSession surfaces failures
-  through the store error state (state untouched on failure, never a fake
-  success); (3) createSession prepend is idempotent by id; (4) sidebar
-  rows carry data-session-id (the rendered 8-char slice collides within a
-  bucket).
-- Test repair (never weakened): the browser delete test now waits
-  STATE-BASED for the created session (count grows by one), then asserts
-  the SPECIFIC deleted id, survivor identity-set equality, the count,
-  replacement activation, composer usability, and post-reload absence
-  from the sidebar AND a fresh authoritative fetch. New browser E2E for
-  the init race: the startup GET response is held until the create POST's
-  response has REACHED the page (causality, no timers), then delivered;
-  asserts the created session survives, appears exactly once, and is
-  active.
-- Deterministic coverage: src/session-delete-regression.test.ts (11
-  scenarios over the REAL store via a scripted HTTP transport where
-  response ordering is forced by causality — pending/persisted delete,
-  replacement selection, delete-vs-held-GET, stale-GET non-resurrection,
-  mode separation, honest duplicate-delete, post-delete fresh fetch,
-  init-race survival, clean-init apply, eager first-install session) +
-  src/extensionless-ts-resolver.mjs (Node resolve hook making the store
-  testable outside the bundler); internal/sessions/delete_pending_test.go
-  (pending delete removes every authority; persisted delete cleans
-  index/file/sidecars with fresh-store no-resurrection; unknown-id honest
-  failure). Registered in package.json test:units.
-- Mutation verification: with the init guard neutralized (v1.8.2
-  semantics), BOTH the store-level test and the browser E2E fail; with
-  the repair, both pass. The coverage detects the defect class it was
-  written for.
-- ROADMAP.md repaired: artifact truth (changelog = sole release history;
-  README current-only; UPDATE.md current release/maintenance evidence);
-  Performance, Reliability & Scale Backlog with D/I/H evidence labels;
-  v1.9/v1.10/v1.11/v1.12/v2.0 expanded per the mission; external report
-  figures (percentages, TPS/TTFT/cache/VRAM, 3x/5x/80%) explicitly
-  treated as hypotheses; incompatible prescriptions (Tokio/asyncio
-  rewrites, mandatory FAISS/USearch/SQLite/bbolt/tree-sitter, assumed
-  PagedAttention, NPU embedding service, dual-model VRAM swapping)
-  rejected; performance measurement framework documented with no invented
-  targets.
-- Version truth 1.8.3 via the canonical gate (release-version.mjs
-  --check green: package.json, package-lock.json, config.go,
-  build/config.yml, SIGNATURE); codename gate green; README/ARCHITECTURE/
-  agent.md/UPDATE.md/changelog.md synchronized to v1.8.3.
+  server state. The product deleted the correct session; the MEASUREMENT
+  raced the app.
+- Real defects found and repaired behind the investigation: the startup
+  GET /api/sessions write bypassed the ONE sessionListGuard (a create
+  landing during init was clobbered by the stale startup list — the
+  created session vanished from the sidebar); `void deleteSession(id)`
+  turned server DELETE failures into invisible unhandled rejections; the
+  unconditional create prepend could duplicate a row.
+- Test repaired state-based, never weakened (no timeout increased): wait
+  for the created session to appear (count grows by one), then assert the
+  SPECIFIC deleted id via data-session-id, survivor identity-set equality,
+  count, replacement activation, composer usability, and post-reload
+  absence from the sidebar AND a fresh authoritative fetch.
+- Deterministic three-layer coverage: src/session-delete-regression.test.ts
+  (11 scenarios over the REAL store, causality-forced ordering),
+  internal/sessions/delete_pending_test.go, browser E2E (the init-race
+  test holds the startup GET response until the create POST's response has
+  reached the page). Mutation-verified: with the init guard neutralized,
+  both the store test and the browser E2E fail.
+- ROADMAP.md repaired (artifact truth + the evidence-ranked Performance,
+  Reliability & Scale Backlog); version truth 1.8.3 through the canonical
+  gate.
 
-Verification (evidence classes; Linux x86-64, Go 1.26, Node 24):
-- Frontend: typecheck green; oxlint 0 warnings; npm run test:units 191/191
-  (incl. the 11 new store-level scenarios); production build + embedded
-  sync green.
-- Go: go test ./internal/... -tags headless -count=1 green (58 packages);
-  go vet -tags headless ./internal/... green; race gate green
-  (api/agent/sessions/contextplan/histref/runtime).
-- Native: cmake configure/build + ctest 12/12 green.
-- Browser E2E: FULL suite 32/32 green (real stack, real native engine,
-  no skipped failures) — the repaired delete test and the new init-race
-  test included; every v1.8.2 streaming/memory/self-model test unchanged
-  and passing.
-- Stress suite: 47 pass / 0 fail, hangs=0, crashes=0.
-- NOT executed here (stated honestly): physical-Windows runtime
-  acceptance. The repairs are pinned by deterministic tests and
-  mutation-verified coverage, not by a physical-host observation.
+---
 
-Stage Summary:
-- v1.8.3 complete on this revision: the run-107 session-delete failure is
-  root-caused with instrumented evidence and repaired without weakening
-  any test; the startup list write goes through the one generation
-  authority; DELETE failures are honest; the prepend is idempotent;
-  session-delete behavior is pinned deterministically at store, Go and
-  browser layers with mutation-verified coverage; the roadmap carries
-  the evidence-ranked backlog; version identity is exactly 1.8.3.
-Task ID: 1 (v1.8.1 session)
+Task ID: 1 (v1.8.1 session — condensed to compact form per the operator's
+v1.10.10 docs order; the full session narrative lived in the v1.8.1 cycle)
 Agent: v1.8.1 engineering session
 Task: v1.8.1 — P0 real-Windows local-generation crash repair (small Gemma
 model + `hi`), P0 single-frame streamed-answer visibility, P1 engine
 rollback identity repair, audits, version truth
 
-Work Log:
-- Baseline: HEAD `e5a12c0` (`v1.8.0`), CI green (`36570586149`). The
-  primary evidence is the user's Windows runtime log: local CPU backend,
-  `gemma-4-E2B-it-Q4_K_M.gguf`, llama.cpp b11261, preflight
-  `compatible=true`, then `recovered panic: runtime error: invalid memory
-  address or nil pointer dereference` after `task classified: kind=chat
-  complexity=8`, run settled `error` in ~57 ms, no request-sent /
-  response-header / first-byte evidence.
-- Reproduced the panic deterministically BEFORE any fix (synthetic
-  Gemma-class GGUF: 262,144-entry tokenizer block > the parser's 8 MiB
-  read bound): `ReadModelCard` fails at the LimitReader →
-  `ResolveModelCapabilities` returns nil → the orchestrator's
-  `resolveEffectiveContext` dereferences `caps.TokenizerFamily` between
-  `task classified` and `tier selected` — the exact window and signature.
-- P0 crash repairs: (1) nil-card fallback in `resolveEffectiveContext`
-  (documented caps contract: configured context + conservative heuristic
-  estimator); (2) GGUF metadata read bound 8 → 32 MiB
-  (`ggufMetadataReadLimit`) so real Gemma-class cards parse again
-  (model-aware context clamp + family estimator restored for that model
-  class); (3) `ResolveModelCapabilities` made uniformly nil-config-safe
-  (the vision block was guarded, the recommendation block was not — same
-  deref class, found during verification); (4) gemma3n/gemma4 added to
-  the tokenizer-family and chat-template lineage lists.
-- Regressions (each verified to FAIL on the pre-fix code):
-  `TestResolveEffectiveContextSurvivesUnreadableCard` (unit, panics
-  pre-fix), `TestGemmaClassCardParsesUnderRaisedBound`,
-  `TestResolveEffectiveContextGemmaClassEndToEnd`,
-  `TestLocalGemmaHiChatCompletes` and
-  `TestLocalChatSurvivesUnreadableModelCard` (the api package's FIRST
-  local-provider run-level E2E tests — the test binary re-executes as a
-  fake llama-server subprocess serving the real engine contract; the
-  unreadable-card E2E settles `error` pre-fix, `done` post-fix).
-- P0 streaming: the store routed streamed text through TWO render frames
-  (activity batch frame → streaming flush frame). New
-  `src/stream-fast-path.ts`: stream-critical events
-  (response/reasoning) fold into the streaming accumulator at
-  socket-receive time — ONE frame boundary; the events still join the
-  timeline batch, a self-draining ledger prevents double processing;
-  cumulative-replace, replay idempotence, sequence/stale-run protection
-  and the synchronous done/error/abort flush are unchanged. 12
-  deterministic frame-controller tests (`stream-fast-path.test.ts`), no
-  sleeps. Registered in `npm run test:units`.
-- Backend `emitProgress` SplitThink O(n²) assessed and NOT optimized:
-  bounded by the ~8 ms emit throttle; at realistic local-model token
-  rates the scan volume is negligible (worst case ~6 MB/s on a 100 KB
-  response). Correctness preserved (measure, don't guess).
-- P1 engine identity: the user's b10642 transient is the documented
-  last-resort stamp during the verification window; the commit is
-  authoritative (existing tests pin two-boot no-redownload, manifest
-  fallback, corrupt-state fallback, genuinely-newer-still-updates). ONE
-  real defect found and fixed: after a FAILED verification + Rollback,
-  the transient stamp survived in `installed.json` while the restored
-  manifest described the serving engine (state-first
-  `EffectiveInstalledEngineTag` would then read the wrong build).
-  `Rollback()` now re-records from the restored manifest;
-  `TestRollbackRestoresRecordedIdentityFromManifest` fails pre-fix at
-  exactly `b10642`, plus `TestCommitRemainsTheAuthoritativeIdentity` and
-  `TestRollbackLeavesStateUntouchedWhenManifestHasNoTag`.
-- P1 runtime-root migration audit: the user's
-  `detected=1 merged=1 recovered=0 collisions=4 removed=1
-  reloadConfig=false` IS the intended contract (deterministic newer-wins
-  collisions, one authoritative root, idempotent next boot) — pinned by
-  the existing migration family; no change. GPU/AUTO CPU with `numGPU=0`
-  remains the honest evidence-ladder outcome; Runtime Governor untouched.
-- Version truth 1.8.1 through the canonical gate
-  (`node scripts/release-version.mjs --check` green); README/UPDATE/
-  ARCHITECTURE/agent.md updated to v1.8.1 current with v1.8.0 compressed
-  to history.
-
-Stage Summary:
-- v1.8.1 repairs the real-Windows `hi` crash at the root (both layers:
-  the deref guard and the card-read bound), makes streamed answers
-  visible through ONE render frame, and restores engine rollback
-  identity truth. All regressions were proven against the pre-fix code.
+Summary (compact):
+- Baseline HEAD `e5a12c0` (v1.8.0), CI run 36570586149 green. The primary
+  evidence: the user's Windows runtime log — local CPU backend,
+  gemma-4-E2B-it-Q4_K_M.gguf, llama.cpp b11261, preflight compatible,
+  then a recovered nil-pointer panic between `task classified` and
+  `tier selected`, run settled error in ~57 ms.
+- Root cause reproduced deterministically BEFORE any fix: Gemma-class
+  GGUFs carry ~262K-entry tokenizer blocks exceeding the model-card
+  parser's 8 MiB read bound → ReadModelCard fails → the capability card
+  resolves to nil → resolveEffectiveContext dereferences it.
+- Repairs: the documented nil-card fallback in resolveEffectiveContext
+  (configured context + conservative estimator); the GGUF metadata read
+  bound raised 8 → 32 MiB so real Gemma-class cards parse again;
+  ResolveModelCapabilities made uniformly nil-config-safe (the
+  recommendation block had the same deref class); gemma3n/gemma4 lineage
+  entries. Regressions proven to FAIL pre-fix, including the api
+  package's FIRST local-provider run-level E2E (the test binary
+  re-executes as a fake llama-server subprocess serving the real engine
+  contract).
+- P0 streaming: src/stream-fast-path.ts folds stream-critical events into
+  the streaming accumulator at socket-receive time — ONE frame boundary;
+  12 deterministic frame-controller tests. (The flush-boundary dependency
+  on requestAnimationFrame this left behind was root-caused and closed in
+  v1.8.2/v1.8.4.)
+- P1 engine identity: Rollback() re-records from the restored manifest (a
+  FAILED verification left the transient bundled-default tag stamped in
+  installed.json while the restored manifest described the serving
+  engine); TestRollbackRestoresRecordedIdentityFromManifest fails pre-fix
+  at exactly the transient tag.
+- Audited with no change: the AppData runtime-root migration contract
+  (detected=1 merged=1 recovered=0 collisions=4 removed=1 is the intended
+  deterministic newer-wins contract); GPU/AUTO CPU with numGPU=0 as the
+  honest evidence-ladder outcome. Version truth 1.8.1 through the
+  canonical gate.
 
 ---
-Task ID: 1 (v1.8.0 session)
+
+Task ID: 1 (v1.8.0 session — condensed to compact form per the operator's
+v1.10.10 docs order; the full session narrative lived in the v1.8.0 cycle)
 Agent: v1.8.0 engineering session
 Task: v1.8.0 — P0 pause/resume synchronization repair, honest abort
 marker, Runtime Governor vertical slice (Adaptive Runtime Intelligence),
 documentation consolidation, version truth
 
-Work Log:
-- Inspected the live repository at HEAD `eab6e1b` (`v1.7.6`) and the
-  failing Actions run `36553559366` (Windows x64 Go verification:
-  `TestPauseResumePauseAgainThenResumeCompletes` — `run settled "done"
-  (error "") while waiting for phase "paused"`).
-- Root-caused the CI failure: the test reused `waitForRunResponse` after
-  a resume; its `LatestResponse != ""` condition is satisfied by the
-  STALE pre-resume cumulative snapshot, so the second pause was issued
-  without proof the resumed generation was live. Reproduced the defect
-  class locally; on Linux the failure is scheduling-dependent (the same
-  structural hazard), on the Windows runner it deterministically failed.
-- P0 repair (no production weakening): added `resumedGenerationEvidence`
-  (strictly newer run sequence AND changed cumulative response/reasoning
-  snapshot) + `waitForResumedGeneration` (fail-fast on settlement);
-  `TestPauseResumePauseAgainThenResumeCompletes` now captures the
-  pre-resume snapshot and requires new authoritative activity before the
-  second pause. Hazard note added to `waitForRunResponse` (initial
-  generation only). Regression coverage:
-  `TestResumedGenerationEvidenceContract` (deterministic unit — stale
-  cumulative state, seq-only bumps, shorter continuation captions),
-  `TestPauseResumeRequiresNewGenerationEvidence` (integration replay of
-  the CI scenario).
-- P0 (latent, found during the audit): abort-after-resume was flaky at
-  BASELINE (~1-in-6 on Linux). Root cause: the orchestrator's four
-  context-cancelation exits published `Activity{Type: "done"}`;
-  `observe()` folds any `done` as the terminal outcome, so the live
-  state flipped `done` while the caller settled `aborted` — a registry/
-  state divergence the one-settlement rule can never repair. Repair:
-  honest `aborted` activity type end-to-end (orchestrator exits,
-  `observe` folding, `captureTerminal` + resumed-path caption capture
-  replacing the hardcoded "Completed", frontend typed `aborted` kind +
-  dedicated store case replacing caption-string sniffing). Evidence:
-  15/15 stressed abort-after-resume runs; deterministic regressions
-  `TestAbortedRunStateAgreesWithOutcome`, `TestRunLiveObserveAbortedMarker`.
-- Feature: Runtime Governor vertical slice (`internal/governor`) —
-  ONE runtime policy authority fed by the EXISTING live monitor (same
-  sampler, same cadence, same protection path; the monitor's cooperative
-  critical protection unchanged). `ResourceState` (measured facts +
-  explicit unknowns), sustained-duration + bounded rolling signals over
-  the shipped four-level pressure vocabulary, `Envelope` with adjustment
-  classes (`live`/`next-run`/`reload`), `AdmitHeavyweight`/`AdmitMemory`
-  resident-budget admission (mapped size ≠ resident; unknown →
-  conservative refusal), `SelfModel` with provenance. Policy only — no
-  second sampler/scheduler/authority; executes nothing.
-- Wiring: `Stack.StartGovernor()` on the existing poll path
-  (`observeGovernor`); engine facts through the existing `llm.Backend
-  Metrics` (read-only); active runs through the existing counter; CPU
-  through an injected platform seam (Linux measured load average;
-  Windows honestly unknown with CPU policy inert).
-- Surface: `GET /api/governor` composing governor + sysinfo hardware
-  (GPU/NPU labeled detection-only) + engine metrics + capabilities;
-  System Centre `GovernorCard` (real values, named unknowns). API
-  contract tests + frontend typecheck/lint/units/build green.
-- Docs: README rewritten current + compact history; ARCHITECTURE.md
-  rewritten around the v1.8 truth + compressed historical layers;
-  ROADMAP.md rewritten capability-driven (v1.9+ explicitly FUTURE —
-  NOT IMPLEMENTED); UPDATE.md top section = v1.8.0 with compressed
-  records; agent.md = current handoff; REPORT.md marked unmistakably
-  historical; worklog updated (this entry). Version identity 1.8.0 via
-  the canonical gate (`release-version.mjs --check` green: package.json,
-  package-lock, config.go, build/config.yml, SIGNATURE).
-
-Verification (evidence classes; Linux x86-64, Go 1.26.0, Node 24):
-- Deterministic unit: `go test ./internal/governor/ -count=3` green;
-  new api regression suites green (`-count=5` targeted, family `-count=3`).
-- Race: `go test ./internal/governor/ -race -count=3` green; api+agent
-  full suites `-tags headless -count=2` green (176s + 40s).
-- Integration: `/api/governor` contract; pause/resume/abort/edit family.
-- Frontend: `npm run typecheck` (CI script), `oxlint` 0 warnings,
-  `npm run test:units` green, production build + embedded sync green.
-- Release: `node scripts/release-version.mjs --check` consistent at
-  1.8.0; codename gate green on the tracked tree (and re-run against the
-  clean-room drop at packaging).
-- NOT executed here (stated honestly): physical-PC Windows runtime
-  verification; native C++ build/ctest on this host (GTK/WebKit-free
-  environment builds headless targets only); Browser E2E (Playwright)
-  in this session.
-
-Stage Summary:
-- v1.8.0 complete on this revision: the actual CI failure is repaired at
-  the root with regression coverage that makes stale cumulative-state
-  reuse impossible; the abort path is honest end-to-end (flake
-  eliminated); the Runtime Governor vertical slice is real, wired and
-  exercised; docs are consolidated (current + history, no duplicated
-  essays); version identity is exactly 1.8.0. Pre-v1.8 session records
-  are summarized once below.
+Summary (compact):
+- Baseline HEAD `eab6e1b` (v1.7.6); failing Actions run 36553559366
+  (Windows Go verification: TestPauseResumePauseAgainThenResumeCompletes
+  — "run settled done while waiting for phase paused"). Root cause: the
+  test reused waitForRunResponse after a resume — its condition was
+  satisfied by the STALE pre-resume cumulative snapshot, so the second
+  pause was issued without proof the resumed generation was live
+  (scheduling-dependent on Linux, deterministic on the Windows runner).
+- P0 repair: resumedGenerationEvidence (strictly newer run sequence AND
+  changed cumulative response/reasoning snapshot) + waitForResumedGeneration
+  (fail-fast on settlement); deterministic unit + integration regression
+  coverage.
+- P0 latent defect found during the audit (~1-in-6 flaky at BASELINE):
+  the orchestrator's four context-cancelation exits published
+  Activity{Type: "done"} while the caller settled "aborted" — a
+  registry/state divergence the one-settlement rule can never repair.
+  Honest "aborted" activity type end-to-end (orchestrator, observe
+  folding, captureTerminal, frontend typed kind); 15/15 stressed
+  abort-after-resume runs.
+- Runtime Governor vertical slice (internal/governor): ONE runtime policy
+  authority fed by the EXISTING live monitor (same sampler, same cadence,
+  same protection path). ResourceState (measured facts + explicit
+  unknowns), sustained-duration + bounded rolling pressure signals,
+  Envelope with adjustment classes (live/next-run/reload),
+  AdmitHeavyweight/AdmitMemory resident-budget admission (mapped size ≠
+  resident; unknown → conservative refusal), provenance-carrying
+  SelfModel. Policy only — no second sampler/scheduler/authority;
+  executes nothing. Wired via Stack.StartGovernor on the existing poll
+  path; GET /api/governor + the System Centre GovernorCard.
+- Docs consolidated (README current + compact history; ROADMAP
+  capability-driven with v1.9+ explicitly FUTURE); version identity 1.8.0
+  via the canonical gate. Physical-PC Windows runtime verification
+  honestly NOT executed in that session.
 
 ---
 Task ID: 1 (pre-v1.8.0 record — summarized once)
@@ -2872,3 +2715,279 @@ Commit: prepared in the working tree — this environment cannot push
 (no credentials). The OPERATOR pushes main; the hosted run of this revision
 is the first exercise of the first-time surfaces; fix forward ONLY on what
 its annotations and summaries name.
+
+---
+
+# v1.10.10 — THE INSTANCE-INVARIANT FIX + CLIENT PIPE-BUSY CONTRACT + DOCS CONDENSATION
+
+Task ID: 1 (single-agent session, 113-minute budget)
+Agent: v1.10.10 engineering session
+Task: fix the Windows named-pipe instance race at its root on BOTH sides of
+the contract (server instance inventory + client ERROR_PIPE_BUSY handling),
+pin it with a Windows-gated burst regression test, execute the operator's
+docs order (stale version lines removed, pre-1.9.x history condensed,
+docs polished to the hosted truth), and ship the complete source ZIP.
+
+## Phase 1 — LIVE STATE + EVIDENCE (quoted BEFORE any fix was chosen)
+
+Baseline claim re-verified at live HEAD: clone of main == `0571b49b2b8c3a54aa4c97edf439433c98c0076c` (v1.10.9) — the register's observed baseline, NO drift.
+
+Hosted run 38919925013 (v1.10.9), jobs re-read via the anonymous REST API
+this cycle:
+
+- `Source & frontend audit` — success.
+- `Linux x64` — success. FULL GREEN end-to-end for the first time in the
+  repository's history: the core booted hosted for the first time
+  (CORE_BIN canonicalization), the real smoke gates G1–G5 passed, and the
+  entire chain behind them passed (Qt live-answer acceptance, headless
+  surface runtime smoke, packaging, ZIP verification, artifact upload).
+  Linux is DONE — a protected surface.
+- `Windows x64` — failure at exactly step 14 "Go verification", the FULL
+  go test suite, one test.
+- `Publish and verify main` — skipped (never executed in any run).
+
+The Windows evidence, quoted verbatim from the run's check-run annotations
+(anonymously readable, re-fetched this cycle; the v1.10.9 emitter upgrade
+carried the failing assertion anonymously as designed):
+
+```text
+win-go-test-full:     serve_test.go:287: health after garbage: Get "http://localipc/api/health": All pipe instances are busy.
+win-go-test-full: --- FAIL: TestServeMalformedRequestIsRejectedNotCrashing (0.42s)
+win-go-test-full: FAIL  github.com/Parsaetak/SHEYTAN-local-agent/internal/localipc      12.487s
+```
+
+The asymmetry (both facts from THIS run): the SAME package PASSED the
+headless run (`go test ./internal/... -tags headless`) and FAILED only the
+full suite (`go test ./... -run Test -count=1`, parallel package load) —
+the failure is load-dependent. `All pipe instances are busy` is
+ERROR_PIPE_BUSY: the pipe exists, but ZERO instances are listening at the
+instant of the test's immediate health redial (write garbage, close,
+redial in microseconds).
+
+Docs boundary confirmed at HEAD: README.md line 16 `Current release:
+v1.10.8` inside the ```text identity block; worklog.md line 3 `Current
+release:  v1.10.3`; changelog.md carries nine FULL per-version sections
+v1.8.0–v1.8.8 with the `## v1.7.0 → v1.7.6 (compact)` precedent directly
+below them; worklog.md carries the full pre-1.9.x session writeups for
+v1.8.0/v1.8.1/v1.8.3; UPDATE.md carries superseded v1.10.0/v1.10.1 notes
+sections.
+
+## Phase 2 — ROOT-CAUSE CONFIRMATION (W-RC, line-by-line at HEAD)
+
+`internal/localipc/listener_windows.go` at `0571b49`:
+
+- `Accept` (line 248) → `takeInstance` (line 256) hands out the spare
+  instance and EMPTIES the inventory; the refill `preCreate` sits at line
+  316 — AFTER `connectUntilClientOrClose` (line 277) returns, i.e. after
+  the server goroutine observes the overlapped connect completion via
+  `GetOverlappedResult`.
+- The KERNEL marks instance #1 busy (connected) at the FIRST client's
+  `CreateFile` — before the server goroutine has noticed anything. The
+  window: [kernel connect → zero listening instances] → [event fires] →
+  [goroutine wakeup] → [GetOverlappedResult] → [preCreate refills]. Under
+  the full suite's parallel package load, the test goroutine's
+  write+close+redial (microseconds) beats the server goroutine's refill
+  bookkeeping; the redial's `CreateFile` finds zero listening instances →
+  ERROR_PIPE_BUSY. The headless run's lighter load leaves the refill ahead
+  in practice — exactly the observed asymmetry.
+- `dialEndpoint` (lines 150–164) treats EVERY `CreateFile` error —
+  including ERROR_PIPE_BUSY — as a plain immediate failure: no
+  WaitNamedPipe, no retry. The documented Windows named-pipe client
+  contract for this exact error is unimplemented.
+- The v1.10.9 vanished-peer fix (`isVanishedPeer`) repaired a DIFFERENT,
+  real accept-path window (a client that connects and dies before the
+  overlapped connect resolves) — it stays, untouched.
+
+The Windows named-pipe semantics violation, stated plainly: the listener
+guaranteed "an instance ahead of demand" only in USERSPACE bookkeeping;
+the KERNEL's connect-time instance-busy marking is what empties the
+listening set, and the userspace refill ran outside the lock that governs
+the instance inventory, after a goroutine wakeup. A listening instance
+must exist at EVERY instant from Serve's return until Close — enforced
+structurally (refill inside the same locked section as the hand-out), not
+by userspace bookkeeping order.
+
+The client contract, verified against current Microsoft documentation
+this cycle (Named Pipe Client, learn.microsoft.com, fetched 2026-10-17):
+"If the pipe exists but all of its instances are busy, CreateFile returns
+INVALID_HANDLE_VALUE and the GetLastError function returns ERROR_PIPE_BUSY.
+When this happens, the named pipe client uses the WaitNamedPipe function
+to wait for an instance of the named pipe to become available." The kernel
+instance-selection semantics were verified against the NPFS implementation
+(client open scans the instance list head-to-tail; instances are inserted
+at the TAIL — FIFO by creation order): the handed-out instance is always
+older than the spare, so a client always pairs with the pending-connect
+instance first, and a client landing on the spare is served by the very
+next Accept via the existing ERROR_PIPE_CONNECTED path.
+
+Rule-8 sweeps (proof-before-delete):
+
+- `Current release` across the tree: README.md:16 (v1.10.8, ordered
+  removed), worklog.md:3 (v1.10.3, ordered removed), docs/agent.md (the
+  current-release narrative line — updated to v1.10.10 hosted truth, not
+  in the D1 removal scope), plus two historical mentions INSIDE old
+  session writeups (session records, kept as history).
+- Version literals in non-docs code: only the five canonical release
+  surfaces (package.json, internal/config/config.go, build/config.yml,
+  SIGNATURE, .github/workflows/build-desktop.yml). Pin-proof re-verified:
+  `scripts/release-version.mjs` maintains exactly those five surfaces and
+  contains no README/worklog reference; `scripts/release-version.test.mjs`,
+  `cmd/stress_release_surface.go` (presence check only — content
+  untouched), and `internal/releasecontract` (packaged-app README.txt
+  paths, not the repo README) contain no "Current release" reference.
+  Removal breaks no gate.
+- Cross-references into the sections being condensed: the v1.8.x mentions
+  in README/agent.md/ARCHITECTURE.md are version-fact markers
+  ("Deterministic data analysis (v1.8.7)", "the v1.8.5 reasoning ladder"),
+  not section-anchor links; the compact changelog section preserves each
+  version's one-line essence so every marker still resolves. The pre-1.9.x
+  worklog sessions carry NO run URLs (verified by sweep) — condensation
+  loses no evidence lines. No doc references the UPDATE v1.10.0/v1.10.1
+  superseded sections by anchor.
+
+Condensation plan (scope decision, stated before editing): changelog.md
+collapses the nine FULL v1.8.0–v1.8.8 sections into ONE `## v1.8.0 →
+v1.8.8 (compact)` section following the v1.7.x precedent (each version
+keeps its one-line essence and key invariants; v1.9.0+ stays detailed);
+worklog.md collapses the named pre-1.9.x session writeups (v1.8.0, v1.8.1,
+v1.8.3) to compact summaries (v1.9.2+ sessions and the already-compact
+records stay); UPDATE.md condenses the superseded v1.10.0/v1.10.1 notes
+("What v1.10.x changes" from v1.10.2 onward stays). Keep-list regardless
+of age: every v1.9.x/v1.10.x entry, every run URL, every quoted evidence
+line.
+
+## Phase 3 — WINDOWS TRANSPORT FIX (compile-level local proof; hosted run = runtime authority)
+
+W-INV (server, `internal/localipc/listener_windows.go`): `takeInstance`
+now creates the replacement pipe instance inside the SAME locked section
+that hands out the spare — the inventory can never be observed empty at
+a hand-out, so at least one listening instance exists at every instant
+from Serve's return until Close. The post-completion refill (the old
+`preCreate` call in Accept, and with it the now-unused `setHandleErr`
+publisher) is REMOVED; `takeInstance` also refuses to create anything
+after Close (the endpoint still vanishes with the last handle — this
+also closes a latent post-Close spare-creation race the old shape had).
+A refill failure defers to the next Accept via `handleErr` exactly as
+before (the current connection is still handed to http.Serve). The
+kernel FIFO pairing was verified against the NPFS implementation
+(client open scans the instance list head-to-tail; instances insert at
+the tail — so the pending-connect instance always pairs first and a
+client landing on the spare is served by the very next Accept through
+the existing ERROR_PIPE_CONNECTED path).
+
+W-CLI (client, same file): `dialEndpoint` — the production dial path
+behind the UI's http.Client — now implements the documented
+ERROR_PIPE_BUSY sequence (verified against current Microsoft
+documentation, quoted in Phase 2): on ERROR_PIPE_BUSY, call
+WaitNamedPipe (bounded 2000 ms — the OS's own readiness notification,
+event-driven, never a sleep-based poll; bound directly from winbase as
+WaitNamedPipeW since x/sys does not expose it), retry CreateFile up to
+3 times, return the real error (wrapping the last ERROR_PIPE_BUSY) on
+exhaustion. A WaitNamedPipe ERROR_FILE_NOT_FOUND (endpoint vanished)
+stops the retry immediately — no retry can create a pipe into existence.
+
+W-PIN (two Windows-gated tests in `listener_windows_test.go`):
+`TestTakeInstanceRefillsSpareUnderSameLock` — the STRUCTURAL pin,
+deterministic: after takeInstance hands out an instance, the
+replacement must already exist, inspected under the inventory lock
+(this fails deterministically against the old post-completion-refill
+shape); `TestMalformedBurstUnderParallelismNeverSurfacesPipeBusy` — the
+LOAD pin: the exact W-A shape (dial, write garbage, close WITHOUT
+reading, IMMEDIATE redial for health) × 8 parallel goroutines × 4
+cycles, keep-alives disabled so every request is a TRUE fresh dial,
+asserting no dial surfaces an ERROR_PIPE_BUSY error and every health
+redial answers 200. The existing malformed-garbage test in serve_test.go
+is byte-identical (git diff proves it); serve_test.go is untouched.
+
+Evidence class, stated plainly: local proof for the Windows transport is
+COMPILE-LEVEL ONLY (GOOS=windows go build + go vet — both green); the
+Linux-only environment cannot run Windows tests. The Unix localipc
+suite (which exercises the SAME serve/accept contract over the Unix
+transport, including the untouched malformed and oversized tests) is
+green and unchanged — no contract drift on the shared path. The hosted
+Windows job is the only runtime authority for the named-pipe fix.
+
+## Phase 4 — D1/D2 EXECUTION (docs)
+
+D1: README.md's identity block is version-free (the Current release line
+removed; Application / Executable / AppUserModelID / Branch kept);
+worklog.md's header carries no version and names docs/changelog.md as
+the canonical version authority. The Phase 2 sweep proof covers both
+removals.
+
+D2: changelog.md's nine FULL v1.8.0–v1.8.8 sections (765 lines) → one
+`## v1.8.0 → v1.8.8 (compact)` section (75 lines, the v1.7.x precedent),
+each version keeping its one-line essence and key invariants; v1.9.0+
+detailed sections untouched. worklog.md's named pre-1.9.x full sessions
+(v1.8.3, v1.8.1, v1.8.0 — 284 lines) → compact summaries (125 lines)
+with every baseline fact, root cause and evidence identifier preserved;
+the already-compact records (pre-v1.8.0, v1.8.5 PHASE 1) and every other
+session untouched. UPDATE.md's superseded v1.10.1/v1.10.0 notes (172
+lines) → condensed (102 lines) preserving every run URL and decision;
+the "What v1.10.x changes" sections from v1.10.2 onward untouched. All
+seams verified; the seven docs files remain present (repository-shape
+contract intact — the stress gate checks presence, not content).
+
+## Phase 5 — D3 + POLISH + VERSION IDENTITY
+
+changelog.md carries the v1.10.10 entry (run 38919925013 evidence quoted
+verbatim: the Linux full-green milestone, the assertion line, the FAIL
+line, the headless/full-suite asymmetry, the root cause, both fix parts,
+the pins, the docs order). UPDATE.md carries "What v1.10.10 changes" and
+the v1.10.10 header. agent.md states the hosted truth (Linux protected
+and fully green; Windows compile-level proof, hosted proof pending;
+steps 16–32 and publish first-time surfaces). ARCHITECTURE.md's
+"Current for" marker and ROADMAP.md's shipped-baseline marker updated to
+v1.10.10. Version identity: package.json 1.10.9 → 1.10.10, canonical
+sync green (internal/config/config.go AppVersion, build/config.yml
+productVersion, SIGNATURE first line), `release-version.mjs --check`
+GREEN at 1.10.10; the tracked web bundle rebuilt (web/static/assets/
+index.js — the embedded frontend, verify:web green).
+
+## Phase 6 — FULL LOCAL REGRESSION (gate table; every command executed this session)
+
+| Gate | Command | Result |
+|------|---------|--------|
+| Frontend deps | npm ci | PASS (0 vulnerabilities) |
+| Typecheck | npm run typecheck | PASS |
+| Lint | npm run lint | PASS (0 warnings, 0 errors) |
+| Frontend units | npm run test:units | PASS 236/236 |
+| Release units | npm run test:release | PASS 38/38 |
+| Frontend build | npm run build (+sync:web) | PASS (bundle embedded at 1.10.10) |
+| Stable asset contract | npm run verify:web | PASS |
+| gofmt | gofmt -l . | CLEAN (empty) |
+| Go vet | go vet ./... | PASS |
+| Headless suite | go test ./internal/... -tags headless -count=1 | PASS (exit 0) |
+| FULL suite | go test ./... -count=1 | PASS (exit 0) |
+| Race gate | go test -race (api/agent/sessions/contextplan/histref/runtime + localipc) | PASS (exit 0) |
+| Windows compile | GOOS=windows go build ./... | PASS |
+| Windows vet | GOOS=windows go vet ./... | PASS (compiles the new tests) |
+| Smoke syntax | bash -n scripts/qt-desktop-smoke.sh | PASS |
+| Canonical funnel | node scripts/verify-all.mjs | PASS (native CTest + Qt host NOT RUN — environment-limited, no cmake/Qt6 locally; hosted run covers both) |
+| Stress suite | go build ./scripts/stress-main && /tmp/sheytan-stress stress | PASS 47/47, hangs=0, crashes=0 |
+| Release metadata | node scripts/release-version.mjs --check | GREEN at 1.10.10 |
+| Unix localipc | go test ./internal/localipc/ -count=1 -v | PASS (malformed + oversized untouched, green) |
+
+## Phase 7 — COMMIT + OPERATOR PUSH
+
+Commit prepared in the working tree (transport fix + pins + docs + version
+identity + rebuilt web bundle). This environment cannot push (no
+credentials) — the OPERATOR pushes main. The hosted run of this revision
+is the first exercise of the Windows fix (W-INV/W-CLI/W-PIN) and of the
+never-executed Windows steps 16–32 and the publish job; fix forward ONLY
+on what its annotations and summaries name. Run URL: to be filled by the
+operator's push (run of the v1.10.10 commit this entry ships in).
+
+Per-item outcome table (this cycle's register):
+
+| Item | Outcome | Closure class |
+|------|---------|---------------|
+| W-A | CLOSED (code, both sides of the contract) | W-INV server invariant (refill inside the inventory lock) + W-CLI client WaitNamedPipe contract; compile-level local proof; hosted run = runtime authority |
+| W-RC | CLOSED (root cause confirmed line-by-line) | kernel connect-time busy marking vs post-completion userspace refill — the gap is structurally eliminated |
+| W-INV | CLOSED (code) | takeInstance same-lock refill; post-Close creation refused; deterministic structural pin added |
+| W-CLI | CLOSED (code) | dialEndpoint ERROR_PIPE_BUSY → WaitNamedPipe(2s) × bounded 3 retries → real error; MSDN contract quoted; no sleep-based correctness |
+| W-PIN | CLOSED (code) | structural pin + 8×4 parallel burst pin (W-A shape, keep-alives disabled); malformed-garbage test byte-identical |
+| W-BND | OPEN by design | first-time surfaces (Windows steps 16–32, publish job) consumed as evidence-only fix-forward after the operator's push |
+| D1 | CLOSED (docs) | README.md + worklog.md version lines removed; rule-8 sweep proof recorded (Phase 2) |
+| D2 | CLOSED (docs) | changelog v1.8.x compact, worklog pre-1.9.x sessions compact, UPDATE superseded notes condensed; keep-list honored |
+| D3 | CLOSED (docs) | changelog v1.10.10 entry (evidence verbatim), this worklog entry, UPDATE.md v1.10.10 section, agent.md hosted truth |
