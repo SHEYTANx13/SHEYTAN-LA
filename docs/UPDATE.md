@@ -1,29 +1,94 @@
-# UPDATE.md — v1.10.10 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.10.11 Release Notes & Maintenance Behavior
 
 The authoritative per-release history lives in `docs/changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
-behavior. v1.10.10 is the INSTANCE-INVARIANT FIX + CLIENT PIPE-BUSY
-CONTRACT + DOCS CONDENSATION release: run
-https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38919925013
-(v1.10.9, commit 0571b49) was the LINUX MILESTONE — the Linux x64 job
-went FULLY GREEN end-to-end for the first time in the repository's
-history (the core booted hosted for the first time, the real smoke gates
-G1–G5 passed, and the entire chain behind them passed: Qt live-answer
-acceptance, headless surface runtime smoke, packaging, ZIP verification,
-artifact upload — Linux is DONE, a protected surface). Windows failed at
-exactly one named place: step 14 "Go verification", the FULL go test
-suite, one test, with the assertion carried anonymously by the v1.10.9
-emitter upgrade: `serve_test.go:287: health after garbage: Get
-"http://localipc/api/health": All pipe instances are busy.` / `--- FAIL:
-TestServeMalformedRequestIsRejectedNotCrashing (0.42s)`. v1.10.10 fixes
-exactly that failure on BOTH sides of the named-pipe contract (the
-server's instance inventory refilled inside the lock that governs it, so
-a listening instance exists at every instant; the client's dial path
-honoring ERROR_PIPE_BUSY through the documented WaitNamedPipe contract
-with a bounded retry), pins it with two Windows-gated regression tests,
-and executes the operator's docs order (the stale version lines removed
-from README.md and worklog.md, every pre-1.9.x history condensed to
-concise form, all docs polished to the hosted truth).
+behavior. v1.10.11 is the KERNEL32 BINDING REPAIR + NON-PANICKING DIAL
+PATH release: run
+https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38984879544
+(v1.10.10, commit 5ccbe35) proved the v1.10.10 transport repair WORKED —
+the Windows FULL go test suite, which failed four consecutive releases
+with the ERROR_PIPE_BUSY race, produced no FAIL line that run (INFERENCE:
+the emitter captures both runs' failing lines with per-run prefixes,
+cap 10, only 4 annotations emitted, none win-go-test-full-prefixed; the
+hosted run of this revision is the confirmation authority) — and the
+Windows HEADLESS run failed instead, on a process panic:
+`panic: The specified module could not be found.` →
+`FAIL  github.com/Parsaetak/SHEYTAN-local-agent/internal/localipc  7.795s`.
+The root cause: the v1.10.10 client fix bound `WaitNamedPipeW` from
+`winbase.dll` — a module that does not exist as a loadable file on
+modern Windows (WinBase functions are exported by kernel32.dll;
+"winbase" is a HEADER, not a DLL); LazyDLL loads on first Call, so
+GOOS=windows build and vet passed locally on the defect (the
+compile-level check class is structurally blind to lazy-binding
+errors), and the first real busy wait panicked —
+`LoadLibrary("winbase.dll")` fails with ERROR_MOD_NOT_FOUND and
+`LazyProc.Call` panics on load failure, killing the process. v1.10.11
+rebinds the proc from kernel32.dll (the documented exporting module,
+the canonical go-winio binding), makes the dial path structurally
+non-panicking (Find()-based resolution with a typed error, so a
+resolution failure surfaces the original busy error instead of killing
+the host), pins the defect class with a Windows-gated
+proc-resolution regression test, and hands the never-executed Windows
+steps 17–32 and the publish job to evidence-driven fix-forward.
+
+## What v1.10.11 changes
+
+1. **W-BIND — the binding targets the documented exporting module.**
+   `internal/localipc/listener_windows.go` now declares
+   `modkernel32 = windows.NewLazySystemDLL("kernel32.dll")` /
+   `procWaitNamedPipeW = modkernel32.NewProc("WaitNamedPipeW")` —
+   Microsoft's WaitNamedPipe requirements: "Library: Kernel32.lib, DLL:
+   Kernel32.dll"; the canonical go-winio client binds it from
+   kernel32.dll identically. The former `winbase.dll` name could never
+   LoadLibrary on modern Windows ("winbase" is a header family, not a
+   DLL), so the first `LazyProc.Call` panicked with "The specified
+   module could not be found." — the hosted win-go-test-headless FAIL
+   (run 38984879544, step 14). In production the same panic would have
+   killed the real UI's process on its first contended dial.
+2. **W-FIX — the dial path is structurally non-panicking.**
+   `waitNamedPipe` resolves the proc with `procWaitNamedPipeW.Find()`
+   BEFORE any Call and returns the typed `ErrWaitNamedPipeUnresolved`
+   on resolution failure — a real error, never a process panic. The
+   dial's bounded retries then exhaust and surface the ORIGINAL busy
+   error honestly. No `LazyProc.Call` panic path remains anywhere in
+   transport code: a library dial path fails with an error, never
+   kills the host process. The bounded retry constants
+   (`pipeBusyWaitMS = 2000`, `pipeBusyMaxRetries = 3`) and the whole
+   `dialEndpoint` loop are UNCHANGED — the documented client contract,
+   already correct.
+3. **W-PIN — the compile-blind defect class becomes a named test
+   failure.** `TestWaitNamedPipeProcResolves` (Windows-gated) asserts
+   `procWaitNamedPipeW.Find()` returns nil: any future wrong module
+   name or wrong proc name fails as a NAMED, self-describing test —
+   never again a mystery process panic seven seconds into a package
+   run. `TestWaitNamedPipeLiveEndpointSemantics` calls the real
+   `waitNamedPipe` against a live served endpoint and asserts the
+   documented success semantics (nil when a listening instance exists
+   within the timeout), exercising Find() and the actual kernel32 call
+   end-to-end. The burst pin
+   (`TestMalformedBurstUnderParallelismNeverSurfacesPipeBusy` — the
+   trigger that exposed this defect exactly as designed), the
+   structural pin (`TestTakeInstanceRefillsSpareUnderSameLock`), and
+   the serial malformed-garbage test stay BYTE-IDENTICAL (the test-file
+   diff is purely additive).
+4. **Rule-8 sweep recorded (proof-before-edit).** Every lazy DLL load
+   in the tree was inventoried before the edit (kernel32, ntdll,
+   psapi, shell32, comdlg32, user32, gdi32, iphlpapi — all documented,
+   loadable modules, the same set Go's stdlib loads via sysdll);
+   exactly ONE non-existent module name existed in the tree:
+   `winbase.dll`, the named defect. Nothing else was edited; the
+   twice-fully-green Linux chain and every v1.10.3–v1.10.10 gain are
+   untouched.
+5. **Hosted truth, stated plainly.** Linux x64: fully green two
+   consecutive runs — a protected surface, not churned. Windows x64:
+   the binding fix carries compile-level local proof (GOOS=windows
+   build + vet — a class this cycle PROVED cannot see lazy-binding
+   defects, which is exactly why the proc-resolution pin exists);
+   hosted proof pending the first run of this revision, which is also
+   the potential FIRST complete pipeline pass (a green step 14
+   unblocks the never-executed Windows steps 17–32 and then the
+   publish job, never executed in ANY run). Fix forward only on what
+   the run's annotations and summaries name.
 
 ## What v1.10.10 changes
 

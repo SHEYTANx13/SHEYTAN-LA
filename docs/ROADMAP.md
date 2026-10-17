@@ -19,13 +19,20 @@ Motto: **"The model proposes. The tools execute. The laboratory verifies."**
 
 ## Shipped baseline (compact)
 
-**v1.10.10 is the shipped baseline; release evidence is in changelog.md.**
-(v1.10.10 is the instance-invariant + client pipe-busy contract release:
-the Windows named-pipe instance race repaired on BOTH sides of the
-transport contract and the operator's docs condensation order executed;
-v1.10.9 — the smoke path canonicalization + evidence-named Windows
+**v1.10.11 is the shipped baseline; release evidence is in changelog.md.**
+(v1.10.11 is the kernel32 binding repair + non-panicking dial path
+release: the win-go-test-headless process panic root-caused to a wrong
+lazy-DLL module name ("winbase.dll" — a header, not a DLL) and fixed at
+the binding (kernel32.dll, the documented exporting module), with
+Find()-based resolution so a transport dial fails with an error instead
+of killing the host process, pinned by a Windows-gated
+proc-resolution regression test; v1.10.10 — the instance-invariant +
+client pipe-busy contract release, the Windows named-pipe instance race
+repaired on BOTH sides of the transport contract plus the operator's
+docs condensation order — is its parent release. v1.10.9 — the smoke
+path canonicalization + evidence-named Windows
 transport repair, whose run 38919925013 took Linux x64 FULLY GREEN
-end-to-end for the first time — is its parent release. v1.10.5 — the
+end-to-end for the first time — is its grandparent. v1.10.5 — the
 live-stream + Qt-host-build release — closed the Linux Qt host build's
 missing OpenGL development dependency — the run 38584769607 step 22
 blocker — and fixed the activity-stream fragmentation defect that froze

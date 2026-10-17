@@ -329,3 +329,48 @@ func TestMalformedBurstUnderParallelismNeverSurfacesPipeBusy(t *testing.T) {
 		t.Error(msg)
 	}
 }
+
+// TestWaitNamedPipeProcResolves — v1.10.11 (W-BIND, run 38984879544 step 14)
+// regression pin: the WaitNamedPipeW lazy binding MUST resolve — the proc
+// must be exported by the module it is bound from. The v1.10.10 binding
+// declared windows.NewLazySystemDLL("winbase.dll"), a module that does not
+// exist as a loadable file on modern Windows (WinBase functions are exported
+// by kernel32.dll; "winbase" is a header, not a DLL). LazyDLL loads on first
+// Call, so GOOS=windows build and vet passed locally — the compile-level
+// local check class is structurally BLIND to lazy-binding defects — while
+// the first real busy wait panicked with "The specified module could not be
+// found." and killed the localipc test binary (the hosted
+// win-go-test-headless FAIL). This pin turns that defect class into a NAMED
+// failing test: any future wrong module name or wrong proc name fails
+// HERE, at test time, with a self-describing name — never again a mystery
+// process panic 7 seconds into a package run. The binding is kernel32.dll,
+// the documented exporting module (Microsoft, WaitNamedPipe requirements:
+// "Library: Kernel32.lib, DLL: Kernel32.dll"), identical to the canonical
+// go-winio client. Compile-verified locally (GOOS=windows); executed by the
+// hosted Windows go test job — the runtime authority.
+func TestWaitNamedPipeProcResolves(t *testing.T) {
+	if err := procWaitNamedPipeW.Find(); err != nil {
+		t.Fatalf("WaitNamedPipeW proc resolution failed (wrong module or proc name — the v1.10.11 W-BIND defect class): %v", err)
+	}
+}
+
+// TestWaitNamedPipeLiveEndpointSemantics — the semantic half of the W-BIND
+// pin: waitNamedPipe against a LIVE endpoint must honor its documented
+// contract — nil when a listening instance is available within the timeout
+// (W-INV guarantees the spare exists from Serve's return), and NEVER a
+// process panic on any branch. The resolution path is exercised for real:
+// Find() then the actual WaitNamedPipeW call. A live, freshly served
+// endpoint owns one listening spare instance, so the OS's readiness
+// notification fires immediately — no sleep, no poll, deterministic.
+func TestWaitNamedPipeLiveEndpointSemantics(t *testing.T) {
+	srv, cfg := newCore(t)
+	ipc := startIPC(t, srv, cfg, "")
+	ln, ok := ipc.listener.(*pipeListener)
+	if !ok {
+		t.Fatalf("listener is %T, want *pipeListener", ipc.listener)
+	}
+
+	if err := waitNamedPipe(ln.name, pipeBusyWaitMS); err != nil {
+		t.Fatalf("waitNamedPipe against a live endpoint with a listening spare instance: %v (want nil — the documented success semantics; a panic here is the W-BIND defect class)", err)
+	}
+}

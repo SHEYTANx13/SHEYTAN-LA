@@ -170,8 +170,25 @@ func pipeName(endpoint string) string {
 // dial path (the real UI's transport behind http.Client), not any test: a UI
 // issuing rapid successive requests through the same endpoint benefits
 // identically. WaitNamedPipe is not exposed by golang.org/x/sys/windows, so
-// it is bound directly from winbase (WaitNamedPipeW) — the same binding the
-// canonical winio client used.
+// it is bound directly from kernel32.dll (WaitNamedPipeW) — the documented
+// exporting module; the canonical go-winio client binds it from kernel32.dll
+// identically.
+//
+// v1.10.11 (W-BIND, run 38984879544 step 14): the v1.10.10 binding loaded
+// "winbase.dll" — a module that does NOT exist as a loadable file on
+// modern Windows (WinBase functions are exported by kernel32.dll; winbase
+// is a HEADER, not a DLL). LazyDLL loads on first Call, so GOOS=windows
+// build and vet passed locally while the first real busy wait panicked:
+// LoadLibrary("winbase.dll") fails with ERROR_MOD_NOT_FOUND — message
+// exactly "The specified module could not be found." — and LazyProc.Call
+// panics on load failure, killing the whole test binary (hosted evidence,
+// the win-go-test-headless FAIL; in production the same panic would kill
+// the real UI's process on its first contended dial). The binding now
+// targets kernel32.dll (Microsoft's WaitNamedPipe requirements: "Library:
+// Kernel32.lib, DLL: Kernel32.dll"), and waitNamedPipe resolves the proc
+// with Find() BEFORE any Call, returning a typed error on resolution
+// failure — no LazyProc.Call panic path remains anywhere in the transport:
+// a library dial path fails with an error, never kills the host process.
 const (
 	// pipeBusyWaitMS bounds ONE WaitNamedPipe readiness wait. Finite,
 	// single-digit seconds: long enough for a saturated server's next
@@ -185,19 +202,37 @@ const (
 )
 
 var (
-	modwinbase         = windows.NewLazySystemDLL("winbase.dll")
-	procWaitNamedPipeW = modwinbase.NewProc("WaitNamedPipeW")
+	// v1.10.11 (W-BIND): kernel32.dll is the documented exporting module
+	// for WaitNamedPipeW. "winbase" is a header family (winbase.h), not a
+	// loadable DLL — the former NewLazySystemDLL("winbase.dll") could
+	// never load on modern Windows.
+	modkernel32        = windows.NewLazySystemDLL("kernel32.dll")
+	procWaitNamedPipeW = modkernel32.NewProc("WaitNamedPipeW")
 )
+
+// ErrWaitNamedPipeUnresolved marks a failed WaitNamedPipeW proc resolution
+// (a wrong module name or wrong proc name in a future binding regression,
+// or the module genuinely absent). A transport dial must fail with an
+// error — never kill the host process the way LazyProc.Call's load-failure
+// panic does. When waitNamedPipe returns this error, the dial loop's
+// bounded retries exhaust and surface the ORIGINAL busy error honestly.
+var ErrWaitNamedPipeUnresolved = errors.New("localipc: WaitNamedPipeW proc unresolved")
 
 // waitNamedPipe waits for a listening instance of the named pipe to become
 // available (the OS's readiness notification — no sleeping, no polling).
 // Returns nil when an instance became available within the timeout; the
 // GetLastError value otherwise (ERROR_SEM_TIMEOUT on timeout,
-// ERROR_FILE_NOT_FOUND when no pipe instance exists at all).
+// ERROR_FILE_NOT_FOUND when no pipe instance exists at all). The proc is
+// resolved with Find() BEFORE any Call — a resolution failure returns
+// ErrWaitNamedPipeUnresolved (a real error, never a panic), so the dial
+// path stays non-panicking on every branch.
 func waitNamedPipe(name string, timeoutMS uint32) error {
 	p, err := windows.UTF16PtrFromString(name)
 	if err != nil {
 		return err
+	}
+	if err := procWaitNamedPipeW.Find(); err != nil {
+		return fmt.Errorf("%w: %v", ErrWaitNamedPipeUnresolved, err)
 	}
 	r1, _, e1 := procWaitNamedPipeW.Call(uintptr(unsafe.Pointer(p)), uintptr(timeoutMS))
 	if r1 == 0 {

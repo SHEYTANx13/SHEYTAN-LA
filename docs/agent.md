@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.10 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.11 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -7,44 +7,56 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.10.10 — the instance-invariant fix + the client
-pipe-busy contract + the operator's docs condensation order (run
-38919925013 consumed: the LINUX MILESTONE — the Linux x64 job went FULLY
-GREEN end-to-end for the first time in the repository's history: the core
-booted hosted for the first time, the real smoke gates G1–G5 passed, and
-the whole chain behind them — Qt live-answer acceptance, headless surface
-runtime smoke, packaging, ZIP verification, artifact upload. Windows
-failed at exactly one named place: step 14 "Go verification", the FULL go
-test suite, `TestServeMalformedRequestIsRejectedNotCrashing`, with the
-assertion carried anonymously: `serve_test.go:287: health after garbage:
-Get "http://localipc/api/health": All pipe instances are busy.` —
-ERROR_PIPE_BUSY, a load-dependent named-pipe instance race. v1.10.10
-fixes it on BOTH sides of the contract: the server's `takeInstance` now
-creates the replacement pipe instance inside the SAME locked section
-that hands out the spare (a listening instance exists at every instant
-from Serve's return until Close — the kernel marks an instance busy at
-the client's CreateFile, before any userspace completion notice, so the
-former post-completion refill left the zero-instance window), and
-`dialEndpoint` (the production dial path) now honors ERROR_PIPE_BUSY
-through the documented WaitNamedPipe contract (bounded 2 s wait, bounded
-retries, real error on exhaustion — no sleep-based polling). Two
-Windows-gated pins: a structural inventory-lock pin and a parallel
-load pin (8 goroutines × the exact dial–write–close–immediate-redial
-shape). The malformed-garbage test is NOT modified. The operator's docs
-order is executed: README.md and worklog.md carry no version line
-(docs/changelog.md is the canonical version authority), the nine FULL
-changelog v1.8.x sections collapse to one compact section, the worklog
-v1.8.0/v1.8.1/v1.8.3 sessions collapse to compact summaries, and
-UPDATE.md's superseded v1.10.0/v1.10.1 notes condense. HOSTED STATUS
-(do not overstate): audit and Linux x64 are fully green since run
-38919925013 — Linux is a protected surface, do not churn the verified
-chain; the Windows fix carries compile-level local proof only (the
-Linux-only environment cannot run Windows tests — GOOS=windows go build
-+ go vet are the local gates, the hosted Windows job is the runtime
-authority); Windows steps 16–32 and the publish job (never executed in
-ANY run) remain first-time surfaces — fix forward only on what the next
-run's annotations and summaries name.**
-Its parents, v1.10.8 — the line-ending policy + E2E path repair + CI
+**Current release: v1.10.11 — the kernel32 binding repair + the
+non-panicking dial path (run 38984879544 consumed: the v1.10.10 transport
+repair WORKED — the Windows FULL go test suite, which failed four
+consecutive releases with the ERROR_PIPE_BUSY race, produced no FAIL
+line that run, an INFERENCE with the hosted run of this revision as the
+confirmation authority; the Windows HEADLESS run failed instead, on a
+process panic: `panic: The specified module could not be found.` →
+`FAIL  github.com/Parsaetak/SHEYTAN-local-agent/internal/localipc
+7.795s`. The root cause: the v1.10.10 client fix bound `WaitNamedPipeW`
+from `winbase.dll` — a module that does not exist as a loadable file on
+modern Windows (WinBase functions are exported by kernel32.dll; winbase
+is a HEADER, not a DLL); LazyDLL loads on first Call, so GOOS=windows
+build + vet passed locally on the defect — the compile-level check class
+is structurally blind to lazy-binding errors — and the first real busy
+wait panicked (LoadLibrary fails with ERROR_MOD_NOT_FOUND and
+LazyProc.Call panics on load failure, killing the process; in
+production the same panic would kill the real UI's process on its first
+contended dial). v1.10.11 fixes it at the binding: kernel32.dll, the
+documented exporting module, the canonical go-winio binding
+(`modkernel32 = windows.NewLazySystemDLL("kernel32.dll")` →
+`WaitNamedPipeW`); `waitNamedPipe` resolves via `Find()` with the typed
+`ErrWaitNamedPipeUnresolved` on failure, so the dial's bounded retries
+exhaust and surface the original busy error — no LazyProc.Call panic
+path remains in transport code. The W-PIN regression pair
+(`TestWaitNamedPipeProcResolves` — any future wrong module/proc name
+becomes a NAMED failing test, not a mystery panic; and
+`TestWaitNamedPipeLiveEndpointSemantics` — the documented success
+semantics against a live endpoint) is additive; the burst pin, the
+structural pin, the malformed-garbage test, and the whole dialEndpoint
+loop stay BYTE-IDENTICAL. HOSTED STATUS (do not overstate): audit and
+Linux x64 are fully green for two consecutive runs (runs 38919925013
+and 38984879544) — Linux is a protected surface, do not churn the
+verified chain; the Windows binding fix carries compile-level local
+proof only (the Linux-only environment cannot run Windows tests —
+GOOS=windows go build + go vet are the local gates, a class this cycle
+PROVED cannot see lazy-binding defects, which is exactly why the
+proc-resolution pin exists; the hosted Windows job is the runtime
+authority); Windows steps 17–32 and the publish job (never executed in
+ANY run) remain first-time surfaces — the next run is also the
+potential FIRST complete pipeline pass — fix forward only on what its
+annotations and summaries name.**
+Its parents, v1.10.10 — the instance-invariant fix + the client
+pipe-busy contract + the operator's docs condensation order (the
+server's `takeInstance` creates the replacement pipe instance inside
+the SAME locked section that hands out the spare, so a listening
+instance exists at every instant from Serve's return until Close; the
+client's `dialEndpoint` honors ERROR_PIPE_BUSY through the documented
+WaitNamedPipe contract with a bounded retry; the burst and structural
+pins; the stale version lines removed and pre-1.9.x history condensed) —
+and v1.10.8 — the line-ending policy + E2E path repair + CI
 Visibility 3.0 (the Windows gofmt gate was RIGHT — the committed tree is
 gofmt-clean; the CRLF checkout class is fixed by a scoped `.gitattributes`
 (`*.go text eol=lf`) plus a Windows pre-Checkout `core.autocrlf=false` pin,
