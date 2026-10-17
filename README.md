@@ -39,7 +39,7 @@ Governor folds the existing live-pressure telemetry into a policy
 authority — it owns policy only; every action stays with its existing
 subsystem. Full truth: `docs/ARCHITECTURE.md`.
 
-### Deterministic data analysis (v1.8.7)
+### Deterministic data analysis
 
 The one `dataAnalysis` tool is the application's data authority: CSV/
 TSV/JSON load with type inference and a parse-once numeric cache, then
