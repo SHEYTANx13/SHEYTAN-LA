@@ -19,8 +19,16 @@ Motto: **"The model proposes. The tools execute. The laboratory verifies."**
 
 ## Shipped baseline (compact)
 
-**v1.10.11 is the shipped baseline; release evidence is in changelog.md.**
-(v1.10.11 is the kernel32 binding repair + non-panicking dial path
+**v1.10.12 is the shipped baseline; release evidence is in changelog.md.**
+(v1.10.12 is the documented busy-retry contract release: the hosted
+burst failure's 0.60 s arithmetic (run 39019535982) proved the client's
+fixed 3-attempt busy budget — not the server — was the defect, and
+dialEndpoint now implements the documented Microsoft Named Pipe Client
+pattern — retry CreateFile while WaitNamedPipe reports an instance
+becoming available — bounded by a 10 s busy-dial deadline; the same
+release completes THIS shipped-baseline section through v1.10.x and
+corrects the stale Phase 2 status sentence. v1.10.11 is the kernel32
+binding repair + non-panicking dial path
 release: the win-go-test-headless process panic root-caused to a wrong
 lazy-DLL module name ("winbase.dll" — a header, not a DLL) and fixed at
 the binding (kernel32.dll, the documented exporting module), with
@@ -48,6 +56,32 @@ the pause/edit/resume run lifecycle, sessions/recovery/continuum machinery,
 the Coding Lab, the scheduler, custom tools, the downloader/updater, the
 Governor, and the skill stores. This roadmap deliberately carries NO detailed
 v1.8.x release history — that history lives in exactly one place.
+
+v1.9 delivered, with per-release evidence in `changelog.md`: the AI System
+object with frozen execution binding; the durable Goal engine; approval
+authority with risk classification and the CallKey decision ledger; bounded
+sub-agents and delegation (`internal/multiagent/subtasks`); `repo_nav`
+deterministic repository navigation; progressive disclosure hardening; the
+loopback activity transport with capability token; engine/run admission
+coordination (EngineAdmission, UpdateEngineNow, the admission boundary); the
+zero-session send contract; the measured live-stream/TTFT engine repair
+(19.08 → 3.66 ms/token, prefill parity); the Governor race-gate repair; the
+performance baseline framework (`internal/perf`, `cmd/shtn-perf`). This
+roadmap deliberately carries NO detailed v1.9.x release history — that
+history lives in exactly one place.
+
+v1.10 delivered, with per-release evidence in `changelog.md`: the full
+Qt/QML host migration (Wails removed); the Go core + Qt host architecture
+over the secured localipc transport; the repository reshape; the Windows
+named-pipe transport repair chain (W1–W4, W-C, isVanishedPeer, the
+Close-timer stop, the W-INV structural instance invariant, the
+WaitNamedPipe client contract, the kernel32 binding, the non-panicking
+dial path); the CI visibility system (tee'd logs, failure summaries,
+anonymous annotations); the LF policy and gofmt gates; the green browser
+E2E suite; the stress gate; the fully-green Linux pipeline (three
+consecutive runs); the version-free docs order; Linux packaging and ZIP
+proven. This roadmap deliberately carries NO detailed v1.10.x release
+history — that history lives in exactly one place.
 
 ## Evidence labels used by the backlog
 
@@ -191,11 +225,19 @@ client's refusal of RFC6455 fragmented activity frames (the hub's
 1024-byte write buffer fragments every large event) froze `liveText()`
 on every real long-context run — reassembly is now implemented with
 the violation refusals kept loud. The Windows `Go verification`
-failure remains UNIDENTIFIED (the step log is admin-gated; the exact
-CGO_ENABLED=0 commands pass locally — 64+65 packages + vet — and
-GOOS=windows type-checks every package including test files; no
-speculative change, no test weakening). Windows CI remains NOT
-VERIFIED until a green hosted run of v1.10.5 exists; the run's own
+failure — UNIDENTIFIED when this sentence was written at v1.10.5 — has
+since been ROOT-CAUSED and repaired across v1.10.7–v1.10.12: the CI
+visibility system surfaced the real failing lines (v1.10.7), the
+vanished-peer classification and the Close-timer stop removed the false
+fatal accept failures (v1.10.8–v1.10.9), the W-INV structural instance
+invariant and the WaitNamedPipe client contract closed the
+ERROR_PIPE_BUSY race on both sides of the transport (v1.10.10), the
+kernel32 binding repair + non-panicking dial removed the process panic
+(v1.10.11), and the deadline-bounded busy dial replaced the fixed
+3-attempt budget that the hosted burst failure's 0.60 s arithmetic
+proved was the remaining client-side defect (v1.10.12 — compile-level
+local proof only; the hosted run is the runtime authority). Windows CI
+remains NOT VERIFIED until a green hosted run exists; the run's own
 step log is the arbiter.
 Remaining surfaces NOT yet migrated to Qt (honest): AI Systems
 editing/import, Goals,

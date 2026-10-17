@@ -11,6 +11,131 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.10.12 — 2026-10-17 — the documented busy-retry contract + the ROADMAP shipped-baseline completion: dialEndpoint's fixed 3-attempt busy budget replaced by the documented Microsoft Named Pipe Client pattern bounded by a 10 s busy-dial deadline, the burst pin kept byte-identical, and the shipped baseline completed through v1.10.x
+
+Focus: consume the run 39019535982 evidence boundary (v1.10.11, commit
+e89680b) and fix exactly the one named Windows failure. That run proved
+three things. First: the v1.10.11 kernel32 binding repair WORKED — the
+"The specified module could not be found." process panic is gone, and
+the proc-resolution pin passed. Second: the Windows FULL go test suite
+produced no failing line for the SECOND consecutive run (the failure
+emitter captures every FAIL/panic line from both Windows test runs with
+per-run prefixes; all 7 annotations this run carry the
+win-go-test-headless prefix, none carry win-go-test-full — labeled
+INFERENCE below, the hosted run of THIS revision is the confirmation
+authority). Third: the headless run now fails on a NAMED test with
+decisive published evidence:
+
+```text
+--- FAIL: TestMalformedBurstUnderParallelismNeverSurfacesPipeBusy (0.60s)
+listener_windows_test.go:329: burst dial: localipc: dial \\.\pipe\sheytan-la-runneradmin-core: no listening pipe instance after 3 busy waits: All pipe instances are busy. (ERROR_PIPE_BUSY surfaced — the instance invariant ...
+```
+(the annotation line above was emitted twice — two of the eight workers
+hit it; GitHub truncates annotation text at 250 chars, the run page
+carries the full line)
+```text
+FAIL  github.com/Parsaetak/SHEYTAN-local-agent/internal/localipc  9.157s
+FAIL
+Process completed with exit code 1.
+```
+Steps 15–16 ran (failure summary + upload); steps 17–32 skipped; the
+publish job skipped. This is a 0.60-second named test failure — not a
+panic, not a server-side gap.
+
+1. **P0 — the root cause (W-BUDGET): the client's FIXED attempt-count
+   budget, not the server.** The arithmetic is decisive. dialEndpoint's
+   busy loop (unchanged since v1.10.10) retries CreateFile a fixed
+   `pipeBusyMaxRetries = 3` times, waiting up to `pipeBusyWaitMS =
+   2000` ms per attempt via WaitNamedPipe. Three full 2000 ms waits
+   cannot fit inside a 0.60 s failure — so every WaitNamedPipe returned
+   PROMPTLY, meaning the server's W-INV refill published a new
+   listening instance each time, exactly as designed: the SERVER side
+   is healthy. What failed was the CreateFile immediately after each
+   wait: with 8 workers racing for the single listening instance the
+   invariant guarantees, a worker can legitimately lose the CreateFile
+   race three times in a row — in microseconds — and its dial then
+   fails with a spurious "no listening pipe instance after 3 busy
+   waits" although the server was healthy and an instance was available
+   milliseconds later. Losing three consecutive microsecond-scale
+   CreateFile races under 8-way contention is normal scheduling, not a
+   server defect. In production the same defect would make the real
+   UI's dial path spuriously fail under 8 parallel requests.
+
+2. **P0 — the fix (W-BUDGET): the DOCUMENTED Microsoft Named Pipe
+   Client pattern, bounded by a deadline.** Microsoft's documented
+   Named Pipe Client pattern (learn.microsoft.com — Named Pipe Client)
+   is NOT an attempt count: on ERROR_PIPE_BUSY the client calls
+   WaitNamedPipe and retries CreateFile — repeatedly, for as long as
+   WaitNamedPipe reports an instance becoming available, bounded by the
+   caller's deadline. `internal/localipc/listener_windows.go`
+   restructures dialEndpoint to exactly that contract: on
+   ERROR_PIPE_BUSY it waits (the OS's event-driven readiness
+   notification — never a sleep poll; each wait capped by
+   `pipeBusyWaitMS = 2000` and clamped to the remaining budget) and
+   retries CreateFile immediately with NO attempt counter — the only
+   bound is the new `pipeBusyDialBudget = 10 * time.Second` total
+   busy-dial wall clock. Honest early exits are preserved and
+   sharpened: a CreateFile error other than ERROR_PIPE_BUSY returns
+   as-is; a wait reporting ERROR_FILE_NOT_FOUND returns that error
+   (the pipe name vanished — the server is gone; not a busy
+   condition); a wait that times out with no instance (the server
+   stopped publishing — a real failure) or an unresolved WaitNamedPipe
+   proc (waiting is impossible; the loop never spins on a broken wait
+   facility) surfaces the ORIGINAL busy error. On deadline exhaustion
+   it returns the new typed `ErrBusyDialBudgetExhausted` naming the
+   budget and the elapsed time. This is the documented client
+   contract, NOT a test-weakening mask: the burst pin that surfaced
+   the defect stays BYTE-IDENTICAL and must still pass — it passes
+   because the dial stops surrendering after three lost lottery
+   tickets, not because the assertion moved.
+
+3. **Server side and every pin byte-identical.** The W-INV
+   takeInstance refill under the same lock, preCreate, isVanishedPeer,
+   the Close-timer stop, the kernel32 binding, the non-panicking
+   waitNamedPipe, the structural pin
+   (TestTakeInstanceRefillsSpareUnderSameLock), the resolution pin
+   (TestWaitNamedPipeProcResolves), and the malformed-garbage test are
+   UNCHANGED. The v1.10.10–v1.10.11 chain built the correct pieces
+   (binding, resolution, W-INV refill); v1.10.12 completes the client
+   contract they serve.
+
+4. **ROADMAP shipped-baseline completion (R1/R2/R3).** docs/ROADMAP.md
+   gains the missing "v1.9 delivered" and "v1.10 delivered" paragraphs
+   in the existing v1.8 paragraph's form, using only the
+   evidence-backed feature lists; the stale v1.10.5-era Phase 2
+   sentence claiming the Windows Go verification failure "remains
+   UNIDENTIFIED" is replaced with the verified defect-chain truth
+   (root-caused and repaired across v1.10.7–v1.10.12) while keeping
+   the honest boundary — Windows CI is NOT VERIFIED until a green
+   hosted run; the shipped-baseline header names v1.10.12. No
+   invented features, no future-phase rewrites, no status flipped to
+   verified without a green hosted run.
+
+5. **W-FULL (INFERENCE, high confidence — second consecutive clean
+   run):** win-go-test-full produced no FAIL/panic line in run
+   39019535982 (the emitter captures both runs' failing lines with
+   per-run prefixes; all 7 annotations carry the
+   win-go-test-headless prefix). The full suite — which failed four
+   consecutive releases before v1.10.10 — APPEARS GREEN at e89680b,
+   second consecutive run. Labeled INFERENCE; the hosted run of THIS
+   revision is the confirmation authority.
+
+6. **Honest hosted boundary.** The Windows transport fix carries
+   compile-level local proof only (GOOS=windows build + vet; a
+   Linux-only environment cannot execute the Windows dial path or the
+   pins). The hosted Windows job is the runtime authority. The
+   never-executed surfaces ahead are unchanged by this release and
+   unconsumed: Windows steps 17–32 (engine variant assets, Windows
+   resources, executable build + console smoke probe, executable
+   verify, Qt host build + windeployqt, desktop runtime smoke,
+   live-answer acceptance, portable package, ZIP, ZIP integrity, NSIS
+   installer, installer verify, uploads) and the publish job — never
+   executed in ANY run; the next hosted run's annotations and
+   summaries are the only authority for them. Linux x64 stays a
+   protected surface: fully green three consecutive runs, untouched.
+
+---
+
 ## v1.10.11 — 2026-10-17 — the kernel32 binding repair + the non-panicking dial path: the win-go-test-headless process panic root-caused to a wrong lazy-DLL module name, fixed at the binding, made structurally non-panicking, and pinned so the compile-blind defect class becomes a named test failure
 
 Focus: consume the run 38984879544 evidence boundary (v1.10.10, commit

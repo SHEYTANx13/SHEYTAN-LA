@@ -3225,3 +3225,272 @@ Per-item outcome table (this cycle's register):
 | W-FULL | INFERENCE (high confidence) | no win-go-test-full-prefixed FAIL/panic line in run 38984879544's 4 annotations; NOT claimed as verified until the next hosted run's step 14 is green |
 | W-BND | OPEN by design | first-time surfaces (Windows steps 17–32, publish job) consumed as evidence-only fix-forward after the operator's push |
 | D1 | CLOSED (docs) | changelog v1.10.11 entry (evidence verbatim, inference labeled), this worklog entry, UPDATE.md v1.10.11 section, agent.md hosted truth; canonical identity 1.10.11 --check green |
+
+---
+Task ID: 1 (single-agent session, 113-minute budget)
+Agent: v1.10.12 engineering session
+Task: v1.10.12 — the documented busy-retry contract + ROADMAP shipped-baseline
+completion: replace dialEndpoint's fixed 3-attempt busy budget with the
+documented Microsoft Named Pipe Client pattern (retry CreateFile while
+WaitNamedPipe reports an instance becoming available, bounded by a 10 s
+busy-dial deadline), complete ROADMAP.md's shipped baseline (v1.9 + v1.10
+delivered paragraphs, stale Phase 2 status sentence, header), write the
+v1.10.12 docs entries, set canonical identity 1.10.12, and consume run
+39019535982 (v1.10.11, commit e89680b) as the evidence authority.
+
+Work Log:
+
+- Phase 1 — LIVE STATE + EVIDENCE. Live main HEAD is `73761f9` ("Update
+  README.md"), PAST the register baseline e89680b; `git diff --stat
+  e89680b..HEAD` = README.md only (1 file, 1 insertion, 1 deletion) —
+  every register surface is at baseline state. Every register item was
+  re-verified against the live tree BEFORE any edit: the busy-loop
+  constants (listener_windows.go L197 `pipeBusyWaitMS = 2000`, L201
+  `pipeBusyMaxRetries = 3`), the attempt-cap check (L267), the failure
+  string (L278), the burst pin (listener_windows_test.go L275
+  TestMalformedBurstUnderParallelismNeverSurfacesPipeBusy, 8 workers ×
+  4 cycles, DisableKeepAlives, dial → garbage → close → health redial),
+  the structural pin (L238 TestTakeInstanceRefillsSpareUnderSameLock),
+  the resolution pin (L351 TestWaitNamedPipeProcResolves), the kernel32
+  binding (L209-210 modkernel32/procWaitNamedPipeW), the non-panicking
+  waitNamedPipe (L229-245, Find() before Call), isVanishedPeer
+  (L608-612), and the ROADMAP sentences (L22 header names v1.10.11;
+  L43-50 the v1.8 paragraph; L193-199 the stale UNIDENTIFIED sentence).
+  Hosted re-read: GitHub REST API returned 403 for every Actions
+  endpoint from this environment (unauthenticated, rate-limited) — the
+  run page and annotations API were NOT fetchable, so the register's
+  verbatim quotes below stand as the hosted evidence, per the same
+  contingency the v1.9.5 session recorded.
+
+- EVIDENCE FIRST — hosted annotation lines from run 39019535982
+  (v1.10.11, commit e89680b), Windows step 14 "Go verification", the
+  headless run, quoted verbatim from the defect register (all 7
+  annotations carry the win-go-test-headless prefix; none carry
+  win-go-test-full; GitHub truncates annotation text at 250 chars):
+
+```text
+--- FAIL: TestMalformedBurstUnderParallelismNeverSurfacesPipeBusy (0.60s)
+listener_windows_test.go:329: burst dial: localipc: dial \\.\pipe\sheytan-la-runneradmin-core: no listening pipe instance after 3 busy waits: All pipe instances are busy. (ERROR_PIPE_BUSY surfaced — the instance invariant ...
+```
+  (emitted twice — two of the eight workers hit it)
+```text
+FAIL  github.com/Parsaetak/SHEYTAN-local-agent/internal/localipc  9.157s
+FAIL
+Process completed with exit code 1.
+```
+  Steps 15–16 ran (failure summary + upload); steps 17–32 skipped; the
+  publish job skipped.
+
+- Evidence-class boundary (stated up front, governs every claim below):
+  local Windows proof is COMPILE-LEVEL ONLY (GOOS=windows go build +
+  go vet; this is a Linux-only environment — it cannot execute the
+  Windows dial path, the pins, or any Windows test). The hosted Windows
+  job is the RUNTIME AUTHORITY. Local green is not hosted green;
+  compile proof is not runtime proof. Linux suite results are RUNTIME
+  evidence for the Unix transport only.
+
+- Phase 2 — ROOT-CAUSE CONFIRMED by inspection + arithmetic, exactly as
+  the register states. dialEndpoint (listener_windows.go L247-279)
+  loops on an attempt counter: on ERROR_PIPE_BUSY it calls
+  waitNamedPipe(name, 2000) and retries CreateFile at most
+  pipeBusyMaxRetries = 3 times, then fails with "no listening pipe
+  instance after 3 busy waits". The 0.60 s failure duration is
+  decisive: three full 2000 ms waits cannot fit inside 0.60 s, so EVERY
+  WaitNamedPipe returned PROMPTLY (an instance became available each
+  time — the server's W-INV consume-and-refill published a listening
+  instance on every cycle; the SERVER side is healthy). What failed
+  was the CreateFile immediately after each wait: 8 workers race for
+  the single listening instance the invariant guarantees; each race
+  loser receives transient ERROR_PIPE_BUSY and burns one of only 3
+  attempts; losing three consecutive microsecond-scale CreateFile
+  races under 8-way contention is normal scheduling, not a server
+  defect. The fixed attempt count is the defect.
+
+- DOCUMENTED PATTERN VERIFIED against the current Microsoft Named Pipe
+  Client documentation (learn.microsoft.com/windows/win32/ipc/
+  named-pipe-client): on ERROR_PIPE_BUSY "the named pipe client uses
+  the WaitNamedPipe function to wait for an instance of the named pipe
+  to become available"; the documented example is a loop that retries
+  CreateFile whenever WaitNamedPipe reports an instance became
+  available (20 s wait timeout in the example), with NO attempt count —
+  the bound is the caller's own. Stated plainly: replacing the attempt
+  cap with a bounded deadline is the DOCUMENTED Microsoft Named Pipe
+  Client pattern, the OPPOSITE of test-weakening; the burst pin that
+  surfaced the defect stays byte-identical and must still pass — it
+  will pass because the dial finally stops surrendering after 3
+  lost lottery tickets.
+
+- Rule-8 sweep 1 — every dialEndpoint caller and every reader of the
+  busy constants (grep over the whole tree, *.go, at HEAD 73761f9):
+
+| Path | Role | Depends on 3-attempt semantics? |
+|------|------|---------------------------------|
+| internal/localipc/listener_windows.go:247 | the Windows dial under repair | the surface itself |
+| internal/localipc/listener_windows.go:127 | listener `dial` closure assigned `dialEndpoint(endpoint)`; field declared :291; NO readers anywhere in the tree | none found |
+| internal/localipc/endpoint.go:150 | cleanStaleEndpoint probe dial — the WINDOWS branch returns EARLY (:148); the call executes on Unix only, resolving to listener_unix.go:16's net.Dial variant | no (different function; build-tagged) |
+| internal/localipc/listener_unix.go:16 | Unix dialEndpoint (net.Dial) | no — untouched |
+| internal/localipc/listener_windows_test.go:306 | burst pin's direct dialEndpoint calls | no — it asserts DIAL SUCCESS under contention |
+| internal/localipc/listener_windows_test.go:373 | TestWaitNamedPipeLiveEndpointSemantics reads pipeBusyWaitMS as its wait timeout | no — pipeBusyWaitMS stays 2000 |
+| "no listening pipe instance after %d busy waits" | emitted ONLY at listener_windows.go:278; NO test or code greps the string | no |
+
+  pipeBusyMaxRetries readers: listener_windows.go L201 (def), L267
+  (cap check), L278 (message) — nothing else in the tree. No caller
+  depends on the 3-attempt semantics; no caller owns a shorter
+  deadline today (the 10 s budget is the transport's own default).
+
+- Rule-8 sweep 2 — ROADMAP inventory (grep + full read at HEAD): the
+  shipped-baseline section (L20-50) contains the v1.8 delivered
+  paragraph and NO v1.9.x or v1.10.x equivalents; the header (L22)
+  names v1.10.11; the Phase 2 section carries the v1.10.5-era sentence
+  "The Windows `Go verification` failure remains UNIDENTIFIED (the
+  step log is admin-gated; ...)" (L193-199) — false since v1.10.7: the
+  failure chain has been root-caused and repaired across
+  v1.10.7–v1.10.11 (emitter visibility, vanished-peer classification,
+  Close-timer stop, W-INV structural invariant, WaitNamedPipe client
+  contract, kernel32 binding, non-panicking dial). Both are repaired in
+  this release.
+
+- DEFECT + FIX STATEMENT (one paragraph, before editing): the defect is
+  the CLIENT's fixed attempt-count budget in dialEndpoint — not the
+  burst pin, not the busy condition it surfaces, not the server. The
+  fix restructures ONLY that loop: on ERROR_PIPE_BUSY, call
+  waitNamedPipe(name, pipeBusyWaitMS); while the wait reports an
+  instance becoming available, retry CreateFile immediately with NO
+  attempt counter, bounded by a total busy-dial budget of 10 seconds
+  of wall clock (a single deadline constant; each wait is clamped to
+  the remaining budget so the total stays honest); exit early and
+  honestly on ERROR_FILE_NOT_FOUND from the wait (the pipe vanished —
+  the server is gone; that error is returned, it is not busy); on a
+  wait that times out with no instance (or an unresolved proc —
+  waiting is impossible, no spin), surface the ORIGINAL busy error
+  honestly; on deadline exhaustion return a typed error that names
+  the elapsed budget. pipeBusyWaitMS = 2000 stays. The server side
+  (W-INV takeInstance refill under the same lock, preCreate,
+  isVanishedPeer, Close-timer) and every pin stay byte-identical.
+
+- Phase 3 — THE FIX (W-BUDGET) implemented in
+  internal/localipc/listener_windows.go, ONE function restructured:
+  dialEndpoint no longer carries an attempt counter. On ERROR_PIPE_BUSY
+  it calls waitNamedPipe(name, pipeBusyWaitMS) and retries CreateFile
+  immediately while the wait reports an instance becoming available;
+  the only bound is the new pipeBusyDialBudget = 10 * time.Second total
+  busy-dial wall clock (each wait clamped to the remaining budget);
+  honest early exits: non-busy CreateFile errors return as-is, a wait
+  reporting ERROR_FILE_NOT_FOUND returns that error ("pipe vanished
+  while busy-waiting" — the old loop broke and mislabeled it as a busy
+  exhaustion), a wait that times out with no instance or an unresolved
+  proc surfaces the ORIGINAL busy error (no spin on a broken wait
+  facility), and deadline exhaustion returns the new typed
+  ErrBusyDialBudgetExhausted naming the budget and the elapsed time.
+  pipeBusyWaitMS = 2000 stays; pipeBusyMaxRetries = 3 is GONE. The
+  ErrWaitNamedPipeUnresolved doc line was updated to the new (still
+  honest) semantics. One compile error was caught by the
+  compile-level gate itself (uint32/int mismatch on the wait clamp) and
+  fixed before any test ran — the gate doing its job. Server side
+  (W-INV takeInstance, preCreate, isVanishedPeer, Close-timer), the
+  kernel32 binding, the non-panicking waitNamedPipe, and EVERY pin are
+  BYTE-IDENTICAL — `git diff` over the test file and over the server
+  functions is empty.
+
+- Phase 4 — ROADMAP shipped-baseline completion (R1/R2/R3): the header
+  names v1.10.12 with a compact v1.10.12 description prepended to the
+  parent chain; "v1.9 delivered" and "v1.10 delivered" paragraphs added
+  in the v1.8 paragraph's exact form, using ONLY the register's
+  evidence-backed feature lists; the stale v1.10.5-era "remains
+  UNIDENTIFIED (the step log is admin-gated...)" Phase 2 sentence
+  replaced with the verified repair chain (v1.10.7 visibility →
+  v1.10.8–v1.10.9 vanished-peer/Close-timer → v1.10.10 W-INV + client
+  contract → v1.10.11 kernel32 binding → v1.10.12 busy-dial budget,
+  compile-level local proof only) while KEEPING the honest boundary —
+  Windows CI remains NOT VERIFIED until a green hosted run. No
+  invented features, no future-phase rewrites, no status flips.
+
+- Phase 5 — D1 docs: changelog v1.10.12 entry (annotation lines
+  verbatim, 0.60 s arithmetic, root cause, fix, W-FULL labeled
+  INFERENCE, honest hosted boundary); UPDATE.md retitled v1.10.12
+  with the new narrative + "What v1.10.12 changes" (the v1.10.11
+  changes section retained below it); agent.md retitled to the
+  v1.10.12 handoff with the hosted truth (Linux three consecutive
+  green runs, Windows FULL clean two consecutive runs as INFERENCE,
+  busy-budget fix pending hosted proof, steps 17–32 + publish
+  unproven, ROADMAP baseline completed through v1.10.x); two stale
+  v1.10.8-era identity claims inside agent.md corrected to 1.10.12.
+  Canonical identity 1.10.12: package.json + package-lock.json (both
+  version fields) edited, scripts/release-version.mjs repaired
+  internal/config/config.go (AppVersion), build/config.yml
+  (productVersion), SIGNATURE (first line); --check GREEN. The web
+  bundle was rebuilt (npm run build → dist → scripts/sync-web.mjs →
+  web/static) and carries exactly one 1.10.12 stamp (index.js);
+  verify:web green. The v1.10.10 docs condensation is untouched.
+
+- Phase 6 — FULL LOCAL REGRESSION, every gate with its transcript
+  result (evidence class: RUNTIME for Unix suites, COMPILE-LEVEL for
+  GOOS=windows):
+
+| Gate | Command | Result |
+|------|---------|--------|
+| gofmt | gofmt -l . | empty (clean) |
+| Windows build | CGO_ENABLED=0 GOOS=windows go build ./... | clean |
+| Windows vet | CGO_ENABLED=0 GOOS=windows go vet ./... | clean |
+| Unix vet | go vet ./... | clean |
+| localipc suite (Unix) | go test ./internal/localipc/... -count=1 | ok 0.536s |
+| headless suite | go test ./internal/... -tags headless -count=1 | exit 0, all ok |
+| FULL suite | go test ./... -count=1 | exit 0, all ok |
+| race | go test -race ./internal/localipc/... ./internal/llm/... -count=1 | ok 1.657s / 528.590s |
+| npm ci | npm ci | 139 packages, ok |
+| typecheck | tsc --noEmit | exit 0 |
+| lint | oxlint . | 0 warnings 0 errors (111 files) |
+| unit tests | npm run test:units | 236 tests, exit 0 |
+| release tests | npm run test:release | exit 0 |
+| web build + bundle | npm run build (tsc -b && vite build && sync:web) | exit 0; index.js carries 1.10.12 |
+| verify:web | node scripts/verify-static-assets.mjs | contract satisfied |
+| canonical entrypoint | node scripts/verify-all.mjs | PASS — 10 PASS + 2 NOT RUN (native CTest: cmake unavailable; Qt host: Qt6 CMake package not found — environment-limited Linux container, honestly recorded) |
+| smoke script syntax | bash -n scripts/qt-desktop-smoke.sh | OK |
+| LF policy | grep -c \\r over every changed file | 0 CRLF everywhere |
+| release metadata | node scripts/release-version.mjs --check | GREEN at 1.10.12 |
+
+  A Unix localipc regression would have been an automatic
+  revert-and-redo: none occurred — the Unix suite is green and
+  unchanged. The two NOT RUN suites are environment limits of this
+  Linux container (no cmake, no Qt6), recorded honestly as NOT RUN,
+  not as PASS; the hosted Windows job remains the runtime authority
+  for the Windows dial path, and the hosted Linux job owns the Qt
+  host build.
+
+- Phase 7 — COMMIT (this environment cannot push; the OPERATOR pushes
+  main). The commit carries: the dial-budget fix
+  (internal/localipc/listener_windows.go — the ONLY code change), the
+  ROADMAP completion, the D1 docs entries, the version identity
+  1.10.12 (package.json, package-lock.json, internal/config/config.go,
+  build/config.yml, SIGNATURE), and the rebuilt web bundle
+  (web/static). While the hosted run executes, doc edits that depend
+  on its result are HELD for the final wording.
+
+## Phase 8 — HOSTED RESULT LOOP
+
+Reserved for the operator's push (this environment has no push
+credentials): read the run page + jobs + annotations for every red
+step, quote its named evidence, root-cause it, fix it as a code diff,
+hand the commit to the operator, read the next run. Expected sequence:
+Windows step 14 green under BOTH suites for the first time, then the
+never-executed Windows steps 17–32, then — if both platforms are green
+— the publish job executing for the FIRST time in the repository's
+history. Never mark a gate VERIFIED without its green job; never
+fabricate green; never fix what the evidence does not name. NOTHING in
+this cycle's register was closed by a hosted run: the hosted loop is
+OPEN by design, handed to the operator.
+
+Per-item outcome table (this cycle's register):
+
+| Item | Outcome | Closure class |
+|------|---------|---------------|
+| W-NAME | CONFIRMED at 73761f9 | hosted annotations quoted verbatim (register); GitHub API 403 from this environment — the quotes stand as evidence, as in the v1.9.5 session |
+| W-ROOT | CLOSED (code diff) | the fixed 3-attempt budget replaced by the documented deadline-bounded retry; 0.60 s arithmetic confirmed against the live code; compile-level local proof |
+| W-TRIG | NOT A DEFECT (protected) | the burst pin stays byte-identical (`git diff` on the test file is empty) and the Unix suite including all pins is green |
+| W-FIX | CLOSED (code) | dialEndpoint restructured to the documented Microsoft Named Pipe Client pattern; pipeBusyDialBudget = 10s; honest early exits; typed ErrBusyDialBudgetExhausted; pipeBusyWaitMS = 2000 unchanged |
+| W-FULL | INFERENCE (unchanged) | second consecutive clean full-suite run at e89680b; NOT claimed verified until the next hosted run's step 14 is green |
+| W-BND | OPEN by design | Windows steps 17–32 + the publish job remain never-executed first-time surfaces; consumed as evidence-only fix-forward after the operator's push |
+| R1 | CLOSED (docs) | v1.9 + v1.10 delivered paragraphs added from the register's lists only |
+| R2 | CLOSED (docs) | stale UNIDENTIFIED sentence replaced with the verified chain + NOT-VERIFIED boundary |
+| R3 | CLOSED (docs) | shipped-baseline header names v1.10.12 |
+| D1 | CLOSED (docs + identity) | changelog/UPDATE/agent/worklog entries; identity 1.10.12 --check GREEN; web bundle rebuilt |

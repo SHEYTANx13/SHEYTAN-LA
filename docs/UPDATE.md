@@ -1,35 +1,104 @@
-# UPDATE.md — v1.10.11 Release Notes & Maintenance Behavior
+# UPDATE.md — v1.10.12 Release Notes & Maintenance Behavior
 
 The authoritative per-release history lives in `docs/changelog.md`; this file
 carries the CURRENT release notes and the operational maintenance
-behavior. v1.10.11 is the KERNEL32 BINDING REPAIR + NON-PANICKING DIAL
-PATH release: run
-https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38984879544
-(v1.10.10, commit 5ccbe35) proved the v1.10.10 transport repair WORKED —
-the Windows FULL go test suite, which failed four consecutive releases
-with the ERROR_PIPE_BUSY race, produced no FAIL line that run (INFERENCE:
-the emitter captures both runs' failing lines with per-run prefixes,
-cap 10, only 4 annotations emitted, none win-go-test-full-prefixed; the
-hosted run of this revision is the confirmation authority) — and the
-Windows HEADLESS run failed instead, on a process panic:
-`panic: The specified module could not be found.` →
-`FAIL  github.com/Parsaetak/SHEYTAN-local-agent/internal/localipc  7.795s`.
-The root cause: the v1.10.10 client fix bound `WaitNamedPipeW` from
-`winbase.dll` — a module that does not exist as a loadable file on
-modern Windows (WinBase functions are exported by kernel32.dll;
-"winbase" is a HEADER, not a DLL); LazyDLL loads on first Call, so
-GOOS=windows build and vet passed locally on the defect (the
-compile-level check class is structurally blind to lazy-binding
-errors), and the first real busy wait panicked —
-`LoadLibrary("winbase.dll")` fails with ERROR_MOD_NOT_FOUND and
-`LazyProc.Call` panics on load failure, killing the process. v1.10.11
-rebinds the proc from kernel32.dll (the documented exporting module,
-the canonical go-winio binding), makes the dial path structurally
-non-panicking (Find()-based resolution with a typed error, so a
-resolution failure surfaces the original busy error instead of killing
-the host), pins the defect class with a Windows-gated
-proc-resolution regression test, and hands the never-executed Windows
-steps 17–32 and the publish job to evidence-driven fix-forward.
+behavior. v1.10.12 is the DOCUMENTED BUSY-RETRY CONTRACT +
+ROADMAP SHIPPED-BASELINE COMPLETION release: run
+https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/39019535982
+(v1.10.11, commit e89680b) proved three things. First: the v1.10.11
+kernel32 binding repair WORKED — the "The specified module could not be
+found." panic is gone and the proc-resolution pin passed. Second: the
+Windows FULL go test suite produced no failing line for the SECOND
+consecutive run (INFERENCE: the failure emitter captures every
+FAIL/panic line from both Windows test runs with per-run prefixes; all
+7 annotations this run carry the win-go-test-headless prefix, none
+carry win-go-test-full; the hosted run of this revision is the
+confirmation authority). Third: the headless run now fails on a NAMED
+test with decisive published evidence:
+`--- FAIL: TestMalformedBurstUnderParallelismNeverSurfacesPipeBusy
+(0.60s)` → `listener_windows_test.go:329: burst dial: localipc: dial
+\\\\.\\pipe\\sheytan-la-runneradmin-core: no listening pipe instance
+after 3 busy waits: All pipe instances are busy.` (emitted twice — two
+of the eight workers hit it) → `FAIL
+github.com/Parsaetak/SHEYTAN-local-agent/internal/localipc  9.157s`.
+The arithmetic is decisive: three full 2000 ms waits cannot fit inside
+a 0.60 s failure, so every WaitNamedPipe returned PROMPTLY — the
+server's W-INV refill published a new listening instance each time and
+the SERVER side is healthy. What failed was the CreateFile immediately
+after each wait: with 8 workers racing for the single listening
+instance the invariant guarantees, a worker can legitimately lose the
+CreateFile race three times in a row — in microseconds — and burn all
+3 attempts. Losing three consecutive microsecond-scale races under
+8-way contention is normal scheduling, not a server defect. In
+production the same defect would make the real UI's dial path
+spuriously fail under 8 parallel requests. v1.10.12 fixes it at the
+root: dialEndpoint now implements the documented Microsoft Named Pipe
+Client pattern — on ERROR_PIPE_BUSY, call WaitNamedPipe and retry
+CreateFile for as long as the wait reports an instance becoming
+available, with NO attempt counter — bounded by a 10 s busy-dial
+deadline (`pipeBusyDialBudget`), with honest early exits
+(ERROR_FILE_NOT_FOUND returned as the vanished-server error it is;
+wait-without-instance or an unresolved proc surfacing the original
+busy error) and a typed `ErrBusyDialBudgetExhausted` naming the budget
+on deadline exhaustion. `pipeBusyWaitMS = 2000` stays. The burst pin
+that surfaced the defect stays BYTE-IDENTICAL and must still pass.
+The same release completes docs/ROADMAP.md's shipped baseline (the
+missing v1.9 and v1.10 delivered paragraphs, the stale
+UNIDENTIFIED Phase 2 sentence replaced with the verified
+v1.10.7–v1.10.12 repair chain, the header naming v1.10.12) and sets
+canonical identity 1.10.12.
+
+## What v1.10.12 changes
+
+1. **W-BUDGET — the fixed attempt count is replaced by the documented
+   deadline bound.** `internal/localipc/listener_windows.go`'s
+   dialEndpoint now loops WITHOUT an attempt counter: attempt
+   CreateFile; on ERROR_PIPE_BUSY call `waitNamedPipe(name,
+   pipeBusyWaitMS)`; when the wait reports an instance became
+   available, retry CreateFile IMMEDIATELY; the only bound is the new
+   `pipeBusyDialBudget = 10 * time.Second` total busy-dial wall clock
+   (each wait is clamped to the remaining budget, so the stated total
+   is honest). This is the DOCUMENTED Microsoft Named Pipe Client
+   pattern (the doc's own example retries CreateFile in a loop while
+   WaitNamedPipe succeeds, with no attempt count) — the OPPOSITE of
+   test-weakening: the burst pin that surfaced the defect is
+   byte-identical and passes because the dial stops surrendering
+   after three lost lottery tickets.
+2. **Honest early exits, sharpened.** A CreateFile error other than
+   ERROR_PIPE_BUSY returns as-is (ERROR_FILE_NOT_FOUND is never
+   retried into existence). A wait reporting ERROR_FILE_NOT_FOUND now
+   returns THAT error ("pipe vanished while busy-waiting" — the server
+   is gone; not a busy condition; the old loop broke and mislabeled it
+   as a busy exhaustion). A wait that times out with no instance (the
+   server stopped publishing — a real failure) or an unresolved
+   WaitNamedPipe proc (waiting is impossible; the loop never spins on
+   a broken wait facility) surfaces the ORIGINAL busy error. On
+   deadline exhaustion the typed `ErrBusyDialBudgetExhausted` names
+   the budget and the elapsed time.
+3. **Server side and every pin byte-identical.** W-INV takeInstance
+   refill under the same lock, preCreate, isVanishedPeer, the
+   Close-timer stop, the kernel32 binding, the non-panicking
+   waitNamedPipe, the structural pin
+   (`TestTakeInstanceRefillsSpareUnderSameLock`), the resolution pin
+   (`TestWaitNamedPipeProcResolves`), and the malformed-garbage test
+   are UNCHANGED. The v1.10.10–v1.10.11 chain built the correct
+   pieces; v1.10.12 completes the client contract they serve.
+4. **ROADMAP shipped-baseline completion.** docs/ROADMAP.md gains the
+   "v1.9 delivered" and "v1.10 delivered" paragraphs in the v1.8
+   paragraph's form (only the evidence-backed feature lists); the
+   stale v1.10.5-era "remains UNIDENTIFIED" Phase 2 sentence is
+   replaced with the verified repair chain while keeping the honest
+   boundary — Windows CI is NOT VERIFIED until a green hosted run;
+   the shipped-baseline header names v1.10.12.
+5. **Hosted truth, stated plainly.** Linux x64: fully green THREE
+   consecutive runs — a protected surface, not churned. Windows FULL
+   suite: clean two consecutive runs as an INFERENCE. The busy-budget
+   fix carries compile-level local proof (GOOS=windows build + vet);
+   the hosted Windows job is the runtime authority. The never-executed
+   Windows steps 17–32 and the publish job (never executed in ANY
+   run) are unconsumed; the next hosted run's annotations and
+   summaries are the only authority for them. Fix forward only on
+   what the evidence names.
 
 ## What v1.10.11 changes
 

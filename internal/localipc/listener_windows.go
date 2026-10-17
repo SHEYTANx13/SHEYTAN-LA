@@ -189,16 +189,32 @@ func pipeName(endpoint string) string {
 // with Find() BEFORE any Call, returning a typed error on resolution
 // failure — no LazyProc.Call panic path remains anywhere in the transport:
 // a library dial path fails with an error, never kills the host process.
+//
+// v1.10.12 (W-BUDGET, run 39019535982 step 14 evidence): the v1.10.10
+// busy-dial contract kept a FIXED attempt cap (pipeBusyMaxRetries = 3)
+// on top of the wait. The hosted burst failure (0.60 s) proved the cap
+// — not the server — was the defect: three 2000 ms waits cannot fit in
+// 0.60 s, so every WaitNamedPipe returned PROMPTLY (the W-INV server
+// published a listening instance every cycle) and the losses were the
+// CreateFile calls immediately after each wait — 8 workers racing for
+// the single listening instance, each race loser burning one of only 3
+// attempts. Losing three consecutive microsecond-scale CreateFile races
+// under 8-way contention is normal scheduling, not a server defect. The
+// cap is replaced by the DOCUMENTED Microsoft Named Pipe Client bound:
+// retry CreateFile for as long as WaitNamedPipe reports an instance
+// becoming available, bounded by the caller's deadline
+// (pipeBusyDialBudget) — an availability race among healthy clients
+// must resolve within the deadline, not within 3 lottery tickets.
 const (
 	// pipeBusyWaitMS bounds ONE WaitNamedPipe readiness wait. Finite,
 	// single-digit seconds: long enough for a saturated server's next
 	// accept iteration to publish a listening instance, short enough that
 	// a vanished server fails fast.
 	pipeBusyWaitMS = 2000
-	// pipeBusyMaxRetries caps the CreateFile retries after a busy wait —
-	// a small bounded count, so the total dial budget stays finite and
-	// exhaustion surfaces the real error instead of looping.
-	pipeBusyMaxRetries = 3
+	// pipeBusyDialBudget (v1.10.12, W-BUDGET) bounds the TOTAL busy-dial
+	// wall clock: the documented client contract's only bound. A
+	// deadline, NOT an attempt count — pipeBusyMaxRetries = 3 is gone.
+	pipeBusyDialBudget = 10 * time.Second
 )
 
 var (
@@ -214,9 +230,20 @@ var (
 // (a wrong module name or wrong proc name in a future binding regression,
 // or the module genuinely absent). A transport dial must fail with an
 // error — never kill the host process the way LazyProc.Call's load-failure
-// panic does. When waitNamedPipe returns this error, the dial loop's
-// bounded retries exhaust and surface the ORIGINAL busy error honestly.
+// panic does. When waitNamedPipe returns this error, the dial surfaces
+// the ORIGINAL busy error honestly (waiting is impossible; the loop
+// never spins on a broken wait facility).
 var ErrWaitNamedPipeUnresolved = errors.New("localipc: WaitNamedPipeW proc unresolved")
+
+// ErrBusyDialBudgetExhausted (v1.10.12, W-BUDGET) marks the
+// deadline-bounded busy dial's exhaustion: the whole busy-dial budget
+// elapsed while the server kept publishing instances (every wait
+// succeeded) and this caller kept losing the CreateFile availability
+// race. Typed, so a caller can distinguish budget exhaustion from a
+// vanished server (ERROR_FILE_NOT_FOUND — the server is gone) and from
+// a server that stopped publishing (the raw ERROR_PIPE_BUSY surfaced
+// after a wait reported no instance).
+var ErrBusyDialBudgetExhausted = errors.New("no listening pipe instance after busy dial budget")
 
 // waitNamedPipe waits for a listening instance of the named pipe to become
 // available (the OS's readiness notification — no sleeping, no polling).
@@ -244,10 +271,28 @@ func waitNamedPipe(name string, timeoutMS uint32) error {
 	return nil
 }
 
+// dialEndpoint opens a connection to the endpoint, implementing the
+// documented Windows named-pipe CLIENT contract for ERROR_PIPE_BUSY
+// (Microsoft, Named Pipe Client): attempt CreateFile; on ERROR_PIPE_BUSY
+// call WaitNamedPipe and — while the wait reports an instance becoming
+// available — retry CreateFile immediately. There is NO attempt count
+// (v1.10.12, W-BUDGET): the only bound is pipeBusyDialBudget, the total
+// busy-dial wall-clock deadline; each individual wait stays capped by
+// pipeBusyWaitMS and is clamped to the remaining budget, so the stated
+// total is honest. Honest early exits: a CreateFile error other than
+// ERROR_PIPE_BUSY returns as-is (ERROR_FILE_NOT_FOUND — the pipe does
+// not exist — is never retried into existence); a wait that reports
+// ERROR_FILE_NOT_FOUND returns that error (the pipe name vanished — the
+// server is gone; not a busy condition); a wait that times out with no
+// instance (the server stopped publishing — a real failure) or an
+// unresolved WaitNamedPipe proc (waiting is impossible; the loop never
+// spins on a broken wait facility) surfaces the ORIGINAL busy error. On
+// deadline exhaustion the typed ErrBusyDialBudgetExhausted names the
+// budget and the elapsed time.
 func dialEndpoint(endpoint string) (net.Conn, error) {
 	name := pipeName(endpoint)
-	var lastBusy error
-	for attempt := 0; ; attempt++ {
+	start := time.Now()
+	for {
 		handle, err := windows.CreateFile(
 			windows.StringToUTF16Ptr(name),
 			windows.GENERIC_READ|windows.GENERIC_WRITE,
@@ -263,19 +308,43 @@ func dialEndpoint(endpoint string) (net.Conn, error) {
 		if err != windows.ERROR_PIPE_BUSY {
 			return nil, err
 		}
-		lastBusy = err
-		if attempt >= pipeBusyMaxRetries {
-			break
+		elapsed := time.Since(start)
+		if elapsed >= pipeBusyDialBudget {
+			return nil, fmt.Errorf("localipc: dial %s: %w (%v budget, %v elapsed): %w",
+				name, ErrBusyDialBudgetExhausted, pipeBusyDialBudget,
+				elapsed.Round(time.Millisecond), err)
 		}
 		// The documented client contract: wait for an instance to become
-		// available, then retry the open. A vanished endpoint
-		// (ERROR_FILE_NOT_FOUND from the wait) cannot be retried into
-		// existence — stop and surface the real error.
-		if werr := waitNamedPipe(name, pipeBusyWaitMS); werr != nil && errors.Is(werr, windows.ERROR_FILE_NOT_FOUND) {
-			break
+		// available, then retry the open. The wait is the OS's readiness
+		// notification — event-driven, never a sleep-based poll — and is
+		// clamped to the remaining budget so the total stays within the
+		// stated deadline.
+		waitMS := uint32(pipeBusyWaitMS)
+		if remainingMS := uint32((pipeBusyDialBudget - elapsed) / time.Millisecond); remainingMS < waitMS {
+			waitMS = remainingMS
 		}
+		if waitMS == 0 {
+			// Sub-millisecond budget left: one more open attempt, then
+			// the budget check above exits.
+			continue
+		}
+		werr := waitNamedPipe(name, waitMS)
+		if werr == nil {
+			// An instance became available: retry CreateFile NOW — no
+			// attempt counter, the deadline is the only bound.
+			continue
+		}
+		if errors.Is(werr, windows.ERROR_FILE_NOT_FOUND) {
+			// The pipe name vanished — the server is gone. That error
+			// is returned honestly; it is not a busy condition.
+			return nil, fmt.Errorf("localipc: dial %s: pipe vanished while busy-waiting: %w", name, werr)
+		}
+		// The wait did NOT report an instance: a timeout (the server
+		// stopped publishing — a real failure) or an unresolved proc
+		// (waiting is impossible). Surface the ORIGINAL busy error
+		// honestly.
+		return nil, fmt.Errorf("localipc: dial %s: no listening pipe instance after a %dms busy wait: %w", name, waitMS, err)
 	}
-	return nil, fmt.Errorf("localipc: dial %s: no listening pipe instance after %d busy waits: %w", name, pipeBusyMaxRetries, lastBusy)
 }
 
 // pipeListener accepts one instance at a time; http.Serve serializes

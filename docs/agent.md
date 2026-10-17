@@ -1,4 +1,4 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.11 handoff)
+# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.12 handoff)
 
 This is the concise, current handoff for an engineering agent continuing
 work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
@@ -7,48 +7,56 @@ truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
 boundary), `changelog.md` (the ONLY release history), `worklog.md`
 (session log).
 
-**Current release: v1.10.11 — the kernel32 binding repair + the
-non-panicking dial path (run 38984879544 consumed: the v1.10.10 transport
-repair WORKED — the Windows FULL go test suite, which failed four
-consecutive releases with the ERROR_PIPE_BUSY race, produced no FAIL
-line that run, an INFERENCE with the hosted run of this revision as the
-confirmation authority; the Windows HEADLESS run failed instead, on a
-process panic: `panic: The specified module could not be found.` →
-`FAIL  github.com/Parsaetak/SHEYTAN-local-agent/internal/localipc
-7.795s`. The root cause: the v1.10.10 client fix bound `WaitNamedPipeW`
-from `winbase.dll` — a module that does not exist as a loadable file on
-modern Windows (WinBase functions are exported by kernel32.dll; winbase
-is a HEADER, not a DLL); LazyDLL loads on first Call, so GOOS=windows
-build + vet passed locally on the defect — the compile-level check class
-is structurally blind to lazy-binding errors — and the first real busy
-wait panicked (LoadLibrary fails with ERROR_MOD_NOT_FOUND and
-LazyProc.Call panics on load failure, killing the process; in
-production the same panic would kill the real UI's process on its first
-contended dial). v1.10.11 fixes it at the binding: kernel32.dll, the
-documented exporting module, the canonical go-winio binding
-(`modkernel32 = windows.NewLazySystemDLL("kernel32.dll")` →
-`WaitNamedPipeW`); `waitNamedPipe` resolves via `Find()` with the typed
-`ErrWaitNamedPipeUnresolved` on failure, so the dial's bounded retries
-exhaust and surface the original busy error — no LazyProc.Call panic
-path remains in transport code. The W-PIN regression pair
-(`TestWaitNamedPipeProcResolves` — any future wrong module/proc name
-becomes a NAMED failing test, not a mystery panic; and
-`TestWaitNamedPipeLiveEndpointSemantics` — the documented success
-semantics against a live endpoint) is additive; the burst pin, the
-structural pin, the malformed-garbage test, and the whole dialEndpoint
-loop stay BYTE-IDENTICAL. HOSTED STATUS (do not overstate): audit and
-Linux x64 are fully green for two consecutive runs (runs 38919925013
-and 38984879544) — Linux is a protected surface, do not churn the
-verified chain; the Windows binding fix carries compile-level local
-proof only (the Linux-only environment cannot run Windows tests —
-GOOS=windows go build + go vet are the local gates, a class this cycle
-PROVED cannot see lazy-binding defects, which is exactly why the
-proc-resolution pin exists; the hosted Windows job is the runtime
+**Current release: v1.10.12 — the documented busy-retry contract + the
+ROADMAP shipped-baseline completion (run 39019535982 consumed: the
+v1.10.11 kernel32 binding repair WORKED — the panic is gone, the
+proc-resolution pin passed; the Windows FULL go test suite produced no
+failing line for the SECOND consecutive run, an INFERENCE with the
+hosted run of this revision as the confirmation authority; the Windows
+HEADLESS run failed instead, on a NAMED test:
+`--- FAIL: TestMalformedBurstUnderParallelismNeverSurfacesPipeBusy
+(0.60s)` with `listener_windows_test.go:329: burst dial: localipc: dial
+\\\\.\\pipe\\sheytan-la-runneradmin-core: no listening pipe instance
+after 3 busy waits: All pipe instances are busy.` emitted twice — two
+of the eight workers hit it). The root cause is the CLIENT's fixed
+attempt-count budget, not the server: three 2000 ms waits cannot fit in
+0.60 s, so every WaitNamedPipe returned promptly — the W-INV server
+published a listening instance every cycle — and the losses were the
+CreateFile calls immediately after each wait (8 workers racing for the
+single listening instance; losing three consecutive microsecond-scale
+races under 8-way contention is normal scheduling). v1.10.12 replaces
+the 3-attempt cap with the DOCUMENTED Microsoft Named Pipe Client
+pattern: retry CreateFile while WaitNamedPipe reports an instance
+becoming available, NO attempt counter, bounded by the new
+`pipeBusyDialBudget = 10 * time.Second` total busy-dial deadline (each
+wait clamped to the remaining budget); honest early exits — a wait
+reporting ERROR_FILE_NOT_FOUND returns that error (the server is gone,
+not busy), a wait that times out with no instance or an unresolved proc
+surfaces the ORIGINAL busy error (no spin), and deadline exhaustion
+returns the typed `ErrBusyDialBudgetExhausted` naming the budget.
+`pipeBusyWaitMS = 2000` stays. The burst pin, the structural pin, the
+resolution pin, the kernel32 binding, and the whole server side stay
+BYTE-IDENTICAL. The same release completes ROADMAP.md's shipped
+baseline (the v1.9 and v1.10 delivered paragraphs in the v1.8 form,
+the stale "UNIDENTIFIED" Phase 2 sentence replaced with the verified
+v1.10.7–v1.10.12 repair chain, the header naming v1.10.12). HOSTED
+STATUS (do not overstate): Linux x64 is fully green THREE consecutive
+runs — a protected surface, do not churn the verified chain; the
+Windows FULL suite is clean two consecutive runs as an INFERENCE; the
+busy-budget fix carries compile-level local proof only (GOOS=windows
+build + vet; the Linux-only environment cannot execute the Windows
+dial path or the pins — the hosted Windows job is the runtime
 authority); Windows steps 17–32 and the publish job (never executed in
 ANY run) remain first-time surfaces — the next run is also the
 potential FIRST complete pipeline pass — fix forward only on what its
 annotations and summaries name.**
-Its parents, v1.10.10 — the instance-invariant fix + the client
+Its parent, v1.10.11 — the kernel32 binding repair + the non-panicking
+dial path (the binding targets kernel32.dll, the documented exporting
+module — "winbase" is a header, not a DLL; `waitNamedPipe` resolves via
+`Find()` with the typed `ErrWaitNamedPipeUnresolved`, so a resolution
+failure surfaces an error instead of killing the host; the W-PIN pair
+pinned the compile-blind defect class) —
+its parents, v1.10.10 — the instance-invariant fix + the client
 pipe-busy contract + the operator's docs condensation order (the
 server's `takeInstance` creates the replacement pipe instance inside
 the SAME locked section that hands out the spare, so a listening
@@ -121,7 +129,7 @@ RAM/hostname/evidence/notes (artifacts:
 at 8.22.0 (GHSA-58qx-3vcg-4xpx / GHSA-96hv-2xvq-fx4p closed, no
 `--force`; upstream fixed them in 8.20.1 and 8.21.0 respectively —
 8.22.0 was chosen, not the smallest). Version identity is exactly
-`1.10.8` everywhere
+`1.10.12` everywhere
 (canonical gate: `node scripts/release-version.mjs --check`).
 
 R&D decision
@@ -136,8 +144,8 @@ fail-closed host classification) + `worklog.md`; the Qt/IPC seam is
 DEFINED in ARCHITECTURE.md (implemented at the chat/sessions surface
 and the AI Systems list/activation surface, not yet at every panel).
 Version identity is
-exactly `1.10.8` everywhere (canonical gate:
-`node scripts/release-version.mjs --check`). No stale 1.10.0–1.10.7
+exactly `1.10.12` everywhere (canonical gate:
+`node scripts/release-version.mjs --check`). No stale 1.10.0–1.10.11
 current-release claims exist outside `changelog.md` and the retained
 historical note sections.
 
