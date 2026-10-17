@@ -888,18 +888,33 @@ jobs:
           # (CMakeCache.txt / CMakeFiles embed absolute paths) — applies to
           # the Qt host exactly as to the native engine: the build dir is
           # wiped unconditionally and reconfigured with --fresh, and the Qt
-          # prefix is PINNED from the install-qt-action environment (the
+          # prefix is PINNED, never left to CMake's search behavior (the
           # green Linux twin passes -DCMAKE_PREFIX_PATH explicitly).
+          # v1.10.13 W-PIN (run 39038248810): the former env-var pin read
+          # Qt6_DIR/CMAKE_PREFIX_PATH, but install-qt-action@v4 prepends
+          # Qt's bin to PATH and exports NEITHER variable (its README:
+          # "The Qt bin directory is prepended to your `path` environment
+          # variable" / "you will not need to set the CMAKE_PREFIX_PATH
+          # CMake variable"), so the guard threw BEFORE cmake ran — the
+          # named gate + the absent tee file prove exactly that path. The
+          # fix derives the prefix from the action's DOCUMENTED PATH
+          # contract: qmake.exe lives at <qt>/bin/qmake.exe, so its
+          # grandparent is the Qt root; assert the exact file
+          # find_package(Qt6) consumes before configuring.
           if (Test-Path "ui/qt/build") {
             Remove-Item "ui/qt/build" -Recurse -Force
           }
-          $qtPrefix = $env:Qt6_DIR
-          if ([string]::IsNullOrEmpty($qtPrefix)) { $qtPrefix = $env:CMAKE_PREFIX_PATH }
-          if ([string]::IsNullOrEmpty($qtPrefix)) {
+          $qmake = (Get-Command qmake.exe -ErrorAction SilentlyContinue).Source
+          if ([string]::IsNullOrEmpty($qmake)) {
             Add-Content "ci-logs/gate-order.txt" "FAIL Qt host cmake configure"
-            throw "[gate] Qt6_DIR/CMAKE_PREFIX_PATH were not set by the Qt install action — refusing an unpinned Qt configure."
+            throw "[gate] qmake.exe is not on PATH — the install-qt-action PATH contract (Qt bin prepended to PATH) is absent from this session; refusing an unpinned Qt configure."
           }
-          Write-Host "Qt prefix pinned from the install-qt-action environment: $qtPrefix"
+          $qtPrefix = Split-Path (Split-Path $qmake)
+          if (-not (Test-Path (Join-Path $qtPrefix "lib\cmake\Qt6\Qt6Config.cmake"))) {
+            Add-Content "ci-logs/gate-order.txt" "FAIL Qt host cmake configure"
+            throw "[gate] derived Qt prefix '$qtPrefix' does not carry lib\cmake\Qt6\Qt6Config.cmake (the file find_package(Qt6) consumes) — refusing an unpinned Qt configure."
+          }
+          Write-Host "Qt prefix derived from qmake on PATH (install-qt-action contract): $qmake -> $qtPrefix"
 
           cmake -S ui/qt -B ui/qt/build --fresh -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$qtPrefix" 2>&1 | Tee-Object -FilePath "ci-logs/win-qt-configure.log"
           if ($LASTEXITCODE -ne 0) {
@@ -1059,69 +1074,24 @@ jobs:
           Select-String -Path $appLog -Pattern "==== SHEYTAN-Local-Agent v$($env:APP_VERSION) session start" |
             Select-Object -First 1 | ForEach-Object { Write-Host $_.Line }
 
-          # v1.9.2 SMOKE REPAIR — the v1.9.1 script ignored CloseMainWindow()'s
-          # return value and never proved a top-level window existed, so its
-          # failure (process alive after the call) was unclassifiable. Now:
-          #   1. MainWindowHandle must be non-zero (a REAL top-level window
-          #      visible to this session) — Refresh() first because the
-          #      handle is cached by the Process object;
-          #   2. CloseMainWindow()'s BOOL is checked: false means NO window
-          #      received the close request (precise diagnosis, not a
-          #      generic timeout);
-          #   3. only a delivered close gates the bounded exit wait; Kill
-          #      remains the failing-run backstop, never a passing path.
-          # Product side (v1.9.2): the main window's WindowClosing now
-          # terminates the application lifecycle (desktop.go), so a
-          # delivered WM_CLOSE exits through the normal path and the
-          # deferred backend cleanup runs.
-          $proc.Refresh()
-          $deadline = (Get-Date).AddSeconds(15)
-          while ($proc.MainWindowHandle -eq 0 -and (Get-Date) -lt $deadline) {
-            if ($proc.HasExited) {
-              throw "runtime smoke: desktop process exited before a main window existed."
-            }
-            Start-Sleep -Milliseconds 250
-            $proc.Refresh()
-          }
-
-          if ($proc.MainWindowHandle -eq 0) {
-            throw ("runtime smoke: no top-level main window exists for pid {0} " +
-                   "after boot (MainWindowHandle == 0). Evidence level: " +
-                   "process + backend init ONLY — GUI window creation is not " +
-                   "verifiable in this session and the close path cannot be " +
-                   "exercised.") -f $proc.Id
-          }
-
-          $winMsg = ("Desktop main window present (pid {0}, hwnd {1})." -f $proc.Id, $proc.MainWindowHandle)
-          Write-Host $winMsg
-
-          $closeRequested = $proc.CloseMainWindow()
-
-          if (-not $closeRequested) {
-            $closeErr = ("runtime smoke: CloseMainWindow() returned false — no main window received the close request (pid {0}, hwnd {1})." -f $proc.Id, $proc.MainWindowHandle)
-            throw $closeErr
-          }
-
-          Write-Host "WM_CLOSE delivered to the main window; requiring exit within 15s."
-
-          if (-not $proc.WaitForExit(15000)) {
-            Write-Host "--- runtime smoke: the process ignored a DELIVERED WM_CLOSE; stopping it ---"
-            Stop-Process -Id $proc.Id -Force
-            $ignoreErr = ("runtime smoke: desktop process {0} did not exit after a delivered WM_CLOSE (hwnd {1}) — the window-close path does not terminate the application lifecycle." -f $proc.Id, $proc.MainWindowHandle)
-            throw $ignoreErr
-          }
-
-          $proc.Refresh()
-          if ($proc.ExitCode -ne 0) {
-            throw ("runtime smoke: desktop process exited with code {0} after the WM close." -f $proc.ExitCode)
-          }
-
-          # v1.10.1: the launcher spawns the Qt host child; the GUI proof
-          # is the CHILD's real top-level window (MainWindowHandle != 0) —
-          # process survival alone is never GUI proof.
-          $uiDeadline = (Get-Date).AddSeconds(30)
+          # v1.10.13 W-SMOKE (run 39038248810 lineage): the close flow is
+          # retargeted to the architecture the v1.10 core actually runs.
+          # The core is built -H=windowsgui and owns NO top-level window;
+          # the REAL top-level window belongs to the sheytan-ui Qt host
+          # child that desktop.go spawns from beside the core and waits on
+          # unconditionally (the child's exit code IS the core's exit
+          # code). Mirrors the green Linux twin's G3/G5 semantics:
+          # (G3) wait for a windowed sheytan-ui child; (G5) deliver
+          # WM_CLOSE to IT, require the child to exit, then require the
+          # CORE to exit with code 0 (the launcher's documented lifecycle
+          # ends when the child ends), and assert no orphan remains.
+          # Banner, liveness, and crash-report assertions above unchanged.
+          $uiDeadline = (Get-Date).AddSeconds(60)
           $ui = $null
           while ((Get-Date) -lt $uiDeadline) {
+            if ($proc.HasExited) {
+              throw "runtime smoke: the core exited before the Qt host produced a windowed UI process (code $($proc.ExitCode))."
+            }
             $ui = Get-Process -Name "sheytan-ui" -ErrorAction SilentlyContinue |
               Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
             if ($ui) { break }
@@ -1133,9 +1103,46 @@ jobs:
             Get-Content $errLog -ErrorAction SilentlyContinue | Select-Object -Last 30
             throw "runtime smoke: the Qt host produced no windowed UI process."
           }
-          Write-Host "Qt host alive (pid $($ui.Id)) with a real top-level window (handle $($ui.MainWindowHandle))."
+          $winMsg = ("Qt host child present (pid {0}, hwnd {1}); core alive (pid {2})." -f $ui.Id, $ui.MainWindowHandle, $proc.Id)
+          Write-Host $winMsg
 
-          Write-Host "Desktop RUNTIME SMOKE passed: process-start + real Qt UI window + backend/runtime init + delivered WM_CLOSE + normal-path exit (code 0)."
+          $closeRequested = $ui.CloseMainWindow()
+
+          if (-not $closeRequested) {
+            $closeErr = ("runtime smoke: CloseMainWindow() returned false — no main window received the close request (pid {0}, hwnd {1})." -f $ui.Id, $ui.MainWindowHandle)
+            throw $closeErr
+          }
+
+          Write-Host "WM_CLOSE delivered to the Qt host's main window; requiring child exit within 15s."
+
+          if (-not $ui.WaitForExit(15000)) {
+            Write-Host "--- runtime smoke: the Qt host ignored a DELIVERED WM_CLOSE; stopping it ---"
+            Stop-Process -Id $ui.Id -Force
+            $ignoreErr = ("runtime smoke: Qt host {0} did not exit after a delivered WM_CLOSE (hwnd {1}) — the window-close path does not terminate the application lifecycle." -f $ui.Id, $ui.MainWindowHandle)
+            throw $ignoreErr
+          }
+
+          # The launcher waits on the child unconditionally and exits with
+          # the child's code (desktop.go): the core's clean exit is the
+          # lifecycle CONSEQUENCE of the child's exit. Bounded, 30s. A core
+          # that lingers or exits non-zero is a REAL product finding.
+          if (-not $proc.WaitForExit(30000)) {
+            $lingerErr = ("runtime smoke: the core (pid {0}) did not exit after the Qt host ended — the launcher's documented child-wait lifecycle did not complete." -f $proc.Id)
+            throw $lingerErr
+          }
+          $proc.Refresh()
+          if ($proc.ExitCode -ne 0) {
+            throw ("runtime smoke: the core exited with code {0} after the Qt host's clean close." -f $proc.ExitCode)
+          }
+
+          # G5 completion: no sheytan-ui orphan may outlive the core.
+          $orphans = @(Get-Process -Name "sheytan-ui" -ErrorAction SilentlyContinue)
+          if ($orphans.Count -gt 0) {
+            foreach ($orphan in $orphans) { Write-Host ("orphan sheytan-ui pid {0}" -f $orphan.Id) }
+            throw "runtime smoke: sheytan-ui orphan process(es) remain after the core exited."
+          }
+
+          Write-Host "Desktop RUNTIME SMOKE passed: process-start + backend/runtime init + real Qt UI window (child) + delivered WM_CLOSE + child exit + core exit (code 0) + no orphan."
 
       # v1.9.5 (P0): the REAL Windows live-answer acceptance gate — the
       # exact user journey, executed against the actual packaged desktop
@@ -1338,8 +1345,14 @@ jobs:
               }
             }
 
+            # v1.10.13 W-ZIP-LAUNCHER: the launcher source moved to
+            # packaging/SHEYTAN-LA.bat in v1.10.7 (R-B) and the repo root
+            # carries NO SHEYTAN-LA.bat, so the former root Test-Path made
+            # this requirement DEAD — the ZIP launcher entry was never
+            # asserted. Gate on the real source path (the Prepare step
+            # stages it from packaging/) and require the staged entry.
             if (
-              (Test-Path "SHEYTAN-LA.bat") -and
+              (Test-Path "packaging/SHEYTAN-LA.bat") -and
               ($entries -notcontains "${env:WIN_PKG_ROOT}/SHEYTAN-LA.bat")
             ) {
               throw "Expected launcher script is missing from Windows ZIP."
@@ -1498,9 +1511,17 @@ jobs:
             throw "NSIS installer is empty."
           }
 
+          # v1.10.13 W-INST-VER: NSIS's VIProductVersion is REQUIRED to be
+          # four-part X.X.X.X (makensis parses "%d.%d.%d.%d" and requires
+          # all four fields; a three-part value fails with "invalid
+          # VIProductVersion format, should be X.X.X.X"), and
+          # installer.nsi therefore carries VIProductVersion
+          # "${VERSION}.0" — the version resource reads "<APP_VERSION>.0".
+          # installer.nsi stays byte-identical; the gate compares against
+          # the four-part identity.
           $versionInfo = (Get-Item $installerPath).VersionInfo
-          if ($versionInfo.ProductVersion -ne $env:APP_VERSION) {
-            throw "Installer ProductVersion '$($versionInfo.ProductVersion)' != APP_VERSION '$env:APP_VERSION'."
+          if ($versionInfo.ProductVersion -ne "$($env:APP_VERSION).0") {
+            throw "Installer ProductVersion '$($versionInfo.ProductVersion)' != '$($env:APP_VERSION).0' (NSIS four-part VIProductVersion contract)."
           }
           if ($versionInfo.ProductName -ne "SHEYTAN-LA") {
             throw "Installer ProductName '$($versionInfo.ProductName)' != expected identity 'SHEYTAN-LA'."
@@ -1732,7 +1753,13 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: windows-go-verification-logs-attempt${{ github.run_attempt }}
-          path: ci-logs/*.log
+          # v1.10.13 W-VIS-2 (run 39038248810): gate-order.txt is the full
+          # RUN/OK/FAIL gate sequence the failure summary names gates from
+          # — the anonymous reader gets it with the logs, not just the
+          # annotations.
+          path: |
+            ci-logs/*.log
+            ci-logs/gate-order.txt
           if-no-files-found: ignore
           retention-days: 14
 

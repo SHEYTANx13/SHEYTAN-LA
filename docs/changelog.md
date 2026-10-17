@@ -147,6 +147,41 @@ LOCAL PROOF CLASS for every Windows C++/Qt change in this release: STATIC
 ONLY (YAML parse, bash -n, script review, logic simulations); the hosted
 Windows job is the runtime authority, and local green is not hosted green.
 
+### v1.10.13 hosted addendum — run 39038248810 read + the response cycle
+
+Run 39038248810 ("Build Desktop" #14, push of v1.10.13, commit c46a9c0,
+conclusion failure, 16m16s) VERIFIED THE VISIBILITY REPAIR LIVE: audit
+green (2m31s), Linux x64 fully green for the FIFTH consecutive run (its
+ZIP produced, 6.32 MB), Windows steps 1–21 green again, and the
+end-of-job failure summary named the failing gate anonymously with
+exactly three annotations: "failing gate: Qt host cmake configure";
+"Qt host cmake configure: (no teed log for this gate — see the red step
+on the run page)"; "Process completed with exit code 1." The gate name
+plus the ABSENT tee file is joint evidence that the only code path
+writing FAIL without creating win-qt-configure.log — the step-22
+pinning guard — threw BEFORE cmake ran: install-qt-action@v4 prepends
+Qt's bin to PATH and exports NEITHER Qt6_DIR NOR CMAKE_PREFIX_PATH (its
+README: "The Qt bin directory is prepended to your `path` environment
+variable" / "you will not need to set the CMAKE_PREFIX_PATH CMake
+variable"). The response cycle (same version, no bump) fixes exactly
+what that evidence names: W-PIN (the Qt prefix is derived from qmake on
+PATH — grandparent of <qt>/bin/qmake.exe — and asserted against
+lib/cmake/Qt6/Qt6Config.cmake, the file find_package consumes), W-SMOKE
+(the runtime smoke targets the windowed sheytan-ui child the core
+spawns, requires the child's exit after a delivered WM_CLOSE, then the
+core's exit 0 and no orphan — mirroring the Linux twin's G3/G5; the
+former gate required the windowsgui core to own a window it cannot
+own), W-INST-VER (the installer gate compares against
+"$($env:APP_VERSION).0" — NSIS's VIProductVersion is required four-part
+X.X.X.X by makensis source contract; installer.nsi stays
+byte-identical), W-ZIP-LAUNCHER (the ZIP launcher gate reads
+packaging/SHEYTAN-LA.bat and REQUIRES the packaged entry — the former
+root Test-Path was dead since v1.10.7 R-B), W-VIS-2 (gate-order.txt
+rides the failure artifact), and W-DOC (docs/agent.md restructured into
+the project's operating manual). The two-run protocol stands: main
+green, then the operator's v1.10.13 tag drive the publish job's first
+execution.
+
 ---
 
 ## v1.10.12 — 2026-10-17 — the documented busy-retry contract + the ROADMAP shipped-baseline completion: dialEndpoint's fixed 3-attempt busy budget replaced by the documented Microsoft Named Pipe Client pattern bounded by a 10 s busy-dial deadline, the burst pin kept byte-identical, and the shipped baseline completed through v1.10.x

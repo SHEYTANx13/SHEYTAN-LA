@@ -3904,3 +3904,109 @@ Per-item outcome table (this cycle's register):
 | W-QT | RECORDED (non-defects) | no fix applied to any of the three; no wasted cycles |
 | D1 | CLOSED (docs + identity) | changelog/UPDATE/agent/ROADMAP/worklog entries; identity 1.10.13 --check GREEN; web bundle rebuilt |
 | HOSTED #1/#2 | OPEN (operator) | no push credentials; fix-forward loop handed to the operator per Phase 7 |
+
+---
+Task ID: 2 (v1.10.13 post-release session — run 39038248810 response)
+Agent: v1.10.13 full-green engineering session
+Task: FIRST FULLY GREEN pipeline pass — fix the four verified defects named by run 39038248810's
+visibility system (W-PIN, W-SMOKE, W-INST-VER, W-ZIP-LAUNCHER), complete W-VIS-2, restructure
+docs/agent.md into the operating manual (W-DOC), keep every protected surface byte-identical,
+identity frozen at 1.10.13.
+
+EVIDENCE FIRST (hosted re-read, GitHub REST API, unauthenticated — quoted verbatim):
+
+Run 39038248810 ("Build Desktop" #14, push of v1.10.13, commit c46a9c08683392fa4baa12a2d94de3a22331bff3,
+conclusion failure, total 16m16s). Job conclusions: audit=success (2m31s), Linux x64=success (9m50s,
+FIFTH consecutive green, ZIP artifact produced 6.32 MB), Windows x64=failure (13m39s), publish=skipped
+(main push — the tag gate). Windows check-run annotations, re-read from the API and matching the
+register verbatim:
+
+  1. "failing gate: Qt host cmake configure"
+  2. "Qt host cmake configure: (no teed log for this gate — see the red step on the run page)"
+  3. "Process completed with exit code 1."
+
+EVIDENCE CLASSES (stated up front): local proof for the Windows C++/Qt, Go-compile, and packaging
+surfaces is STATIC ONLY (YAML parse, script review, source-level contract verification). The hosted
+Windows job is the runtime authority. Local green is not hosted green.
+
+SWEEP 1 — W-PIN root-cause chain (joint evidence, all four legs):
+  (a) FAIL marker present in gate-order.txt (annotation 1 names the gate the visibility system
+      tracked), (b) win-qt-configure.log ABSENT (annotation 2 is the exact no-teed-log branch of the
+      failure summary — had cmake run, the tee would exist regardless of its outcome),
+  (c) install-qt-action@v4 live README (re-read this session): "The Qt bin directory is prepended to
+      your `path` environment variable." / "you will not need to set the `CMAKE_PREFIX_PATH` CMake
+      variable." The action exports NEITHER Qt6_DIR NOR CMAKE_PREFIX_PATH, (d) the pinning guard at
+      workflow lines 896-901 is the ONLY code path that writes "FAIL Qt host cmake configure" without
+      creating the tee file. The guard was correct discipline on a wrong assumption.
+
+SWEEP 2 — desktop.go spawn/wait/close lifecycle (static, HEAD): Run() = api.New + EnsureSetup →
+  localipc.Serve binds endpoint → uiExecutable() resolves sheytan-ui.exe NEXT TO THE CORE
+  (filepath.Join(filepath.Dir(self), name)) unless SHEYTAN_UI_EXECUTABLE overrides / "none" sentinel →
+  exec.Command(uiPath) with endpoint + ephemeral key in the child env → cmd.Start() → select waits on
+  childDone OR signal; uiSpawnTimeout = 0 (disabled: the launcher waits on the child unconditionally);
+  child exit → core exits with the CHILD's exit code (exec.ExitError.ExitCode()); signal → SIGTERM to
+  child, 5s grace, kill, exit 0. Consequence: the core (built -H=windowsgui) owns NO top-level window;
+  the window belongs to the Qt host child; CloseMainWindow() must be delivered to the CHILD, and the
+  core's clean exit is the lifecycle CONSEQUENCE of the child's exit.
+
+SWEEP 3 — SHEYTAN-LA.bat references tree-wide (static): repo root has NO SHEYTAN-LA.bat (moved to
+  packaging/ in v1.10.7 R-B; audit's shape-check enforces absence at root). References: the audit
+  shape-check (packaging/SHEYTAN-LA.bat present, root absent), the Prepare step's staging copy from
+  packaging/SHEYTAN-LA.bat into the package root, the ZIP verify step's DEAD gate on
+  Test-Path "SHEYTAN-LA.bat" (root), installer.nsi shortcut creation (package-relative, unaffected).
+
+SWEEP 4 — install-qt-action@v4 exports (live README): PATH prepend (bin dir), QT_ROOT_DIR,
+  QT_PLUGIN_PATH, QML2_IMPORT_PATH, PKG_CONFIG_PATH, LD_LIBRARY_PATH, IQTA_TOOLS. NO Qt6_DIR, NO
+  CMAKE_PREFIX_PATH export. CMAKE_PREFIX_PATH is explicitly the CONSUMER's choice ("you can set it to
+  either ${QT_ROOT_DIR} or to ${QT_ROOT_DIR}/lib/cmake").
+
+SWEEP 5 — NSIS VIProductVersion contract (source-level, kichik/nsis master): script.cpp:5005
+  `_stscanf(token, "%d.%d.%d.%d", ...) == 4` — exactly four dot-separated integers; build.cpp:1842
+  "Error: invalid VIProductVersion format, should be X.X.X.X"; tokens.cpp:336 usage
+  `version_string_X.X.X.X`. A three-part "1.10.13" FAILS makensis; installer.nsi:129 correctly carries
+  `VIProductVersion "${VERSION}.0"` → the version resource reads "1.10.13.0" while APP_VERSION is
+  "1.10.13" → the step-29 gate as written throws BY CONSTRUCTION against a perfect installer.
+
+FIXES IMPLEMENTED (each a minimal diff, register-cited; local proof class:
+STATIC — YAML parse, actionlint, script review; the hosted job is the
+runtime authority):
+
+| Item | Closure class | Diff |
+|------|---------------|------|
+| W-PIN | CLOSED (workflow diff) | step 22 reads qmake.exe from PATH (Get-Command), derives the Qt root as the grandparent (<qt>/bin/qmake.exe → <qt>), ASSERTS lib\cmake\Qt6\Qt6Config.cmake (the file find_package(Qt6) consumes), passes -DCMAKE_PREFIX_PATH; qmake-absent fails loudly naming the missing PATH contract; wipe + --fresh + tee + gate markers retained |
+| W-SMOKE | CLOSED (workflow diff) | step 23 retargeted: banner/liveness/crash-report assertions unchanged; then bounded 60s wait for a windowed sheytan-ui child (G3); CloseMainWindow() to the CHILD with BOOL checked; child exit in 15s (ignores → Stop-Process + throw); CORE exit code 0 in 30s (desktop.go lifecycle consequence); no-orphan assertion (G5) |
+| W-INST-VER | CLOSED (workflow diff) | step 29 compares ProductVersion against "$($env:APP_VERSION).0" citing the NSIS four-part contract (script.cpp "%d.%d.%d.%d" == 4; build.cpp "should be X.X.X.X"); installer.nsi byte-identical |
+| W-ZIP-LAUNCHER | CLOSED (workflow diff) | step 27 gates on Test-Path "packaging/SHEYTAN-LA.bat" and REQUIRES "${env:WIN_PKG_ROOT}/SHEYTAN-LA.bat" among the ZIP entries |
+| W-VIS-2 | CLOSED (workflow diff) | the Windows failure upload now includes ci-logs/gate-order.txt alongside ci-logs/*.log |
+| W-DOC | CLOSED (docs, ordered deliverable) | docs/agent.md restructured into the nine-section OPERATING MANUAL (what-this-is / repository map / verification ladder / evidence classes / code-before-docs / CI contract / push protocol / protected surfaces / where-to-write); every line verifiable from the tree or cited hosted evidence; status narrative retired to changelog/worklog/UPDATE |
+| W-PY-OK / W-NSIS-OK / W-SUMS-OK | KEPT BYTE-IDENTICAL | verified at HEAD, untouched |
+| W-QT non-defects | RECORDED, untouched | no cycle spent |
+| D1 | CLOSED (docs, capped) | changelog.md hosted addendum; UPDATE.md hosted addendum; this worklog entry; NO version bump — identity 1.10.13 |
+
+LOCAL GATE TABLE (this environment: node v24.21.0, npm 11.19.0, python3
+3.12.15; go/cmake/Qt/pwsh NOT installed — Go, native, Qt, and all Windows
+runtime surfaces are STATIC-ONLY here; the hosted job is the runtime
+authority):
+
+| Gate | Result |
+|------|--------|
+| YAML parse (PyYAML) | PASS |
+| actionlint v1.7.7 | PASS (exit 0) |
+| release-version.mjs --check | PASS (1.10.13, canonical surfaces + workflow contract) |
+| npm ci | PASS (0 vulnerabilities) |
+| npm run typecheck | PASS |
+| npm run lint (oxlint) | PASS (0 warnings, 0 errors, 111 files) |
+| npm run test:units | PASS (236/236) |
+| npm run test:release | PASS |
+| npm run build + sync:web | PASS |
+| verify-static-assets --dist | PASS (web/static mirrors the current build) |
+| node scripts/verify-all.mjs | PASS (3 suites NOT RUN: go/cmake/Qt unavailable — honest skips, fail-fast profile) |
+| bash -n scripts/qt-desktop-smoke.sh | PASS |
+| gofmt -l . / go test / go vet / GOOS=windows | NOT RUN (no go toolchain locally) — hosted authority |
+| CMake configure sanity (Qt) | NOT RUN (no Qt toolchain locally) — hosted authority |
+| Line endings of edited files | LF verified (no CRLF introduced) |
+
+HOSTED STATUS (honest): run #1 (operator push of main) and run #2 (the
+operator's v1.10.13 tag) have NOT happened at this tree shape. No gate
+past step 21 is claimed VERIFIED. The two-run protocol is handed to the
+operator exactly as the register prescribes.

@@ -88,6 +88,34 @@ inspection already proves the next runs would hit.
    the FIRST time, with the P-SUMS contract in force. Canonical identity
    is 1.10.13 (scripts/release-version.mjs --check green).
 
+## v1.10.13 hosted addendum — run 39038248810 + the response cycle
+
+Run 39038248810 ("Build Desktop" #14, push of v1.10.13, commit c46a9c0,
+failure, 16m16s) verified the W-VIS visibility repair live: audit green,
+Linux x64 green for the FIFTH consecutive run (ZIP produced, 6.32 MB),
+Windows steps 1–21 green again, and the end-of-job summary named the
+failing gate anonymously — "failing gate: Qt host cmake configure",
+"(no teed log for this gate — see the red step on the run page)",
+"Process completed with exit code 1.". That joint evidence (named gate +
+absent tee file) root-caused W-PIN: the step-22 pinning guard read
+Qt6_DIR/CMAKE_PREFIX_PATH, but install-qt-action@v4 exports neither (its
+README documents only the PATH prepend), so the guard threw before cmake
+ran. The response cycle (no version bump) fixes what the evidence names:
+W-PIN (qmake-derived, Qt6Config.cmake-asserted prefix), W-SMOKE (the
+smoke targets the windowed sheytan-ui child — the windowsgui core owns
+no window — then requires the core's exit 0 and no orphan, mirroring the
+Linux twin's G3/G5), W-INST-VER (installer ProductVersion compared
+against "$($env:APP_VERSION).0" per NSIS's mandatory four-part
+VIProductVersion; installer.nsi byte-identical), W-ZIP-LAUNCHER (the
+launcher gate reads packaging/SHEYTAN-LA.bat and requires the packaged
+entry), W-VIS-2 (gate-order.txt included in the failure artifact), and
+W-DOC (docs/agent.md restructured into the project's operating manual —
+the cycle's one ordered documentation deliverable). Two-run protocol
+status: run #1 (main) is the next operator action; run #2 (the
+v1.10.13 tag) executes the publish job for the first time once main is
+fully green. Local proof class for every fix: STATIC ONLY (YAML parse +
+actionlint + script review); the hosted job is the runtime authority.
+
 ## v1.10.12 notes (parent release — superseded where they describe the current release)
 
 v1.10.12 is the DOCUMENTED BUSY-RETRY CONTRACT +

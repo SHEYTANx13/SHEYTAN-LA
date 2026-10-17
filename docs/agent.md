@@ -1,589 +1,268 @@
-# SHEYTAN-Local-Agent — Agent Context (CURRENT v1.10.13 handoff)
+# SHEYTAN-Local-Agent — Operating Manual for Engineering Agents
 
-This is the concise, current handoff for an engineering agent continuing
-work on SHEYTAN-LA. It states what IS (verified), what is NOT (future), the
-durable invariants, and the surfaces most sensitive to regression. Full
-truth: `ARCHITECTURE.md` (architecture), `ROADMAP.md` (current/future
-boundary), `changelog.md` (the ONLY release history), `worklog.md`
-(session log).
+This manual GUIDES an agent through this repository. It states what the
+project IS, where things live, how the work is verified, what proof means,
+and where to write. Every line is verifiable from the tree or from the
+hosted evidence it cites. Status narrative lives in `docs/changelog.md`
+(the ONLY release history), `docs/worklog.md` (session log with evidence
+classes), `docs/UPDATE.md` (current release notes + maintenance behavior),
+and `docs/ROADMAP.md` (current/future boundary). Architecture truth:
+`docs/ARCHITECTURE.md`.
 
-**Current release: v1.10.13 — the post-verification visibility +
-predicted-defect clearance release.** Run 39024607296 (v1.10.12, commit
-b8817d95) made history twice and then stopped: Windows step 14 "Go
-verification" went GREEN for the FIRST time in the repository's history
-(the v1.10.12 deadline-bounded busy-retry dial budget held under the
-8-worker burst pin in both suites), steps 17–21 (engine variant assets,
-Windows resources, Windows executable build + console smoke probe,
-executable verify, Qt 6.8.2 install) went green on their FIRST execution,
-and then step 22 "Build Qt host (Windows)" failed in 41 seconds, exit 1,
-with NO readable evidence — one generic "Process completed with exit code
-1." annotation at a nominal workflow line (137), the step log admin-gated
-(403). THE EXACT FAILING COMMAND INSIDE STEP 22 IS UNKNOWN and nothing in
-this release claims otherwise. What v1.10.13 changes (all code, none of it
-asserting a root cause for run 39024607296): (1) W-VIS — the Windows
-if:failure() pair MOVED from mid-job (positions 15–16, provably blind to a
-failure at step 22 or later — run 39024607296 proved it live) to the END
-of the job so if:failure() covers the ENTIRE job; every post-verification
-native command (cmake configure, cmake build, windeployqt, the acceptance
-run, NSIS makensis) tees its own log into ci-logs/ and tracks RUN/OK/FAIL
-in ci-logs/gate-order.txt; the summary NAMES the failing gate and emits
-redacted, truncated tail annotations under the existing caps (10/step,
-250 chars, no secrets); the proven Go summary path is unchanged when no
-post-verification markers exist. (2) P-DEPLOY — windeployqt now runs
-against the staged Qt host ("$appRoot/sheytan-ui.exe") instead of the Go
-launcher, teed and exit-code-asserted, with Qt6Core.dll verified beside
-the host. (3) P-CMAKE — the Qt host configure wipes ui/qt/build,
-configures with --fresh, and pins -DCMAKE_PREFIX_PATH from the
-install-qt-action environment (the repo's own CMake cache rule + the
-green Linux twin's pattern). (4) P-PY — the acceptance harness resolves
-python3/python platform-robustly and asserts the chosen interpreter.
-(5) P-SUMS — the publish job writes ONE SHA256SUMS.txt naming all THREE
-published assets from their actual paths, asserted line-by-line before
-release. (6) P-ZIP — the "Verify Windows ZIP" no-backslash-entry tripwire.
-(7) W-QT non-defects recorded (CMake config-mode discovery honors
-Qt6_DIR/PATH prefixes; QLocalSocket accepts full \.\pipe\... names
-verbatim; Compress-Archive is in the fixed module range on pwsh 7.4+) —
-no cycle is to be spent on them. HOSTED STATUS (do not overstate): Linux
-x64 is fully green FOUR consecutive runs — a protected surface, do not
-churn the verified chain; Windows Go verification is green for the first
-time (ONE hosted run at this shape — the run of THIS revision is its
-confirmation authority); Windows steps 17–21 are green on first execution
-by the same single run; step 22 is RED with an unreadable log; the
-post-verification visibility is INSTALLED this release and has never run
-hosted yet; the publish job executes ONLY on tag pushes
-(if: startsWith(github.ref, 'refs/tags/v')) — never in any run so far;
-the TWO-RUN PROTOCOL to the first complete pipeline pass is: the operator
-pushes main (run #1 — the visibility repair's first live proving, expected
-to name the real step-22 culprit if the frontier is still red), and once
-main is green the operator pushes the v1.10.13 tag (run #2 — full matrix
-again, then the publish job's first-ever execution). Fix forward only on
-what the installed visibility names.**
-
-Its parent, v1.10.12 — the documented busy-retry contract + the ROADMAP
-shipped-baseline completion (run 39019535982 consumed: the v1.10.11
-kernel32 binding repair WORKED and the proc-resolution pin passed; the
-Windows headless run failed on the NAMED burst test with the 0.60 s
-arithmetic proving the CLIENT's fixed 3-attempt budget was the defect;
-v1.10.12 replaced the attempt counter with the DOCUMENTED Microsoft Named
-Pipe Client pattern — retry CreateFile while WaitNamedPipe reports an
-instance becoming available — bounded by `pipeBusyDialBudget = 10 *
-time.Second`, honest early exits, typed `ErrBusyDialBudgetExhausted`; the
-burst pin, the structural pin, the resolution pin, the kernel32 binding,
-and the whole server side stay BYTE-IDENTICAL; its hosted run 39024607296
-then proved step 14 green for the first time and moved the frontier to
-step 22) —
-Its parent, v1.10.11 — the kernel32 binding repair + the non-panicking
-dial path (the binding targets kernel32.dll, the documented exporting
-module — "winbase" is a header, not a DLL; `waitNamedPipe` resolves via
-`Find()` with the typed `ErrWaitNamedPipeUnresolved`, so a resolution
-failure surfaces an error instead of killing the host; the W-PIN pair
-pinned the compile-blind defect class) —
-its parents, v1.10.10 — the instance-invariant fix + the client
-pipe-busy contract + the operator's docs condensation order (the
-server's `takeInstance` creates the replacement pipe instance inside
-the SAME locked section that hands out the spare, so a listening
-instance exists at every instant from Serve's return until Close; the
-client's `dialEndpoint` honors ERROR_PIPE_BUSY through the documented
-WaitNamedPipe contract with a bounded retry; the burst and structural
-pins; the stale version lines removed and pre-1.9.x history condensed) —
-and v1.10.8 — the line-ending policy + E2E path repair + CI
-Visibility 3.0 (the Windows gofmt gate was RIGHT — the committed tree is
-gofmt-clean; the CRLF checkout class is fixed by a scoped `.gitattributes`
-(`*.go text eol=lf`) plus a Windows pre-Checkout `core.autocrlf=false` pin,
-the gate byte-identical; `build:e2e` builds `./cmd/sheytan-local-agent`
-after the reshape emptied the root package — the full E2E stack passes
-40/40 Playwright specs locally; the Browser E2E gate joins the visibility
-system with tee'd ci-logs + an if:failure() summary emitting capped
-::error:: annotations; the smoke summary distinguishes never-started from
-died-at-gate; verify-all.mjs's Qt acceptance builds the core explicitly
-from its real entrypoint and the missed-reference sweep is proven) — and
-v1.10.7 — the evidence-driven gate repair + CI
-Visibility 2.0 + repository shape (the Windows named-pipe client now
-satisfies the overlapped-IO contract; gofmt gated on BOTH platforms; all
-documentation in docs/, the core entry in cmd/sheytan-local-agent/, the
-launcher source in packaging/) — and v1.10.5 — the live-stream +
-Qt-host-build release — established the current behavior below. The production
-desktop UI is the native Qt Quick/QML host (`ui/qt`), an IPC CLIENT of
-the unchanged Go core over `internal/localipc` (per-user Unix socket /
-named pipe, transport-level identity checks, versioned keyed handshake
-`sheytan-ipc/1`, bounded framing). Wails is REMOVED — from the product,
-the build (`build/config.yml`), the module graph (go.mod/go.sum; CI
-asserts the absence) and the current-product docs; historical release
-records that name Wails stay (deleting them would falsify history). The
-shipped Qt surfaces are sessions/chat/live-streaming-with-Stop/
-settlement-persistence-reload/repeat-send, the core states, and — new
-in v1.10.2 — the AI Systems list/activation drawer (a pure
-`/api/systems` client: list, activate, typed error paths; the store
-keeps ALL authority). The remaining UI surfaces (AI Systems
-editing/import, Goals, Coding Lab, Net Search page, repository index,
-tasks/automations, downloads/diagnostics) are still served by the
-documented headless/browser mode until their Qt migration lands — they
-are NOT claimed done. Run teardown is deterministic: run spawns are
-tracked and `Server.Close` joins them (bounded) before releasing the
-stack; new run/resume registrations are refused once shutdown began.
-The launcher's UI-resolution contract is unit-tested
-(`internal/desktop/desktop_test.go`: `none` sentinel, override,
-next-to-core layout, hard refusal). The Linux desktop smoke owns its
-whole environment (Xvfb + Openbox/equivalent WM when present, self-built
-close tool, self-built core when unstaged, trap cleanup) and its G1–G5
-PASS under a real WM. The Windows full-suite compile gate is repaired:
-the localipc contract tests build on Windows too (the test-only
-`credAllowed` helper is platform-neutral now). The ONE canonical local
-verification entrypoint is scripts/verify-all.mjs; the CI jobs run
-their gates INLINE in build-desktop.yml and do NOT invoke verify-all.mjs
-(v1.10.3 correction — the v1.10.2 wording claimed CI calls it, and the
-workflow never did). The Phase 1 engine
-gate is UNCHANGED: the physical-Windows warm-TTFT/native-vs-managed
-baseline is NOT MEASURED (no physical hardware), so the native C++
-engine default stays evidence-gated and the managed llama.cpp path
-remains the default backend. The Windows TEST-ONLY CDP acceptance
-switch is retired with the Wails shell; the live-answer gate is now the
-Qt acceptance suite (real QML UI + real core) on both platforms. The
-former loopback activity transport is retired; /api/ws-origin now
-answers same-origin unconditionally for the headless/browser mode.
-Measurement is FAIL-CLOSED about hosts: `cmd/shtn-perf` requires an
-explicit `--host-class physical|hosted` (no default), refuses a
-physical claim over detected hosted-CI markers, derives the
-schema-compat `hostedCI` flag from that class, and records
-RAM/hostname/evidence/notes (artifacts:
-`baselines/perf-hosted-ci-v1.10.0.json`,
-`baselines/perf-hosted-v1.10.2.json`). The direct devDependency `ws` is
-at 8.22.0 (GHSA-58qx-3vcg-4xpx / GHSA-96hv-2xvq-fx4p closed, no
-`--force`; upstream fixed them in 8.20.1 and 8.21.0 respectively —
-8.22.0 was chosen, not the smallest). Version identity is exactly
-`1.10.12` everywhere
-(canonical gate: `node scripts/release-version.mjs --check`).
-
-R&D decision
-(`Parsaetak/Contents` → `Research-and-Development` →
-`SHEYTAN-LA-2026-10-11.md`) remains the direction authority: Go stays
-the single orchestration authority; C++ owns numerical inference; the
-native-engine DEFAULT promotion is NOT flipped in v1.10.2 — the
-blocking evidence is the physical-Windows warm-TTFT comparison against
-managed llama.cpp (checklist in ROADMAP.md); the Phase 0 baselines live
-in `baselines/` (hosted class, NOT-MEASURED honesty per metric,
-fail-closed host classification) + `worklog.md`; the Qt/IPC seam is
-DEFINED in ARCHITECTURE.md (implemented at the chat/sessions surface
-and the AI Systems list/activation surface, not yet at every panel).
-Version identity is
-exactly `1.10.12` everywhere (canonical gate:
-`node scripts/release-version.mjs --check`). No stale 1.10.0–1.10.11
-current-release claims exist outside `changelog.md` and the retained
-historical note sections.
-
-**WHAT v1.10.0 CHANGED (the v1.10.0 regression-sensitive surfaces; all
-still current):**
-
-1. **The variant transaction order** (`internal/llm/llama.go`,
-   `updateEngineVariantTx`): early live-run refusal (no claim) →
-   validate/supported/no-op → tag resolve → CLAIM-FREE staged download
-   (`updater.DownloadEngineArchiveStaged` — non-destructive, no install
-   lease; the swap half keeps the full lease/lock discipline through
-   `InstallStagedFromArchiveDeferredWithVariant`) → DESTRUCTIVE
-   BOUNDARY (admission claim + live verdict, atomic) → fresh
-   `wasRunning` → stop → swap → start → verify → commit/rollback. The
-   claim MUST NOT move back before the boundary: doing so re-opens the
-   v1.9.5 regression (background probes holding run admission for
-   minutes). A download failure must NOT restart the engine (nothing
-   was stopped).
-
-2. **Desktop loopback activity transport** (carried from v1.9.5,
-   unchanged; `internal/api/loopback.go`, `src/config.ts`,
-   `src/store.ts`, `internal/api/ws.go`): the desktop process binds the
-   EXISTING API handler on 127.0.0.1:0; `GET /api/ws-origin` returns the
-   origin ("" = same-origin); `connectActivity` resolves it once via
-   `ensureActivityWsOrigin()` and opens the socket through
-   `openActivitySocket`. `allowedOrigin` accepts ONLY the exact Wails
-   page origin (http/wails + `wails.localhost`) against LOOPBACK request
-   hosts. Never broaden the origin check, never add a second streaming
-   channel, never serve the socket from a second handler. The
-   regression pins live in `internal/api/loopback_v195_test.go`
-   (including a REAL WebSocket upgrade with the Wails origin receiving
-   `attached`).
-
-3. **Engine/run coordination (admission claim at the destructive
-   boundary)** (`internal/llm/llama.go` `SetRunGate`/`SetAdmissionControl`/
-   `ErrEngineBusyWithRun`, wired in `internal/api` `New`):
-   `updateEngineVariantTx` refuses on an active run TWICE — an early
-   read-only registry check before anything happens (no claim), and the
-   atomic check-and-claim at the DESTRUCTIVE boundary (a run registered
-   during the claim-free download window is seen by the live verdict).
-   The AUTO probe treats either refusal as a DEFERRAL
-   (`internal/llm/variant_auto.go`) — never a persisted bounded failure.
-   Do not move the claim before the boundary (that re-opens the v1.9.5
-   run-admission outage), do not skip the boundary claim (that re-opens
-   the check-then-act tear), and do not persist deferrals into gpu-probe
-   state.
-
-4. **Settled-reply proof selector** (`e2e/zero-session.spec.ts`
-   `expectRealAssistantReply`): settled assistant replies render
-   `.message-markdown` (MessageBubble → `<Markdown>`); `.message-content`
-   exists ONLY on the live bubbles. Any future settled-reply assertion
-   must target the markdown surface; never accept placeholder rows.
-
-5. **Stream trace** (`src/stream-trace.ts`): opt-in via
-   `localStorage SHEYTAN_STREAM_TRACE=1`, lengths only, bounded ring,
-   `window.__SHEYTAN_STREAM_TRACE_DUMP__` exposed ONLY when enabled.
-   The zero-session spec attaches it on failure. Keep the disabled path
-   a strict no-op and keep content OUT of the trace.
-
-6. **Run summary metrics** (`internal/api/server.go` settle):
-   `gateMs`/`ttftMs`/`persistMs`/`acceptToDoneMs`/`totalMs` +
-   `events`/`deltas`/`firstDeltaMs`. `publishMs` is retired — do not
-   reintroduce it.
-
-7. **The TEST-ONLY WebView2 CDP seam** (`internal/desktop/desktop.go`,
-   `acceptanceCDPPort` + the `WindowsOptions.AdditionalBrowserArgs`
-   forward): the acceptance harness's CDP switch
-   (`SHEYTAN_ACCEPTANCE_CDP_PORT`) MUST travel this programmatic
-   channel — never `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, which the
-   Wails pure-Go loader pins to "" at package init. Keep the switch
-   digits-only, bounded, inert when unset, and keep production launchers
-   from ever setting it. Pins: none in Go (env-gated); the harness
-   (`scripts/windows-live-answer-acceptance.mjs`) documents the
-   mechanism and its sanitized CDP-timeout diagnostic.
-
-8. **The UpdateEngineNow admission seam** (`internal/llm/llama.go`,
-   `UpdateEngineNow`): early advisory refusal → boundary claim (same
-   primitives as `updateEngineVariantTx`) → stop/install/start under the
-   claim → balanced release on every exit. Pins:
-   `internal/llm/admission_updatenow_v1100_test.go` — keep the
-   begin/end balance and the "refusal never stops a serving engine"
-   guarantees when touching this transaction.
-
-1. **Governor CPU policy contract** (`internal/governor/governor.go`,
-   pinned by tests in BOTH directions): the envelope's CPU-reduction
-   branch requires a SUSTAINED rolling signal — ≥ `cpuWarmupSamples` (3)
-   folded samples AND rolling average ≥ `CPUReduceAbove`. A lone spike
-   (including the FIRST sample ever folded, whose EWMA equals the raw
-   value) never flips the envelope; sustained high load still reduces
-   background/concurrency. The folded sample count rides
-   `ResourceState.CPUSamples`. `Governor.SetCPUSampler` is a TEST seam —
-   production keeps `governor.CPULoadPlatform` (ONE platform sampler);
-   integration tests that assert a pressure contract MUST pin the seam
-   (unknown or low CPU) or they will fold the host's real load again
-   (the exact run 38035650428 failure mode).
-2. **Native prefill parity gate** (`tests/test_prefill_parity.cpp`): the
-   claims now match the proof exactly — per-position logits through the
-   chunk=1 span cadence, final-token logits for chunks 3/7/16, full KV
-   bytes across every chunking AND the serial run, edge/error bounds,
-   mixed prefill→decode; tied output NOT claimed (no shipped fixture is
-   tied). Any change to the layer math MUST keep that gate bit-exact or
-   be a deliberate, documented numerics change.
-3. **Zero-session / live-stream E2E contracts**: EVERY zero-session test
-   now proves the settled assistant reply is real content (non-empty
-   `.message-content`, no `[data-stream-placeholder]` descendant) via
-   `expectRealAssistantReply`; the count-based row assertions alone are
-   NOT sufficient (the generation bubble also carries
-   `.message-row.from-agent`). Keep that helper on any new transcript
-   test.
-4. **UI typography floors** (`src/styles.css`): no `font-size` below
-   10px (metadata floor), errors/essential states ≥ 11px, interactive
-   control text ≥ 12px. Do not reintroduce sub-10px text; density comes
-   from hierarchy and layout, not microscopic type.
-
-**WHAT v1.9.2 CHANGED (carried forward):**
-
-1. **Native engine forward path** (`native/engine/src/forward.h/.cpp`,
-   `generate.cpp`, `tensor.h/.cpp`): the forward pass runs on a RESOLVED
-   WEIGHT TABLE (once-per-binding `Weights::resolve`; rows walked by
-   `row_ptr`/`dequant_row`) and prefill runs through `Forward::prefill_span`
-   (16-token chunks, last-token-only logits, cancel cadence 16). Measured
-   19.08 → 3.66 ms/token (5.2×). `Forward::token()` public semantics are
-   UNCHANGED. Bit-for-bit parity is pinned by `tests/test_prefill_parity.cpp`
-   (per-position logits via the chunk=1 cadence, last-token logits for
-   the production chunk sizes, FULL KV bytes across every chunking) — any
-   change to the layer math MUST keep that gate bit-exact or be a
-   deliberate, documented numerics change. The native CMake build now
-   DEFAULTS to Release when no build type is given.
-2. **Desktop shell** (`internal/desktop/desktop.go`): the main window binds
-   `events.Common.WindowClosing` → `app.Quit()` (wails v3.0.0-beta.16
-   swallows webview-window closes on both platforms — verified in the
-   dependency sources). Do not remove this binding: closing the window
-   would strand a zombie process with the backend running.
-3. **Desktop smoke gates** (`.github/workflows/build-desktop.yml`):
-   Windows requires `MainWindowHandle != 0` + a true `CloseMainWindow()`
-   return + exit code 0; Linux owns a real Xvfb display, finds the app's
-   window via xdotool (`--pid` + `getwindowpid` ownership), closes it with
-   `WM_DELETE_WINDOW`, and requires normal-path exit. `xdotool` is a Linux
-   CI dependency. These gates are the authoritative GUI-runtime evidence —
-   keep them honest (Kill remains a failing-run backstop only).
-4. **Zero-session recovery** (`src/store.ts` `recoverRunFromIdle`): an
-   idle sentinel WITHOUT a lastRun block that lands within 250 ms of the
-   attach acknowledgement (`activityAttachAckAt`) is the attach handshake,
-   never recovery evidence — the measured clobber mechanism. The v1.2.6
-   Path A (idle + lastRun) and late-idle semantics are unchanged.
-5. **E2E contracts**: the live-stream + zero-session visibility proofs
-   observe REAL content only (`data-stream-placeholder` excluded); the
-   zero-session observation bound is 60 s; live-stream failures attach
-   compact structured diagnostics.
-
-**THE CURRENT PROGRAM (v1.9.x):** complete the v1.9 boundary honestly —
-see `ROADMAP.md` §"v1.9 current/future boundary": automatic sub-agent
-fan-out from the goal runner, the protected-evaluation anti-hack guard,
-MCP runtime wiring through the guarded registration pipeline, and
-oversized-output spool triggers. Linux is a first-class release target:
-the Linux CI path must reach Go verification → Browser E2E → stress →
-build → package; nothing may be skipped because Windows passes.
+Current release identity: **1.10.13** — version-only, no codename. The
+canonical gate is `node scripts/release-version.mjs --check` (package.json
+is the single source of truth; the audit job resolves it at runtime and
+every other job consumes it via needs-outputs).
 
 ---
 
-## What SHEYTAN is
+## 1. What this is
 
-A local-first AI engineering laboratory — NOT an Ollama/LM Studio wrapper.
-One Go runtime owns every authority exactly once; a React/TypeScript
-frontend is embedded; managed llama.cpp and a native C++ engine path serve
-inference behind one backend contract. Motto: **"The model proposes. The
-tools execute. The laboratory verifies."**
+SHEYTAN-LA is a local-first AI engineering laboratory — NOT an
+Ollama/LM Studio wrapper. ONE Go core owns every authority exactly once
+(policy, runs, sessions, tools, approvals) and serves its API over the
+secured `internal/localipc` channel (per-user Unix socket / named pipe,
+transport-level identity checks, versioned keyed handshake
+`sheytan-ipc/1`, bounded framing). The native Qt Quick/QML host
+(`ui/qt`) is a CLIENT of that core: the packaged pair is the Go core
+launcher (`SHEYTAN-LA.exe`, built `-H=windowsgui` — it owns NO top-level
+window) plus the spawned Qt host child (`sheytan-ui.exe`, resolved NEXT
+TO the core per `internal/desktop/desktop.go`, which waits on the child
+unconditionally and exits with the child's exit code). A React/TypeScript
+frontend (`src/`, embedded) serves the headless/browser mode for CI,
+containers and tooling. Managed llama.cpp and a native C++ engine
+(`native/`) serve inference behind ONE backend contract; the native
+engine default is evidence-gated (physical-Windows warm-TTFT comparison,
+see ROADMAP). Wails is REMOVED from the product, the build, and the
+module graph. Motto: **"The model proposes. The tools execute. The
+laboratory verifies."**
 
-## v1.9 capabilities (implemented, evidence in changelog §v1.9.0)
+Durable invariants (all releases): one authority per concern; no
+sleeps/timing hacks/retry storms — deterministic tests synchronize on
+authoritative state; build/typecheck ≠ runtime proof; device detection ≠
+device execution; model output ≠ objective evidence; no fake autonomy
+(everything bounded by permissions, approvals, workspace policy, the
+Governor, cancellation, pause and verification); no fake long-context;
+no model-specific hard-coding; the codename-removal gate stays enabled;
+release identity flows from package.json through
+`scripts/release-version.mjs` only. The R&D decision document
+(`Parsaetak/Contents` → `Research-and-Development` →
+`SHEYTAN-LA-2026-10-11.md`) remains the direction authority: Go stays
+the single orchestration authority; C++ owns numerical inference.
 
-* **AI System object (`internal/aisystem`, `/api/systems`, System Centre
-  UI).** ONE user-owned, revisioned run-configuration store: instructions,
-  model override, reasoning preference, allowed tool surface, approval
-  policy, skills surface, knowledge/memory/compaction policy,
-  verification policy. Atomic per-document persistence, deterministic
-  ordering, corruption tolerance, a reserved default system that
-  reproduces the pre-v1.9 behavior exactly, non-destructive migration,
-  clone/export/import. The ACTIVE system's snapshot (systemId +
-  systemRevision) is frozen into every run BEFORE the run goroutine
-  starts — mid-run edits can never mutate a running configuration.
-* **Execution binding (v1.9).** The frozen snapshot applies server-side:
-  instructions (one bounded system-prefix block), model override, effort
-  preference on the EXISTING v1.8.5 ladder (low=0, mid=1024, high=4096,
-  ultra=engine default; explicit request level wins), tool surface
-  constrain (`ToolPolicy.AISystemConstrain` — offer AND execution, remove-
-  only), skills filtering (excluded skills never inflate context),
-  approval policy. Identity is observable: an `ai_system` activity event
-  and the run response fields.
-* **Goal engine (`internal/goal`, `/api/goals`, Goals UI card).** Durable
-  long-horizon state: phases understanding → planning → acting →
-  verifying → completed; waiting/exception states; bounded plan (≤12);
-  per-step status/result/evidence; a goal-level evidence journal;
-  checkpoints after planning, each completed step, approval boundaries
-  and terminal settlement; resume WITHOUT replaying committed mutations;
-  bounded replanning (≤2) that never erases failure evidence; turn
-  budget parking; boot recovery that marks found-live goals paused
-  (never falsely running) and is idempotent; terminal settlement from
-  the orchestrator's OBJECTIVE verification report only — a model claim
-  never completes a goal.
-* **Approval authority (`internal/approval`, the `agent.WithApprovalGate`
-  seam).** ONE deterministic risk classification (read-only /
-  workspace-write / external-network / destructive / privileged);
-  `auto` / `ask-risky` (default) / `ask-all`; the EXACT normalized call
-  identity (`CallKey`) is the only thing an approval binds to; a bounded
-  decision ledger; goal runs install a deny-by-default gate (no risky
-  call executes silently); goal-level approvals persist durably and
-  approve/resume the exact call; rejection is evidence; stale approvals
-  are rejected. Chat/agent runs install NO gate — behavior unchanged.
-* **Bounded delegation (`internal/multiagent/subtasks`).** Executable
-  subtasks beside the advisory specialists: read-only parallelism ≤ 2
-  (the concurrency seam can only tighten), mutating work serialized, no
-  nested spawning, fan-out ≤ 8, deadlines are honest blocks,
-  deterministic merge in `subtaskId` order, failures stay failed.
-* **Repository navigation (`repo_nav`).** `open` / `navigate` / `read` /
-  `grep` over identified sources through the SAME index and path-safety
-  authority as `repo_search`; exact ranges, provenance, truncation
-  state; entire files are never returned.
-* **P0 repaired (the v1.8.8 Linux E2E blocker).** The zero-session
-  reload-persistence defect: `run()` now sets its startup state BEFORE
-  any transport work, the lazy `createSession({keepRunState:true})` can
-  no longer clobber it, failure paths clean up deterministically, and
-  the E2E waits for the deterministic run-dispatch marker plus durable
-  post-reload transcript. Regression pair: `zero-session-send.test.ts`
-  #6/#7.
-* **P0 repaired (v1.9.1, the live-stream observation contract).** The
-  CI live-stream growth assertion baselined on the live bubble's
-  PRESENTATION PLACEHOLDER and spent its poll budget inside the engine
-  gate + prefill phase (~40 ms/prompt-token measured; a 446-token
-  briefing ≈ 8 s TTFT unloaded, >30 s under contention). Placeholders
-  now carry `data-stream-placeholder` in the DOM; the live-stream
-  proofs require real streamed content for the baseline and observe
-  strictly-longer growth inside the genuine live window; the fixture
-  budget is 320 tokens (40 real engine chunks — the deterministic
-  snapshot count). No product streaming path changed; the chain was
-  verified healthy end to end (WS frame + DOM timeline diagnostic).
-* **Measured fact to carry (native engine path).** Native prefill is
-  ~25–40 ms/prompt-token on a mid host (no batching yet); decode is
-  130+ tok/s on the live fixture. First-token latency on the native
-  path is dominated by prompt length until prefill batching lands
-  (ROADMAP performance item).
+## 2. Repository map
 
-## Verified foundations (v1.8 — unchanged authorities)
+| Path | Owns |
+|------|------|
+| `cmd/sheytan-local-agent/` | Entrypoints: `main.go` plus `main_headless.go`, `main_other.go`, `main_stderr.go`, `main_windows.go` (the root package is EMPTY — v1.10.7 reshape) |
+| `internal/` | The Go core: `api` (HTTP + IPC server), `config`, `desktop` (launcher/child lifecycle), `localipc` (THE pipe/socket transport contract), `multiagent` (bounded subtasks), `perf`, `releasecontract` (canonical package-root truth mirrored by CI), `updater`, `platform`, plus the authority packages (`agent`, `aisystem`, `goal`, `approval`, `governor`, `llm`, `sessions`, `memory`, `tools`, `accelerator`, `testfakes`, …) |
+| `native/` | The C++ engine (CMake) and its parity/acceptance tests |
+| `ui/qt/` | The Qt 6.8 host: `CMakeLists.txt`, `src/` (C++), `qml/` (`Main.qml`, `EmptyState.qml`), `tests/` (`tst_acceptance.cpp` — the QtTest acceptance suite driving the REAL Main.qml against the REAL core) |
+| `src/` + `web/` | The embedded React/TS frontend; `web/static` is the verified embed surface |
+| `scripts/` | `release-version.mjs` (identity), `verify-all.mjs` (the ONE canonical local verification entrypoint), `qt-desktop-smoke.sh` (Linux G1–G5 smoke), `fake-remote-engine.py` (acceptance fixture engine), `verify-static-assets.mjs`, `sync-web.mjs`, `codename-gate.mjs`, `stress-main/` (stress suite) |
+| `packaging/` | `SHEYTAN-LA.bat` (launcher source — staged into every package) and `nsis/installer.nsi` (the NSIS installer contract) |
+| `e2e/` | Playwright specs over the REAL stack (`zero-session.spec.ts`, `ai-systems.spec.ts`) + `make-e2e-model.py` fixture |
+| `baselines/` | Hosted-class perf baselines (fail-closed host classification; physical claims refused without physical hardware) |
+| `build/` | `config.yml` (build config; Wails is absent by contract) |
+| `docs/` | ALL documentation: `ARCHITECTURE.md`, `ROADMAP.md`, `UPDATE.md`, `agent.md` (this manual), `changelog.md`, `worklog.md`, `CONTRIBUTING.md` |
+| `.github/workflows/build-desktop.yml` | The pipeline: audit → Windows x64 + Linux x64 → release (tag-gated) |
 
-* **One run lifecycle** — one registry, one hub, one `runLive` per run;
-  sequence-stamped activity replay; settlement ordering (outcome recorded
-  before the terminal flip) through the ONE `finishSuccessfulRun` path.
-* **Pause / edit / resume** — durable atomic checkpoints; transactional
-  edits with journals + startup recovery; resume = semantic continuation;
-  abort publishes `aborted`, never a fake `done`.
-* **Streaming contract (do not regress)** — server bounded conflation-
-  aware queue → newest cumulative snapshot; sequence/replay; reconnect;
-  frontend fast path; triple-boundary self-healing flush; synchronous
-  terminal flush (done/error/abort).
-* **v1.8.5 reasoning ladder** — low/mid/high/ultra carry REAL numeric
-  thinking budgets on the local llama.cpp request path; remote providers
-  never receive the field; the native path documents the level as inert
-  rather than faking it.
-* **Execution/evidence invariants** — `GPU detected ≠ GPU available ≠ GPU
-  selected ≠ GPU executed ≠ GPU verified`; identity-bound
-  `ExecutionReceipt`; staged engine identity; one accelerator authority;
-  one Governor (policy only — it never executes).
-* **dataAnalysis (v1.8.7/v1.8.8)** — deterministic analyze/aggregate/
-  join/quality/export; 256 MB input honesty; compact model-oriented
-  output. Agent/Goal work should prefer it for data tasks.
-* **Sessions/continuum/recovery** — one session store (hot cache, atomic
-  writes, self-healing index); continuum chapter rollover; recovery
-  handoffs for context exhaustion.
+## 3. The verification ladder
 
-## The v1.9 runtime seams (where new code must hook)
+Run in this order before claiming anything (the audit job runs exactly
+this shape; `scripts/verify-all.mjs` is the local wrapper):
 
-* Run options (`agent.RunOption`): `WithAISystem`, `WithApprovalGate`,
-  `WithToolPolicy`, `WithThinkingMode`, `WithRunIdentity`, … — new
-  per-run behavior rides options, never globals.
-* Tool policy: `ToolPolicy.allows()` is the ONE offer/execution gate; the
-  AI System constrain binds FIRST (nothing can re-enable an excluded
-  tool).
-* Approval: classify through `approval.ClassifyRisk` only; never
-  re-implement risk vocabulary.
-* Goal drives: the drive executor is `goal.RunFunc` bound to the ONE
-  orchestrator (`api.goalRunFunc`); no second model loop.
-* Storage: new durable objects follow the house pattern (one JSON per
-  object, unique-temp+rename, bounded, deterministic listing,
-  corruption-tolerant).
+1. `npm ci`
+2. `npm run typecheck` — `tsc --noEmit`
+3. `npm run lint` — oxlint
+4. `npm run test:units` — frontend unit suites (node --test)
+5. `npm run test:release` — release-version + codename-gate tests
+6. `npm run build` — `tsc -b && vite build && node scripts/sync-web.mjs`
+7. `node scripts/verify-static-assets.mjs --dist` — embedded-frontend checks
+8. `gofmt -l .` — MUST print nothing (CI gates this on BOTH platforms)
+9. `go test ./internal/... -tags headless -count=1`
+10. `go test ./... -count=1`
+11. `go test -race -tags headless -count=1 ./internal/api ./internal/agent ./internal/sessions ./internal/contextplan ./internal/histref ./internal/runtime` — the concurrency-heavy packages
+12. `go vet ./...`
+13. Windows cross-proof: `GOOS=windows go build ./...` + `GOOS=windows go vet ./...` (compile-level only — see §4)
+14. `node scripts/verify-all.mjs` (profiles: `--go`, `--native` CTest, `--qt`, `--release`)
+15. The stress suite (`scripts/stress-main`) — Linux CI runs it end to end
+16. `bash -n scripts/qt-desktop-smoke.sh` — syntax gate for the Linux smoke
+17. `node scripts/release-version.mjs --check` — identity gate
 
-## Invariants (all releases)
+Local Qt sanity check when a Qt 6.8 toolchain exists: resolve qmake,
+derive the prefix (qmake → bin parent → grandparent), assert
+`lib/cmake/Qt6/Qt6Config.cmake`, then `cmake -S ui/qt -B ui/qt/build
+--fresh -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=<prefix>` and
+build. Without a toolchain, record the evidence class honestly and let
+the hosted job rule.
 
-* One authority per concern — including the ONE AI System store, ONE goal
-  store, ONE approval classification.
-* No sleeps/timing hacks/retry storms; deterministic tests synchronize on
-  authoritative state.
-* Build/typecheck ≠ runtime proof; device detection ≠ device execution;
-  model output ≠ objective evidence.
-* No fake autonomy: everything stays bounded by permissions, approvals,
-  workspace policy, the Governor, cancellation, pause and verification.
-* No fake long-context: use the actual model/engine/effective context.
-* No model-specific hard-coding; unsupported backend capabilities remain
-  unsupported with honest fallback (never prompt-side emulation).
-* The codename-removal gate stays enabled; release identity flows from
-  package.json through `scripts/release-version.mjs` only.
+## 4. Evidence classes
 
-## Code formatting convention
+* **Local static proof**: YAML parse + actionlint, script review,
+  compile/typecheck/unit/test runs, GOOS cross-builds, CMake configure
+  where a toolchain exists. This is the ONLY class available for the
+  Windows C++/Qt and packaging surfaces in a Linux-only environment.
+* **Hosted CI runtime proof**: a green GitHub Actions job on the exact
+  revision. The hosted job is the ONLY runtime authority for Windows
+  (GUI, MSVC, NSIS, windeployqt) — local green is not hosted green.
+* **Physical proof**: real-hardware measurements (warm TTFT etc.). The
+  perf gate is FAIL-CLOSED about hosts: `cmd/shtn-perf` requires an
+  explicit `--host-class physical|hosted` and refuses a physical claim
+  over detected hosted-CI markers.
+* A compile proof NEVER upgrades to a runtime claim. State the class
+  with every claim — in summaries, commits, and `docs/worklog.md`.
+* Hosted evidence for a credential-less agent: the PUBLIC step summary
+  (`$GITHUB_STEP_SUMMARY`, no login required) and the check-run
+  annotations API (also anonymous). Step LOGS are admin-gated (403) —
+  never depend on them. Fix-forward reads ONLY the summary +
+  annotations + uploaded artifacts.
 
-* Go sources are gofmt-canonical (tab-indented; the v1.10.7 tree-wide
-  reformat repaired the 1d3b1f2-era tab→space mangling). CI GATES
-  `gofmt -l .` inside the Go verification steps on BOTH platforms (a
-  violation fails the job) — v1.10.8 additionally pins the LF
-  line-ending policy (`.gitattributes` `*.go text eol=lf` + the Windows
-  `core.autocrlf=false` checkout pin) so the Windows gate observes the
-  true LF tree. Run `gofmt -w .` before committing any Go edit; match
-  the file's existing gofmt style (v1.10.3 record, register R12;
-  superseded gofmt-gate wording from the pre-v1.10.7 era is retired).
+## 5. The code-before-docs discipline
 
-## Linux / Windows evidence boundaries
+Documentation NEVER closes a failure item. Every failure closes as a
+code or workflow diff, or as an evidenced NOT-REPRODUCIBLE (with the
+reproduction transcript). A failure item "closed" by documentation edits
+alone is an automatic workflow failure. The mirror rule: do not edit
+anything the evidence does not name (PROOF-BEFORE-EDIT — sweep the
+affected surface and record the sweep in `docs/worklog.md` BEFORE
+editing). Do not weaken a test, gate, or assertion to make a run green.
+Fix forward ONLY what the run's named evidence names.
 
-* v1.10.9 RUN TRUTH (do not overstate in any future edit): run
-  https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38871731277
-  (v1.10.8, commit a1041fe) — the breakthrough run: the Windows gofmt gate
-  passed for the first time (the LF pin worked), the Windows go test suite
-  ran hosted for the FIRST time since v1.10.1 with exactly ONE failure —
-  Windows step 14 `--- FAIL: TestServeMalformedRequestIsRejectedNotCrashing
-  (0.06s)` (package internal/localipc, artifact
-  windows-go-verification-logs-attempt1) — the Linux Browser E2E passed,
-  and the stress suite passed on its first hosted run at the new shape.
-  Linux step 24: the Qt smoke's core NEVER STARTED — `SMOKE FAIL: core
-  died at boot` with the decisive bash ENOENT line naming the relative
-  path executed after the cd (artifact linux-verification-logs-attempt1).
-  v1.10.9's fixes consume that evidence: the smoke path canonicalization
-  (L-A), the accept-path vanished-peer classification (W-A/C1, INFERENCE —
-  the exact assertion-line paste was unavailable and the annotations API
-  was rate-limited from the working IP), the Close timer stop (W-B), and
-  the assertion-line annotation upgrade (V-A.2). Local proof is
-  compile-level for the Windows transport (Linux-only environment) and
-  run-level for the smoke path (the core booted past the cd locally,
-  honestly bounded at G2 — no Qt toolchain/openbox/xdotool here). The
-  smoke gates G1–G5, Windows steps 16–32, Linux steps 26–33, and the
-  publish job have NEVER executed hosted — v1.10.9 does not claim
-  otherwise; the next run is their first exercise, and fix-forward reads
-  ONLY its annotations and summaries.
-* v1.10.8 RUN TRUTH (do not overstate in any future edit): run
-  https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38823624040
-  (v1.10.7, commit 22049b9) — the Visibility 2.0 annotations WORKED and
-  both failures are root-caused with primary evidence: Windows step 13
-  "Go verification" failed at the gofmt gate, and the gate was RIGHT
-  (the committed tree is gofmt-clean byte-for-byte — the eight annotated
-  cmd/ files are the first eight alphabetically, a listing artifact of
-  the CRLF checkout: runner default core.autocrlf=true, no
-  .gitattributes, gofmt normalizes to LF); Linux step 17 "Browser E2E"
-  failed because build:e2e still built the emptied ROOT package
-  (reproduced locally: exit 1, "no Go files"). The Windows go test
-  suite has STILL never run hosted at the repaired transport (W1–W4 +
-  W-C) — no hosted run since v1.10.1 has executed it, and v1.10.8 does
-  not claim otherwise. v1.10.8's fixes are environment repairs and
-  path repairs, proven by local reproduction: .gitattributes + the
-  Windows checkout pin (mechanism demonstrated: CRLF working-tree file
-  → gofmt names it; LF tree → clean), the build:e2e target
-  (before: exit 1; after: exit 0 and 40/40 Playwright specs on the
-  real stack), E2E tee + failure summary, the smoke never-started
-  discrimination, and the verify-all.mjs repair with sweep proof. No
-  hosted green is claimed for v1.10.8: its own hosted result is
-  recorded here only after the operator's push executes the run.
-* v1.10.7 RUN TRUTH (parent record; do not overstate in any future edit): run
-  https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38731387959
-  (v1.10.6, commit 48cee27) — audit SUCCEEDED (3m7s), the Linux Go
-  verification gate GREEN for the first time, the stress suite and the
-  Qt host build green; Windows x64 FAILED step 13 "Go verification"
-  (output line 138, the SIXTH consecutive run) and Linux x64 FAILED
-  step 23 "Qt desktop acceptance smoke" (output line 55, identical in
-  v1.10.5 and v1.10.6); the publish job never ran. Both failing jobs'
-  check-run annotations read anonymously carry bare exit codes only
-  ("Process completed with exit code 1.") — the failing test names and
-  gate identity live in the two auth-walled failure artifacts, NOT in
-  any anonymously readable channel, so v1.10.7's Windows fixes are
-  read-verified source defects (the client pipe handle opened without
-  FILE_FLAG_OVERLAPPED while pipeConn IO is overlapped — present since
-  v1.10.1; plus the never-enforced future read deadline) and its Linux
-  fixes are first-hand reproductions on the same Qt 6.8.2 minor (the
-  smoke passes ALL of G1–G5 locally once the xcb plugin dependency set
-  is complete). v1.10.7 installs CI Visibility 2.0 on top of the
-  v1.10.6 failure-visibility: the failure-summary steps emit ::error::
-  annotations (failing test names on Windows, the failing gate +
-  ui.log/core.log tails on Linux, failing gates on audit) that are
-  anonymously machine-readable via the check-run annotations API — the
-  next red run diagnoses itself for a credential-less agent. No hosted
-  green is claimed for v1.10.7: its own hosted result is recorded here
-  only after the operator's push executes the run.
-* v1.10.6 RUN TRUTH (parent record): Windows x64 failed step 13 "Go
-  verification" in five consecutive hosted runs through
-  https://github.com/SHEYTANx13/SHEYTAN-LA/actions/runs/38714950052
-  (v1.10.5, commit 8d8e660); Linux x64 failed step 23 "Qt desktop
-  acceptance smoke" on the smoke's first hosted execution in the same
-  run. v1.10.6 fixes the verified defect classes in code (the named-pipe
-  transport W1–W4, the smoke environment L1–L3) and installs CI
-  failure-visibility: every Go-verification command tees to its own log
-  and on failure appends failing test names + log tails to
-  $GITHUB_STEP_SUMMARY (public without login) plus uploaded artifacts —
-  that summary output, not the admin-gated log, is the authoritative
-  read for a credential-less agent. No hosted green is claimed for
-  v1.10.6; local GOOS=windows build/vet is compile proof only.
-* Linux CI path: source/frontend audit → Go verification (headless) →
-  native engine build/tests → Browser E2E (real headless server + real
-  engine + fixture GGUF) → stress → executable build → version smoke →
-  desktop RUNTIME SMOKE (v1.9.2: a REAL Xvfb display the step owns, the
-  app's real pid, the real top-level window located via xdotool with a
-  getwindowpid ownership check, a real WM_DELETE_WINDOW close, and a
-  normal-path exit — status 0) → ZIP verification. Nothing is skipped
-  because the other platform is green.
-* Windows x64 keeps its green release path (installer, execution
-  evidence, discovery and data tests) plus the v1.9.2 RUNTIME SMOKE
-  step: the real desktop executable is launched, a real top-level
-  window is proven (`MainWindowHandle != 0`), `CloseMainWindow()`'s
-  BOOL is checked (a delivered close), and exit code 0 is required
-  through the normal path — with the exact unmet evidence level
-  reported when no window exists. Runtime smoke is a DISTINCT gate
-  from build/package — packaging success never implies GUI runtime
-  success.
-* The Browser E2E fixtures run the REAL stack; no mock-only substitute
-  for backend behavior is accepted. The zero-session reload flow and the
-  v1.9 AI System / Goal UI flows are covered by
-  `e2e/zero-session.spec.ts` and `e2e/ai-systems.spec.ts`.
+## 6. The CI contract (`.github/workflows/build-desktop.yml`)
+
+* **Jobs**: `audit` (Source & frontend audit) → `build-windows` (Windows
+  x64) + `build-linux` (Linux x64) → `release` (Publish and verify,
+  `if: startsWith(github.ref, 'refs/tags/v')` — a main push can NEVER
+  publish).
+* **Gate semantics (v1.4.0, the run 35966462352-class repair)**: every
+  gate is a REQUIRED gate — bash steps run under `set -euo pipefail`;
+  pwsh steps assert `$LASTEXITCODE -ne 0` after EVERY native command.
+  A green job therefore means the gated verification genuinely passed;
+  failure-hiding (a native command failing silently) is the forbidden
+  class.
+* **ci-logs discipline (v1.10.13 W-VIS)**: every post-verification
+  native command (cmake configure/build, windeployqt, the acceptance
+  run, NSIS makensis) tees its own log into `ci-logs/*.log` and tracks
+  `RUN`/`OK`/`FAIL` in `ci-logs/gate-order.txt`. On failure the
+  end-of-job summary (positioned at the END of the job so
+  `if: failure()` covers the ENTIRE job) names the failing gate from
+  gate-order.txt and emits redacted, truncated tail lines as anonymous
+  annotations. `gate-order.txt` is uploaded inside the failure artifact
+  (W-VIS-2). Go verification keeps its own proven summary path (gofmt →
+  headless → full → vet, each teed: win-gofmt.log, win-go-test-headless.log,
+  win-go-test-full.log, win-go-vet.log).
+* **Caps and secrets (rule 7)**: ≤ 10 annotations per step, ≤ 250 chars
+  per line; NO IPC keys, capability tokens, runIds, sessionIds, or model
+  content in annotations, summaries, or uploaded logs. Named-pipe
+  endpoints are redacted wholesale; key-shaped assignments are masked.
+  (The acceptance suite's engine key "acceptance" is a published fixed
+  fixture string.)
+* **The Qt prefix contract (W-PIN)**: install-qt-action@v4 prepends
+  Qt's bin to PATH and exports NEITHER `Qt6_DIR` NOR
+  `CMAKE_PREFIX_PATH`. The Windows Qt host configure therefore derives
+  the prefix from qmake on PATH (grandparent of `<qt>/bin/qmake.exe`),
+  asserts `<qt>/lib/cmake/Qt6/Qt6Config.cmake` exists, and passes
+  `-DCMAKE_PREFIX_PATH` explicitly — never an env-var guess.
+* **The runtime smoke contract (W-SMOKE)**: the Windows smoke asserts
+  banner + boot markers in the isolated data dir, liveness, no crash
+  report — then targets the ARCHITECTURE: a windowed `sheytan-ui` child
+  (the core is `-H=windowsgui` and owns no window), `CloseMainWindow()`
+  to the CHILD with its BOOL checked, child exit in 15s, CORE exit 0 in
+  30s (the launcher's documented lifecycle), no orphan. This mirrors
+  the Linux smoke's G1–G5 (Xvfb, xdotool window ownership,
+  WM_DELETE_WINDOW, clean exit, no orphan, no leaked endpoint file).
+* **Installer identity (W-INST-VER)**: NSIS's VIProductVersion is
+  REQUIRED four-part X.X.X.X (makensis parses `%d.%d.%d.%d` and demands
+  all four fields); `packaging/nsis/installer.nsi` carries
+  `VIProductVersion "${VERSION}.0"` — the installer gate compares
+  against `"$($env:APP_VERSION).0"`.
+* **ZIP launcher contract (W-ZIP-LAUNCHER)**: the launcher source lives
+  at `packaging/SHEYTAN-LA.bat` (the repo root carries none); the ZIP
+  verify step gates on that path and REQUIRES the
+  `${WIN_PKG_ROOT}/SHEYTAN-LA.bat` entry.
+* **NSIS source contract**: the workflow pre-flight asserts seven
+  fragments in installer.nsi (MUI_PAGE_DIRECTORY, "Create a &desktop
+  shortcut", BST_CHECKED, WriteUninstaller, UninstallString,
+  SHEYTAN_DATA_DIR, "preserve user data") and the ABSENCE of
+  `RMDir /r` — user data is preserved by construction.
+* **Publish contract (W-SUMS)**: the release job verifies the payload,
+  writes ONE `SHA256SUMS.txt` naming ALL THREE published assets
+  (`wc -l == 3` + awk assertion), generates `release-manifest.json`
+  (validated JSON; consumed by `internal/updater/appupdate`), publishes
+  via softprops/action-gh-release (version-only title, 5 files), then
+  `gh release view` + jq verifies tag, non-draft, non-prerelease, and
+  all five asset names. No manual GitHub Release — the publish job IS
+  the pipeline's end.
+* **The two-run protocol**: run #1 = the operator pushes main (full
+  matrix green on main); run #2 = the operator pushes the `v<version>`
+  tag (full matrix again, then the publish job's first execution). Each
+  hosted run costs ~13–18 minutes. Version identity is FROZEN during a
+  cycle — `release-version.mjs --check` must stay green; docs work is
+  capped; the code fixes are the cycle.
+
+## 7. The push protocol
+
+The agent has NO push credentials. The agent prepares commits (code +
+workflow + docs, each fix a minimal diff with its register citation)
+and hands them to the OPERATOR. The operator pushes main, reads run #1,
+then — once main is fully green — tags `v<version>` and pushes the tag
+for run #2 (the first publish). Never ask the agent to push; never
+fabricate a hosted result; record each run's verdict with its evidence
+class in `docs/worklog.md` only after reading the summary/annotations.
+
+## 8. Protected surfaces (do not churn)
+
+* **The Linux chain**: fully green FIVE consecutive hosted runs
+  (through run 39038248810, Linux x64, 9m50s, ZIP artifact produced).
+  Do not restructure it to "fix" Windows.
+* **Windows steps 1–21**: green two consecutive runs (Go verification
+  green twice; engine variant assets, resources, executable build +
+  console probe, executable verify, Qt install green at that shape).
+* **The v1.10.13 visibility system**: the end-of-job failure summary +
+  gate-order tracking — proven live by run 39038248810 (it named the
+  failing gate anonymously from exactly three annotations).
+* **Go pins**: the named-pipe transport repair chain (W1–W4 + W-C, the
+  overlapped-IO contract, the WaitNamedPipe busy-dial budget), the
+  desktop launcher unit pins (`internal/desktop/desktop_test.go`), the
+  variant transaction order (early refusal → claim-free staged download
+  → DESTRUCTIVE BOUNDARY claim → stop/swap/start/verify → commit or
+  rollback), the admission seams (`UpdateEngineNow`, the governor CPU
+  sampler seam, the streaming contract, `recoverRunFromIdle`).
+* **The gates**: gofmt on BOTH platforms + the LF pin
+  (`.gitattributes` `*.go text eol=lf` + Windows `core.autocrlf=false`),
+  the E2E real-content proofs (`expectRealAssistantReply`), the stress
+  suite, the acceptance python fallback (Q_OS_WINDOWS candidates
+  {python, python3}), the NSIS source contract, the publish checksum
+  contract.
+* **Docs**: the condensed history (pre-1.9.x), the ROADMAP
+  shipped-baseline paragraphs, the changelog's canon.
+* Regression-sensitive detail (the full surface contracts) lives in
+  `docs/ARCHITECTURE.md`, the pins in the test files themselves, and
+  the per-release rationale in `docs/changelog.md`. Read those before
+  touching: the variant transaction (`internal/llm/llama.go`), the
+  loopback origin model (`/api/ws-origin` answers same-origin
+  unconditionally for headless/browser mode), the settled-reply DOM
+  selector (`.message-markdown`), typography floors (no `font-size`
+  below 10px), the parity gate (`tests/test_prefill_parity.cpp` —
+  bit-exact or a deliberate documented numerics change).
+
+## 9. Where to write what
+
+* `docs/changelog.md` — the ONLY canonical release history. New release
+  entries only; no version bump without the operator's order.
+* `docs/worklog.md` — the session log: Task ID, agent, task, evidence
+  classes (local static / hosted / physical), sweeps, fixes, run
+  verdicts. Evidence-first: quote hosted annotation lines verbatim
+  BEFORE editing code.
+* `docs/UPDATE.md` — current release notes + operational maintenance
+  behavior for the CURRENT version.
+* `docs/agent.md` — THIS manual. Durable operational truth only; keep
+  status narrative out (it belongs to changelog/worklog/UPDATE).
+* `docs/ROADMAP.md` — the current/future boundary. Hosted-status
+  appends ONLY after the green run is read (Phase 8/9 discipline).
+* `docs/ARCHITECTURE.md` — architecture truth (seams, IPC, engine
+  contract). Never contradict it in code.
+* Version identity: `package.json` via `scripts/release-version.mjs`
+  (then `--check` must stay green). NEVER hand-edit derived surfaces —
+  run the script's repair mode when the operator orders a bump.
