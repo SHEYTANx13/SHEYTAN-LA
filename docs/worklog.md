@@ -4010,3 +4010,15 @@ HOSTED STATUS (honest): run #1 (operator push of main) and run #2 (the
 operator's v1.10.13 tag) have NOT happened at this tree shape. No gate
 past step 21 is claimed VERIFIED. The two-run protocol is handed to the
 operator exactly as the register prescribes.
+---
+Task ID: 2 (v1.10.13 post-run-#15 cycle)
+Agent: v1.10.13 acceptance-evidence cycle
+Task: run 39045528337 verdict → W-ACC evidence capture + D1 errors-only summaries + D2 docs cap
+Hosted annotations (quoted verbatim, run #15 step 24): "failing gate: Qt live-answer acceptance" /
+"Qt live-answer acceptance: (no teed log for this gate — see the red step on the run page)" /
+"Process completed with exit code 1.". Classes: W-ACC/W-LOGS/D-DOCS = code diffs at 345266f; hosted
+re-read 403 (annotations register-transcribed); launcher root cause UNKNOWN until a run names it
+(fix-forward a/b/c pre-planned, none asserted). Change: step-24 try/catch writes the launch
+exception/no-output exit code into ci-logs/win-qt-acceptance.log (FAIL marker + throw naming the log);
+the five 200-line tail dumps are gone (audit/Windows/E2E×2/Qt-smoke) — errors only, capped 60, sources
+named, NOTHING skipped; docs capped to this entry + the changelog addendum; sweeps in the session worklog.

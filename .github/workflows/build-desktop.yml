@@ -296,11 +296,13 @@ jobs:
 
           # v1.10.6 FAILURE-VISIBILITY: every Go-verification command tees to
           # a log file. The if:failure() steps at the end of this job append
-          # the failing test names + a 200-line tail per failing command to
-          # $GITHUB_STEP_SUMMARY (publicly visible without login — this is
-          # how a credential-less agent reads the next failure) and upload
-          # the full logs via actions/upload-artifact. No secrets/keys are
-          # ever written to these outputs.
+          # the failing test names to $GITHUB_STEP_SUMMARY (publicly visible
+          # without login — this is how a credential-less agent reads the
+          # next failure) and upload the full logs via
+          # actions/upload-artifact. v1.10.13 D1 (operator directive): the
+          # summaries publish ERRORS ONLY — no tail dumps; every test still
+          # runs exactly as before. No secrets/keys are ever written to
+          # these outputs.
           go test -race -tags headless -count=1 ./internal/api ./internal/agent ./internal/sessions ./internal/contextplan ./internal/histref ./internal/runtime 2>&1 | tee ci-logs/audit-go-race.log
 
           echo "Race gate passed."
@@ -366,16 +368,13 @@ jobs:
             for f in ci-logs/*.log; do
               [ -f "$f" ] || continue
               failing="$(grep -E '^(--- FAIL|FAIL|panic:|fatal error:)' "$f" | head -60 || true)"
+              # v1.10.13 D1: errors-only — the 200-line tail dump is gone;
+              # the capped failing-line block is the whole publication.
               {
                 echo ""
                 echo "### $f — failing test names"
                 echo '```'
                 printf '%s\n' "$failing"
-                echo '```'
-                echo ""
-                echo "### $f — last 200 lines"
-                echo '```'
-                tail -n 200 "$f" || true
                 echo '```'
               } >> "$GITHUB_STEP_SUMMARY" || true
               if [ -n "$failing" ]; then
@@ -1182,12 +1181,34 @@ jobs:
           # v1.10.13 W-VIS: the acceptance run is teed into ci-logs and
           # tracked like every other post-verification gate, so a red run
           # names the failing gate and carries the harness output tail.
+          # v1.10.13 W-ACC (run 39045528337): the hosted failure was a
+          # terminating LAUNCH-class error thrown BEFORE Tee-Object created
+          # the file — the exception text existed only in the admin-gated
+          # step log. The catch now writes the exception type + message
+          # into the teed log itself and appends the FAIL marker; if the
+          # binary produced no output at all (absent or empty log), the
+          # exit code is written instead. Every failure class lands in the
+          # teed log, so the next red run names the defect in an anonymous
+          # annotation. No failure class is presumed here: the pre-planned
+          # fix-forward responses are applied only after a run names one.
+          $accLog = "ci-logs/win-qt-acceptance.log"
           Add-Content "ci-logs/gate-order.txt" "STEP Windows live-answer acceptance"
           Add-Content "ci-logs/gate-order.txt" "RUN Qt live-answer acceptance"
-          & $acc 2>&1 | Tee-Object -FilePath "ci-logs/win-qt-acceptance.log"
-          if ($LASTEXITCODE -ne 0) {
+          $accExit = $null
+          try {
+            & $acc 2>&1 | Tee-Object -FilePath $accLog
+            $accExit = $LASTEXITCODE
+          } catch {
             Add-Content "ci-logs/gate-order.txt" "FAIL Qt live-answer acceptance"
-            throw "[gate] windows qt acceptance failed with exit code $LASTEXITCODE (log: ci-logs/win-qt-acceptance.log)."
+            Add-Content $accLog "acceptance launch failed: $($_.Exception.GetType().Name): $($_.Exception.Message)"
+            throw "[gate] the Qt acceptance binary could not be launched: $($_.Exception.Message) (log: $accLog)."
+          }
+          if (-not (Test-Path $accLog) -or (Get-Item $accLog).Length -eq 0) {
+            Add-Content $accLog "acceptance produced no output (exit code $accExit)."
+          }
+          if ($accExit -ne 0) {
+            Add-Content "ci-logs/gate-order.txt" "FAIL Qt live-answer acceptance"
+            throw "[gate] windows qt acceptance failed with exit code $accExit (log: $accLog)."
           }
           Add-Content "ci-logs/gate-order.txt" "OK Qt live-answer acceptance"
 
@@ -1580,10 +1601,10 @@ jobs:
           retention-days: 30
 
       # v1.10.6 FAILURE-VISIBILITY: on failure, append the failing test
-      # names + a 200-line tail per failing command to $GITHUB_STEP_SUMMARY
-      # (publicly visible without login — the log is admin-gated, this is
-      # not). This is how a credential-less agent reads the next failure.
-      # No secrets/keys are ever written here.
+      # names to $GITHUB_STEP_SUMMARY (publicly visible without login —
+      # the log is admin-gated, this is not). This is how a credential-less
+      # agent reads the next failure. No secrets/keys are ever written
+      # here.
       #
       # v1.10.7 VISIBILITY 2.0 (V-A): the summary steps ALSO emit
       # ::error:: workflow-command annotations — anonymously machine-readable
@@ -1673,18 +1694,35 @@ jobs:
             if (-not $failingGate -and $lastGate) { $failingGate = $lastGate }
           }
 
+          # v1.10.13 D1 (operator directive 1): errors-only summaries. The
+          # per-log "last 200 lines" tail dumps are REMOVED — the summary
+          # publishes ONLY failing/error lines, capped, each block carrying
+          # its source name. Nothing about which tests run changes; the
+          # full logs remain in the uploaded artifacts. The failing-line
+          # classes grow the native coverage so the acceptance and Qt
+          # build errors are captured anonymously: QtTest "FAIL!" + failed
+          # Totals, MSVC/LNK ": error", CMake/ninja build-tool errors, and
+          # the W-ACC acceptance launch/no-output evidence lines.
+          $errClasses = {
+            param([string]$l)
+            $l -match '^(--- FAIL|FAIL|panic:|fatal error:)' -or
+            $l -match '\.go:[0-9]+: ' -or
+            $l -match '^FAIL!' -or
+            $l -match '^Totals: .*, [1-9][0-9]* failed' -or
+            $l -match ': (fatal )?error( [A-Z0-9]+)?:' -or
+            $l -match 'CMake Error' -or
+            $l -match '^FAILED: ' -or
+            $l -match 'ninja: build stopped' -or
+            $l -match '^acceptance (launch failed|produced no output)'
+          }
           foreach ($log in Get-ChildItem "ci-logs" -Filter "*.log" -ErrorAction SilentlyContinue) {
             $raw = @(Get-Content $log.FullName -ErrorAction SilentlyContinue)
             $text = if ($goLogs -contains $log.Name) { $raw } else { @($raw | ForEach-Object { Redact-Anonymous $_ }) }
             $lines += ""
-            $lines += "### $($log.Name) — failing test names"
-            $failing = @($text | Where-Object { $_ -match '^(--- FAIL|FAIL|panic:|fatal error:)' -or $_ -match '\.go:[0-9]+: ' })
+            $lines += "### $($log.Name) — failing/error lines"
+            $failing = @($text | Where-Object { & $errClasses $_ })
             $lines += '```'
             if ($failing.Count -gt 0) { $lines += ($failing | Select-Object -First 60) } else { $lines += "(no FAIL lines captured)" }
-            $lines += '```'
-            $lines += "### $($log.Name) — last 200 lines"
-            $lines += '```'
-            $lines += ($text | Select-Object -Last 200)
             $lines += '```'
           }
 
@@ -1728,7 +1766,7 @@ jobs:
           foreach ($log in Get-ChildItem "ci-logs" -Filter "*.log" -ErrorAction SilentlyContinue) {
             if ($emitted -ge 10) { break }
             $text = @(Get-Content $log.FullName -ErrorAction SilentlyContinue)
-            $failing = @($text | Where-Object { $_ -match '^(--- FAIL|FAIL|panic:|fatal error:)' -or $_ -match '\.go:[0-9]+: ' })
+            $failing = @($text | Where-Object { & $errClasses $_ })
             foreach ($line in ($failing | Select-Object -First 10)) {
               if ($emitted -ge 10) { break }
               $msg = "$($log.BaseName): $line"
@@ -2076,13 +2114,14 @@ jobs:
 
       # v1.10.8 VISIBILITY 3.0 (V-B): the E2E failure summary — same
       # contract as the Windows Go verification summary. On failure it
-      # appends the captured logs' tails to $GITHUB_STEP_SUMMARY (public
-      # without login) and emits capped ::error:: annotations naming the
-      # first failing specs and error lines (10-per-step budget; lines
-      # truncated; no secrets — rule 7: these logs contain no IPC keys,
-      # tokens, runIds, sessionIds or model content). A missing Playwright
-      # log means the BUILD stage failed — the summary says so instead of
-      # implying the tests ran (the run 38823624040 false-lead class).
+      # appends the captured logs' ERROR LINES to $GITHUB_STEP_SUMMARY
+      # (public without login; v1.10.13 D1: no tail dumps) and emits
+      # capped ::error:: annotations naming the first failing specs and
+      # error lines (10-per-step budget; lines truncated; no secrets —
+      # rule 7: these logs contain no IPC keys, tokens, runIds,
+      # sessionIds or model content). A missing Playwright log means the
+      # BUILD stage failed — the summary says so instead of implying the
+      # tests ran (the run 38823624040 false-lead class).
       - name: E2E failure summary (Linux)
         if: failure()
         shell: bash
@@ -2109,11 +2148,13 @@ jobs:
           }
 
           if [ -f "$build_log" ]; then
+            # v1.10.13 D1: errors-only — the 200-line tail dump is gone;
+            # the build log publishes its build-tool error lines instead.
             {
               echo ""
-              echo "### e2e-build.log — last 200 lines"
+              echo "### e2e-build.log — build errors"
               echo '```'
-              tail -n 200 "$build_log" || true
+              grep -aE '(npm error|error TS[0-9]+|ERROR in |Build failed)' "$build_log" | head -60 || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY" || true
           else
@@ -2121,7 +2162,7 @@ jobs:
           fi
 
           if [ ! -f "$pw_log" ]; then
-            emit "Browser E2E failed BEFORE Playwright ran — the build:e2e stage is the failing gate (e2e-build.log tail is in the step summary)"
+            emit "Browser E2E failed BEFORE Playwright ran — the build:e2e stage is the failing gate (e2e-build.log errors are in the step summary)"
           else
             {
               echo ""
@@ -2129,11 +2170,6 @@ jobs:
               echo '```'
               grep -E '^[[:space:]]*[0-9]+\) ' "$pw_log" | head -10 || true
               grep -E '^[[:space:]]+[0-9]+ (failed|passed|interrupted|skipped)' "$pw_log" | tail -5 || true
-              echo '```'
-              echo ""
-              echo "### e2e-playwright.log — last 200 lines"
-              echo '```'
-              tail -n 200 "$pw_log" || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY" || true
 
@@ -2329,13 +2365,14 @@ jobs:
           bash scripts/qt-desktop-smoke.sh
 
       # v1.10.6 FAILURE-VISIBILITY: the smoke's core.log / ui.log /
-      # xvfb.log / wm.log / engine.log tails are appended to
-      # $GITHUB_STEP_SUMMARY (public without login) and the full logs are
-      # uploaded as artifacts. ui.log now EXISTS (the smoke captures the
-      # UI's real output), so a red smoke prints real QML/Qt evidence —
-      # never an empty file again. No IPC keys: the smoke reads the key
-      # from the child environment and never logs it (rule enforced in the
-      # script itself).
+      # xvfb.log / wm.log / engine.log ERROR LINES are appended to
+      # $GITHUB_STEP_SUMMARY (public without login; v1.10.13 D1:
+      # errors-only, no tail dumps) and the full logs are uploaded as
+      # artifacts. ui.log now EXISTS (the smoke captures the UI's real
+      # output), so a red smoke prints real QML/Qt evidence — never an
+      # empty file again. No IPC keys: the smoke reads the key from the
+      # child environment and never logs it (rule enforced in the script
+      # itself).
       #
       # v1.10.7 VISIBILITY 2.0 (V-A): this step ALSO emits ::error::
       # annotations — the failing gate name (the smoke writes a
@@ -2380,11 +2417,18 @@ jobs:
           for f in "$work"/*.log; do
             [ -f "$f" ] || continue
             base="$(basename "$f")"
+            # v1.10.13 D1: errors-only — the 200-line tail dump is gone;
+            # each smoke log publishes its capped error lines (QtTest
+            # FAIL!/Totals, FATAL/panic, Go FAIL/panic, build-tool errors,
+            # assertion failures) with the same pipe/key redaction the
+            # Windows summary applies. Source name is the block header.
             {
               echo ""
-              echo "### smoke log: $base — last 200 lines"
+              echo "### smoke log: $base — error lines"
               echo '```'
-              tail -n 200 "$f" || true
+              grep -aE '^(FAIL!|FATAL|panic:|fatal error:|--- FAIL|FAIL|ERROR|error:)|: (fatal )?error|assert(ion)? failed|Totals: .*, [1-9][0-9]* failed| FAILED|CMake Error|build stopped|\[FAIL\]' "$f" 2>/dev/null \
+                | sed -E 's/\\\\\\.\\pipe\\\S+/\\.\\pipe\<redacted\>/g; s/((key|token|secret|password)[=:])[^ ]*/\1<redacted>/Ig' \
+                | head -60 || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY" || true
             cp -f "$f" "ci-logs/smoke-$base" 2>/dev/null || true

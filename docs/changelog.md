@@ -11,6 +11,18 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.10.13 (addendum) — 2026-10-17 — run 39045528337 verdict + operator directives D1/D2 in code
+Run #15: audit green; Linux x64 green 11m12s (SIXTH consecutive); Windows steps 1–23 ALL green —
+step 22 (Qt host build, qmake-derived prefix, windeployqt vs the host, Qt6Core.dll asserted) and
+step 23 (retargeted smoke: WM_CLOSE to the windowed Qt host child, core clean exit) green for the
+FIRST time; step 24 failed as a terminating launch-class error BEFORE the tee file existed —
+"failing gate: Qt live-answer acceptance" / "Qt live-answer acceptance: (no teed log for this gate —
+see the red step on the run page)" / "Process completed with exit code 1.". Code of this addendum:
+W-ACC (step 24 try/catch writes the launch exception — or the no-output exit code — into
+ci-logs/win-qt-acceptance.log so the next red run names the defect) + D1 (the five 200-line tail
+dumps removed from the audit/Windows/E2E×2/Qt-smoke summaries — errors only, capped, sources named;
+nothing skipped). Identity frozen: 1.10.13.
+
 ## v1.10.13 — 2026-10-17 — the post-verification visibility + predicted-defect clearance release: the Windows failure pair moved to the job's end so if:failure() finally covers steps 17–32, every post-verification native command teed and asserted, five inspection-proven predicted defects fixed, and the two-run tag protocol stated honestly — while run 39024607296's step-22 failure stays honestly unnamed until the installed visibility names it
 
 Focus: run 39024607296 (Build Desktop #13, push of v1.10.12, commit b8817d95)
