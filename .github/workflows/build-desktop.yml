@@ -1176,6 +1176,7 @@ jobs:
 
           $env:SHEYTAN_REPO = (Get-Location).Path
           $env:SHEYTAN_CORE_BIN = (Resolve-Path $core).Path
+          $env:SHEYTAN_UI_BIN = (Resolve-Path "$RUNNER_TEMP/sheytan-ui").Path
           $env:QT_QPA_PLATFORM = "offscreen"
 
           # v1.10.13 W-ACC3: Start-Process with native-handle capture into
@@ -2484,6 +2485,7 @@ jobs:
 
           export SHEYTAN_REPO="$(pwd)"
           export SHEYTAN_CORE_BIN="$(pwd)/dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent"
+          export SHEYTAN_UI_BIN="$RUNNER_TEMP/sheytan-ui"
           export QT_QPA_PLATFORM=offscreen
           export LD_LIBRARY_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           export QT_QPA_PLATFORM_PLUGIN_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/plugins/platforms"
