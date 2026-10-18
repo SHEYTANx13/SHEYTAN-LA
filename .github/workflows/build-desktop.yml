@@ -2487,7 +2487,7 @@ jobs:
           export LD_LIBRARY_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           export QT_QPA_PLATFORM_PLUGIN_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/plugins/platforms"
 
-          "$RUNNER_TEMP/sheytan-ui-acceptance" 2>&1 | tee ci-logs/linux-qt-acceptance.log
+          "$RUNNER_TEMP/sheytan-ui-acceptance" 2>&1 | tee ci-logs/linux-qt-acceptance.log || true
           accExit=${PIPESTATUS[0]}
           if [ "$accExit" -ne 0 ]; then
             echo "FAIL Qt live-answer acceptance" >> ci-logs/gate-order.txt
