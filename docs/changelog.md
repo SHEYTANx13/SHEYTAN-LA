@@ -11,6 +11,17 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.10.13 (cycle) — 2026-10-18 — W-FLAKE total session ordering + the Goals Qt surface (roadmap Phase 2)
+Run #16 (commit 4592230) failed at Windows step 14: "sessions_test.go:87: newest-first violated: first then second" —
+CreateInMode assigned one clock read to both fields and List()/sortIndexLocked tie-broke only UpdatedAt-then-CreatedAt,
+so same-tick sessions kept insertion order. Code diff (never a sleep, retry, skip or weakened assertion): Session gains a
+store-assigned monotonic `seq,omitempty`; nextSeq derives from loaded stubs (max+1); CreateInMode assigns it under the store
+lock; every ordering site uses the total comparator (UpdatedAt desc, CreatedAt desc, Seq desc), pinned sleep-free by
+TestListNewestFirstUnderForcedTimestampTie (-count=50; race gate green). Feature: the Goals Qt surface — CoreClient Q_PROPERTY
+goals + refresh/start/pause/resume/cancel/approve/reject mapped 1:1 to the existing /api/goals handlers (already routed on
+localipc via core.Handler()), a Main.qml Goals drawer (phase, plan-derived progress, current step, pause/resume/cancel,
+approve/reject for waiting_for_approval), and three tst_acceptance slots pinning the wire contract over the real core.
+
 ## v1.10.13 (addendum) — 2026-10-17 — run 39045528337 verdict + operator directives D1/D2 in code
 Run #15: audit green; Linux x64 green 11m12s (SIXTH consecutive); Windows steps 1–23 ALL green —
 step 22 (Qt host build, qmake-derived prefix, windeployqt vs the host, Qt6Core.dll asserted) and

@@ -31,6 +31,12 @@ class CoreClient : public QObject {
     // the reserved default stay server-owned; no second authority here.
     Q_PROPERTY(QVariantList systems READ systems NOTIFY systemsChanged)
     Q_PROPERTY(QString activeSystemId READ activeSystemId NOTIFY activeSystemIdChanged)
+    // Goals surface (v1.10.13, roadmap Phase 2): a pure IPC client of the
+    // ONE durable Go goal engine (/api/goals). List + control actions only
+    // — the store, the bounded drive loop and the approval semantics stay
+    // server-owned; no second run registry or policy authority lives here
+    // and no goal state is kept in QML beyond display.
+    Q_PROPERTY(QVariantList goals READ goals NOTIFY goalsChanged)
     Q_PROPERTY(bool canStop READ canStop NOTIFY busyChanged)
 
 public:
@@ -49,6 +55,15 @@ public:
     Q_INVOKABLE void patchConfig(const QVariantMap &patch);
     Q_INVOKABLE void refreshSystems();
     Q_INVOKABLE void activateSystem(const QString &id);
+    // Goals surface (v1.10.13): each invokable maps 1:1 to the existing
+    // /api/goals handler (list + start/pause/resume/cancel + approve/reject).
+    Q_INVOKABLE void refreshGoals();
+    Q_INVOKABLE void startGoal(const QString &id);
+    Q_INVOKABLE void pauseGoal(const QString &id);
+    Q_INVOKABLE void resumeGoal(const QString &id);
+    Q_INVOKABLE void cancelGoal(const QString &id);
+    Q_INVOKABLE void approveGoal(const QString &id, const QString &approvalId);
+    Q_INVOKABLE void rejectGoal(const QString &id, const QString &approvalId);
     Q_INVOKABLE void refreshApprovals();
     Q_INVOKABLE void resolveApproval(const QString &id, bool approve);
 
@@ -64,6 +79,7 @@ public:
     QVariantList messages() const { return m_messages; }
     QVariantList systems() const { return m_systems; }
     QString activeSystemId() const { return m_activeSystemId; }
+    QVariantList goals() const { return m_goals; }
     bool canStop() const { return m_busy; }
 
 signals:
@@ -79,6 +95,7 @@ signals:
     void messagesChanged();
     void systemsChanged();
     void activeSystemIdChanged();
+    void goalsChanged();
     void settled(const QString &outcome, const QString &caption);
 
 private:
@@ -98,6 +115,12 @@ private:
     QByteArray readWsFrame(QLocalSocket *sock, bool &ok);
     void setError(const QString &msg);
     void applySession(const QVariantMap &sess);
+    // Goals plumbing: one 1:1 POST to a /api/goals/{id} control subroute
+    // (action without a body) and one decision POST carrying the durable
+    // pending approvalId. Every accepted action re-reads the authoritative
+    // list; the store is the only state owner.
+    void goalAction(const QString &action, const QString &id);
+    void goalDecision(const QString &action, const QString &id, const QString &approvalId);
 
     QString m_endpoint;
     QString m_key;
@@ -116,6 +139,7 @@ private:
     QVariantList m_messages;
     QVariantList m_systems;
     QString m_activeSystemId;
+    QVariantList m_goals;
 
     // activity WS state
     QLocalSocket *m_wsSock = nullptr;

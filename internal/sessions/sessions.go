@@ -161,6 +161,16 @@ type Session struct {
 	Messages   []llm.Message   `json:"messages,omitempty"`
 	Activities []ActivityEntry `json:"activities,omitempty"`
 
+	// Seq (v1.10.13, W-FLAKE) is the store-assigned monotonic creation
+	// sequence — the FINAL tie-break of the total listing order. Two
+	// sessions created inside one wall-clock tick share CreatedAt AND
+	// UpdatedAt (the coarser Windows tick made the first hosted tie appear
+	// in run #16: "newest-first violated: first then second"), so every
+	// ordering site breaks exact timestamp ties by Seq desc. omitempty
+	// keeps every legacy file byte-identical until its next natural save;
+	// legacy sessions without seq (0) keep the previous stable order.
+	Seq int64 `json:"seq,omitempty"`
+
 	// MsgCount is the persisted message count so meta-index stubs
 	// (Messages == nil) can still answer MessageCount().
 	MsgCount int `json:"msgCount,omitempty"`
@@ -187,6 +197,7 @@ func stubOf(sess *Session) *Session {
 		Preset:    sess.Preset,
 		CreatedAt: sess.CreatedAt,
 		UpdatedAt: sess.UpdatedAt,
+		Seq:       sess.Seq,
 		Mode:      sess.Mode,
 		ThreadID:  sess.ThreadID,
 		ParentID:  sess.ParentID,
@@ -202,7 +213,8 @@ func sameStub(a, b *Session) bool {
 		a.Preset == b.Preset && a.ThreadID == b.ThreadID &&
 		a.ParentID == b.ParentID && a.Chapter == b.Chapter &&
 		a.Mode == b.Mode &&
-		a.MsgCount == b.MsgCount && a.UpdatedAt.Equal(b.UpdatedAt)
+		a.MsgCount == b.MsgCount && a.UpdatedAt.Equal(b.UpdatedAt) &&
+		a.Seq == b.Seq
 }
 
 // Store persists sessions under Dir.
@@ -213,6 +225,7 @@ type Store struct {
 	loaded  bool
 	index   []*Session          // stubs, newest first
 	pending map[string]*Session // created in-memory, not yet persisted
+	nextSeq int64               // highest assigned Seq (v1.10.13 W-FLAKE)
 
 	// hot (v1.2.4): bounded LRU of fully-loaded sessions, validated by
 	// (size, mtime) on every hit so external writers are still detected.
@@ -341,6 +354,12 @@ func (s *Store) CreateInMode(mode string) *Session {
 		UpdatedAt: now,
 	}
 	s.mu.Lock()
+	// v1.10.13 (W-FLAKE): the creation sequence is assigned under the store
+	// lock so two sessions created in one clock tick still get distinct,
+	// monotonic Seq values — the total order's final tie-break.
+	s.loadIndexLocked()
+	s.nextSeq++
+	sess.Seq = s.nextSeq
 	s.pending[sess.ID] = sess
 	s.mu.Unlock()
 	return sess
@@ -382,6 +401,16 @@ func (s *Store) loadIndexLocked() {
 		}
 	}
 	s.reconcileLocked()
+	// v1.10.13 (W-FLAKE): derive the creation sequence from the loaded
+	// stubs (max seq + 1) so a restarted store never re-issues a Seq —
+	// orphan stubs folded in by reconcile are included.
+	var maxSeq int64
+	for _, st := range s.index {
+		if st != nil && st.Seq > maxSeq {
+			maxSeq = st.Seq
+		}
+	}
+	s.nextSeq = maxSeq
 }
 
 // reconcileLocked folds orphan session files into the index and drops
@@ -487,14 +516,26 @@ func (s *Store) saveIndexLocked() error {
 	return writeAtomic(s.idxPath, data)
 }
 
-// sortIndexLocked orders stubs newest-first (UpdatedAt desc, ties broken
-// by CreatedAt desc so same-millisecond creates stay deterministic).
+// sessionNewer is the TOTAL listing order (v1.10.13, W-FLAKE): UpdatedAt
+// desc, then CreatedAt desc, then the persisted creation sequence desc.
+// The final Seq tie-break makes the order total even when both clocks tie
+// (two sessions created inside one wall-clock tick — the hosted run #16
+// Windows failure). Legacy sessions without seq (0) keep the previous
+// deterministic stable order because Seq only breaks exact ties.
+func sessionNewer(a, b *Session) bool {
+	if !a.UpdatedAt.Equal(b.UpdatedAt) {
+		return a.UpdatedAt.After(b.UpdatedAt)
+	}
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.After(b.CreatedAt)
+	}
+	return a.Seq > b.Seq
+}
+
+// sortIndexLocked orders stubs newest-first by the total order.
 func (s *Store) sortIndexLocked() {
 	sort.SliceStable(s.index, func(i, j int) bool {
-		if s.index[i].UpdatedAt.Equal(s.index[j].UpdatedAt) {
-			return s.index[i].CreatedAt.After(s.index[j].CreatedAt)
-		}
-		return s.index[i].UpdatedAt.After(s.index[j].UpdatedAt)
+		return sessionNewer(s.index[i], s.index[j])
 	})
 }
 
@@ -680,8 +721,11 @@ func (s *Store) List() ([]*Session, error) {
 		}
 	}
 	if extra > 0 {
+		// v1.10.13 (W-FLAKE): the re-sort uses the same TOTAL comparator as
+		// the index — a tie-less UpdatedAt-only sort preserved insertion
+		// order on exact ties, listing the older-created session first.
 		sort.SliceStable(out, func(i, j int) bool {
-			return out[i].UpdatedAt.After(out[j].UpdatedAt)
+			return sessionNewer(out[i], out[j])
 		})
 	}
 	return out, nil

@@ -4022,3 +4022,13 @@ re-read 403 (annotations register-transcribed); launcher root cause UNKNOWN unti
 exception/no-output exit code into ci-logs/win-qt-acceptance.log (FAIL marker + throw naming the log);
 the five 200-line tail dumps are gone (audit/Windows/E2E×2/Qt-smoke) — errors only, capped 60, sources
 named, NOTHING skipped; docs capped to this entry + the changelog addendum; sweeps in the session worklog.
+---
+Task ID: 3 (v1.10.13 goals cycle)
+Agent: v1.10.13 engineering session
+Task: W-FLAKE total session ordering (run 39076376006 step 14) + the roadmap Phase 2 Goals Qt surface
+Forced-tie repro RED on the unfixed tree (-count=50, exact hosted message), Seq repair GREEN (-count=50, -race,
+vet); /api/goals verified already routed on localipc via core.Handler() — no route change needed; CoreClient gains
+the seven 1:1 goal invokables, Main.qml the Goals drawer, tst_acceptance the list/round-trip/approve-reject slots.
+Local battery green: gofmt -l . clean; headless + full go test; go vet ./...; audit race six; frontend
+typecheck/lint/test:units/test:release/build; release-version --check green (1.10.13). Qt build not runnable locally
+(no cmake/Qt6; sudo unavailable) — hosted run #1 is the authority for steps 15-30. Docs capped per D2.

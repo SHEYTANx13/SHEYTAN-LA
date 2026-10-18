@@ -39,6 +39,13 @@ private slots:
     void initTestCase();
     void chatStreamPersistRepeatAndClose();
     void aiSystemsListActivate();
+    // v1.10.13 Goals surface (roadmap Phase 2): pure IPC client cycle of the
+    // ONE Go goal engine (/api/goals) — the list field contract, the full
+    // start→pause→resume→cancel control round trip, and the durable
+    // approve/reject decision path on goals parked at waiting_for_approval.
+    void goalsListFieldContract();
+    void goalsStartPauseResumeCancelRoundTrip();
+    void goalsApproveRejectParkedGoal();
     // v1.10.3 framing + contract suite (byte-level CoreClient rules against
     // a raw hand-written HTTP fake; the REAL-core slots above prove live
     // behavior, these prove the framing/handshake/encoding contract):
@@ -292,6 +299,270 @@ void Acceptance::aiSystemsListActivate() {
     QVERIFY2(core.error().contains(QStringLiteral("status 404")),
              qPrintable(core.error()));
     QCOMPARE(core.activeSystemId(), pick);
+}
+
+// ============================================================================
+// v1.10.13 Goals surface (real core, real engine, /api/goals over IPC)
+// ============================================================================
+
+// ipcRequest performs ONE raw HTTP/1.1 request over the real local IPC
+// channel (the same wire CoreClient speaks) and returns {status, body}. The
+// goals slots use it to seed fixtures (an ask-all AI System, unstarted
+// goals) WITHOUT widening the CoreClient surface beyond the roadmap's seven
+// goal invokables: the client contract stays exactly list + control +
+// decisions, and the fixtures still travel the real channel.
+static QPair<int, QByteArray> ipcRequest(const QString &endpoint, const QString &key,
+                                         const char *method, const QString &path,
+                                         const QByteArray &body) {
+    QLocalSocket sock;
+    sock.connectToServer(endpoint);
+    if (!sock.waitForConnected(5000)) return {0, QByteArray()};
+
+    QByteArray req;
+    req += QByteArray(method) + " " + path.toUtf8() + " HTTP/1.1\r\n";
+    req += "Host: sheytan-core\r\n";
+    if (!key.isEmpty()) req += "X-SHEYTAN-IPC-Key: " + key.toUtf8() + "\r\n";
+    if (!body.isEmpty()) {
+        req += "Content-Type: application/json\r\n";
+        req += "Content-Length: " + QByteArray::number(body.size()) + "\r\n";
+    }
+    req += "Connection: close\r\n\r\n";
+    req += body;
+    sock.write(req);
+
+    QByteArray all;
+    const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + 10000;
+    while (QDateTime::currentMSecsSinceEpoch() < deadline) {
+        all += sock.readAll();
+        if (sock.state() != QLocalSocket::ConnectedState) break;
+        sock.waitForReadyRead(100);
+    }
+    const int headEnd = int(all.indexOf("\r\n\r\n"));
+    if (headEnd < 0) return {0, QByteArray()};
+    const QByteArray statusLine = all.left(int(all.indexOf("\r\n")));
+    const QList<QByteArray> parts = statusLine.split(' ');
+    return {parts.value(1).toInt(), all.mid(headEnd + 4)};
+}
+
+// goalById projects the authoritative CoreClient goals list onto one goal.
+static QVariantMap goalById(const QVariantList &goals, const QString &id) {
+    for (const auto &v : goals) {
+        const QVariantMap g = v.toMap();
+        if (g.value("goalId").toString() == id) return g;
+    }
+    return {};
+}
+
+// goalsListFieldContract — the list contract the client mirrors: a created
+// goal is served by GET /api/goals as {"goals":[…]} carrying exactly the
+// wire fields the QML cards render (goalId, status, phase, originalGoal,
+// currentStep, turnBudget), and the single-goal GET carries the
+// goal/driving/done/total envelope. Fixture seeding rides the raw IPC
+// channel; the observed list is the CoreClient's own refreshGoals read.
+void Acceptance::goalsListFieldContract() {
+    CoreClient core;
+    bool handshake = false;
+    connect(&core, &CoreClient::handshakeDone, [&]() { handshake = true; });
+
+    core.connectToCore(m_endpoint, QStringLiteral("acceptance"));
+    QVERIFY(waitFor([&]() { return handshake; }));
+    QVERIFY(waitFor([&]() { return core.connected(); }));
+
+    const auto created = ipcRequest(m_endpoint, QStringLiteral("acceptance"), "POST",
+                                    QStringLiteral("/api/goals"),
+                                    QJsonDocument(QJsonObject{
+                                        {"goal", QStringLiteral("acceptance field contract fixture")},
+                                    }).toJson());
+    QCOMPARE(created.first, 200);
+    const QString goalId = QJsonDocument::fromJson(created.second)
+                               .object().value("goalId").toString();
+    QVERIFY2(!goalId.isEmpty(), "created goal must carry goalId");
+
+    core.refreshGoals();
+    QVERIFY(waitFor([&]() { return core.goals().size() > 0; }, 10000));
+
+    bool found = false;
+    for (const auto &v : core.goals()) {
+        const QVariantMap g = v.toMap();
+        if (g.value("goalId").toString() != goalId) continue;
+        found = true;
+        QCOMPARE(g.value("status").toString(), QStringLiteral("active"));
+        QCOMPARE(g.value("phase").toString(), QStringLiteral("understanding"));
+        QCOMPARE(g.value("originalGoal").toString(),
+                 QStringLiteral("acceptance field contract fixture"));
+        QCOMPARE(g.value("currentStep").toInt(), -1);
+        QVERIFY(g.value("turnBudget").toInt() > 0);
+        break;
+    }
+    QVERIFY2(found, "the seeded goal must appear in the CoreClient goals list");
+
+    const auto item = ipcRequest(m_endpoint, QStringLiteral("acceptance"), "GET",
+                                 QStringLiteral("/api/goals/") + goalId, QByteArray());
+    QCOMPARE(item.first, 200);
+    const auto envelope = QJsonDocument::fromJson(item.second).object();
+    for (const char *field : {"goal", "driving", "done", "total"})
+        QVERIFY2(envelope.contains(QLatin1String(field)),
+                 (QByteArray("single-goal GET missing field: ") + field).constData());
+}
+
+// goalsStartPauseResumeCancelRoundTrip — the full control round trip of the
+// Goals surface through the real engine: start flips the bounded drive on
+// (the phase leaves understanding), pause parks the goal deterministically
+// (the store flip is the control surface; the drive stops at the next
+// checkpoint boundary), resume re-drives from the checkpoint, cancel
+// terminates — never resurrects. Every observed state is the CoreClient's
+// own re-read of the authoritative list; no client-side goal state exists.
+void Acceptance::goalsStartPauseResumeCancelRoundTrip() {
+    CoreClient core;
+    bool handshake = false;
+    connect(&core, &CoreClient::handshakeDone, [&]() { handshake = true; });
+
+    core.connectToCore(m_endpoint, QStringLiteral("acceptance"));
+    QVERIFY(waitFor([&]() { return handshake; }));
+    QVERIFY(waitFor([&]() { return core.connected(); }));
+
+    const auto created = ipcRequest(m_endpoint, QStringLiteral("acceptance"), "POST",
+                                    QStringLiteral("/api/goals"),
+                                    QJsonDocument(QJsonObject{
+                                        {"goal", QStringLiteral("acceptance round trip fixture")},
+                                    }).toJson());
+    QCOMPARE(created.first, 200);
+    const QString goalId = QJsonDocument::fromJson(created.second)
+                               .object().value("goalId").toString();
+    QVERIFY(!goalId.isEmpty());
+
+    core.refreshGoals();
+    QVERIFY(waitFor([&]() {
+        return goalById(core.goals(), goalId).value("status").toString()
+               == QStringLiteral("active");
+    }, 10000));
+
+    // Start: the bounded drive begins — the phase leaves understanding (the
+    // store is the only authority for the observed transition).
+    core.startGoal(goalId);
+    QVERIFY(waitFor([&]() {
+        const QVariantMap g = goalById(core.goals(), goalId);
+        return g.value("phase").toString() != QStringLiteral("understanding");
+    }, 45000));
+
+    // Pause: parks at the next checkpoint boundary.
+    core.pauseGoal(goalId);
+    QVERIFY(waitFor([&]() {
+        return goalById(core.goals(), goalId).value("status").toString()
+               == QStringLiteral("paused");
+    }, 15000));
+
+    // Resume: back to active, the drive re-runs from the checkpoint.
+    core.resumeGoal(goalId);
+    QVERIFY(waitFor([&]() {
+        return goalById(core.goals(), goalId).value("status").toString()
+               == QStringLiteral("active");
+    }, 15000));
+
+    // Cancel: terminal; the re-driven loop stops at its next boundary.
+    core.cancelGoal(goalId);
+    QVERIFY(waitFor([&]() {
+        return goalById(core.goals(), goalId).value("status").toString()
+               == QStringLiteral("cancelled");
+    }, 15000));
+    QVERIFY2(core.error().isEmpty(), qPrintable(core.error()));
+}
+
+// goalsApproveRejectParkedGoal — the durable approval path: a goal bound to
+// an ask-all AI System parks at waiting_for_approval BEFORE its first acting
+// step (the pending call is durably recorded with a stable approvalId);
+// approve records the decision as goal evidence and arms the loop; reject
+// records the decision and leaves the goal blocked with the pending call
+// cleared. The ask-all binding is created through the raw IPC channel
+// (POST /api/systems) so the CoreClient surface stays the seven invokables.
+void Acceptance::goalsApproveRejectParkedGoal() {
+    CoreClient core;
+    bool handshake = false;
+    connect(&core, &CoreClient::handshakeDone, [&]() { handshake = true; });
+
+    core.connectToCore(m_endpoint, QStringLiteral("acceptance"));
+    QVERIFY(waitFor([&]() { return handshake; }));
+    QVERIFY(waitFor([&]() { return core.connected(); }));
+
+    const auto sys = ipcRequest(m_endpoint, QStringLiteral("acceptance"), "POST",
+                                QStringLiteral("/api/systems"),
+                                QJsonDocument(QJsonObject{
+                                    {"name", QStringLiteral("acceptance ask-all")},
+                                    {"instructions",
+                                     QStringLiteral("fixture policy: park before every acting step")},
+                                    {"approvalPolicy", QStringLiteral("ask-all")},
+                                }).toJson());
+    QCOMPARE(sys.first, 200);
+    const QString systemId = QJsonDocument::fromJson(sys.second)
+                                 .object().value("systemId").toString();
+    QVERIFY(!systemId.isEmpty());
+
+    auto parkGoal = [&](const QString &text) -> QString {
+        const auto created = ipcRequest(m_endpoint, QStringLiteral("acceptance"), "POST",
+                                        QStringLiteral("/api/goals"),
+                                        QJsonDocument(QJsonObject{
+                                            {"goal", text},
+                                            {"systemId", systemId},
+                                            {"start", true},
+                                        }).toJson());
+        if (created.first != 200) return QString();
+        return QJsonDocument::fromJson(created.second).object().value("goalId").toString();
+    };
+    const QString approveId = parkGoal(QStringLiteral("acceptance approval fixture"));
+    const QString rejectId = parkGoal(QStringLiteral("acceptance rejection fixture"));
+    QVERIFY(!approveId.isEmpty());
+    QVERIFY(!rejectId.isEmpty());
+
+    core.refreshGoals();
+    // The park is deterministic: the ask-all check fires BEFORE every acting
+    // step, so both goals reach waiting_for_approval while driving.
+    QVERIFY(waitFor([&]() {
+        const QVariantMap a = goalById(core.goals(), approveId);
+        const QVariantMap r = goalById(core.goals(), rejectId);
+        return !a.isEmpty() && !r.isEmpty()
+               && a.value("status").toString() == QStringLiteral("waiting_for_approval")
+               && r.value("status").toString() == QStringLiteral("waiting_for_approval");
+    }, 60000));
+
+    auto pendingApprovalOf = [&](const QString &id) -> QVariantMap {
+        return goalById(core.goals(), id).value("pendingApproval").toMap();
+    };
+    const QVariantMap approvePa = pendingApprovalOf(approveId);
+    QVERIFY2(!approvePa.isEmpty(), "the parked goal must carry a durable pendingApproval");
+    QVERIFY2(!approvePa.value("approvalId").toString().isEmpty(),
+             "the pending approval must carry a stable approvalId");
+    QVERIFY2(approvePa.value("toolName").toString() == QStringLiteral("goal.step"),
+             qPrintable(approvePa.value("toolName").toString()));
+
+    // Approve: the decision is recorded durably as goal evidence and the
+    // loop re-drives (under ask-all it may park again at the NEXT boundary
+    // — the core's policy owns that; the client only dispatches).
+    core.approveGoal(approveId, approvePa.value("approvalId").toString());
+    QVERIFY(waitFor([&]() {
+        const QVariantMap g = goalById(core.goals(), approveId);
+        if (g.isEmpty()) return false;
+        const auto ev = g.value("evidence").toList();
+        for (const auto &e : ev) {
+            const QVariantMap em = e.toMap();
+            if (em.value("action").toString() == QStringLiteral("approval decision")
+                && em.value("status").toString() == QStringLiteral("approved"))
+                return true;
+        }
+        return false;
+    }, 20000));
+
+    // Reject: the decision is recorded, the pending call is cleared and the
+    // goal stays blocked — it is never re-driven.
+    const QVariantMap rejectPa = pendingApprovalOf(rejectId);
+    QVERIFY2(!rejectPa.isEmpty(), "the second goal must still park for its reject leg");
+    core.rejectGoal(rejectId, rejectPa.value("approvalId").toString());
+    QVERIFY(waitFor([&]() {
+        const QVariantMap g = goalById(core.goals(), rejectId);
+        return !g.isEmpty()
+               && g.value("status").toString() == QStringLiteral("blocked")
+               && g.value("pendingApproval").toMap().isEmpty();
+    }, 20000));
+    QVERIFY2(core.error().isEmpty(), qPrintable(core.error()));
 }
 
 // ============================================================================

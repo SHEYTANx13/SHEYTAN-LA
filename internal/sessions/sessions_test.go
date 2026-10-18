@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
 )
@@ -90,6 +91,70 @@ func TestListNewestFirstAndStubsAreLean(t *testing.T) {
 	// Stubs must not carry full histories.
 	if list[0].Messages != nil {
 		t.Fatal("stub list must not include messages")
+	}
+}
+
+// TestListNewestFirstUnderForcedTimestampTie pins the TOTAL ordering of
+// session listings when the wall clock ties. Hosted run #16 (Windows step
+// 14) failed with "newest-first violated: first then second" because two
+// sessions created inside one coarse Windows clock tick shared both
+// CreatedAt and UpdatedAt, and the ordering sites had no final tie-break.
+// Sleep-free by construction: the tie is forced by setting both timestamp
+// fields directly before Save, so the deterministic Seq order decides.
+func TestListNewestFirstUnderForcedTimestampTie(t *testing.T) {
+	tie := time.Date(2026, 10, 17, 22, 45, 0, 0, time.UTC)
+
+	// Saved path: the sortIndexLocked site, then the persisted index
+	// order must survive a store restart (seq round-trips index.json).
+	store := newTestStore(t)
+	first := store.Create()
+	first.Title = "first"
+	second := store.Create()
+	second.Title = "second"
+	for _, sess := range []*Session{first, second} {
+		sess.CreatedAt = tie
+		sess.UpdatedAt = tie
+		if err := store.Save(sess); err != nil {
+			t.Fatalf("Save %s: %v", sess.Title, err)
+		}
+	}
+	list, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("expected 2 stubs, got %d", len(list))
+	}
+	if list[0].Title != "second" || list[1].Title != "first" {
+		t.Fatalf("newest-first violated under forced tie: %s then %s", list[0].Title, list[1].Title)
+	}
+
+	reopened := New(store.Dir())
+	list, err = reopened.List()
+	if err != nil {
+		t.Fatalf("reopened List: %v", err)
+	}
+	if len(list) != 2 || list[0].Title != "second" || list[1].Title != "first" {
+		t.Fatalf("reopened order violated under forced tie: got %d stubs", len(list))
+	}
+
+	// Pending path: the List() re-sort site (fresh, not-yet-persisted
+	// sessions re-sorted against the index).
+	store2 := newTestStore(t)
+	a := store2.Create()
+	a.Title = "first"
+	b := store2.Create()
+	b.Title = "second"
+	a.CreatedAt = tie
+	a.UpdatedAt = tie
+	b.CreatedAt = tie
+	b.UpdatedAt = tie
+	list, err = store2.List()
+	if err != nil {
+		t.Fatalf("pending List: %v", err)
+	}
+	if len(list) != 2 || list[0].Title != "second" || list[1].Title != "first" {
+		t.Fatalf("pending order violated under forced tie: %s then %s", list[0].Title, list[1].Title)
 	}
 }
 

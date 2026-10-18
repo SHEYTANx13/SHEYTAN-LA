@@ -6,9 +6,13 @@
 // transcript with per-message roles, live streaming bubble (cumulative
 // text), Stop while streaming, composer lock/unlock, settlement →
 // persistence reload, error/empty/loading states, model/backend settings,
-// and the AI Systems panel (v1.10.2: list + activation over /api/systems
+// the AI Systems panel (v1.10.2: list + activation over /api/systems
 // — the store's validation, persistence and reserved default stay
-// server-owned; this view holds no second authority).
+// server-owned; this view holds no second authority), and the Goals
+// panel (v1.10.13: list + start/pause/resume/cancel + approve/reject
+// over /api/goals — the durable store, the bounded drive loop and the
+// approval semantics stay server-owned; progress shown is derived from
+// the actual plan state, never a decorative percentage).
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -137,6 +141,177 @@ ApplicationWindow {
         }
     }
 
+    // Goals panel (v1.10.13): right-edge drawer, pure /api/goals client.
+    Drawer {
+        id: goalsDrawer
+        edge: Qt.RightEdge
+        width: 440
+        height: root.height
+        onOpened: Core.refreshGoals()
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 14
+            spacing: 10
+
+            RowLayout {
+                Layout.fillWidth: true
+                Label {
+                    text: qsTr("Goals")
+                    color: "#e8e8ea"
+                    font.pixelSize: 16
+                    font.bold: true
+                    Layout.fillWidth: true
+                }
+                Button {
+                    text: qsTr("Refresh")
+                    display: AbstractButton.TextOnly
+                    onClicked: Core.refreshGoals()
+                }
+            }
+
+            ListView {
+                id: goalsList
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                spacing: 8
+                model: Core.goals
+                ScrollBar.vertical: ScrollBar {}
+
+                delegate: Rectangle {
+                    required property var modelData
+                    width: goalsList.width
+                    height: goalCol.implicitHeight + 20
+                    radius: 8
+                    color: "#222226"
+
+                    // Derived from the ACTUAL plan state served by the core
+                    // (PlanStep.status) — never a decorative percentage.
+                    function planSteps()    { return modelData.plan !== undefined ? modelData.plan : [] }
+                    function completedSteps() {
+                        var n = 0
+                        var plan = planSteps()
+                        for (var i = 0; i < plan.length; i++)
+                            if (plan[i].status === "completed") n++
+                        return n
+                    }
+                    function currentObjective() {
+                        var plan = planSteps()
+                        if (modelData.currentStep !== undefined && modelData.currentStep >= 0
+                                && modelData.currentStep < plan.length)
+                            return plan[modelData.currentStep].objective
+                        return ""
+                    }
+                    function terminal() {
+                        return modelData.status === "completed"
+                               || modelData.status === "cancelled"
+                               || modelData.status === "failed"
+                    }
+
+                    ColumnLayout {
+                        id: goalCol
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 4
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label {
+                                text: modelData.originalGoal
+                                color: "#e8e8ea"
+                                font.bold: true
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: modelData.goalId + "  ·  " + modelData.status + "  ·  " + modelData.phase
+                            color: modelData.status === "waiting_for_approval" ? "#e8c268" : "#8a8a92"
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: planSteps().length > 0
+                                  ? qsTr("plan: ") + completedSteps() + qsTr(" of ") + planSteps().length + qsTr(" steps completed")
+                                  : qsTr("no plan yet")
+                            color: "#8fb8dd"
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: currentObjective() !== ""
+                            text: qsTr("current step: ") + currentObjective()
+                            color: "#8a8a92"
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: modelData.status === "waiting_for_approval"
+                                     && modelData.pendingApproval !== undefined
+                                     && modelData.pendingApproval !== null
+                                     && modelData.pendingApproval.reason !== undefined
+                                     && modelData.pendingApproval.reason !== ""
+                            text: qsTr("awaiting approval: ") + modelData.pendingApproval.reason
+                            color: "#e8c268"
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+                            Button {
+                                visible: modelData.status === "waiting_for_approval"
+                                         && modelData.pendingApproval !== undefined
+                                         && modelData.pendingApproval !== null
+                                text: qsTr("Approve")
+                                onClicked: Core.approveGoal(modelData.goalId,
+                                                            modelData.pendingApproval.approvalId)
+                            }
+                            Button {
+                                visible: modelData.status === "waiting_for_approval"
+                                         && modelData.pendingApproval !== undefined
+                                         && modelData.pendingApproval !== null
+                                text: qsTr("Reject")
+                                onClicked: Core.rejectGoal(modelData.goalId,
+                                                           modelData.pendingApproval.approvalId)
+                            }
+                            Button {
+                                visible: modelData.status === "paused"
+                                text: qsTr("Resume")
+                                onClicked: Core.resumeGoal(modelData.goalId)
+                            }
+                            Button {
+                                visible: !terminal()
+                                text: qsTr("Pause")
+                                onClicked: Core.pauseGoal(modelData.goalId)
+                            }
+                            Button {
+                                visible: !terminal()
+                                text: qsTr("Cancel")
+                                onClicked: Core.cancelGoal(modelData.goalId)
+                            }
+                        }
+                    }
+                }
+
+                EmptyState {
+                    anchors.centerIn: parent
+                    visible: Core.goals.length === 0
+                    icon: "◇"
+                    title: Core.connected ? qsTr("No goals") : qsTr("Not connected")
+                    detail: Core.connected
+                        ? qsTr("The core goal store is empty.")
+                        : qsTr("Connect to the core to list goals.")
+                }
+            }
+        }
+    }
+
     function connect() {
         if (ipcEndpoint !== "") Core.connectToCore(ipcEndpoint, ipcKey)
     }
@@ -234,6 +409,13 @@ ApplicationWindow {
                     text: qsTr("AI Systems")
                     enabled: Core.connected
                     onClicked: systemsDrawer.open()
+                }
+
+                Button {
+                    Layout.fillWidth: true
+                    text: qsTr("Goals")
+                    enabled: Core.connected
+                    onClicked: goalsDrawer.open()
                 }
 
                 Button {

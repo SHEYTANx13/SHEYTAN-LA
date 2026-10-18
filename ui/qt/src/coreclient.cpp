@@ -492,6 +492,81 @@ void CoreClient::refreshApprovals() {}
 
 void CoreClient::resolveApproval(const QString &id, bool approve) {}
 
+// --- Goals (pure IPC client of the ONE Go goal engine) ----------------------
+//
+// v1.10.13, roadmap Phase 2. The wire shapes are mirrored FROM the core's
+// handlers (internal/api/goals.go), never invented here:
+//   GET  /api/goals                → {"goals":[…]} (list; entries carry
+//                                    goalId, phase, status, originalGoal,
+//                                    currentStep, turnBudget, plan omitempty)
+//   POST /api/goals/{id}/start     → {"ok":true,"started":id}
+//   POST /api/goals/{id}/pause     → goal document
+//   POST /api/goals/{id}/resume    → goal document
+//   POST /api/goals/{id}/cancel    → goal document
+//   POST /api/goals/{id}/approve   → goal document (body {"approvalId":…})
+//   POST /api/goals/{id}/reject    → goal document (body {"approvalId":…})
+// The durable store, the bounded drive loop and the approval policy stay
+// server-owned; the client keeps no goal state beyond the last list read.
+
+void CoreClient::refreshGoals() {
+    request("GET", "/api/goals", QByteArray(), [this](int status, const QByteArray &body) {
+        // v1.10.3 rule: a failed refresh is a TYPED, visible error — never
+        // a silent stale/empty panel.
+        if (status != 200) {
+            setError(QStringLiteral("goals refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        bool ok = false;
+        const QVariantMap m = toMap(body, &ok);
+        if (!ok) {
+            setError(QStringLiteral("goals refresh failed (malformed payload)"));
+            return;
+        }
+        m_goals = m.value("goals").toList();
+        emit goalsChanged();
+    });
+}
+
+void CoreClient::goalAction(const QString &action, const QString &id) {
+    if (id.isEmpty()) return;
+    // v1.10.3 (R8) rule: ids are percent-encoded into path segments —
+    // never interpolated raw into the request line.
+    request("POST", QStringLiteral("/api/goals/%1/%2").arg(encodeSegment(id), action), QByteArray(),
+            [this, action, id](int status, const QByteArray &) {
+                if (status != 200) {
+                    setError(QStringLiteral("goal %1 failed (status %2)").arg(action).arg(status));
+                    return;
+                }
+                // The store is the authority: re-read the durable list.
+                refreshGoals();
+            });
+}
+
+void CoreClient::goalDecision(const QString &action, const QString &id, const QString &approvalId) {
+    if (id.isEmpty() || approvalId.isEmpty()) return;
+    const QJsonObject payload{{"approvalId", approvalId}};
+    request("POST", QStringLiteral("/api/goals/%1/%2").arg(encodeSegment(id), action),
+            QJsonDocument(payload).toJson(),
+            [this, action, id](int status, const QByteArray &) {
+                if (status != 200) {
+                    setError(QStringLiteral("goal %1 failed (status %2)").arg(action).arg(status));
+                    return;
+                }
+                refreshGoals();
+            });
+}
+
+void CoreClient::startGoal(const QString &id)  { goalAction(QStringLiteral("start"), id); }
+void CoreClient::pauseGoal(const QString &id)  { goalAction(QStringLiteral("pause"), id); }
+void CoreClient::resumeGoal(const QString &id) { goalAction(QStringLiteral("resume"), id); }
+void CoreClient::cancelGoal(const QString &id) { goalAction(QStringLiteral("cancel"), id); }
+void CoreClient::approveGoal(const QString &id, const QString &approvalId) {
+    goalDecision(QStringLiteral("approve"), id, approvalId);
+}
+void CoreClient::rejectGoal(const QString &id, const QString &approvalId) {
+    goalDecision(QStringLiteral("reject"), id, approvalId);
+}
+
 // --- activity WebSocket ----------------------------------------------------
 
 // sendWsFrameControl writes one small masked control/data frame (client
