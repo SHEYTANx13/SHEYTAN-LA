@@ -11,6 +11,17 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.10.13 (cycle) — 2026-10-18 — run #22 verdict quoted + the four hosted-defect repairs (W-UIBIN, W-SUM127, W-PIPE, L-E2E)
+Run 39115765789 ("Build Desktop" #22, commit 070bc61): "audit job green (2m 32s)"; Windows steps 1-21 green; Linux steps 1-16 green;
+Windows step 22 "Process completed with exit code 1"; Linux step 27 "Process completed with exit code 127"; E2E
+"page.waitForResponse: Test timeout of 120000ms exceeded" (e2e/sessions.spec.ts:170:1, first failure in 22 runs).
+W-UIBIN: deleted the dead $env:SHEYTAN_UI_BIN Resolve-Path pin — a Linux-only path threw a terminating error before
+the try/catch under $ErrorActionPreference="Stop"; the harness reads the variable only into Q_UNUSED (Linux export deleted in the same touch).
+W-SUM127: rewrote the corrupted summary script (a literal backslash-n replaced the { opener → command-not-found, exit 127)
+and added the upstream branch (no acceptance log AND no RUN marker → "the live-answer acceptance never started", exit 0).
+W-PIPE: set +e before the acceptance tee pipeline, ${PIPESTATUS[0]} read, set -e — the trailing || true reset PIPESTATUS
+to 0 on a failed binary (green-fabrication hazard). L-E2E: no change — boot path intact by inspection; local repro unavailable (no Go); run #1 governs.
+
 ## v1.10.13 (cycle) — 2026-10-18 — W-FLAKE total session ordering + the Goals Qt surface (roadmap Phase 2)
 Run #16 (commit 4592230) failed at Windows step 14: "sessions_test.go:87: newest-first violated: first then second" —
 CreateInMode assigned one clock read to both fields and List()/sortIndexLocked tie-broke only UpdatedAt-then-CreatedAt,

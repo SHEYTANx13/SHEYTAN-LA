@@ -8,6 +8,16 @@ is carried in this header; a worklog-header version is a stale-claim
 hazard by construction).
 
 ---
+Task ID: 1 (v1.10.13 fix cycle) — agent: hosted-defect repair session; tree pinned at 070bc61
+Task: repair the four defects named by run 39115765789 ("Build Desktop" #22: audit green, Win steps 1-21 green,
+Linux 1-16 green; W step 22 exit 1, L step 27 exit 127, E2E waitForResponse timeout at sessions.spec.ts:170:1)
+Work Log: W-UIBIN (dead SHEYTAN_UI_BIN pin deleted), W-SUM127 (backslash-n corruption rewritten + upstream branch),
+W-PIPE (|| true before PIPESTATUS repaired) — class sweeps, YAML parse, bash -n and a 3-scenario summary simulation green;
+L-E2E decision (local inspection class): no change — the sidebar boot path is intact, local repro unavailable (no Go);
+L-ACC pre-read: both slots' wait contracts satisfiable under the deterministic fixture (the ask-all park is policy-driven,
+not model-driven) — hypotheses stay runtime-class, run #1's FAIL! lines are the authority; local battery green (tsc, lint,
+units 236:0, release incl. codename gate, vite build); Go/Qt gates local-unavailable. ZIP: git-archive of tracked tree only.
+---
 Task ID: 1 (v1.9.5 session)
 Agent: v1.9.5 engineering session
 Task: v1.9.5 — repair the failed v1.9.4 release attempt (Actions run

@@ -1176,8 +1176,11 @@ jobs:
 
           $env:SHEYTAN_REPO = (Get-Location).Path
           $env:SHEYTAN_CORE_BIN = (Resolve-Path $core).Path
-          $env:SHEYTAN_UI_BIN = (Resolve-Path "$RUNNER_TEMP/sheytan-ui").Path
           $env:QT_QPA_PLATFORM = "offscreen"
+          # v1.10.13 D1: SHEYTAN_UI_BIN deleted — the harness reads it only
+          # into Q_UNUSED (ui/qt/tests/tst_acceptance.cpp), and the Linux-only
+          # Resolve-Path target threw a terminating error before the try/catch
+          # under $ErrorActionPreference = "Stop" (run 39115765789, step 22).
 
           # v1.10.13 W-ACC3: Start-Process with native-handle capture into
           # ci-logs/win-qt-acceptance.out.log and .err.log, merged into
@@ -2485,13 +2488,19 @@ jobs:
 
           export SHEYTAN_REPO="$(pwd)"
           export SHEYTAN_CORE_BIN="$(pwd)/dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent"
-          export SHEYTAN_UI_BIN="$RUNNER_TEMP/sheytan-ui"
-          export QT_QPA_PLATFORM=offscreen
+          # v1.10.13 D1: SHEYTAN_UI_BIN export deleted — dead config (Q_UNUSED
+          # in the acceptance harness); same touch as the Windows pin removal.
           export LD_LIBRARY_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           export QT_QPA_PLATFORM_PLUGIN_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/plugins/platforms"
 
-          "$RUNNER_TEMP/sheytan-ui-acceptance" 2>&1 | tee ci-logs/linux-qt-acceptance.log || true
+          # v1.10.13 D3: the trailing `|| true` ran true on a failed binary
+          # (pipefail), resetting PIPESTATUS to 0 and recording a FAILED
+          # acceptance as gate OK — a green-fabrication hazard. The exit is
+          # now read before errexit is re-enabled.
+          set +e
+          "$RUNNER_TEMP/sheytan-ui-acceptance" 2>&1 | tee ci-logs/linux-qt-acceptance.log
           accExit=${PIPESTATUS[0]}
+          set -e
           if [ "$accExit" -ne 0 ]; then
             echo "FAIL Qt live-answer acceptance" >> ci-logs/gate-order.txt
             echo "::error::Qt live-answer acceptance failed with exit code $accExit (log: ci-logs/linux-qt-acceptance.log)"
@@ -2505,7 +2514,14 @@ jobs:
         run: |
           set -uo pipefail
 
-          {\n            echo "## Qt live-answer acceptance FAILED"
+          # v1.10.13 D2: the script's opening brace block carried a literal
+          # backslash-n where the { opener belongs — bash executed it as
+          # command-not-found and the step exited 127 (run 39115765789,
+          # step 27). Rewritten cleanly, with the upstream branch added:
+          # when the acceptance gate never started, the summary says so
+          # instead of implying the acceptance ran.
+          {
+            echo "## Qt live-answer acceptance FAILED"
             echo ""
             echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } >> "$GITHUB_STEP_SUMMARY" || true
@@ -2521,6 +2537,21 @@ jobs:
           }
 
           accLog="ci-logs/linux-qt-acceptance.log"
+          gateOrder="ci-logs/gate-order.txt"
+          accStarted=false
+          if [ -f "$gateOrder" ] && grep -q 'RUN Qt live-answer acceptance' "$gateOrder" 2>/dev/null; then
+            accStarted=true
+          fi
+          if [ ! -f "$accLog" ] && [ "$accStarted" = false ]; then
+            {
+              echo ""
+              echo "### Live-answer acceptance: NEVER STARTED"
+              echo ""
+              echo "No acceptance log and no RUN marker in gate-order.txt — the failure is upstream of the acceptance gate."
+            } >> "$GITHUB_STEP_SUMMARY" || true
+            emit "The live-answer acceptance never started — the failure is upstream (read the red step above)"
+            exit 0
+          fi
           if [ -f "$accLog" ]; then
             {
               echo ""
