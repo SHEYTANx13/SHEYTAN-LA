@@ -1188,6 +1188,7 @@ jobs:
           $errLog = "ci-logs/win-qt-acceptance.err.log"
           Add-Content "ci-logs/gate-order.txt" "STEP Windows live-answer acceptance"
           Add-Content "ci-logs/gate-order.txt" "RUN Qt live-answer acceptance"
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
           $accExit = $null
           try {
             # Process-facts prelude
