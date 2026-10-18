@@ -2478,8 +2478,8 @@ jobs:
           set -euo pipefail
 
           mkdir -p ci-logs
-          Add-Content "ci-logs/gate-order.txt" "STEP Qt live-answer acceptance"
-          Add-Content "ci-logs/gate-order.txt" "RUN Qt live-answer acceptance"
+          echo "STEP Qt live-answer acceptance" >> ci-logs/gate-order.txt
+          echo "RUN Qt live-answer acceptance" >> ci-logs/gate-order.txt
 
           export SHEYTAN_REPO="$(pwd)"
           export SHEYTAN_CORE_BIN="$(pwd)/dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent"
@@ -2490,11 +2490,11 @@ jobs:
           "$RUNNER_TEMP/sheytan-ui-acceptance" 2>&1 | tee ci-logs/linux-qt-acceptance.log
           accExit=${PIPESTATUS[0]}
           if [ "$accExit" -ne 0 ]; then
-            Add-Content "ci-logs/gate-order.txt" "FAIL Qt live-answer acceptance"
+            echo "FAIL Qt live-answer acceptance" >> ci-logs/gate-order.txt
             echo "::error::Qt live-answer acceptance failed with exit code $accExit (log: ci-logs/linux-qt-acceptance.log)"
             exit $accExit
           fi
-          Add-Content "ci-logs/gate-order.txt" "OK Qt live-answer acceptance"
+          echo "OK Qt live-answer acceptance" >> ci-logs/gate-order.txt
 
       - name: Qt acceptance failure summary (Linux)
         if: failure()
@@ -2512,7 +2512,7 @@ jobs:
             if [ "$emitted" -lt 10 ]; then
               msg="$1"
               if [ "${#msg}" -gt 250 ]; then msg="${msg:0:247}..."; fi
-              printf '::error::%s\\n' "$msg"
+              printf '::error::%s\n' "$msg"
               emitted=$((emitted + 1))
             fi
           }
