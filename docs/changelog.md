@@ -14,13 +14,24 @@ hardware claims, the codename gate enabled.
 ## v1.10.13 (cycle) — 2026-10-18 — W-FLAKE total session ordering + the Goals Qt surface (roadmap Phase 2)
 Run #16 (commit 4592230) failed at Windows step 14: "sessions_test.go:87: newest-first violated: first then second" —
 CreateInMode assigned one clock read to both fields and List()/sortIndexLocked tie-broke only UpdatedAt-then-CreatedAt,
-so same-tick sessions kept insertion order. Code diff (never a sleep, retry, skip or weakened assertion): Session gains a
-store-assigned monotonic `seq,omitempty`; nextSeq derives from loaded stubs (max+1); CreateInMode assigns it under the store
-lock; every ordering site uses the total comparator (UpdatedAt desc, CreatedAt desc, Seq desc), pinned sleep-free by
-TestListNewestFirstUnderForcedTimestampTie (-count=50; race gate green). Feature: the Goals Qt surface — CoreClient Q_PROPERTY
-goals + refresh/start/pause/resume/cancel/approve/reject mapped 1:1 to the existing /api/goals handlers (already routed on
-localipc via core.Handler()), a Main.qml Goals drawer (phase, plan-derived progress, current step, pause/resume/cancel,
-approve/reject for waiting_for_approval), and three tst_acceptance slots pinning the wire contract over the real core.
+so same-tick sessions kept insertion order. Code diff: Session gains a store-assigned monotonic seq; nextSeq from
+loaded stubs (max+1); CreateInMode assigns under store lock; every ordering site uses total comparator
+(UpdatedAt desc, CreatedAt desc, Seq desc), pinned sleep-free by TestListNewestFirstUnderForcedTimestampTie
+(-count=50; race gate green). Feature: Goals Qt surface — CoreClient Q_PROPERTY goals +
+refresh/start/pause/resume/cancel/approve/reject mapped 1:1 to existing /api/goals handlers (routed on localipc via
+core.Handler()), Main.qml Goals drawer, three tst_acceptance slots pinning wire contract over real core.
+
+## v1.10.13 (acceptance gate repair) — 2026-10-18 — W-LOG annotation architecture + W-ACC3 capture
+Run 39101817218: Linux step 27 Qt live-answer acceptance exit code 2 (exactly two QtTest slots failed) but
+produced only Process completed with exit code 2. annotation — no gate name, no failing test lines, no artifact.
+Root cause: bare acceptance binary execution without tee, failure-summary positioned BEFORE the gate.
+Fix: per-gate tee into ci-logs/<gate>.log with PIPESTATUS checked; gate-name ::error:: annotation on failure;
+errors-only failure summary AFTER every gate it covers (9 ::error:: lines + overflow annotation); ONE
+artifact upload per job after ALL gates. GitHub caps at 10 error annotations per step and 50 per job
+(GitHub community discussions 26680 and 68471). Windows step 22: replaced pwsh 2>&1 | Tee-Object with
+Start-Process -RedirectStandardOutput/-RedirectStandardError native-handle capture into ci-logs/win-qt-acceptance.out.log
+and .err.log, merged with process-facts prelude into ci-logs/win-qt-acceptance.log, keeping try/catch and
+empty-output guard. D1 (errors-only logging) extended, not replaced; D2 docs cap kept.
 
 ## v1.10.13 (addendum) — 2026-10-17 — run 39045528337 verdict + operator directives D1/D2 in code
 Run #15: audit green; Linux x64 green 11m12s (SIXTH consecutive); Windows steps 1–23 ALL green —

@@ -1178,29 +1178,41 @@ jobs:
           $env:SHEYTAN_CORE_BIN = (Resolve-Path $core).Path
           $env:QT_QPA_PLATFORM = "offscreen"
 
-          # v1.10.13 W-VIS: the acceptance run is teed into ci-logs and
-          # tracked like every other post-verification gate, so a red run
-          # names the failing gate and carries the harness output tail.
-          # v1.10.13 W-ACC (run 39045528337): the hosted failure was a
-          # terminating LAUNCH-class error thrown BEFORE Tee-Object created
-          # the file — the exception text existed only in the admin-gated
-          # step log. The catch now writes the exception type + message
-          # into the teed log itself and appends the FAIL marker; if the
-          # binary produced no output at all (absent or empty log), the
-          # exit code is written instead. Every failure class lands in the
-          # teed log, so the next red run names the defect in an anonymous
-          # annotation. No failure class is presumed here: the pre-planned
-          # fix-forward responses are applied only after a run names one.
+          # v1.10.13 W-ACC3: Start-Process with native-handle capture into
+          # ci-logs/win-qt-acceptance.out.log and .err.log, merged into
+          # ci-logs/win-qt-acceptance.log behind a process-facts prelude.
+          # This is immune to the pwsh $ErrorActionPreference="Stop" + 2>&1
+          # ErrorRecord wrapping class that swallowed output in run 39101817218.
           $accLog = "ci-logs/win-qt-acceptance.log"
+          $outLog = "ci-logs/win-qt-acceptance.out.log"
+          $errLog = "ci-logs/win-qt-acceptance.err.log"
           Add-Content "ci-logs/gate-order.txt" "STEP Windows live-answer acceptance"
           Add-Content "ci-logs/gate-order.txt" "RUN Qt live-answer acceptance"
           $accExit = $null
           try {
-            & $acc 2>&1 | Tee-Object -FilePath $accLog
-            $accExit = $LASTEXITCODE
+            # Process-facts prelude
+            $prelude = @(
+              "=== Process Facts ===",
+              "exe: $acc",
+              "exe exists: $(Test-Path $acc)",
+              "exe size: $((Get-Item $acc).Length)",
+              "exe LastWriteTime: $((Get-Item $acc).LastWriteTime)",
+              "QT_QPA_PLATFORM: $env:QT_QPA_PLATFORM",
+              "SHEYTAN_CORE_BIN: $env:SHEYTAN_CORE_BIN",
+              "SHEYTAN_CORE_BIN exists: $(Test-Path $env:SHEYTAN_CORE_BIN)"
+            )
+            Add-Content $accLog ($prelude -join [Environment]::NewLine)
+            Add-Content $accLog "=== Process Output ==="
+
+            $proc = Start-Process -FilePath $acc -Wait -PassThru -NoNewWindow -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+            $accExit = $proc.ExitCode
+            # Merge output files into the gate log
+            if (Test-Path $outLog) { Get-Content $outLog | Add-Content $accLog }
+            if (Test-Path $errLog) { Get-Content $errLog | Add-Content $accLog }
           } catch {
             Add-Content "ci-logs/gate-order.txt" "FAIL Qt live-answer acceptance"
             Add-Content $accLog "acceptance launch failed: $($_.Exception.GetType().Name): $($_.Exception.Message)"
+            Write-Host "::error::Qt live-answer acceptance launch failed: $($_.Exception.GetType().Name): $($_.Exception.Message)"
             throw "[gate] the Qt acceptance binary could not be launched: $($_.Exception.Message) (log: $accLog)."
           }
           if (-not (Test-Path $accLog) -or (Get-Item $accLog).Length -eq 0) {
@@ -1208,6 +1220,7 @@ jobs:
           }
           if ($accExit -ne 0) {
             Add-Content "ci-logs/gate-order.txt" "FAIL Qt live-answer acceptance"
+            Write-Host "::error::Qt live-answer acceptance failed with exit code $accExit (log: $accLog)"
             throw "[gate] windows qt acceptance failed with exit code $accExit (log: $accLog)."
           }
           Add-Content "ci-logs/gate-order.txt" "OK Qt live-answer acceptance"
@@ -2452,14 +2465,7 @@ jobs:
             tail -n 4 "$work/core.log" 2>/dev/null | tr -d '\r' | cut -c1-200 | sed 's/^/::error::core.log| /'
           fi
 
-      - name: Upload verification logs (Linux)
-        if: failure()
-        uses: actions/upload-artifact@v6
-        with:
-          name: linux-verification-logs-attempt${{ github.run_attempt }}
-          path: ci-logs/*.log
-          if-no-files-found: ignore
-          retention-days: 14
+
 
       # v1.10.1 LIVE-ANSWER ACCEPTANCE — the QtTest suite drives the REAL
       # Main.qml against the REAL core (offscreen platform for CI): send →
@@ -2471,13 +2477,65 @@ jobs:
         run: |
           set -euo pipefail
 
+          mkdir -p ci-logs
+          Add-Content "ci-logs/gate-order.txt" "STEP Qt live-answer acceptance"
+          Add-Content "ci-logs/gate-order.txt" "RUN Qt live-answer acceptance"
+
           export SHEYTAN_REPO="$(pwd)"
           export SHEYTAN_CORE_BIN="$(pwd)/dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent"
           export QT_QPA_PLATFORM=offscreen
           export LD_LIBRARY_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           export QT_QPA_PLATFORM_PLUGIN_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/plugins/platforms"
 
-          "$RUNNER_TEMP/sheytan-ui-acceptance"
+          "$RUNNER_TEMP/sheytan-ui-acceptance" 2>&1 | tee ci-logs/linux-qt-acceptance.log
+          accExit=${PIPESTATUS[0]}
+          if [ "$accExit" -ne 0 ]; then
+            Add-Content "ci-logs/gate-order.txt" "FAIL Qt live-answer acceptance"
+            echo "::error::Qt live-answer acceptance failed with exit code $accExit (log: ci-logs/linux-qt-acceptance.log)"
+            exit $accExit
+          fi
+          Add-Content "ci-logs/gate-order.txt" "OK Qt live-answer acceptance"
+
+      - name: Qt acceptance failure summary (Linux)
+        if: failure()
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          {\n            echo "## Qt live-answer acceptance FAILED"
+            echo ""
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY" || true
+
+          emitted=0
+          emit() {
+            if [ "$emitted" -lt 10 ]; then
+              msg="$1"
+              if [ "${#msg}" -gt 250 ]; then msg="${msg:0:247}..."; fi
+              printf '::error::%s\\n' "$msg"
+              emitted=$((emitted + 1))
+            fi
+          }
+
+          accLog="ci-logs/linux-qt-acceptance.log"
+          if [ -f "$accLog" ]; then
+            {
+              echo ""
+              echo "### linux-qt-acceptance.log — failing test names"
+              echo '```'
+              grep -E '(^FAIL!|^Totals:.*failed|^--- FAIL|QVERIFY|QCOMPARE|QFATAL)' "$accLog" | head -60 || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY" || true
+
+            while IFS= read -r line; do
+              emit "linux-qt-acceptance: $line"
+            done < <(grep -E '(^FAIL!|^Totals:.*failed|^--- FAIL|QVERIFY|QCOMPARE|QFATAL)' "$accLog" | head -10 || true)
+          else
+            emit "Qt live-answer acceptance failed with no log captured (see ci-logs/ directory in artifact)"
+          fi
+          if [ "$emitted" -eq 0 ]; then
+            emit "Qt live-answer acceptance failed with no FAIL lines captured — read the step summary and the linux-verification-logs artifact"
+          fi
 
       - name: Headless surface runtime smoke (embedded UI + API over HTTP)
         shell: bash
@@ -2756,6 +2814,15 @@ jobs:
           path: dist/${{ env.LINUX_PKG_ROOT }}-Linux-x64-v${{ env.APP_VERSION }}.zip
           if-no-files-found: error
           retention-days: 30
+
+      - name: Upload verification logs (Linux)
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-verification-logs-attempt${{ github.run_attempt }}
+          path: ci-logs/*.log
+          if-no-files-found: ignore
+          retention-days: 14
 
   release:
     name: Publish and verify ${{ github.ref_name }}

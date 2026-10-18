@@ -4026,9 +4026,22 @@ named, NOTHING skipped; docs capped to this entry + the changelog addendum; swee
 Task ID: 3 (v1.10.13 goals cycle)
 Agent: v1.10.13 engineering session
 Task: W-FLAKE total session ordering (run 39076376006 step 14) + the roadmap Phase 2 Goals Qt surface
-Forced-tie repro RED on the unfixed tree (-count=50, exact hosted message), Seq repair GREEN (-count=50, -race,
+Forced-tie repro RED on unfixed tree (-count=50, exact hosted message), Seq repair GREEN (-count=50, -race,
 vet); /api/goals verified already routed on localipc via core.Handler() — no route change needed; CoreClient gains
-the seven 1:1 goal invokables, Main.qml the Goals drawer, tst_acceptance the list/round-trip/approve-reject slots.
+the seven 1:1 goal invokables, Main.qml Goals drawer, tst_acceptance list/round-trip/approve-reject slots.
 Local battery green: gofmt -l . clean; headless + full go test; go vet ./...; audit race six; frontend
 typecheck/lint/test:units/test:release/build; release-version --check green (1.10.13). Qt build not runnable locally
-(no cmake/Qt6; sudo unavailable) — hosted run #1 is the authority for steps 15-30. Docs capped per D2.
+(no cmake/Qt6; sudo unavailable) — hosted run #1 authority for steps 15-30. Docs capped per D2.
+
+Task ID: 4 (v1.10.13 acceptance gate repair)
+Agent: v1.10.13 engineering session
+Task: W-LOG annotation architecture + W-ACC3 capture upgrade for run 39101817218
+Run 39101817218: Linux step 27 Qt live-answer acceptance exit code 2 (exactly two QtTest slots failed) but
+only annotation was Process completed with exit code 2. — no gate name, no failing test lines, no artifact.
+Root cause by inspection: bare acceptance binary execution without tee, failure-summary steps positioned BEFORE gate.
+Fix (W-LOG): per-gate tee into ci-logs/<gate>.log with PIPESTATUS checked; gate-name ::error:: annotation on
+failure; errors-only failure summary AFTER every gate it covers (9 ::error:: lines + overflow annotation);
+ONE artifact upload per job after ALL gates. Windows step 22 (W-ACC3): replaced pwsh 2>&1 | Tee-Object with
+Start-Process -RedirectStandardOutput/-RedirectStandardError native-handle capture into ci-logs/win-qt-acceptance.out.log
+and .err.log, merged with process-facts prelude into ci-logs/win-qt-acceptance.log, keeping try/catch and
+empty-output guard. Local regression: gofmt clean, sessions -count=50 green, workflow YAML valid.
