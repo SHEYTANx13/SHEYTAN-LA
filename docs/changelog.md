@@ -10,6 +10,17 @@ concern, evidence over confidence, no sleep-based correctness, honest
 hardware claims, the codename gate enabled.
 
 ---
+## v1.10.13 (run #25 cycle) — 2026-10-19 — QJsonValue compile unblock + APPROVAL-IDENTITY + rollback error propagation + frozen-revision contract
+Run 39269035971 (commit 2d07da6): audit green; BOTH platform jobs failed at the Qt host build gate — the acceptance suites, the smokes, package/ZIP layout and the release-version contract never started (NOT RUN, never pass). Windows diagnostic, quoted:
+ui/qt/tests/tst_acceptance.cpp(428,50): error C2039: 'toMap': is not a member of 'QJsonValue'; Linux failed at the same upstream build step (its per-line diagnostic was not exposed anonymously). COMPILE-UNBLOCK: dumpGoalDiagnostics parses the diagnostics document,
+checks isObject twice, converts via toObject().toVariantMap(), and emits a named QWARN on every malformed path — the silent empty map is gone; the other 12 .toMap() sites operate on QVariant and are valid. APPROVAL-IDENTITY: the ONE-USE grant persists the
+envelope's full canonical identity (tool + objective beside the step); TakeApprovedAction consumes only the EXACT identity — a mismatched step/tool/objective is a typed ErrApprovalIdentity with no side effects (I4). ROLLBACK-ERRORS: failed compensating
+writes in resumeAndDrive and the approve restart are structured-logged, never discarded (I3). SYSTEM-REVISION: SnapshotOf serves the CURRENT revision and the store keeps no history, so the run boundary now fails typed (ErrInvalid) on a revised system;
+the durable goal keeps its frozen revision across phases (probe-verified in source, pinned by tests).
+Local battery: go build ./..., go test -race ./internal/goal ./internal/api, gofmt — green. The Qt host build stayed NOT RUN locally (the cycle sandbox has no Qt/CMake toolchain and no root to install one); hosted proof belongs to the Phase 7 run on the pushed commit.
+CMake project version drifted (1.10.6) — set to 1.10.13 to match package.json.
+Hosted verdict for this cycle is recorded at delivery; nothing here claims a hosted gate that has not run.
+
 
 ## v1.10.13 (final cycle) — 2026-10-19 — run #24 verdict quoted + the four Go source repairs (drive registry, resume 500, swallowed errors, SystemID) + one-use approvals + the Windows report
 Run 39243477114 ("Build Desktop" #24, commit fa6afd1): audit green; Linux acceptance RAN the full suite for the first time —

@@ -164,9 +164,9 @@ func (s *Server) goalRunFunc() goal.RunFunc {
 			if s.systemsStore() == nil {
 				return goal.RunOutcome{}, fmt.Errorf("%w: goal %s references AI system %q but the systems store is unavailable", goal.ErrInvalid, req.GoalID, req.SystemID)
 			}
-			snap, snapErr := s.systemsStore().SnapshotOf(req.SystemID)
+			snap, snapErr := s.resolveGoalSystemSnapshot(req.SystemID, req.SystemRevision)
 			if snapErr != nil {
-				return goal.RunOutcome{}, fmt.Errorf("%w: goal %s references AI system %q which is unavailable: %v", goal.ErrInvalid, req.GoalID, req.SystemID, snapErr)
+				return goal.RunOutcome{}, fmt.Errorf("%w: goal %s references AI system %q: %v", goal.ErrInvalid, req.GoalID, req.SystemID, snapErr)
 			}
 			runOpts = append(runOpts, agent.WithAISystem(&snap))
 		}
@@ -228,15 +228,29 @@ func (s *Server) goalRunnerOptions() goal.RunnerOptions {
 			if err != nil {
 				return false, nil
 			}
-			// v1.10.13 APPROVAL-ONE-USE (I4): an approved decision is
-			// consumed EXACTLY once, for the EXACT canonical action (the
-			// step identity). The recorded grant for THIS step honors the
+			// v1.10.13 APPROVAL-ONE-USE (I4) + APPROVAL-IDENTITY: an approved
+			// decision is consumed EXACTLY once, for the EXACT canonical action
+			// — the step, its tool and its objective as the approval envelope
+			// carried them. The recorded grant for THIS identity honors the
 			// human decision — the step executes and the grant is cleared
-			// atomically under the store lock, so the next drive can
-			// never re-park the same approved step. A mismatched grant is
-			// never consumed and has no side effects: the policy below
-			// re-parks with a fresh pending call.
-			if granted, grantErr := s.goalStore().TakeApprovedAction(goalID, stepIdx); grantErr == nil && granted {
+			// atomically under the store lock, so the next drive can never
+			// re-park the same approved step. A mismatched identity (e.g. a
+			// replanned objective behind an unchanged step index) is a typed
+			// rejection with no side effects: the grant survives for the exact
+			// action, the mismatch is logged, and the policy below re-parks
+			// with a fresh pending call.
+			objective := ""
+			if stepIdx >= 0 && stepIdx < len(g.Plan) {
+				objective = g.Plan[stepIdx].Objective
+			}
+			granted, grantErr := s.goalStore().TakeApprovedAction(goalID, goal.ActionIdentity{
+				StepIdx:   stepIdx,
+				ToolName:  "goal.step",
+				Objective: objective,
+			})
+			if grantErr != nil {
+				log.Printf("[goal] %s: approval grant not consumed at step %d: %v", goalID, stepIdx, grantErr)
+			} else if granted {
 				return false, nil
 			}
 			// The approval POLICY comes from the goal's bound AI System;
@@ -251,10 +265,6 @@ func (s *Server) goalRunnerOptions() goal.RunnerOptions {
 			}
 			if policy != aisystem.ApprovalAskAll {
 				return false, nil
-			}
-			objective := ""
-			if stepIdx >= 0 && stepIdx < len(g.Plan) {
-				objective = g.Plan[stepIdx].Objective
 			}
 			return true, &goal.PendingApproval{
 				ApprovalID: fmt.Sprintf("%s-step-%d", g.GoalID, stepIdx),
@@ -407,23 +417,54 @@ func (s *Server) resumeAndDrive(w http.ResponseWriter, store *goal.Store, id str
 	if err := s.startGoalDrive(id); err != nil {
 		// The status flip is compensated: the goal never sits active
 		// without a drive (I6). The checkpoint and any armed approval
-		// grant survive — an explicit resume re-drives.
-		_, _ = store.AppendEvidence(id, goal.Evidence{
+		// grant survive — an explicit resume re-drives. A FAILED
+		// compensating write is structured-logged, never discarded (I3):
+		// a silent rollback failure would leave the durable state
+		// contradicting the drive registry with zero diagnostics.
+		if _, evErr := store.AppendEvidence(id, goal.Evidence{
 			Phase:  g.Phase,
 			Action: "resume rolled back — the drive could not be admitted",
 			Status: "conflict",
 			Detail: err.Error(),
-		})
-		_, _ = store.Pause(id)
-		_, _ = store.AppendEvidence(id, goal.Evidence{
+		}); evErr != nil {
+			log.Printf("[goal] %s: resume rollback: conflict evidence append FAILED: %v", id, evErr)
+		}
+		if _, pauseErr := store.Pause(id); pauseErr != nil {
+			log.Printf("[goal] %s: resume rollback: pause FAILED — the goal may sit active without a live drive (I6): %v", id, pauseErr)
+		}
+		if _, evErr := store.AppendEvidence(id, goal.Evidence{
 			Phase:  g.Phase,
 			Action: "goal parked — resume the goal to re-drive it",
 			Status: "paused",
-		})
+		}); evErr != nil {
+			log.Printf("[goal] %s: resume rollback: parked evidence append FAILED: %v", id, evErr)
+		}
 		writeGoalErr(w, err)
 		return
 	}
 	writeJSON(w, g)
+}
+
+// resolveGoalSystemSnapshot resolves one goal's frozen AI System
+// identity at the run boundary (v1.10.13 SYSTEM-REVISION probe).
+// The store serves its CURRENT document; it keeps no revision
+// history, so a system revised after the goal was created can never
+// re-serve the frozen revision — instead of silently running
+// against different instructions, the run boundary fails typed
+// (goal.ErrInvalid) and names both revisions. Goals frozen before
+// revisions existed (revision 0) run exactly as before.
+func (s *Server) resolveGoalSystemSnapshot(systemID string, wantRevision int) (aisystem.Snapshot, error) {
+	if s.systemsStore() == nil {
+		return aisystem.Snapshot{}, fmt.Errorf("%w: the systems store is unavailable", goal.ErrInvalid)
+	}
+	snap, err := s.systemsStore().SnapshotOf(systemID)
+	if err != nil {
+		return aisystem.Snapshot{}, fmt.Errorf("%w: ai system %q is unavailable: %v", goal.ErrInvalid, systemID, err)
+	}
+	if wantRevision > 0 && snap.SystemRevision != wantRevision {
+		return aisystem.Snapshot{}, fmt.Errorf("%w: the goal was created against ai system %q revision %d, but the store now holds revision %d — the frozen-revision contract refuses to run against a revised system; re-create or re-bind the goal", goal.ErrInvalid, systemID, wantRevision, snap.SystemRevision)
+	}
+	return snap, nil
 }
 
 func (s *Server) goalStore() *goal.Store {
@@ -626,14 +667,19 @@ func (s *Server) handleGoalItem(w http.ResponseWriter, r *http.Request) {
 				// The approved decision stays durable (evidence + ONE-USE
 				// grant armed); the goal is parked paused so it never sits
 				// active without a drive (I6) — an explicit resume
-				// executes the approved step.
-				_, _ = store.AppendEvidence(id, goal.Evidence{
+				// executes the approved step. Failed compensations are
+				// structured-logged, never discarded (I3).
+				if _, evErr := store.AppendEvidence(id, goal.Evidence{
 					Phase:  g.Phase,
 					Action: "approved decision armed — the drive restart failed; resume to execute the approved step",
 					Status: "conflict",
 					Detail: err.Error(),
-				})
-				_, _ = store.Pause(id)
+				}); evErr != nil {
+					log.Printf("[goal] %s: approve rollback: conflict evidence append FAILED: %v", id, evErr)
+				}
+				if _, pauseErr := store.Pause(id); pauseErr != nil {
+					log.Printf("[goal] %s: approve rollback: pause FAILED — the goal may sit active without a live drive (I6): %v", id, pauseErr)
+				}
 				writeGoalErr(w, err)
 				return
 			}

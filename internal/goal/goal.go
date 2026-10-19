@@ -101,6 +101,11 @@ var (
 	// generation is still unwinding. A typed conflict (HTTP 409) naming
 	// the state, never a generic 500 for a transient unwind.
 	ErrDriveConflict = errors.New("goal drive conflict")
+
+	// ErrApprovalIdentity is the typed rejection when a consume attempt
+	// does not match the armed grant's canonical action identity (the
+	// step, its tool and its objective) — v1.10.13 APPROVAL-IDENTITY.
+	ErrApprovalIdentity = errors.New("approval identity mismatch")
 )
 
 // ---------------------------------------------------------------------------
@@ -152,10 +157,28 @@ type PendingApproval struct {
 // a rejection clears it. The durable store stays the one approval
 // authority.
 type ApprovedAction struct {
-	ApprovalID string         `json:"approvalId"`
-	StepIdx    int            `json:"step"`
-	Args       map[string]any `json:"args,omitempty"`
-	GrantedAt  time.Time      `json:"grantedAt"`
+	ApprovalID string `json:"approvalId"`
+	StepIdx    int    `json:"step"`
+	// v1.10.13 APPROVAL-IDENTITY: the grant carries the envelope's full
+	// canonical identity — the tool that executes the step and the
+	// objective as it was parked — so a matching step index alone can
+	// never consume it.
+	ToolName  string         `json:"toolName,omitempty"`
+	Objective string         `json:"objective,omitempty"`
+	Args      map[string]any `json:"args,omitempty"`
+	GrantedAt time.Time      `json:"grantedAt"`
+}
+
+// ActionIdentity is the canonical identity of a goal-step action: the
+// exact plan step, the tool that executes it and its objective as the
+// approval envelope carried them. v1.10.13 APPROVAL-IDENTITY: an
+// approval binds to this identity — a matching step index alone never
+// consumes a grant, and a stale or mismatched consume attempt is a
+// typed rejection with no side effects.
+type ActionIdentity struct {
+	StepIdx   int
+	ToolName  string
+	Objective string
 }
 
 // Checkpoint is the durable compact state (spec §9): everything the next
@@ -238,6 +261,10 @@ type RunRequest struct {
 	StepIdx  int    // acting: the step being executed
 	Prompt   string
 	SystemID string
+	// SystemRevision is the revision the goal was frozen against at
+	// creation (v1.10.13 SYSTEM-REVISION): every phase request carries
+	// it so the run boundary can enforce the frozen-revision contract.
+	SystemRevision int
 }
 
 // RunOutcome is the objective result of one run. Text is the model's
@@ -743,9 +770,13 @@ func (s *Store) ResolveApproval(id, approvalID, decision string) (Goal, error) {
 		if decision == "approved" {
 			g.Status = StatusActive
 			if hasStep {
+				// The grant persists the envelope's FULL canonical identity
+				// (tool + objective included), not just the step index.
 				g.ApprovedAction = &ApprovedAction{
 					ApprovalID: g.PendingApproval.ApprovalID,
 					StepIdx:    step,
+					ToolName:   g.PendingApproval.ToolName,
+					Objective:  objectiveOf(g.PendingApproval),
 					Args:       g.PendingApproval.Args,
 					GrantedAt:  now,
 				}
@@ -785,23 +816,50 @@ func canonicalStepOf(pa *PendingApproval) (int, bool) {
 	return 0, false
 }
 
-// TakeApprovedAction consumes the ONE-USE approval grant for the exact
-// canonical step (v1.10.13, invariant I4). It returns granted=true
-// exactly once per approved decision: the grant for THIS step is
-// cleared atomically under the store lock, at the step boundary —
-// execution, not consultation. A mismatched step never consumes the
-// grant and has no side effects: the caller re-parks with a fresh
-// pending call.
-func (s *Store) TakeApprovedAction(id string, stepIdx int) (bool, error) {
+// objectiveOf extracts the canonical objective a goal-step pending
+// approval carries (Args["objective"], stored as a string at park
+// time). Anything but a string normalizes to the empty string.
+func objectiveOf(pa *PendingApproval) string {
+	if pa == nil {
+		return ""
+	}
+	obj, _ := pa.Args["objective"].(string)
+	return obj
+}
+
+// TakeApprovedAction consumes the ONE-USE approval grant for the EXACT
+// canonical action identity (v1.10.13, invariant I4 + APPROVAL-IDENTITY).
+// It returns granted=true exactly once per approved decision: the grant
+// is cleared atomically under the store lock, at the step boundary —
+// execution, not consultation.
+//
+// A mismatched identity — a different step, tool or objective than the
+// armed grant carries — is a typed ErrApprovalIdentity with NO side
+// effects: the grant survives, nothing is consumed, the durable document
+// is not rewritten. An absent grant (never armed, already consumed, or
+// cleared by a rejection) returns granted=false with no error — the
+// caller re-parks the step with a fresh pending call under the approval
+// policy; a repeated approval of the same pending action after
+// consumption is rejected typed at the resolve boundary (ErrInvalid).
+func (s *Store) TakeApprovedAction(id string, want ActionIdentity) (bool, error) {
 	granted := false
 	_, err := s.mutate(id, func(g *Goal) error {
-		if g.ApprovedAction != nil && g.ApprovedAction.StepIdx == stepIdx {
-			granted = true
-			g.ApprovedAction = nil
+		a := g.ApprovedAction
+		if a == nil {
+			return nil
 		}
+		if a.StepIdx != want.StepIdx || a.ToolName != want.ToolName || a.Objective != want.Objective {
+			return fmt.Errorf("%w: armed grant is %q step %d %q, the caller executes %q step %d %q",
+				ErrApprovalIdentity, a.ToolName, a.StepIdx, a.Objective, want.ToolName, want.StepIdx, want.Objective)
+		}
+		granted = true
+		g.ApprovedAction = nil
 		return nil
 	})
-	return granted, err
+	if err != nil {
+		return false, err
+	}
+	return granted, nil
 }
 
 // SettleDriveFailure parks a goal that lost its drive to an OBSERVED

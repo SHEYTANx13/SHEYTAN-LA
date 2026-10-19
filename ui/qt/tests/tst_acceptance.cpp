@@ -424,8 +424,22 @@ static void dumpGoalDiagnostics(const QString &endpoint, const QStringList &ids)
                                  .arg(id).arg(item.first)));
             continue;
         }
-        const QVariantMap g = QJsonDocument::fromJson(item.second).object()
-                                  .value("goal").toMap();
+        // QJsonValue has no toMap() (run #25 C2039 on both toolchains):
+        // parse → object check → value("goal") → object check → variant map.
+        // Every malformed path emits a named QWARN — never a silent empty map.
+        const QJsonDocument diag = QJsonDocument::fromJson(item.second);
+        if (!diag.isObject()) {
+            QWARN(qPrintable(QStringLiteral("goal %1 → diagnostics body is not a JSON object (bytes=%2)")
+                                 .arg(id).arg(item.second.size())));
+            continue;
+        }
+        const QJsonValue goalVal = diag.object().value(QStringLiteral("goal"));
+        if (!goalVal.isObject()) {
+            QWARN(qPrintable(QStringLiteral("goal %1 → diagnostics JSON carries no object 'goal' field")
+                                 .arg(id)));
+            continue;
+        }
+        const QVariantMap g = goalVal.toObject().toVariantMap();
         const auto ev = g.value("evidence").toList();
         QString lastEv;
         if (!ev.isEmpty()) {

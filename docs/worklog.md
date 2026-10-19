@@ -8,6 +8,18 @@ is carried in this header; a worklog-header version is a stale-claim
 hazard by construction).
 
 ---
+---
+Task ID: 25 (v1.10.13 run #25 cycle) — agent: compile unblock + residual Go repairs session; tree pinned at 2d07da6
+Task: fix the confirmed QJsonValue compile blocker in tst_acceptance.cpp, close the residual Go lifecycle gaps (approval identity binding, rollback error propagation, frozen-revision probe), prove locally what the sandbox can prove
+Work Log: tst_acceptance.cpp — dumpGoalDiagnostics: QJsonDocument parse → isObject → value("goal") → isObject → toObject().toVariantMap(); named QWARN on malformed JSON, missing goal, non-object goal; sweep confirmed the other 12 .toMap() calls are QVariant-based.
+goals.go — the ApprovalCheck caller builds goal.ActionIdentity{step, tool, objective} from the live plan and logs a typed grant rejection; resumeAndDrive + approve-restart compensations structured-log their failures (I3); goalRunFunc resolves via resolveGoalSystemSnapshot.
+goal.go — ApprovedAction carries ToolName+Objective; ActionIdentity type; objectiveOf; ErrApprovalIdentity; TakeApprovedAction(id, want) typed contract; RunRequest.SystemRevision; runner passes the frozen revision on all five phase requests.
+Tests — TestApprovalIdentityBindsExactAction (objective/tool mismatch → typed, no side effects, resolve replay typed), TestRunRequestsCarryFrozenRevision (every phase carries the frozen revision), TestGoalSystemRevisionFrozenContract (revised system → typed ErrInvalid, goal keeps rev 1); TestApprovedActionMismatchedStepNotConsumed strengthened to the typed contract; all deterministic, channel/poll-based.
+Local — go build ./... green; go test -race ./internal/goal (1.2s) and ./internal/api (119.5s) green; gofmt clean; CMake project() 1.10.6→1.10.13.
+NOT RUN locally — the Qt host build and the Qt acceptance suite (the sandbox has no Qt/CMake and no root to install them); the hosted run must carry that proof or the cycle stays honest-red.
+Future work (scope unchanged): CI restructuring, Qt suite splitting, revision-addressed snapshot history in the systems store.
+
+---
 Task ID: 3 (v1.10.13 final cycle) — agent: Go source repair session; tree pinned at fa6afd1
 Task: repair the four verified Go defects named by run 39243477114 (Linux 16 passed / 2 failed: "goal resume failed (status 500)",
 park timeout with zero diagnostics; Windows exit 2, empty captures), capture the Windows report, encode the never-again invariants

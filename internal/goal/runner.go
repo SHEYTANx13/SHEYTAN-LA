@@ -172,7 +172,7 @@ func driveUnderstanding(ctx context.Context, store *Store, runs RunFunc, goalID 
 	g, _ := store.Get(goalID)
 	out, err := runs(ctx, RunRequest{
 		GoalID: goalID, Phase: PhaseUnderstanding,
-		Prompt: understandingPrompt(g.OriginalGoal), SystemID: g.SystemID,
+		Prompt: understandingPrompt(g.OriginalGoal), SystemID: g.SystemID, SystemRevision: g.SystemRevision,
 	})
 	if err != nil {
 		_, _ = store.AppendEvidence(goalID, Evidence{
@@ -193,7 +193,7 @@ func drivePlanning(ctx context.Context, store *Store, runs RunFunc, goalID strin
 	g, _ := store.Get(goalID)
 	out, err := runs(ctx, RunRequest{
 		GoalID: goalID, Phase: PhasePlanning,
-		Prompt: planningPrompt(g.OriginalGoal), SystemID: g.SystemID,
+		Prompt: planningPrompt(g.OriginalGoal), SystemID: g.SystemID, SystemRevision: g.SystemRevision,
 	})
 	if err != nil {
 		_, _ = store.AppendEvidence(goalID, Evidence{
@@ -250,7 +250,7 @@ func driveActing(ctx context.Context, store *Store, runs RunFunc, goalID string,
 		}
 		out, err := runs(ctx, RunRequest{
 			GoalID: goalID, Phase: "replanning",
-			Prompt: replanPrompt(g.OriginalGoal, g.Plan, blockedIdx), SystemID: g.SystemID,
+			Prompt: replanPrompt(g.OriginalGoal, g.Plan, blockedIdx), SystemID: g.SystemID, SystemRevision: g.SystemRevision,
 		})
 		if err != nil {
 			_, _ = store.AppendEvidence(goalID, Evidence{
@@ -330,7 +330,7 @@ func driveActing(ctx context.Context, store *Store, runs RunFunc, goalID string,
 
 	out, err := runs(ctx, RunRequest{
 		GoalID: goalID, Phase: PhaseActing, StepIdx: next,
-		Prompt: stepPrompt(g.OriginalGoal, g.Plan, next), SystemID: g.SystemID,
+		Prompt: stepPrompt(g.OriginalGoal, g.Plan, next), SystemID: g.SystemID, SystemRevision: g.SystemRevision,
 	})
 	if err != nil {
 		// A recoverable tool failure does NOT destroy the whole goal:
@@ -360,7 +360,7 @@ func driveVerifying(ctx context.Context, store *Store, runs RunFunc, goalID stri
 	g, _ := store.Get(goalID)
 	out, err := runs(ctx, RunRequest{
 		GoalID: goalID, Phase: PhaseVerifying,
-		Prompt: verifyPrompt(g.OriginalGoal, g.Plan), SystemID: g.SystemID,
+		Prompt: verifyPrompt(g.OriginalGoal, g.Plan), SystemID: g.SystemID, SystemRevision: g.SystemRevision,
 	})
 	if err != nil {
 		_, _ = store.SetVerification(goalID, false, "verification run failed: "+err.Error())

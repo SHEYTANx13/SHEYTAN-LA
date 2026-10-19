@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aisystem"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/goal"
 )
 
@@ -411,5 +412,58 @@ func TestGoalApproveConsumesGrantExactlyOnce(t *testing.T) {
 	}
 	if got.PendingApproval != nil {
 		t.Fatalf("pending approval survived execution: %+v", got.PendingApproval)
+	}
+}
+
+// TestGoalSystemRevisionFrozenContract pins the v1.10.13 SYSTEM-REVISION
+// probe: a goal created against revision 1 keeps that frozen revision
+// across phases, and once the system is revised the run boundary fails
+// TYPED (goal.ErrInvalid) — it never silently runs against different
+// instructions, and the durable goal document is never rewritten to the
+// store's current revision.
+func TestGoalSystemRevisionFrozenContract(t *testing.T) {
+	srv, _ := newRemoteServerWithHandle(t, "http://127.0.0.1:1") // the engine is never reached
+
+	sys, err := srv.systemsStore().Create(aisystem.System{
+		Name:         "revision fixture",
+		Instructions: "frozen instructions",
+	})
+	if err != nil {
+		t.Fatalf("systems Create: %v", err)
+	}
+
+	g, err := srv.goalStore().Create("revision contract fixture", "sess", sys.SystemID, 1, "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if g.SystemID != sys.SystemID || g.SystemRevision != 1 {
+		t.Fatalf("goal froze systemId=%q revision=%d, want %q revision 1", g.SystemID, g.SystemRevision, sys.SystemID)
+	}
+
+	// While the store still holds revision 1, the snapshot resolves.
+	if _, err := srv.resolveGoalSystemSnapshot(g.SystemID, g.SystemRevision); err != nil {
+		t.Fatalf("matching revision must resolve: %v", err)
+	}
+
+	// Revise the system → revision 2. The durable goal KEEPS revision 1.
+	if _, err := srv.systemsStore().Update(sys.SystemID, func(u *aisystem.System) error {
+		u.Instructions = "REVISED instructions"
+		return nil
+	}); err != nil {
+		t.Fatalf("systems Update: %v", err)
+	}
+	got, err := srv.goalStore().Get(g.GoalID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.SystemRevision != 1 {
+		t.Fatalf("the goal must keep its frozen revision across phases: got %d, want 1", got.SystemRevision)
+	}
+
+	// The run boundary refuses the revised system TYPED — the frozen
+	// revision is never silently substituted with the current one.
+	_, err = srv.resolveGoalSystemSnapshot(g.SystemID, got.SystemRevision)
+	if err == nil || !errors.Is(err, goal.ErrInvalid) {
+		t.Fatalf("revised system = %v; want typed goal.ErrInvalid (frozen-revision contract)", err)
 	}
 }

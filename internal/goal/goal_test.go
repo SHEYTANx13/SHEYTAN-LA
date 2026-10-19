@@ -2,6 +2,7 @@ package goal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -449,4 +450,94 @@ func TestListOrderingDeterministic(t *testing.T) {
 
 func timeNow() time.Time {
 	return time.Now().UTC()
+}
+
+// TestApprovalIdentityBindsExactAction pins v1.10.13 APPROVAL-IDENTITY:
+// the grant is consumed only for the EXACT canonical identity — the same
+// step index with a different objective (or a different tool) is a typed
+// rejection with no side effects; a repeated decision for the same
+// pending action after consumption is a typed rejection at the resolve
+// boundary and never re-arms the grant.
+func TestApprovalIdentityBindsExactAction(t *testing.T) {
+	store := openStore(t)
+	g, err := store.Create("identity fixture", "s1", "", 0, "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	pa := &PendingApproval{
+		ApprovalID:  "apr-identity-1",
+		ToolName:    "goal.step",
+		Args:        map[string]any{"step": 1, "objective": "write the report"},
+		Risk:        "workspace-write",
+		Reason:      "fixture policy",
+		RequestedAt: time.Now().UTC(),
+	}
+	if _, err := store.RequestApproval(g.GoalID, pa); err != nil {
+		t.Fatalf("RequestApproval: %v", err)
+	}
+	if _, err := store.ResolveApproval(g.GoalID, "apr-identity-1", "approved"); err != nil {
+		t.Fatalf("ResolveApproval(approve): %v", err)
+	}
+
+	// Same step index, DIFFERENT objective → typed rejection; the old
+	// step-index-only contract consumed the grant here.
+	granted, err := store.TakeApprovedAction(g.GoalID, ActionIdentity{StepIdx: 1, ToolName: "goal.step", Objective: "a DIFFERENT objective"})
+	if err == nil || !errors.Is(err, ErrApprovalIdentity) || granted {
+		t.Fatalf("objective mismatch = (%v, %v); want false, typed ErrApprovalIdentity", granted, err)
+	}
+	// Different tool → typed rejection too.
+	granted, err = store.TakeApprovedAction(g.GoalID, ActionIdentity{StepIdx: 1, ToolName: "other.tool", Objective: "write the report"})
+	if err == nil || !errors.Is(err, ErrApprovalIdentity) || granted {
+		t.Fatalf("tool mismatch = (%v, %v); want false, typed ErrApprovalIdentity", granted, err)
+	}
+	// No side effects: the exact identity still consumes afterwards —
+	// the mismatches never touched the durable document.
+	granted, err = store.TakeApprovedAction(g.GoalID, ActionIdentity{StepIdx: 1, ToolName: "goal.step", Objective: "write the report"})
+	if err != nil || !granted {
+		t.Fatalf("exact identity after mismatches = (%v, %v); want true, nil (no side effects)", granted, err)
+	}
+
+	// Decision replay: approving the SAME pending action again after
+	// consumption is a typed rejection with no side effects — the grant
+	// was one-use and the pending call is gone.
+	if _, err := store.ResolveApproval(g.GoalID, "apr-identity-1", "approved"); err == nil {
+		t.Fatal("replayed approval after consumption = nil error; want a typed rejection")
+	} else if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("replayed approval error = %v; want ErrInvalid", err)
+	}
+	if got, _ := store.Get(g.GoalID); got.ApprovedAction != nil {
+		t.Fatalf("replayed approval re-armed the grant: %+v", got.ApprovedAction)
+	}
+}
+
+// TestRunRequestsCarryFrozenRevision pins v1.10.13 SYSTEM-REVISION: a
+// goal created against revision 7 of a system keeps that frozen revision
+// across EVERY phase request — the runner reads the durable document,
+// never the store's current revision, so the run boundary can enforce
+// the frozen-revision contract.
+func TestRunRequestsCarryFrozenRevision(t *testing.T) {
+	store := openStore(t)
+	log := &runLog{}
+	runs := scriptedRuns(map[string]string{
+		PhaseUnderstanding: "understood",
+		PhasePlanning:      `["step A", "step B"]`,
+		PhaseActing:        "step executed",
+		PhaseVerifying:     "verified",
+	}, true, log)
+
+	g, err := store.Create("frozen revision journey", "sess-1", "sys-frozen", 7, "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := Drive(context.Background(), store, g.GoalID, runs, RunnerOptions{}); err != nil {
+		t.Fatalf("Drive: %v", err)
+	}
+	if len(log.requests) == 0 {
+		t.Fatal("no phase requests were recorded")
+	}
+	for _, req := range log.requests {
+		if req.SystemID != "sys-frozen" || req.SystemRevision != 7 {
+			t.Fatalf("phase %q request carried systemId=%q revision=%d, want sys-frozen revision 7 (the frozen identity rides EVERY phase)", req.Phase, req.SystemID, req.SystemRevision)
+		}
+	}
 }

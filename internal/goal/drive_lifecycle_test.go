@@ -127,15 +127,16 @@ func TestApprovedActionConsumedExactlyOnce(t *testing.T) {
 	if got.ApprovedAction == nil {
 		t.Fatal("approve did not arm the ONE-USE grant (ApprovedAction nil)")
 	}
-	if got.ApprovedAction.StepIdx != 0 || got.ApprovedAction.ApprovalID != g.GoalID+"-step-0" {
-		t.Fatalf("armed grant = %+v, want the exact canonical action (step 0, its approvalId)", got.ApprovedAction)
+	if got.ApprovedAction.StepIdx != 0 || got.ApprovedAction.ApprovalID != g.GoalID+"-step-0" ||
+		got.ApprovedAction.ToolName != "goal.step" || got.ApprovedAction.Objective != "fixture step" {
+		t.Fatalf("armed grant = %+v, want the exact canonical identity (step 0, its approvalId, tool and objective)", got.ApprovedAction)
 	}
 
-	first, err := s.TakeApprovedAction(g.GoalID, 0)
+	first, err := s.TakeApprovedAction(g.GoalID, ActionIdentity{StepIdx: 0, ToolName: "goal.step", Objective: "fixture step"})
 	if err != nil || !first {
 		t.Fatalf("first TakeApprovedAction(0) = %v, %v; want true, nil", first, err)
 	}
-	second, err := s.TakeApprovedAction(g.GoalID, 0)
+	second, err := s.TakeApprovedAction(g.GoalID, ActionIdentity{StepIdx: 0, ToolName: "goal.step", Objective: "fixture step"})
 	if err != nil || second {
 		t.Fatalf("second TakeApprovedAction(0) = %v, %v; want false, nil (one-use)", second, err)
 	}
@@ -159,9 +160,11 @@ func TestApprovedActionMismatchedStepNotConsumed(t *testing.T) {
 		t.Fatalf("ResolveApproval: %v", err)
 	}
 
-	ok, err := s.TakeApprovedAction(g.GoalID, 1)
-	if err != nil || ok {
-		t.Fatalf("TakeApprovedAction(1) = %v, %v; want false, nil (mismatched step)", ok, err)
+	// v1.10.13 APPROVAL-IDENTITY: a mismatched step is a TYPED rejection
+	// with no side effects (the old code silently returned false, nil).
+	ok, err := s.TakeApprovedAction(g.GoalID, ActionIdentity{StepIdx: 1, ToolName: "goal.step", Objective: "fixture step"})
+	if err == nil || !errors.Is(err, ErrApprovalIdentity) || ok {
+		t.Fatalf("TakeApprovedAction(step 1) = %v, %v; want false, typed ErrApprovalIdentity (mismatched step)", ok, err)
 	}
 	got, _ := s.Get(g.GoalID)
 	if got.ApprovedAction == nil || got.ApprovedAction.StepIdx != 0 {
@@ -232,7 +235,7 @@ func TestApprovedGrantSurvivesReload(t *testing.T) {
 	if got.ApprovedAction == nil || got.ApprovedAction.StepIdx != 0 {
 		t.Fatalf("grant after reload = %+v, want the durable step-0 grant", got.ApprovedAction)
 	}
-	ok, err := s2.TakeApprovedAction(g.GoalID, 0)
+	ok, err := s2.TakeApprovedAction(g.GoalID, ActionIdentity{StepIdx: 0, ToolName: "goal.step", Objective: "fixture step"})
 	if err != nil || !ok {
 		t.Fatalf("post-reload TakeApprovedAction(0) = %v, %v; want true, nil", ok, err)
 	}
