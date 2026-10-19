@@ -11,6 +11,19 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.10.13 (cycle 2) — 2026-10-19 — run #23 verdict quoted + the L-QPA / L-CTEST / W-ANN-ORDER / T-INTEGRITY repairs
+Run 39129668510 ("Build Desktop" #23, commit 161ea36b): "audit job green"; Windows steps 1-23 green; Linux steps 1-16 green;
+Windows acceptance "failed with exit code 2", Linux acceptance "failed with exit code 134" + "no FAIL lines captured" — both quoted anonymously.
+L-QPA: restored export QT_QPA_PLATFORM=offscreen — the W-UIBIN deletion hunk removed BOTH Linux exports in one touch (the dead
+SHEYTAN_UI_BIN AND the live platform export); a QGuiApplication headless without it dies on no-display qFatal → 134, zero FAILs.
+L-CTEST: removed the masked `ctest --test-dir ui/qt/build --output-on-failure || true` — EMPTY suite (no enable_testing/add_test) masked by || true.
+W-ANN-ORDER+R-UNBUF: signal-first gate tail (FAIL-class lines first, prelude last — run #23 spent the whole 10-slot cap on the 8-line
+prelude), failing slot names mirrored into the uncapped job summary, stdbuf -o0 -e0 + separate stderr capture on Linux.
+T-INTEGRITY: the false "drives the REAL Main.qml" claim re-labeled in code (layer A: CoreClient/IPC integration, no QML loaded);
+ONE bounded genuine-QML slot added — qmlLoadsCleanly: real engine, production Main.qml, root object asserted, offscreen/software.
+
+---
+
 ## v1.10.13 (cycle) — 2026-10-18 — run #22 verdict quoted + the four hosted-defect repairs (W-UIBIN, W-SUM127, W-PIPE, L-E2E)
 Run 39115765789 ("Build Desktop" #22, commit 070bc61): "audit job green (2m 32s)"; Windows steps 1-21 green; Linux steps 1-16 green;
 Windows step 22 "Process completed with exit code 1"; Linux step 27 "Process completed with exit code 127"; E2E

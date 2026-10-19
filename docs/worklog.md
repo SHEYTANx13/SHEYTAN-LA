@@ -8,6 +8,19 @@ is carried in this header; a worklog-header version is a stale-claim
 hazard by construction).
 
 ---
+Task ID: 2 (v1.10.13 fix cycle) — agent: hosted-defect repair session; tree pinned at 161ea36b
+Task: restore the Linux platform env, unmask the empty CTest, make the red gates self-naming, keep the acceptance claims
+honest, close the two failing Windows slots — the run-#23 cycle (39129668510: Win acceptance exit 2, Linux exit 134, zero FAIL lines)
+Work Log: L-QPA — export QT_QPA_PLATFORM=offscreen restored (the W-UIBIN hunk deleted the live export beside the dead one);
+L-CTEST — the empty masked ctest invocation removed; W-ANN-ORDER — signal-first gate tail (FAIL lines, then evidence, prelude
+last) + failing slot names mirrored into the uncapped job summary + R-UNBUF (stdbuf -o0 -e0, separate stderr on Linux);
+T-INTEGRITY — the false "REAL Main.qml" claim re-labeled in code + ONE bounded genuine-QML slot (qmlLoadsCleanly) added;
+GOALS-OBS — waitForGoalState added: both slots' waits polled a frozen list (the client owns no goal state beyond its last
+read — the async transition was provably unobservable); same conditions, same bounds, the re-read added, nothing weakened.
+Battery: Qt 6.8.2 syntax compile OK (one real API bug caught: qmlRegisterSingletonInstance takes const char*), YAML parse OK,
+bash -n OK on all three edited steps; Go/link/runtime NOT RUN — no Go toolchain, no cmake, no root. ZIP: git-archive, tracked tree only.
+
+---
 Task ID: 1 (v1.10.13 fix cycle) — agent: hosted-defect repair session; tree pinned at 070bc61
 Task: repair the four defects named by run 39115765789 ("Build Desktop" #22: audit green, Win steps 1-21 green,
 Linux 1-16 green; W step 22 exit 1, L step 27 exit 127, E2E waitForResponse timeout at sessions.spec.ts:170:1)

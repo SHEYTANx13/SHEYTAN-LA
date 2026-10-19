@@ -1177,6 +1177,10 @@ jobs:
           $env:SHEYTAN_REPO = (Get-Location).Path
           $env:SHEYTAN_CORE_BIN = (Resolve-Path $core).Path
           $env:QT_QPA_PLATFORM = "offscreen"
+          # v1.10.13 T-INTEGRITY: load-bearing for the qmlLoadsCleanly slot —
+          # the software scene graph renders without a GL context under
+          # offscreen (the Linux acceptance and smoke steps pin the same).
+          $env:QT_QUICK_BACKEND = "software"
           # v1.10.13 D1: SHEYTAN_UI_BIN deleted — the harness reads it only
           # into Q_UNUSED (ui/qt/tests/tst_acceptance.cpp), and the Linux-only
           # Resolve-Path target threw a terminating error before the try/catch
@@ -1203,6 +1207,7 @@ jobs:
               "exe size: $((Get-Item $acc).Length)",
               "exe LastWriteTime: $((Get-Item $acc).LastWriteTime)",
               "QT_QPA_PLATFORM: $env:QT_QPA_PLATFORM",
+              "QT_QUICK_BACKEND: $env:QT_QUICK_BACKEND",
               "SHEYTAN_CORE_BIN: $env:SHEYTAN_CORE_BIN",
               "SHEYTAN_CORE_BIN exists: $(Test-Path $env:SHEYTAN_CORE_BIN)"
             )
@@ -1225,6 +1230,17 @@ jobs:
           }
           if ($accExit -ne 0) {
             Add-Content "ci-logs/gate-order.txt" "FAIL Qt live-answer acceptance"
+            # v1.10.13 W-ANN-ORDER: the log itself carries the evidence the
+            # anonymous reader needs — first the empty-capture fact (run #23
+            # captured ZERO process output despite a completed run), then the
+            # exit-code contract. The failure summary below greps these
+            # classes FIRST; the prelude lines follow, never lead.
+            if ((-not (Test-Path $outLog)) -or ((Get-Item $outLog -ErrorAction SilentlyContinue).Length -eq 0)) {
+              if ((-not (Test-Path $errLog)) -or ((Get-Item $errLog -ErrorAction SilentlyContinue).Length -eq 0)) {
+                Add-Content $accLog "acceptance output captures were empty (stdout AND stderr zero-length) — the binary exited $accExit with no captured output"
+              }
+            }
+            Add-Content $accLog "acceptance exit code $accExit (QTEST_MAIN contract: exit == the number of failed test functions, capped at 127; 0 = all passed; 134 = killed by SIGABRT, a crash class)"
             Write-Host "::error::Qt live-answer acceptance failed with exit code $accExit (log: $accLog)"
             throw "[gate] windows qt acceptance failed with exit code $accExit (log: $accLog)."
           }
@@ -1731,7 +1747,13 @@ jobs:
             $l -match 'CMake Error' -or
             $l -match '^FAILED: ' -or
             $l -match 'ninja: build stopped' -or
-            $l -match '^acceptance (launch failed|produced no output)'
+            $l -match '^acceptance (launch failed|produced no output)' -or
+            # v1.10.13 W-ANN-ORDER: the acceptance evidence lines the gate
+            # step writes on failure, plus the crash classes — an abort must
+            # name its site (the run #23 Linux class died with zero FAIL
+            # lines; the stderr now carries the qFatal/glibc message).
+            $l -match '^acceptance (exit code|output captures)' -or
+            $l -match '^Fatal|^Aborted|terminate called|core dumped|QFATAL'
           }
           foreach ($log in Get-ChildItem "ci-logs" -Filter "*.log" -ErrorAction SilentlyContinue) {
             $raw = @(Get-Content $log.FullName -ErrorAction SilentlyContinue)
@@ -1744,10 +1766,41 @@ jobs:
             $lines += '```'
           }
 
+          # v1.10.13 W-ANN-ORDER: mirror the FAILING SLOT NAMES and the first
+          # FAIL! lines of the failing gate into the job SUMMARY — the summary
+          # is public and uncapped; the 10-per-step annotation budget is
+          # spent on failure lines first, the slot names ride here forever.
+          if ($failingGate) {
+            $slotGateLog = $gateLogMap[$failingGate]
+            if ($slotGateLog -and (Test-Path $slotGateLog)) {
+              $gateLines = @(Get-Content $slotGateLog -ErrorAction SilentlyContinue | ForEach-Object { Redact-Anonymous $_ })
+              # QtTest emits "FAIL!  : tst_acceptance::slotName()" — the
+              # capture must cross the :: namespace separator.
+              $slotNames = @($gateLines | Where-Object { $_ -match '^FAIL!\s*:\s*([A-Za-z0-9_:]+)\(' } | ForEach-Object { $_ -replace '^FAIL!\s*:\s*([A-Za-z0-9_:]+)\(.*$', '$1' } | Select-Object -Unique)
+              $firstFails = @($gateLines | Where-Object { & $errClasses $_ } | Select-Object -First 8)
+              if ($slotNames.Count -gt 0) {
+                $lines += ""
+                $lines += "### Failing test slots — $failingGate"
+                $lines += ($slotNames | ForEach-Object { "- $_" })
+                $lines += ""
+                $lines += '```'
+                $lines += $firstFails
+                $lines += '```'
+              }
+            }
+          }
+
           Add-Content -Path $summaryPath -Value ($lines -join [Environment]::NewLine)
 
           # v1.10.13 W-VIS: failing-gate annotations (anonymous, redacted,
           # capped — emitted FIRST so a cap drop can never hide them).
+          # v1.10.13 W-ANN-ORDER (run #23): the gate tail is SIGNAL-FIRST.
+          # Run #23 emitted the gate name and then the log's LAST 12 lines —
+          # which were the 9-line process-facts prelude (the process captures
+          # were empty), so the prelude consumed the entire 10-per-step cap
+          # and not one FAIL line surfaced. The order is now: (a) the gate
+          # name, (b) FAIL-class evidence lines, (c) remaining evidence,
+          # (d) prelude lines LAST — a cap drop can then only hide prelude.
           $gateEmitted = 0
           if ($tracked) {
             if ($failingGate) {
@@ -1755,11 +1808,20 @@ jobs:
               $gateEmitted++
               $gateLog = $gateLogMap[$failingGate]
               if ($gateLog -and (Test-Path $gateLog)) {
-                $tail = @(Get-Content $gateLog -ErrorAction SilentlyContinue |
+                $all = @(Get-Content $gateLog -ErrorAction SilentlyContinue |
                   ForEach-Object { Redact-Anonymous $_ } |
-                  Where-Object { $_.Trim().Length -gt 0 } |
-                  Select-Object -Last 12)
-                foreach ($line in $tail) {
+                  Where-Object { $_.Trim().Length -gt 0 })
+                $failTail = @($all | Where-Object { & $errClasses $_ })
+                $isPrelude = {
+                  param([string]$l)
+                  $l -match '^=== (Process Facts|Process Output) ===$' -or
+                  $l -match '^(exe|exe exists|exe size|exe LastWriteTime|QT_QPA_PLATFORM|QT_QUICK_BACKEND|SHEYTAN_CORE_BIN|SHEYTAN_CORE_BIN exists):'
+                }
+                $preludeTail = @($all | Where-Object { & $isPrelude $_ })
+                $midTail = @($all | Where-Object {
+                  (-not ($failTail -contains $_)) -and (-not ($preludeTail -contains $_))
+                })
+                foreach ($line in @($failTail + $midTail + $preludeTail)) {
                   if ($gateEmitted -ge 10) { break }
                   $msg = $line
                   if ($msg.Length -gt 250) { $msg = $msg.Substring(0, 247) + "..." }
@@ -2325,7 +2387,16 @@ jobs:
 
           test -x ui/qt/build/sheytan-ui
           test -x ui/qt/build/sheytan-ui-acceptance
-          ctest --test-dir ui/qt/build --output-on-failure || true
+          # v1.10.13 L-CTEST (run #23): the former
+          # `ctest --test-dir ui/qt/build --output-on-failure || true` ran
+          # an EMPTY suite — ui/qt/CMakeLists.txt registers no tests (no
+          # enable_testing()/add_test()) — and the || true masked even
+          # that: a green-fabrication of the W-PIPE class. No test
+          # invocation may stand here unless it is both real and strict;
+          # the acceptance binary is gated directly, separately and
+          # strictly by the "Qt live-answer acceptance" step below, so
+          # the empty masked call is removed rather than registered
+          # twice.
 
           cp ui/qt/build/sheytan-ui "dist/linux/app/${LINUX_PKG_ROOT}/sheytan-ui"
           cp ui/qt/build/sheytan-ui-acceptance "$RUNNER_TEMP/sheytan-ui-acceptance"
@@ -2488,7 +2559,20 @@ jobs:
 
           export SHEYTAN_REPO="$(pwd)"
           export SHEYTAN_CORE_BIN="$(pwd)/dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent"
-          # v1.10.13 D1: SHEYTAN_UI_BIN export deleted — dead config (Q_UNUSED
+          # v1.10.13 L-QPA (run #23, exit 134 = SIGABRT with zero FAIL
+          # lines): the W-UIBIN deletion hunk removed BOTH exports in one
+          # touch — the dead SHEYTAN_UI_BIN AND the LIVE platform export
+          # beside it. A QTEST_MAIN/QGuiApplication binary on a headless
+          # runner without QT_QPA_PLATFORM selects xcb, dies on the
+          # no-display qFatal and aborts before a single test function
+          # runs. Run #1 is the proof: with this export present the Linux
+          # acceptance RAN and exited 2 — real failures, not a crash.
+          export QT_QPA_PLATFORM=offscreen
+          # v1.10.13 T-INTEGRITY: load-bearing for the qmlLoadsCleanly
+          # slot — the software scene graph renders without a GL context
+          # under offscreen (the same env the smoke step pins below).
+          export QT_QUICK_BACKEND=software
+          # v1.10.13 D1: SHEYTAN_UI_BIN stays deleted — dead config (Q_UNUSED
           # in the acceptance harness); same touch as the Windows pin removal.
           export LD_LIBRARY_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           export QT_QPA_PLATFORM_PLUGIN_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/plugins/platforms"
@@ -2497,12 +2581,26 @@ jobs:
           # (pipefail), resetting PIPESTATUS to 0 and recording a FAILED
           # acceptance as gate OK — a green-fabrication hazard. The exit is
           # now read before errexit is re-enabled.
+          # v1.10.13 R-UNBUF: stdbuf -o0 keeps QtTest's piped stdout
+          # line-flushed so an abort can no longer erase the FAIL evidence
+          # already written, and stderr is captured SEPARATELY in
+          # linux-qt-acceptance.err.log — an abort's glibc/qFatal message
+          # (the run-#23 class that died with zero FAIL lines) now lands in
+          # its own durable file and is named by the failure summary below.
           set +e
-          "$RUNNER_TEMP/sheytan-ui-acceptance" 2>&1 | tee ci-logs/linux-qt-acceptance.log
+          stdbuf -o0 -e0 "$RUNNER_TEMP/sheytan-ui-acceptance" \
+            2> ci-logs/linux-qt-acceptance.err.log \
+            | tee ci-logs/linux-qt-acceptance.log
           accExit=${PIPESTATUS[0]}
           set -e
           if [ "$accExit" -ne 0 ]; then
             echo "FAIL Qt live-answer acceptance" >> ci-logs/gate-order.txt
+            if [ ! -s ci-logs/linux-qt-acceptance.log ] && [ ! -s ci-logs/linux-qt-acceptance.err.log ]; then
+              echo "acceptance output captures were empty (stdout AND stderr zero-length) — the binary exited $accExit with no captured output" >> ci-logs/linux-qt-acceptance.log
+            fi
+            # The exit-code contract, into the log itself so the summary
+            # and the gate tail carry it to the anonymous reader.
+            echo "acceptance exit code $accExit (QTEST_MAIN contract: exit == the number of failed test functions, capped at 127; 0 = all passed; 134 = killed by SIGABRT, a crash class)" >> ci-logs/linux-qt-acceptance.log
             echo "::error::Qt live-answer acceptance failed with exit code $accExit (log: ci-logs/linux-qt-acceptance.log)"
             exit $accExit
           fi
@@ -2537,12 +2635,20 @@ jobs:
           }
 
           accLog="ci-logs/linux-qt-acceptance.log"
+          # v1.10.13 R-UNBUF: stderr is a separate capture now — an abort's
+          # qFatal/glibc message lives there even when stdout tore.
+          accErr="ci-logs/linux-qt-acceptance.err.log"
+          # v1.10.13 W-ANN-ORDER (Linux half): the classes grow the abort
+          # evidence (qFatal/terminate/Aborted/core dumped) and the exit-code
+          # contract lines so a crash names its actual site, never "no FAIL
+          # lines" alone. Errors-only, capped, D1.
+          failClasses='(^FAIL!|^Totals:.*failed|^--- FAIL|QVERIFY|QCOMPARE|QFATAL|^Fatal|^Aborted|terminate called|core dumped|^acceptance (exit code|output captures))'
           gateOrder="ci-logs/gate-order.txt"
           accStarted=false
           if [ -f "$gateOrder" ] && grep -q 'RUN Qt live-answer acceptance' "$gateOrder" 2>/dev/null; then
             accStarted=true
           fi
-          if [ ! -f "$accLog" ] && [ "$accStarted" = false ]; then
+          if [ ! -f "$accLog" ] && [ ! -f "$accErr" ] && [ "$accStarted" = false ]; then
             {
               echo ""
               echo "### Live-answer acceptance: NEVER STARTED"
@@ -2552,18 +2658,18 @@ jobs:
             emit "The live-answer acceptance never started — the failure is upstream (read the red step above)"
             exit 0
           fi
-          if [ -f "$accLog" ]; then
+          if [ -f "$accLog" ] || [ -f "$accErr" ]; then
             {
               echo ""
               echo "### linux-qt-acceptance.log — failing test names"
               echo '```'
-              grep -E '(^FAIL!|^Totals:.*failed|^--- FAIL|QVERIFY|QCOMPARE|QFATAL)' "$accLog" | head -60 || true
+              cat "$accLog" "$accErr" 2>/dev/null | grep -aE "$failClasses" | head -60 || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY" || true
 
             while IFS= read -r line; do
               emit "linux-qt-acceptance: $line"
-            done < <(grep -E '(^FAIL!|^Totals:.*failed|^--- FAIL|QVERIFY|QCOMPARE|QFATAL)' "$accLog" | head -10 || true)
+            done < <(cat "$accLog" "$accErr" 2>/dev/null | grep -aE "$failClasses" | head -10 || true)
           else
             emit "Qt live-answer acceptance failed with no log captured (see ci-logs/ directory in artifact)"
           fi

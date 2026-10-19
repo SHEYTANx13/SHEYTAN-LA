@@ -1,13 +1,25 @@
-// tst_acceptance.cpp — Qt UI + real Go-core interaction acceptance.
+// tst_acceptance.cpp — acceptance suite, honestly labeled (v1.10.13 T-INTEGRITY).
 //
-// Drives the REAL Main.qml through a REAL CoreClient against a REAL core
-// executable with a deterministic fixture engine:
+// LAYER A — CoreClient/IPC integration (the proven surface of every slot
+// below except one): the REAL core executable over the REAL local IPC
+// channel with the deterministic fixture engine:
 //   handshake → session create → send → live text grows while Stop is
 //   visible → exactly one terminal settle → transcript reload (persisted
 //   assistant answer, live bubble gone, composer unlocked) → repeat send
-//   works → clean close via QML window close.
-//   Plus the v1.10.2 AI Systems surface: list (seeded default), typed
-//   activation, and the typed 404 error path — all through /api/systems.
+//   works → clean close. Plus the AI Systems surface, the Goals surface
+//   (/api/goals list/control/decisions) and the byte-level framing and
+//   contract suite. Every Layer-A slot drives CoreClient DIRECTLY — no
+//   QML is loaded by these slots. The former header claim "drives the
+//   REAL Main.qml" was FALSE (QQmlApplicationEngine was included but
+//   never constructed) and is re-labeled by this comment; nothing else
+//   about the suite changed.
+// LAYER B — genuine QML, bounded to what the budget allows (v1.10.13):
+//   qmlLoadsCleanly is the ONE QML slot: a real QQmlApplicationEngine
+//   loads the production Main.qml (the exact file the sheytan-ui host
+//   ships) offscreen and asserts object creation. The full interactive
+//   QML acceptance — composer → live bubble → settle → persistence
+//   through real QML controls — remains FUTURE WORK and is never
+//   claimed by this suite.
 //
 // No mocks: the core is the production binary; only the LLM backend is the
 // deterministic fixture (scripts/fake-remote-engine.py).
@@ -21,6 +33,8 @@
 #include <QTemporaryDir>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QUrl>
 #include <QRegularExpression>
 #include <QSet>
 #include <QTimer>
@@ -46,6 +60,10 @@ private slots:
     void goalsListFieldContract();
     void goalsStartPauseResumeCancelRoundTrip();
     void goalsApproveRejectParkedGoal();
+    // v1.10.13 T-INTEGRITY (layer B): the ONE genuine-QML slot — the
+    // production Main.qml loads in a real engine, offscreen, and creates
+    // its root object. The interactive QML journey is future work.
+    void qmlLoadsCleanly();
     // v1.10.3 framing + contract suite (byte-level CoreClient rules against
     // a raw hand-written HTTP fake; the REAL-core slots above prove live
     // behavior, these prove the framing/handshake/encoding contract):
@@ -63,6 +81,13 @@ private slots:
 
 private:
     bool waitFor(const std::function<bool()> &cond, int timeoutMs = 30000);
+    // v1.10.13 Goals observability: the client owns NO goal state beyond
+    // its last read (the coreclient.cpp contract), and the drive mutates
+    // the durable store ASYNCHRONOUSLY — an async transition is observable
+    // only by RE-READING the authoritative list. Same deadline discipline
+    // as waitFor; conditions and bounds unchanged, nothing weakened.
+    bool waitForGoalState(CoreClient *core, const std::function<bool()> &cond,
+                          int timeoutMs);
     QProcess *m_engine = nullptr;
     QProcess *m_core = nullptr;
     QString m_endpoint;
@@ -75,6 +100,34 @@ bool Acceptance::waitFor(const std::function<bool()> &cond, int timeoutMs) {
     while (QDateTime::currentMSecsSinceEpoch() < deadline) {
         QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
         if (cond()) return true;
+    }
+    return false;
+}
+
+// waitForGoalState — observe the DURABLE goal store through the client's
+// one contract: "the client keeps no goal state beyond the last list read"
+// (coreclient.cpp). The former goals slots polled core.goals() while the
+// drive mutated the store ASYNCHRONOUSLY and nothing ever re-read the list,
+// so the waits could provably never observe the transitions (the run #17
+// / run #23 Windows exit-2 class). Each iteration pumps the event loop,
+// re-reads the authoritative list via refreshGoals(), and re-checks the
+// SAME condition under the SAME bound — no assertion is weakened, skipped
+// or sleep-replaced; the waits gain the observability the store contract
+// requires (the POST /start control returns before the drive has run its
+// first model step, so the one-shot post-action refresh cannot carry the
+// transition it precedes).
+bool Acceptance::waitForGoalState(CoreClient *core, const std::function<bool()> &cond,
+                                  int timeoutMs) {
+    const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + timeoutMs;
+    while (QDateTime::currentMSecsSinceEpoch() < deadline) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        if (cond()) return true;
+        core->refreshGoals();
+        // Pump ~300ms so the GET /api/goals round trip and its callback
+        // land on this thread's event loop before the next check.
+        const qint64 pumpUntil = QDateTime::currentMSecsSinceEpoch() + 300;
+        while (QDateTime::currentMSecsSinceEpoch() < pumpUntil)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
     }
     return false;
 }
@@ -439,29 +492,33 @@ void Acceptance::goalsStartPauseResumeCancelRoundTrip() {
 
     // Start: the bounded drive begins — the phase leaves understanding (the
     // store is the only authority for the observed transition).
+    // v1.10.13: waitForGoalState — the drive runs ASYNC and the client owns
+    // no goal state beyond its last read, so the transition is observed by
+    // re-reading the store, never by a stale list (45s bound unchanged).
     core.startGoal(goalId);
-    QVERIFY(waitFor([&]() {
+    QVERIFY(waitForGoalState(&core, [&]() {
         const QVariantMap g = goalById(core.goals(), goalId);
         return g.value("phase").toString() != QStringLiteral("understanding");
     }, 45000));
 
-    // Pause: parks at the next checkpoint boundary.
+    // Pause: parks at the next checkpoint boundary (durable flip is
+    // synchronous with the control POST; the re-read confirms it).
     core.pauseGoal(goalId);
-    QVERIFY(waitFor([&]() {
+    QVERIFY(waitForGoalState(&core, [&]() {
         return goalById(core.goals(), goalId).value("status").toString()
                == QStringLiteral("paused");
     }, 15000));
 
     // Resume: back to active, the drive re-runs from the checkpoint.
     core.resumeGoal(goalId);
-    QVERIFY(waitFor([&]() {
+    QVERIFY(waitForGoalState(&core, [&]() {
         return goalById(core.goals(), goalId).value("status").toString()
                == QStringLiteral("active");
     }, 15000));
 
     // Cancel: terminal; the re-driven loop stops at its next boundary.
     core.cancelGoal(goalId);
-    QVERIFY(waitFor([&]() {
+    QVERIFY(waitForGoalState(&core, [&]() {
         return goalById(core.goals(), goalId).value("status").toString()
                == QStringLiteral("cancelled");
     }, 15000));
@@ -516,7 +573,9 @@ void Acceptance::goalsApproveRejectParkedGoal() {
     core.refreshGoals();
     // The park is deterministic: the ask-all check fires BEFORE every acting
     // step, so both goals reach waiting_for_approval while driving.
-    QVERIFY(waitFor([&]() {
+    // v1.10.13: waitForGoalState — the park happens in the ASYNC drive; the
+    // client must re-read the store to observe it (60s bound unchanged).
+    QVERIFY(waitForGoalState(&core, [&]() {
         const QVariantMap a = goalById(core.goals(), approveId);
         const QVariantMap r = goalById(core.goals(), rejectId);
         return !a.isEmpty() && !r.isEmpty()
@@ -538,7 +597,7 @@ void Acceptance::goalsApproveRejectParkedGoal() {
     // loop re-drives (under ask-all it may park again at the NEXT boundary
     // — the core's policy owns that; the client only dispatches).
     core.approveGoal(approveId, approvePa.value("approvalId").toString());
-    QVERIFY(waitFor([&]() {
+    QVERIFY(waitForGoalState(&core, [&]() {
         const QVariantMap g = goalById(core.goals(), approveId);
         if (g.isEmpty()) return false;
         const auto ev = g.value("evidence").toList();
@@ -556,13 +615,60 @@ void Acceptance::goalsApproveRejectParkedGoal() {
     const QVariantMap rejectPa = pendingApprovalOf(rejectId);
     QVERIFY2(!rejectPa.isEmpty(), "the second goal must still park for its reject leg");
     core.rejectGoal(rejectId, rejectPa.value("approvalId").toString());
-    QVERIFY(waitFor([&]() {
+    QVERIFY(waitForGoalState(&core, [&]() {
         const QVariantMap g = goalById(core.goals(), rejectId);
         return !g.isEmpty()
                && g.value("status").toString() == QStringLiteral("blocked")
                && g.value("pendingApproval").toMap().isEmpty();
     }, 20000));
     QVERIFY2(core.error().isEmpty(), qPrintable(core.error()));
+}
+
+// qmlLoadsCleanly — the ONE bounded genuine-QML slot (v1.10.13 T-INTEGRITY,
+// layer B). Every slot above drives CoreClient directly; this slot proves
+// the production QML surface at its most basic contract: the REAL Main.qml
+// (the exact file the sheytan-ui host ships, resolved from the checkout via
+// SHEYTAN_REPO or from the build tree) loads in a REAL QQmlApplicationEngine
+// under the offscreen/software environment the workflow pins, creates a
+// root object, and emits no objectCreationFailed. It does NOT drive the
+// composer → live bubble → settle → persistence journey through real QML
+// controls — that interactive acceptance is future work and is never
+// claimed here. The engine is scoped to this slot; no state leaks into the
+// IPC slots.
+void Acceptance::qmlLoadsCleanly() {
+    const QString repo = qEnvironmentVariable("SHEYTAN_REPO");
+    QStringList candidates;
+    if (!repo.isEmpty())
+        candidates << (repo + QStringLiteral("/ui/qt/qml/Main.qml"));
+    candidates << (QCoreApplication::applicationDirPath()
+                   + QStringLiteral("/../qml/Main.qml"));
+    QString mainQml;
+    for (const QString &c : candidates)
+        if (QFileInfo::exists(c)) { mainQml = c; break; }
+    if (mainQml.isEmpty())
+        QSKIP("production Main.qml not reachable (no SHEYTAN_REPO, no build-tree layout) — NOT RUN");
+
+    QQmlApplicationEngine engine;
+    // The host registers the CoreClient singleton under the sheytan.ui URI
+    // BEFORE the engine loads Main.qml (main.cpp: qmlRegisterSingletonInstance
+    // + Main.qml "import sheytan.ui" + Core.* bindings). Mirror that wiring
+    // exactly, or creation would fail for an environment artifact instead of
+    // a product defect. The instance is unconnected — identical to the
+    // host's own pre-connect state at creation time (Main.qml's
+    // Component.onCompleted connect is endpoint-guarded and stays off).
+    qmlRegisterSingletonInstance("sheytan.ui", 1, 0, "Core", new CoreClient());
+    bool creationFailed = false;
+    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
+                     [&creationFailed]() { creationFailed = true; });
+    engine.load(QUrl::fromLocalFile(mainQml));
+
+    QVERIFY2(!creationFailed,
+             qPrintable(QStringLiteral("the production Main.qml failed to create objects: %1")
+                            .arg(mainQml)));
+    QVERIFY2(!engine.rootObjects().isEmpty(),
+             "the production Main.qml must create a non-empty rootObjects() list");
+    QVERIFY2(qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst()) != nullptr,
+             "the production Main.qml root must be a QQuickWindow");
 }
 
 // ============================================================================
