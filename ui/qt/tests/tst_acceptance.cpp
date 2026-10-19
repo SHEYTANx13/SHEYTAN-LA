@@ -266,9 +266,10 @@ void Acceptance::chatStreamPersistRepeatAndClose() {
 
     // Settlement reloads the authoritative transcript: live bubble gone,
     // composer unlocked, EXACTLY ONE assistant message persisted.
-    QVERIFY(waitFor([&]() { return !core.busy(); }));
-    QVERIFY(waitFor([&]() { return !core.liveActive(); }));
-    QVERIFY(waitFor([&]() {
+    // v1.10.13 run #26: the wait keeps its exact condition and 15s bound;
+    // a timeout now QWARNs the observable state before the assertion
+    // fires (the Windows-only first-wait failure becomes readable).
+    const bool firstPersisted = waitFor([&]() {
         int assistants = 0;
         const auto msgs = core.messages();
         for (const auto &m : msgs)
@@ -276,7 +277,11 @@ void Acceptance::chatStreamPersistRepeatAndClose() {
                 m.toMap().value("content").toString().contains(QStringLiteral("working fine")))
                 assistants++;
         return assistants == 1;
-    }, 15000));
+    }, 15000);
+    if (!firstPersisted) {
+        dumpChatPersistDiagnostics(core, QStringLiteral("first-persisted-assistant==1"));
+    }
+    QVERIFY(firstPersisted);
 
     // Reload persistence through a fresh read of the same session.
     const QString sid = core.currentSession().value("id").toString();
@@ -293,14 +298,20 @@ void Acceptance::chatStreamPersistRepeatAndClose() {
     QVERIFY(waitFor([&]() { return settled; }, 30000));
     QCOMPARE(outcome, QStringLiteral("done"));
     QVERIFY(waitFor([&]() { return !core.busy(); }));
-    QVERIFY(waitFor([&]() {
+    // v1.10.13 run #26: same instrumentation contract on the repeat-send
+    // wait — condition and bound unchanged, a timeout names the state.
+    const bool repeatPersisted = waitFor([&]() {
         int assistants = 0;
         const auto msgs = core.messages();
         for (const auto &m : msgs)
             if (m.toMap().value("role").toString() == QStringLiteral("assistant"))
                 assistants++;
         return assistants == 2;
-    }, 15000));
+    }, 15000);
+    if (!repeatPersisted) {
+        dumpChatPersistDiagnostics(core, QStringLiteral("repeat-assistant-count==2"));
+    }
+    QVERIFY(repeatPersisted);
 }
 
 void Acceptance::cleanupTestCase() {
@@ -460,6 +471,78 @@ static void dumpGoalDiagnostics(const QString &endpoint, const QStringList &ids)
                                   g.value("lastAction").toString(),
                                   lastEv)));
     }
+}
+
+// dumpChatPersistDiagnostics — the settle→persist snapshot for
+// chatStreamPersistRepeatAndClose's two assistant-count waits (the
+// Windows-only first-wait failure class). On a timed-out wait it QWARNs
+// the observable facts that discriminate a slow-runner persistence race
+// from a CoreClient settle→transcript-reload defect: the transcript
+// size, the role list, whether any assistant content carries the
+// fixture marker, and the client's own error/busy/liveActive/session
+// state at the moment of the timeout. QWARN rides the QtTest -o report
+// and (from this cycle) the workflow failure summaries, so the facts
+// are anonymously readable on a red run — never a tail dump, the
+// assertion and its bound stay exactly as they were.
+static void dumpChatPersistDiagnostics(const CoreClient &core, const QString &which)
+{
+    QStringList roles;
+    bool anyAssistantWorkingFine = false;
+    const auto msgs = core.messages();
+    for (const auto &m : msgs) {
+        const QVariantMap mm = m.toMap();
+        const QString role = mm.value("role").toString();
+        roles << role;
+        if (role == QStringLiteral("assistant")
+            && mm.value("content").toString().contains(QStringLiteral("working fine")))
+            anyAssistantWorkingFine = true;
+    }
+    QWARN(qPrintable(QStringLiteral(
+                         "chat-persist[%1] → messages=%2 roles=[%3] anyAssistantWorkingFine=%4 error=%5 busy=%6 liveActive=%7 session=%8")
+                         .arg(which,
+                              QString::number(msgs.size()),
+                              roles.join(QLatin1Char(',')),
+                              anyAssistantWorkingFine ? QStringLiteral("true") : QStringLiteral("false"),
+                              core.error(),
+                              core.busy() ? QStringLiteral("true") : QStringLiteral("false"),
+                              core.liveActive() ? QStringLiteral("true") : QStringLiteral("false"),
+                              core.currentSession().value("id").toString())));
+}
+
+// dumpChatPersistDiagnostics — the settle→persist snapshot for
+// chatStreamPersistRepeatAndClose's two assistant-count waits (the
+// Windows-only first-wait failure class). On a timed-out wait it QWARNs
+// the observable facts that discriminate a slow-runner persistence race
+// from a CoreClient settle→transcript-reload defect: the transcript
+// size, the role list, whether any assistant content carries the
+// fixture marker, and the client's own error/busy/liveActive/session
+// state at the moment of the timeout. QWARN rides the QtTest -o report
+// and (from this cycle) the workflow failure summaries, so the facts
+// are anonymously readable on a red run — never a tail dump, the
+// assertion and its bound stay exactly as they were.
+static void dumpChatPersistDiagnostics(const CoreClient &core, const QString &which)
+{
+    QStringList roles;
+    bool anyAssistantWorkingFine = false;
+    const auto msgs = core.messages();
+    for (const auto &m : msgs) {
+        const QVariantMap mm = m.toMap();
+        const QString role = mm.value("role").toString();
+        roles << role;
+        if (role == QStringLiteral("assistant")
+            && mm.value("content").toString().contains(QStringLiteral("working fine")))
+            anyAssistantWorkingFine = true;
+    }
+    QWARN(qPrintable(QStringLiteral(
+                         "chat-persist[%1] → messages=%2 roles=[%3] anyAssistantWorkingFine=%4 error=%5 busy=%6 liveActive=%7 session=%8")
+                         .arg(which,
+                              QString::number(msgs.size()),
+                              roles.join(QLatin1Char(',')),
+                              anyAssistantWorkingFine ? QStringLiteral("true") : QStringLiteral("false"),
+                              core.error(),
+                              core.busy() ? QStringLiteral("true") : QStringLiteral("false"),
+                              core.liveActive() ? QStringLiteral("true") : QStringLiteral("false"),
+                              core.currentSession().value("id").toString())));
 }
 
 // goalsListFieldContract — the list contract the client mirrors: a created

@@ -10,6 +10,15 @@ concern, evidence over confidence, no sleep-based correctness, honest
 hardware claims, the codename gate enabled.
 
 ---
+## v1.10.13 (run #26 cycle) — 2026-10-19 — phantom approval gate wired + pure drive-registry extraction + anonymous QWARN diagnostics
+Run 39287807508 (commit ffcf2c8): audit green; both platform jobs built the Qt host and RAN the live-answer acceptance — Windows exit 2 (16 passed / 2 failed), Linux exit 1 (17 passed / 1 failed, quoted: goalsApproveRejectParkedGoal "'parked' returned FALSE"), chatStreamPersistRepeatAndClose failed only on Windows at the first persisted-assistant wait; packaging, smokes and uploads after the acceptance gate NOT RUN.
+PHANTOM-GATE: goalRunFunc now wires agent.WithApprovalGate(goalApprovalGate{}) when a system snapshot is bound — the documented denial gate exists in code, denial-as-evidence, never a run error; unbound goals run exactly as before.
+PURE MOVE: the drive registry/lifecycle machinery (goalDriveRecord, goalDrives, goalDriveStopWait, admit/lookup/waitStop/cancel/release) moved byte-identically (4086 bytes, mechanically verified against ffcf2c8) from goals.go into internal/api/goal_drive.go — no rename, no signature change, no behavior change, I1–I3 untouched.
+DIAGNOSTICS: both assistant-count waits of chatStreamPersistRepeatAndClose QWARN messages/roles/working-fine/error/busy/liveActive/session on a timeout; the Windows errClasses and the Linux failClasses carry one QWARN arm each, so the goal/chat diagnostics surface anonymously on a red run (D1-compatible: error-context lines, still no tail dumps).
+PROBE: TestGoalAskAllTwoGoalsParkConcurrently reproduces the exact Qt two-goal ask-all shape through the real server stack + chunked SSE fixture — NOT REPRODUCED locally (both goals park; the single-goal precedent is already green in the hosted audit); the probe stays as the regression pin and the hosted QWARN evidence discriminates the client/packaged path. coreclient.cpp stays untouched: the settle→reload analysis pins nothing (the core appends the assistant reply BEFORE the done frame; every client failure mode surfaces via the new QWARNs).
+Local battery: go build ./..., go test -race ./internal/goal ./internal/api, gofmt, workflow YAML parse — green. The Qt host build stayed NOT RUN locally (no Qt toolchain in the cycle sandbox); hosted proof belongs to the run on the pushed commit.
+Hosted verdict for this cycle is recorded at delivery; nothing here claims a hosted gate that has not run.
+
 ## v1.10.13 (run #25 cycle) — 2026-10-19 — QJsonValue compile unblock + APPROVAL-IDENTITY + rollback error propagation + frozen-revision contract
 Run 39269035971 (commit 2d07da6): audit green; BOTH platform jobs failed at the Qt host build gate — the acceptance suites, the smokes, package/ZIP layout and the release-version contract never started (NOT RUN, never pass). Windows diagnostic, quoted:
 ui/qt/tests/tst_acceptance.cpp(428,50): error C2039: 'toMap': is not a member of 'QJsonValue'; Linux failed at the same upstream build step (its per-line diagnostic was not exposed anonymously). COMPILE-UNBLOCK: dumpGoalDiagnostics parses the diagnostics document,

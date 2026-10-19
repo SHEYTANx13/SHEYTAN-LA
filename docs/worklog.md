@@ -9,6 +9,17 @@ hazard by construction).
 
 ---
 ---
+Task ID: 26 (v1.10.13 run #26 cycle) — agent: park diagnosis + structural session; tree pinned at ffcf2c8
+Task: root-cause the deterministic ask-all park failure (goalsApproveRejectParkedGoal, red on three consecutive hosted runs), deliver anonymous diagnosability for it and the Windows-only chat-persist failure, land the two structural items (phantom gate wiring, drive-registry extraction)
+Work Log: probe TestGoalAskAllTwoGoalsParkConcurrently — the exact Qt shape (two ask-all goals started at creation through the real HTTP surface, chunked SSE fixture engine) parks BOTH goals in 0.17s locally, full race battery green — NOT REPRODUCED; the probe stays as the regression pin and the hosted QWARN facts discriminate the client/packaged path.
+goals.go — goalApprovalGate{} wired via agent.WithApprovalGate when a snapshot is bound (the documented denial gate: denial-as-evidence, never a run error; unbound goals unchanged); the drive registry moved out byte-identically (4086 bytes, mechanically verified against ffcf2c8) into goal_drive.go.
+tst_acceptance.cpp — dumpChatPersistDiagnostics on both assistant-count waits (messages/roles/working-fine/error/busy/liveActive/session); conditions and bounds unchanged. coreclient.cpp untouched — the settle→reload analysis pins nothing: the core appends the assistant reply BEFORE the done frame, and every client failure mode (non-200, timeout, malformed payload) is exposed by the new QWARNs.
+build-desktop.yml — exactly two hunks: one QWARN arm in the Windows errClasses scriptblock, QWARN inside the Linux failClasses alternation; every protected surface byte-identical.
+Local — go build ./... green; go test -race ./internal/goal (1.2s) and ./internal/api (116–120s) green; gofmt clean; workflow YAML parses (two hunks proven).
+NOT RUN locally — the Qt host build and the Qt acceptance suite (no Qt toolchain in the sandbox); hosted proof belongs to the run on the pushed commit.
+Future work (scope unchanged): CI restructuring, Qt suite splitting, revision-addressed snapshot history in the systems store, installer/NSIS work, any frontend or publish-job change, raising any wait bound without hosted evidence.
+
+---
 Task ID: 25 (v1.10.13 run #25 cycle) — agent: compile unblock + residual Go repairs session; tree pinned at 2d07da6
 Task: fix the confirmed QJsonValue compile blocker in tst_acceptance.cpp, close the residual Go lifecycle gaps (approval identity binding, rollback error propagation, frozen-revision probe), prove locally what the sandbox can prove
 Work Log: tst_acceptance.cpp — dumpGoalDiagnostics: QJsonDocument parse → isObject → value("goal") → isObject → toObject().toVariantMap(); named QWARN on malformed JSON, missing goal, non-object goal; sweep confirmed the other 12 .toMap() calls are QVariant-based.

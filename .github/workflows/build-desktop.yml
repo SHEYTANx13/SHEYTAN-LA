@@ -1792,7 +1792,8 @@ jobs:
             # name its site (the run #23 Linux class died with zero FAIL
             # lines; the stderr now carries the qFatal/glibc message).
             $l -match '^acceptance (exit code|output captures|instrumentation failure)' -or
-            $l -match '^Fatal|^Aborted|terminate called|core dumped|QFATAL'
+            $l -match '^Fatal|^Aborted|terminate called|core dumped|QFATAL' -or
+            $l -match '^QWARN'
           }
           # v1.10.13 WINDOWS-REPORT: the -o report (.txt) is evidence —
           # its FAIL!/assertion lines ride the same errors-only summary.
@@ -2734,7 +2735,7 @@ jobs:
           # evidence (qFatal/terminate/Aborted/core dumped) and the exit-code
           # contract lines so a crash names its actual site, never "no FAIL
           # lines" alone. Errors-only, capped, D1.
-          failClasses='(^FAIL!|^Totals:.*failed|^--- FAIL|QVERIFY|QCOMPARE|QFATAL|^Fatal|^Aborted|terminate called|core dumped|^acceptance (exit code|output captures|instrumentation failure))'
+          failClasses='(^FAIL!|^Totals:.*failed|^--- FAIL|QVERIFY|QCOMPARE|QFATAL|QWARN|^Fatal|^Aborted|terminate called|core dumped|^acceptance (exit code|output captures|instrumentation failure))'
           gateOrder="ci-logs/gate-order.txt"
           accStarted=false
           if [ -f "$gateOrder" ] && grep -q 'RUN Qt live-answer acceptance' "$gateOrder" 2>/dev/null; then
