@@ -406,6 +406,48 @@ static QVariantMap goalById(const QVariantList &goals, const QString &id) {
     return {};
 }
 
+// dumpGoalDiagnostics — the failure snapshot the run #24 test lacked (I5:
+// the failure NAMES its state). On a bounded wait timeout, read each
+// goal's durable document through the real IPC channel and print status,
+// phase, the live driving flag, last action and the LAST evidence record
+// BEFORE the assertion fails — the hosted run then shows exactly which
+// phase stalled and why (the swallowed-error class died here with zero
+// diagnostics). QWARN rides the QtTest report file, so the snapshot
+// lands in the -o report and the anonymous artifacts, not just stderr.
+static void dumpGoalDiagnostics(const QString &endpoint, const QStringList &ids)
+{
+    for (const QString &id : ids) {
+        const auto item = ipcRequest(endpoint, QStringLiteral("acceptance"), "GET",
+                                     QStringLiteral("/api/goals/") + id, QByteArray());
+        if (item.first != 200) {
+            QWARN(qPrintable(QStringLiteral("goal %1 → GET failed (status %2)")
+                                 .arg(id).arg(item.first)));
+            continue;
+        }
+        const QVariantMap g = QJsonDocument::fromJson(item.second).object()
+                                  .value("goal").toMap();
+        const auto ev = g.value("evidence").toList();
+        QString lastEv;
+        if (!ev.isEmpty()) {
+            const QVariantMap em = ev.last().toMap();
+            lastEv = QStringLiteral("%1 [%2] %3")
+                         .arg(em.value("action").toString(),
+                              em.value("status").toString(),
+                              em.value("detail").toString().left(160));
+        }
+        QWARN(qPrintable(QStringLiteral(
+                             "goal %1 → status=%2 phase=%3 driving=%4 lastAction=%5 lastEvidence=%6")
+                             .arg(id,
+                                  g.value("status").toString(),
+                                  g.value("phase").toString(),
+                                  g.value("driving").toBool()
+                                      ? QStringLiteral("true")
+                                      : QStringLiteral("false"),
+                                  g.value("lastAction").toString(),
+                                  lastEv)));
+    }
+}
+
 // goalsListFieldContract — the list contract the client mirrors: a created
 // goal is served by GET /api/goals as {"goals":[…]} carrying exactly the
 // wire fields the QML cards render (goalId, status, phase, originalGoal,
@@ -496,10 +538,15 @@ void Acceptance::goalsStartPauseResumeCancelRoundTrip() {
     // no goal state beyond its last read, so the transition is observed by
     // re-reading the store, never by a stale list (45s bound unchanged).
     core.startGoal(goalId);
-    QVERIFY(waitForGoalState(&core, [&]() {
+    const bool leftUnderstanding = waitForGoalState(&core, [&]() {
         const QVariantMap g = goalById(core.goals(), goalId);
         return g.value("phase").toString() != QStringLiteral("understanding");
-    }, 45000));
+    }, 45000);
+    if (!leftUnderstanding) {
+        // v1.10.13: name the stall before failing (I5).
+        dumpGoalDiagnostics(m_endpoint, {goalId});
+    }
+    QVERIFY(leftUnderstanding);
 
     // Pause: parks at the next checkpoint boundary (durable flip is
     // synchronous with the control POST; the re-read confirms it).
@@ -511,10 +558,17 @@ void Acceptance::goalsStartPauseResumeCancelRoundTrip() {
 
     // Resume: back to active, the drive re-runs from the checkpoint.
     core.resumeGoal(goalId);
-    QVERIFY(waitForGoalState(&core, [&]() {
+    const bool resumed = waitForGoalState(&core, [&]() {
         return goalById(core.goals(), goalId).value("status").toString()
                == QStringLiteral("active");
-    }, 15000));
+    }, 15000);
+    if (!resumed) {
+        // v1.10.13: the former cycle's ONLY failure signal here was a bare
+        // "goal resume failed (status 500)" — the snapshot names the
+        // durable state (and the drive flag) before the assertion fires.
+        dumpGoalDiagnostics(m_endpoint, {goalId});
+    }
+    QVERIFY(resumed);
 
     // Cancel: terminal; the re-driven loop stops at its next boundary.
     core.cancelGoal(goalId);
@@ -575,13 +629,20 @@ void Acceptance::goalsApproveRejectParkedGoal() {
     // step, so both goals reach waiting_for_approval while driving.
     // v1.10.13: waitForGoalState — the park happens in the ASYNC drive; the
     // client must re-read the store to observe it (60s bound unchanged).
-    QVERIFY(waitForGoalState(&core, [&]() {
+    const bool parked = waitForGoalState(&core, [&]() {
         const QVariantMap a = goalById(core.goals(), approveId);
         const QVariantMap r = goalById(core.goals(), rejectId);
         return !a.isEmpty() && !r.isEmpty()
                && a.value("status").toString() == QStringLiteral("waiting_for_approval")
                && r.value("status").toString() == QStringLiteral("waiting_for_approval");
-    }, 60000));
+    }, 60000);
+    if (!parked) {
+        // v1.10.13: BOTH goals' durable status, phase, last evidence and
+        // driving flag, named BEFORE the failure — the diagnostic snapshot
+        // the run #24 test lacked (its timeout had zero diagnostics).
+        dumpGoalDiagnostics(m_endpoint, {approveId, rejectId});
+    }
+    QVERIFY(parked);
 
     auto pendingApprovalOf = [&](const QString &id) -> QVariantMap {
         return goalById(core.goals(), id).value("pendingApproval").toMap();

@@ -96,6 +96,11 @@ var (
 	ErrTooMany  = errors.New("the goal store is full")
 	// ErrNotResumable: the goal is in a state that cannot resume.
 	ErrNotResumable = errors.New("goal is not resumable in its current state")
+	// ErrDriveConflict (v1.10.13): the goal's drive lifecycle refused the
+	// request — a live drive generation owns the goal, or the previous
+	// generation is still unwinding. A typed conflict (HTTP 409) naming
+	// the state, never a generic 500 for a transient unwind.
+	ErrDriveConflict = errors.New("goal drive conflict")
 )
 
 // ---------------------------------------------------------------------------
@@ -138,6 +143,21 @@ type PendingApproval struct {
 	DecidedAt   *time.Time     `json:"decidedAt,omitempty"`
 }
 
+// ApprovedAction is the durable ONE-USE approval grant (v1.10.13
+// APPROVAL-ONE-USE): an approved decision arms EXACTLY the approved
+// canonical action — the goal step identity plus the approvalId and its
+// arguments. The drive's approval check consumes it atomically at the
+// step boundary, exactly once, so the next drive can never re-park the
+// same approved step; a stale or mismatched grant is never consumed and
+// a rejection clears it. The durable store stays the one approval
+// authority.
+type ApprovedAction struct {
+	ApprovalID string         `json:"approvalId"`
+	StepIdx    int            `json:"step"`
+	Args       map[string]any `json:"args,omitempty"`
+	GrantedAt  time.Time      `json:"grantedAt"`
+}
+
 // Checkpoint is the durable compact state (spec §9): everything the next
 // stage needs, nothing disposable.
 type Checkpoint struct {
@@ -178,10 +198,13 @@ type Goal struct {
 	TurnsUsed          int              `json:"turnsUsed"`
 	Replans            int              `json:"replans"`
 	PendingApproval    *PendingApproval `json:"pendingApproval,omitempty"`
-	Checkpoint         *Checkpoint      `json:"checkpoint,omitempty"`
-	CreatedAt          time.Time        `json:"createdAt"`
-	UpdatedAt          time.Time        `json:"updatedAt"`
-	TerminalAt         *time.Time       `json:"terminalAt,omitempty"`
+	// ApprovedAction (v1.10.13): the ONE-USE grant of the last approved
+	// decision — consumed exactly once by the drive's approval check.
+	ApprovedAction *ApprovedAction `json:"approvedAction,omitempty"`
+	Checkpoint     *Checkpoint     `json:"checkpoint,omitempty"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
+	TerminalAt     *time.Time      `json:"terminalAt,omitempty"`
 }
 
 // IsTerminal reports whether the goal reached a terminal settlement.
@@ -628,15 +651,22 @@ func (s *Store) Pause(id string) (Goal, error) {
 	})
 }
 
-// Resume reactivates a paused/blocked/waiting goal from its checkpoint
-// WITHOUT replaying committed mutations (the checkpoint is the truth).
+// Resume reactivates a paused/blocked goal from its checkpoint WITHOUT
+// replaying committed mutations (the checkpoint is the truth).
+//
+// v1.10.13 STATE-MACHINE repair: waiting_for_approval is NOT a resume
+// source. That state transitions ONLY through approve/reject (and cancel
+// as the terminal escape) — a generic resume must never erase an
+// unresolved human approval decision. The former code accepted
+// waiting_for_approval AND set PendingApproval = nil, wiping the durable
+// record of a decision nobody had made.
 func (s *Store) Resume(id string) (Goal, error) {
 	return s.mutate(id, func(g *Goal) error {
 		if g.IsTerminal() {
 			return ErrNotResumable
 		}
 		switch g.Status {
-		case StatusPaused, StatusBlocked, StatusWaitingApproval, StatusWaitingResource:
+		case StatusPaused, StatusBlocked, StatusWaitingResource:
 			g.Status = StatusActive
 			g.PendingApproval = nil
 			g.LastAction = "resumed from checkpoint"
@@ -706,15 +736,88 @@ func (s *Store) ResolveApproval(id, approvalID, decision string) (Goal, error) {
 			Detail:    decisionText,
 			Timestamp: now,
 		})
+		// v1.10.13 APPROVAL-ONE-USE: the decision arms or clears the
+		// ONE-USE grant for the EXACT canonical action before the
+		// pending call is cleared.
+		step, hasStep := canonicalStepOf(g.PendingApproval)
 		if decision == "approved" {
 			g.Status = StatusActive
+			if hasStep {
+				g.ApprovedAction = &ApprovedAction{
+					ApprovalID: g.PendingApproval.ApprovalID,
+					StepIdx:    step,
+					Args:       g.PendingApproval.Args,
+					GrantedAt:  now,
+				}
+			}
 		} else {
 			g.Status = StatusBlocked
+			// A rejection is terminal for the pending action: any armed
+			// grant for THAT action is cleared, so a later drive can
+			// never execute a step whose newest decision is a rejection.
+			if hasStep && g.ApprovedAction != nil && g.ApprovedAction.StepIdx == step {
+				g.ApprovedAction = nil
+			}
 		}
 		g.LastAction = decisionText
-		pa := *g.PendingApproval
 		g.PendingApproval = nil
-		_ = pa // the decision evidence above is the durable record
+		g.Checkpoint = g.buildCheckpoint()
+		return nil
+	})
+}
+
+// canonicalStepOf extracts the canonical step identity a goal-step
+// pending approval carries. The ApprovalCheck stores Args["step"] as
+// an int; a JSON round trip through the durable document makes it a
+// float64 — both are honored, nothing else.
+func canonicalStepOf(pa *PendingApproval) (int, bool) {
+	if pa == nil {
+		return 0, false
+	}
+	switch v := pa.Args["step"].(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	}
+	return 0, false
+}
+
+// TakeApprovedAction consumes the ONE-USE approval grant for the exact
+// canonical step (v1.10.13, invariant I4). It returns granted=true
+// exactly once per approved decision: the grant for THIS step is
+// cleared atomically under the store lock, at the step boundary —
+// execution, not consultation. A mismatched step never consumes the
+// grant and has no side effects: the caller re-parks with a fresh
+// pending call.
+func (s *Store) TakeApprovedAction(id string, stepIdx int) (bool, error) {
+	granted := false
+	_, err := s.mutate(id, func(g *Goal) error {
+		if g.ApprovedAction != nil && g.ApprovedAction.StepIdx == stepIdx {
+			granted = true
+			g.ApprovedAction = nil
+		}
+		return nil
+	})
+	return granted, err
+}
+
+// SettleDriveFailure parks a goal that lost its drive to an OBSERVED
+// error (v1.10.13, invariants I3/I6): status blocked — resumable
+// honestly, no fake success, no fake failure. Terminal goals stay
+// terminal; paused/waiting states already say why the drive stopped
+// and are left untouched. The former code had NO settlement path at
+// all: a failed drive left the goal active with no functioning drive
+// and zero diagnostics.
+func (s *Store) SettleDriveFailure(id, reason string) (Goal, error) {
+	return s.mutate(id, func(g *Goal) error {
+		if g.IsTerminal() || g.Status != StatusActive {
+			return nil
+		}
+		g.Status = StatusBlocked
+		g.LastAction = reason
 		g.Checkpoint = g.buildCheckpoint()
 		return nil
 	})

@@ -11,6 +11,22 @@ hardware claims, the codename gate enabled.
 
 ---
 
+## v1.10.13 (final cycle) — 2026-10-19 — run #24 verdict quoted + the four Go source repairs (drive registry, resume 500, swallowed errors, SystemID) + one-use approvals + the Windows report
+Run 39243477114 ("Build Desktop" #24, commit fa6afd1): audit green; Linux acceptance RAN the full suite for the first time —
+16 passed, 2 failed (67.792s), quoted: goalsStartPauseResumeCancelRoundTrip "goal resume failed (status 500)";
+goalsApproveRejectParkedGoal "the two goals never reached waiting_for_approval within 60s"; Windows acceptance exit 2, empty captures.
+DRIVE-REGISTRY: one drive record per goal (generation + cancel + done) — atomic admission under ONE lock (I1), generation-safe
+cleanup (I2), the reservation retained until the goroutine exits; RESUME-500: resume serializes on done with a bounded wait —
+a typed 409 naming the state, never a generic 500, the status flip compensated; SWALLOWED-ERRORS: the Drive result+error are
+OBSERVED — a failed drive settles the goal blocked with bounded evidence (I3/I6), the approve restart returned typed;
+SYSTEMID-DISCARDED: the frozen AI System identity binds at the orchestration boundary (SnapshotOf or a typed failure, never the
+active system); STATE-MACHINE: waiting_for_approval is no resume source (the pending decision survives generic resume);
+APPROVAL-ONE-USE: an approved decision arms a durable ONE-USE grant for the exact canonical step, consumed atomically at
+execution (I4), rejection terminal; WINDOWS-REPORT: QtTest writes its own -o report on both platforms, asserted non-empty on
+nonzero exits (empty = named instrumentation failure), uploaded if:always(), slots/assertions into the summaries (I5);
+regression tests: 6 store-level + 5 API-level lifecycle tests, -race clean. Future work recorded, not attempted: lifecycle
+manager extraction, Qt suite split. Protected surfaces byte-identical: Windows steps 1-23, Linux steps 1-16, audit, Go pins, gofmt, LF, E2E, stress, codename gates.
+
 ## v1.10.13 (cycle 2) — 2026-10-19 — run #23 verdict quoted + the L-QPA / L-CTEST / W-ANN-ORDER / T-INTEGRITY repairs
 Run 39129668510 ("Build Desktop" #23, commit 161ea36b): "audit job green"; Windows steps 1-23 green; Linux steps 1-16 green;
 Windows acceptance "failed with exit code 2", Linux acceptance "failed with exit code 134" + "no FAIL lines captured" — both quoted anonymously.

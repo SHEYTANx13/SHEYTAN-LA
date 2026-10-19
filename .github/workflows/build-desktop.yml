@@ -1194,6 +1194,12 @@ jobs:
           $accLog = "ci-logs/win-qt-acceptance.log"
           $outLog = "ci-logs/win-qt-acceptance.out.log"
           $errLog = "ci-logs/win-qt-acceptance.err.log"
+          # v1.10.13 WINDOWS-REPORT (I5): QtTest writes its OWN report
+          # file, independent of native stdout/stderr — the record of
+          # record on any exit. The native captures stay (diagnostics);
+          # an empty report on a nonzero exit is an INSTRUMENTATION
+          # FAILURE — named, not tolerated.
+          $repLog = "ci-logs/win-qt-acceptance-report.txt"
           Add-Content "ci-logs/gate-order.txt" "STEP Windows live-answer acceptance"
           Add-Content "ci-logs/gate-order.txt" "RUN Qt live-answer acceptance"
           New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
@@ -1214,7 +1220,7 @@ jobs:
             Add-Content $accLog ($prelude -join [Environment]::NewLine)
             Add-Content $accLog "=== Process Output ==="
 
-            $proc = Start-Process -FilePath $acc -Wait -PassThru -NoNewWindow -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+            $proc = Start-Process -FilePath $acc -Wait -PassThru -NoNewWindow -ArgumentList @("-o", "$repLog,txt") -RedirectStandardOutput $outLog -RedirectStandardError $errLog
             $accExit = $proc.ExitCode
             # Merge output files into the gate log
             if (Test-Path $outLog) { Get-Content $outLog | Add-Content $accLog }
@@ -1240,13 +1246,44 @@ jobs:
                 Add-Content $accLog "acceptance output captures were empty (stdout AND stderr zero-length) — the binary exited $accExit with no captured output"
               }
             }
+            # v1.10.13 WINDOWS-REPORT: the report file is the record of
+            # record (I5) — a nonzero exit with a missing or empty report
+            # is an instrumentation failure, named, not tolerated.
+            if (-not (Test-Path $repLog) -or (Get-Item $repLog -ErrorAction SilentlyContinue).Length -eq 0) {
+              Add-Content $accLog "acceptance instrumentation failure: the QtTest -o report ($repLog) is missing or empty on a nonzero exit ($accExit) — stdout/stderr are diagnostics, never the only record"
+              Write-Host "::error::Qt acceptance report missing/empty on nonzero exit $accExit (instrumentation failure)"
+            }
             Add-Content $accLog "acceptance exit code $accExit (QTEST_MAIN contract: exit == the number of failed test functions, capped at 127; 0 = all passed; 134 = killed by SIGABRT, a crash class)"
             Write-Host "::error::Qt live-answer acceptance failed with exit code $accExit (log: $accLog)"
             throw "[gate] windows qt acceptance failed with exit code $accExit (log: $accLog)."
           }
+          # v1.10.13 WINDOWS-REPORT: on a GREEN exit the report must
+          # still exist (I5 — every test process writes an on-disk
+          # report regardless of exit code); a missing green report is
+          # named so the green is never trusted blindly.
+          if (-not (Test-Path $repLog) -or (Get-Item $repLog -ErrorAction SilentlyContinue).Length -eq 0) {
+            Add-Content $accLog "acceptance instrumentation failure: the QtTest -o report ($repLog) is missing or empty on a ZERO exit — named, non-fatal; read the native captures"
+            Write-Host "::warning::Qt acceptance report missing/empty on exit 0 (instrumentation failure named)"
+          }
           Add-Content "ci-logs/gate-order.txt" "OK Qt live-answer acceptance"
 
           Write-Host "Windows live-answer acceptance PASSED: real Qt UI + real core over the local IPC channel."
+
+      # v1.10.13 WINDOWS-REPORT (I5): the QtTest -o report is the record
+      # of record — uploaded ALWAYS (green or red), independent of the
+      # failure-gated *.log artifact, so an anonymous reader can download
+      # the named slots, assertions and line numbers on any exit.
+      - name: Upload Qt acceptance report (Windows)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-qt-acceptance-report-attempt${{ github.run_attempt }}
+          path: |
+            ci-logs/win-qt-acceptance-report.txt
+            ci-logs/win-qt-acceptance.log
+            ci-logs/gate-order.txt
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Prepare Windows portable package
         shell: pwsh
@@ -1711,7 +1748,9 @@ jobs:
             "Qt host cmake build"       = "ci-logs/win-qt-build.log"
             "windeployqt"               = "ci-logs/win-windeployqt.log"
             "Qt host staging"           = "ci-logs/win-qt-build.log"
-            "Qt live-answer acceptance" = "ci-logs/win-qt-acceptance.log"
+            # v1.10.13 WINDOWS-REPORT: the -o report carries the
+            # FAIL!/assertion lines now — both files are evidence.
+            "Qt live-answer acceptance" = @("ci-logs/win-qt-acceptance.log", "ci-logs/win-qt-acceptance-report.txt")
             "NSIS makensis"             = "ci-logs/win-nsis.log"
           }
           $failingGate = $null
@@ -1752,10 +1791,12 @@ jobs:
             # step writes on failure, plus the crash classes — an abort must
             # name its site (the run #23 Linux class died with zero FAIL
             # lines; the stderr now carries the qFatal/glibc message).
-            $l -match '^acceptance (exit code|output captures)' -or
+            $l -match '^acceptance (exit code|output captures|instrumentation failure)' -or
             $l -match '^Fatal|^Aborted|terminate called|core dumped|QFATAL'
           }
-          foreach ($log in Get-ChildItem "ci-logs" -Filter "*.log" -ErrorAction SilentlyContinue) {
+          # v1.10.13 WINDOWS-REPORT: the -o report (.txt) is evidence —
+          # its FAIL!/assertion lines ride the same errors-only summary.
+          foreach ($log in (Get-ChildItem "ci-logs" -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in ".log", ".txt" })) {
             $raw = @(Get-Content $log.FullName -ErrorAction SilentlyContinue)
             $text = if ($goLogs -contains $log.Name) { $raw } else { @($raw | ForEach-Object { Redact-Anonymous $_ }) }
             $lines += ""
@@ -1771,9 +1812,15 @@ jobs:
           # is public and uncapped; the 10-per-step annotation budget is
           # spent on failure lines first, the slot names ride here forever.
           if ($failingGate) {
-            $slotGateLog = $gateLogMap[$failingGate]
-            if ($slotGateLog -and (Test-Path $slotGateLog)) {
-              $gateLines = @(Get-Content $slotGateLog -ErrorAction SilentlyContinue | ForEach-Object { Redact-Anonymous $_ })
+            # v1.10.13 WINDOWS-REPORT: the gate's evidence may be several
+            # files (native log + the -o report) — concatenate them.
+            $gateLines = @()
+            foreach ($gl in @($gateLogMap[$failingGate])) {
+              if ($gl -and (Test-Path $gl)) {
+                $gateLines += @(Get-Content $gl -ErrorAction SilentlyContinue | ForEach-Object { Redact-Anonymous $_ })
+              }
+            }
+            if ($gateLines.Count -gt 0) {
               # QtTest emits "FAIL!  : tst_acceptance::slotName()" — the
               # capture must cross the :: namespace separator.
               $slotNames = @($gateLines | Where-Object { $_ -match '^FAIL!\s*:\s*([A-Za-z0-9_:]+)\(' } | ForEach-Object { $_ -replace '^FAIL!\s*:\s*([A-Za-z0-9_:]+)\(.*$', '$1' } | Select-Object -Unique)
@@ -1806,11 +1853,17 @@ jobs:
             if ($failingGate) {
               Write-Host "::error::failing gate: $failingGate"
               $gateEmitted++
-              $gateLog = $gateLogMap[$failingGate]
-              if ($gateLog -and (Test-Path $gateLog)) {
-                $all = @(Get-Content $gateLog -ErrorAction SilentlyContinue |
-                  ForEach-Object { Redact-Anonymous $_ } |
-                  Where-Object { $_.Trim().Length -gt 0 })
+              # v1.10.13 WINDOWS-REPORT: concatenate every evidence file
+              # of the failing gate (native log + the -o report).
+              $all = @()
+              foreach ($gl in @($gateLogMap[$failingGate])) {
+                if ($gl -and (Test-Path $gl)) {
+                  $all += @(Get-Content $gl -ErrorAction SilentlyContinue |
+                    ForEach-Object { Redact-Anonymous $_ } |
+                    Where-Object { $_.Trim().Length -gt 0 })
+                }
+              }
+              if ($all.Count -gt 0) {
                 $failTail = @($all | Where-Object { & $errClasses $_ })
                 $isPrelude = {
                   param([string]$l)
@@ -1842,8 +1895,10 @@ jobs:
           # This proven loop runs unchanged; when the failure is at or
           # before Go verification (no markers) it is the ONLY annotation
           # source, exactly as before.
+          # v1.10.13 WINDOWS-REPORT: the -o report (.txt) is evidence —
+          # the capped annotation loop reads it beside the .log files.
           $emitted = 0
-          foreach ($log in Get-ChildItem "ci-logs" -Filter "*.log" -ErrorAction SilentlyContinue) {
+          foreach ($log in (Get-ChildItem "ci-logs" -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in ".log", ".txt" })) {
             if ($emitted -ge 10) { break }
             $text = @(Get-Content $log.FullName -ErrorAction SilentlyContinue)
             $failing = @($text | Where-Object { & $errClasses $_ })
@@ -2588,7 +2643,12 @@ jobs:
           # (the run-#23 class that died with zero FAIL lines) now lands in
           # its own durable file and is named by the failure summary below.
           set +e
+          # v1.10.13 LINUX-REPORT (I5): QtTest writes its OWN report
+          # file, independent of native stdout/stderr — the record of
+          # record on any exit; an empty report on a nonzero exit is
+          # an instrumentation failure, named, not tolerated.
           stdbuf -o0 -e0 "$RUNNER_TEMP/sheytan-ui-acceptance" \
+            -o ci-logs/linux-qt-acceptance-report.txt,txt \
             2> ci-logs/linux-qt-acceptance.err.log \
             | tee ci-logs/linux-qt-acceptance.log
           accExit=${PIPESTATUS[0]}
@@ -2598,13 +2658,41 @@ jobs:
             if [ ! -s ci-logs/linux-qt-acceptance.log ] && [ ! -s ci-logs/linux-qt-acceptance.err.log ]; then
               echo "acceptance output captures were empty (stdout AND stderr zero-length) — the binary exited $accExit with no captured output" >> ci-logs/linux-qt-acceptance.log
             fi
+            # v1.10.13 LINUX-REPORT: the report file is the record of
+            # record (I5) — a nonzero exit with a missing or empty report
+            # is an instrumentation failure, named, not tolerated.
+            if [ ! -s ci-logs/linux-qt-acceptance-report.txt ]; then
+              echo "acceptance instrumentation failure: the QtTest -o report (ci-logs/linux-qt-acceptance-report.txt) is missing or empty on a nonzero exit ($accExit) — stdout/stderr are diagnostics, never the only record" >> ci-logs/linux-qt-acceptance.log
+            fi
             # The exit-code contract, into the log itself so the summary
             # and the gate tail carry it to the anonymous reader.
             echo "acceptance exit code $accExit (QTEST_MAIN contract: exit == the number of failed test functions, capped at 127; 0 = all passed; 134 = killed by SIGABRT, a crash class)" >> ci-logs/linux-qt-acceptance.log
             echo "::error::Qt live-answer acceptance failed with exit code $accExit (log: ci-logs/linux-qt-acceptance.log)"
             exit $accExit
           fi
+          # v1.10.13 LINUX-REPORT: on a GREEN exit the report must still
+          # exist (I5); a missing green report is named, non-fatal.
+          if [ ! -s ci-logs/linux-qt-acceptance-report.txt ]; then
+            echo "acceptance instrumentation failure: the QtTest -o report (ci-logs/linux-qt-acceptance-report.txt) is missing or empty on a ZERO exit — named, non-fatal" >> ci-logs/linux-qt-acceptance.log
+            echo "::warning::Qt acceptance report missing/empty on exit 0 (instrumentation failure named)"
+          fi
           echo "OK Qt live-answer acceptance" >> ci-logs/gate-order.txt
+
+      # v1.10.13 LINUX-REPORT (I5): the QtTest -o report is the record
+      # of record — uploaded ALWAYS (green or red), so an anonymous
+      # reader can download the named slots, assertions and line numbers
+      # on any exit.
+      - name: Upload Qt acceptance report (Linux)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-qt-acceptance-report-attempt${{ github.run_attempt }}
+          path: |
+            ci-logs/linux-qt-acceptance-report.txt
+            ci-logs/linux-qt-acceptance.log
+            ci-logs/gate-order.txt
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Qt acceptance failure summary (Linux)
         if: failure()
@@ -2635,6 +2723,10 @@ jobs:
           }
 
           accLog="ci-logs/linux-qt-acceptance.log"
+          # v1.10.13 LINUX-REPORT: the -o report carries the
+          # FAIL!/assertion lines now — the summary reads it beside the
+          # native captures.
+          accRep="ci-logs/linux-qt-acceptance-report.txt"
           # v1.10.13 R-UNBUF: stderr is a separate capture now — an abort's
           # qFatal/glibc message lives there even when stdout tore.
           accErr="ci-logs/linux-qt-acceptance.err.log"
@@ -2642,7 +2734,7 @@ jobs:
           # evidence (qFatal/terminate/Aborted/core dumped) and the exit-code
           # contract lines so a crash names its actual site, never "no FAIL
           # lines" alone. Errors-only, capped, D1.
-          failClasses='(^FAIL!|^Totals:.*failed|^--- FAIL|QVERIFY|QCOMPARE|QFATAL|^Fatal|^Aborted|terminate called|core dumped|^acceptance (exit code|output captures))'
+          failClasses='(^FAIL!|^Totals:.*failed|^--- FAIL|QVERIFY|QCOMPARE|QFATAL|^Fatal|^Aborted|terminate called|core dumped|^acceptance (exit code|output captures|instrumentation failure))'
           gateOrder="ci-logs/gate-order.txt"
           accStarted=false
           if [ -f "$gateOrder" ] && grep -q 'RUN Qt live-answer acceptance' "$gateOrder" 2>/dev/null; then
@@ -2663,13 +2755,13 @@ jobs:
               echo ""
               echo "### linux-qt-acceptance.log — failing test names"
               echo '```'
-              cat "$accLog" "$accErr" 2>/dev/null | grep -aE "$failClasses" | head -60 || true
+              cat "$accLog" "$accErr" "$accRep" 2>/dev/null | grep -aE "$failClasses" | head -60 || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY" || true
 
             while IFS= read -r line; do
               emit "linux-qt-acceptance: $line"
-            done < <(cat "$accLog" "$accErr" 2>/dev/null | grep -aE "$failClasses" | head -10 || true)
+            done < <(cat "$accLog" "$accErr" "$accRep" 2>/dev/null | grep -aE "$failClasses" | head -10 || true)
           else
             emit "Qt live-answer acceptance failed with no log captured (see ci-logs/ directory in artifact)"
           fi

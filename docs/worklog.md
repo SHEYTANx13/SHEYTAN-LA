@@ -8,6 +8,20 @@ is carried in this header; a worklog-header version is a stale-claim
 hazard by construction).
 
 ---
+Task ID: 3 (v1.10.13 final cycle) — agent: Go source repair session; tree pinned at fa6afd1
+Task: repair the four verified Go defects named by run 39243477114 (Linux 16 passed / 2 failed: "goal resume failed (status 500)",
+park timeout with zero diagnostics; Windows exit 2, empty captures), capture the Windows report, encode the never-again invariants
+Work Log: goals.go — goalDriveRecord{gen,cancel,done}; goalDriveAdmit under ONE lock (I1); goalDriveRelease generation-safe (I2);
+goalDriveCancel retains until unwind; resumeAndDrive bounded serialization (typed 409, pause-rollback on admit conflict);
+settleDriveError observed completion (bounded evidence + blocked, I3/I6); goalRunFunc binds SnapshotOf (typed failure, no active
+substitution); ApprovalCheck consumes the ONE-USE grant (I4); writeGoalErr errors.Is. goal.go — Resume excludes
+waiting_for_approval; ResolveApproval arms/clears ApprovedAction; TakeApprovedAction; SettleDriveFailure. Workflow — the -o report
+both platforms, non-empty assertion on nonzero exits, if:always() uploads, summaries read the report. tst_acceptance.cpp —
+dumpGoalDiagnostics (status/phase/driving/last evidence) on the park and resume waits.
+Battery: go build ./... OK; go vet ./... OK; go test ./internal/... exit 0 (65 packages) and -race clean; gofmt clean;
+Qt acceptance build NOT RUN (no Qt toolchain). ZIP: git-archive of the tracked tree, single top-level dir, web/static/ present,
+no .git/build trees, no backslash entries, SHA-256 recorded.
+
 Task ID: 2 (v1.10.13 fix cycle) — agent: hosted-defect repair session; tree pinned at 161ea36b
 Task: restore the Linux platform env, unmask the empty CTest, make the red gates self-naming, keep the acceptance claims
 honest, close the two failing Windows slots — the run-#23 cycle (39129668510: Win acceptance exit 2, Linux exit 134, zero FAIL lines)

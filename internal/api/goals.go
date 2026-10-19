@@ -22,10 +22,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aisystem"
@@ -33,31 +36,113 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
 )
 
+// ---------------------------------------------------------------------------
+// Drive registry (v1.10.13 DRIVE-REGISTRY repair)
+//
+// Named invariants (encoded here, tested in goal_drive_lifecycle_test.go):
+//
+//	I1 — Atomic single-flight: admission and reservation happen under
+//	     ONE lock; no check-then-insert gap exists anywhere a registry
+//	     is used.
+//	I2 — Generation ownership: cleanup removes only the record it
+//	     owns; no old actor can delete a newer actor's registration.
+//	I3 — No discarded outcomes: any goroutine whose result matters has
+//	     its result and error observed and settled; "_ =" on a
+//	     consequential error is a review failure.
+//	I6 — Status and drive always agree: an active goal always has a
+//	     live or finishing drive; the invariant is tested, not assumed.
+// ---------------------------------------------------------------------------
+
+// goalDriveRecord is ONE live drive generation per goal.
+type goalDriveRecord struct {
+	gen    uint64
+	cancel context.CancelFunc
+	// done closes exactly when the drive goroutine has fully unwound
+	// (after the generation-safe release below). The resume path
+	// serializes with the old generation on this channel — bounded
+	// seconds, never the acceptance suite's own bounds.
+	done chan struct{}
+}
+
 // goalDrives tracks the single-flight drive per goal (one loop at a time;
-// a second start on a live goal is an honest 409, never a parallel loop).
+// a second start on a live goal is an honest typed 409, never a parallel
+// loop and never a generic 500 for a transient unwind).
 var goalDrives = struct {
 	mu      sync.Mutex
-	pending map[string]context.CancelFunc
-}{
-	pending: map[string]context.CancelFunc{},
-}
+	nextGen uint64
+	live    map[string]*goalDriveRecord
+}{live: map[string]*goalDriveRecord{}}
 
-func goalDriveActive(id string) bool {
+// goalDriveStopWait bounds how long a resume waits for the previous drive
+// generation to unwind. Seconds, deliberately.
+var goalDriveStopWait = 5 * time.Second
+
+// goalDriveAdmit atomically admits a new drive generation: the duplicate
+// check and the reservation are ONE critical section (I1 — the former
+// check-then-insert gap let two concurrent starts both pass and
+// overwrite). On conflict it returns the live record; the caller answers
+// with a typed conflict.
+func goalDriveAdmit(id string, cancel context.CancelFunc) (*goalDriveRecord, bool) {
 	goalDrives.mu.Lock()
 	defer goalDrives.mu.Unlock()
-	_, ok := goalDrives.pending[id]
-	return ok
+	if cur, ok := goalDrives.live[id]; ok {
+		return cur, false
+	}
+	goalDrives.nextGen++
+	rec := &goalDriveRecord{gen: goalDrives.nextGen, cancel: cancel, done: make(chan struct{})}
+	goalDrives.live[id] = rec
+	return rec, true
 }
 
-func goalDriveCancel(id string) bool {
+// goalDriveLookup returns the goal's live drive record, if any.
+func goalDriveLookup(id string) *goalDriveRecord {
 	goalDrives.mu.Lock()
 	defer goalDrives.mu.Unlock()
-	if cancel, ok := goalDrives.pending[id]; ok {
-		delete(goalDrives.pending, id)
-		cancel()
+	return goalDrives.live[id]
+}
+
+// goalDriveWaitStop waits bounded for the goal's live drive generation to
+// unwind. false means the generation is still live after the bound — the
+// caller answers with a typed conflict naming the state.
+func goalDriveWaitStop(id string, timeout time.Duration) bool {
+	rec := goalDriveLookup(id)
+	if rec == nil {
 		return true
 	}
-	return false
+	select {
+	case <-rec.done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+// goalDriveCancel cancels the goal's live drive generation WITHOUT
+// releasing the reservation: the goroutine's own cleanup releases the
+// record when the unwinding completes, so a replacement can never overlap
+// a cancelled generation (the former code deleted the entry before the
+// goroutine had exited).
+func goalDriveCancel(id string) bool {
+	rec := goalDriveLookup(id)
+	if rec == nil {
+		return false
+	}
+	rec.cancel()
+	return true
+}
+
+// goalDriveRelease is the generation-safe cleanup (I2): the record is
+// removed ONLY if the registry still points at THIS record (an old
+// generation can never delete a newer generation's registration), and the
+// done channel closes only AFTER the removal — the reservation outlives
+// the goroutine's entire unwinding.
+func goalDriveRelease(id string, rec *goalDriveRecord) {
+	goalDrives.mu.Lock()
+	if cur, ok := goalDrives.live[id]; ok && cur == rec {
+		delete(goalDrives.live, id)
+	}
+	goalDrives.mu.Unlock()
+	close(rec.done)
 }
 
 // goalRunFunc binds the goal engine's executor seam to the ONE
@@ -66,7 +151,25 @@ func goalDriveCancel(id string) bool {
 // outcome — a model claim alone can never complete a goal.
 func (s *Server) goalRunFunc() goal.RunFunc {
 	return func(ctx context.Context, req goal.RunRequest) (goal.RunOutcome, error) {
-		_ = req.SystemID
+		// v1.10.13 SYSTEMID-DISCARDED repair: the goal's frozen AI
+		// System identity is BINDING at the orchestration boundary — the
+		// runner passes it into every phase request (understanding,
+		// planning, replan, acting, verify). The referenced system must
+		// resolve; an unavailable system fails the run explicitly as a
+		// typed invalid-goal error. The active system is NEVER silently
+		// substituted, and an unbound goal (no frozen identity) runs
+		// unbound exactly as before.
+		var runOpts []agent.RunOption
+		if req.SystemID != "" {
+			if s.systemsStore() == nil {
+				return goal.RunOutcome{}, fmt.Errorf("%w: goal %s references AI system %q but the systems store is unavailable", goal.ErrInvalid, req.GoalID, req.SystemID)
+			}
+			snap, snapErr := s.systemsStore().SnapshotOf(req.SystemID)
+			if snapErr != nil {
+				return goal.RunOutcome{}, fmt.Errorf("%w: goal %s references AI system %q which is unavailable: %v", goal.ErrInvalid, req.GoalID, req.SystemID, snapErr)
+			}
+			runOpts = append(runOpts, agent.WithAISystem(&snap))
+		}
 
 		messages := []llm.Message{{Role: "user", Content: req.Prompt}}
 		res, err := s.orch.RunDetailed(ctx, messages,
@@ -85,6 +188,7 @@ func (s *Server) goalRunFunc() goal.RunFunc {
 			// pre-step parking above; nothing risky ever
 			// executes silently.
 
+			runOpts...,
 		)
 		if err != nil {
 			return goal.RunOutcome{}, err
@@ -124,6 +228,17 @@ func (s *Server) goalRunnerOptions() goal.RunnerOptions {
 			if err != nil {
 				return false, nil
 			}
+			// v1.10.13 APPROVAL-ONE-USE (I4): an approved decision is
+			// consumed EXACTLY once, for the EXACT canonical action (the
+			// step identity). The recorded grant for THIS step honors the
+			// human decision — the step executes and the grant is cleared
+			// atomically under the store lock, so the next drive can
+			// never re-park the same approved step. A mismatched grant is
+			// never consumed and has no side effects: the policy below
+			// re-parks with a fresh pending call.
+			if granted, grantErr := s.goalStore().TakeApprovedAction(goalID, stepIdx); grantErr == nil && granted {
+				return false, nil
+			}
 			// The approval POLICY comes from the goal's bound AI System;
 			// ask-all parks every acting step (the durable pending call
 			// carries the step identity). ask-risky/none defer to the
@@ -152,11 +267,11 @@ func (s *Server) goalRunnerOptions() goal.RunnerOptions {
 	}
 }
 
-// startGoalDrive launches the bounded loop in the background.
+// startGoalDrive launches the bounded loop in the background. Admission
+// is atomic (I1); the goroutine's completion is OBSERVED (I3) and a
+// failed drive settles the goal deliberately — never an active goal
+// without a live or finishing drive (I6).
 func (s *Server) startGoalDrive(goalID string) error {
-	if goalDriveActive(goalID) {
-		return fmt.Errorf("goal %s is already being driven", goalID)
-	}
 	store := s.goalStore()
 	if store == nil {
 		return fmt.Errorf("goal store unavailable")
@@ -170,19 +285,145 @@ func (s *Server) startGoalDrive(goalID string) error {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	goalDrives.mu.Lock()
-	goalDrives.pending[goalID] = cancel
-	goalDrives.mu.Unlock()
+	rec, admitted := goalDriveAdmit(goalID, cancel)
+	if !admitted {
+		// The unused context is released; the live generation keeps
+		// owning the goal. Typed conflict — never a generic 500.
+		cancel()
+		return fmt.Errorf("%w: goal %s is already being driven", goal.ErrDriveConflict, goalID)
+	}
 
 	go func() {
-		defer func() {
-			goalDrives.mu.Lock()
-			delete(goalDrives.pending, goalID)
-			goalDrives.mu.Unlock()
-		}()
-		_, _ = goal.Drive(ctx, store, goalID, s.goalRunFunc(), s.goalRunnerOptions())
+		// I2: cleanup removes ONLY this generation's record, and the
+		// done channel closes after the removal — the reservation
+		// outlives the goroutine's entire unwinding.
+		defer goalDriveRelease(goalID, rec)
+		// I3: no discarded outcomes — the result AND error of the drive
+		// are observed; a failed drive settles the goal deliberately
+		// (the former `_, _ =` discarded both, leaving an active goal
+		// with no functioning drive and zero diagnostics).
+		_, driveErr := goal.Drive(ctx, store, goalID, s.goalRunFunc(), s.goalRunnerOptions())
+		if driveErr != nil {
+			s.settleDriveError(goalID, driveErr)
+		}
 	}()
 	return nil
+}
+
+// redactDriveDetail bounds and redacts a settlement detail before it
+// becomes durable evidence (rule 7 — no secrets in evidence): named-pipe
+// endpoints are masked wholesale, key-shaped assignments are masked, and
+// the store clamps the length. Plain scanning — no regex, no escaping
+// ambiguity at the orchestration boundary.
+func redactDriveDetail(detail string) string {
+	detail = strings.ReplaceAll(detail, `\\.\pipe\`, `\\.\pipe\<redacted>`)
+	detail = maskKeyAssignments(detail)
+	if len(detail) > goal.MaxEvidenceDetailLen {
+		detail = detail[:goal.MaxEvidenceDetailLen]
+	}
+	return detail
+}
+
+// maskKeyAssignments masks "key=value" / "key: value" shaped whitespace
+// separated tokens (case-insensitive over the assignment's key).
+func maskKeyAssignments(detail string) string {
+	fields := strings.Fields(detail)
+	for i, f := range fields {
+		low := strings.ToLower(f)
+		for _, k := range []string{"key", "token", "secret", "password"} {
+			if strings.HasPrefix(low, k+"=") || strings.HasPrefix(low, k+":") {
+				fields[i] = k + "=<redacted>"
+				break
+			}
+		}
+	}
+	return strings.Join(fields, " ")
+}
+
+// settleDriveError (I3/I6) is the observed completion path of a failed
+// drive: bounded evidence with phase, error category, timestamp and
+// redacted detail lands in the durable document, the status moves OFF
+// active (blocked — resumable honestly, no fake success, no fake
+// failure), and the settled state is emitted into the log. A cancelled
+// drive is a CONTROL outcome (pause/cancel/stop): the durable state
+// already says why the drive stopped, so only the evidence is recorded.
+func (s *Server) settleDriveError(goalID string, driveErr error) {
+	category := "run"
+	switch {
+	case errors.Is(driveErr, context.Canceled):
+		category = "cancelled"
+	case errors.Is(driveErr, context.DeadlineExceeded):
+		category = "deadline"
+	}
+	store := s.goalStore()
+	if store == nil {
+		log.Printf("[goal] %s drive %s: store unavailable — error not settled: %v", goalID, category, driveErr)
+		return
+	}
+	g, err := store.Get(goalID)
+	if err != nil {
+		log.Printf("[goal] %s drive %s: the goal vanished before settlement: %v", goalID, category, driveErr)
+		return
+	}
+	detail := redactDriveDetail(fmt.Sprintf("category=%s phase=%s error=%v", category, g.Phase, driveErr))
+	if _, err := store.AppendEvidence(goalID, goal.Evidence{
+		Phase:  g.Phase,
+		Action: "drive failed",
+		Status: "error",
+		Detail: detail,
+	}); err != nil {
+		log.Printf("[goal] %s drive %s: evidence append failed: %v", goalID, category, err)
+	}
+	if category == "cancelled" {
+		log.Printf("[goal] %s drive cancelled at phase %s (status %s)", goalID, g.Phase, g.Status)
+		return
+	}
+	if _, err := store.SettleDriveFailure(goalID, "the drive failed — resume from the checkpoint or cancel"); err != nil {
+		log.Printf("[goal] %s drive %s: settlement failed: %v", goalID, category, err)
+		return
+	}
+	log.Printf("[goal] %s drive %s settled at phase %s: status=blocked detail=%s", goalID, category, g.Phase, detail)
+}
+
+// resumeAndDrive is the ONE serialized resume path (v1.10.13 RESUME-500
+// repair): the previous drive generation must be fully unwound before
+// the store flips the goal active and the new generation is admitted —
+// one live drive per goal, always (I6). The former code flipped the
+// durable status to active, called startGoalDrive, lost the "already
+// being driven" race against the old generation's unwinding, and
+// answered a generic 500 while the durable store said active with no
+// drive. The wait is bounded by goalDriveStopWait (seconds); a drive
+// that will not stop in the bound is a typed conflict naming the state.
+func (s *Server) resumeAndDrive(w http.ResponseWriter, store *goal.Store, id string) {
+	if !goalDriveWaitStop(id, goalDriveStopWait) {
+		writeGoalErr(w, fmt.Errorf("%w: goal %s is still stopping — its previous drive generation has not unwound within %s", goal.ErrDriveConflict, id, goalDriveStopWait))
+		return
+	}
+	g, err := store.Resume(id)
+	if err != nil {
+		writeGoalErr(w, err)
+		return
+	}
+	if err := s.startGoalDrive(id); err != nil {
+		// The status flip is compensated: the goal never sits active
+		// without a drive (I6). The checkpoint and any armed approval
+		// grant survive — an explicit resume re-drives.
+		_, _ = store.AppendEvidence(id, goal.Evidence{
+			Phase:  g.Phase,
+			Action: "resume rolled back — the drive could not be admitted",
+			Status: "conflict",
+			Detail: err.Error(),
+		})
+		_, _ = store.Pause(id)
+		_, _ = store.AppendEvidence(id, goal.Evidence{
+			Phase:  g.Phase,
+			Action: "goal parked — resume the goal to re-drive it",
+			Status: "paused",
+		})
+		writeGoalErr(w, err)
+		return
+	}
+	writeJSON(w, g)
 }
 
 func (s *Server) goalStore() *goal.Store {
@@ -287,7 +528,7 @@ func (s *Server) handleGoalItem(w http.ResponseWriter, r *http.Request) {
 			done, total := g.Progress()
 			writeJSON(w, map[string]any{
 				"goal":    g,
-				"driving": goalDriveActive(id),
+				"driving": goalDriveLookup(id) != nil,
 				"done":    done,
 				"total":   total,
 			})
@@ -318,11 +559,12 @@ func (s *Server) handleGoalItem(w http.ResponseWriter, r *http.Request) {
 		}
 		if g.Status == goal.StatusPaused || g.Status == goal.StatusBlocked ||
 			g.Status == goal.StatusWaitingApproval {
-			// start on a parked goal resumes from the checkpoint
-			if _, err := store.Resume(id); err != nil {
-				writeGoalErr(w, err)
-				return
-			}
+			// start on a parked goal resumes from the checkpoint through
+			// the ONE serialized path. waiting_for_approval is NOT a
+			// resume source any more — the store's Resume rejects it with
+			// a typed error; approve/reject owns that transition.
+			s.resumeAndDrive(w, store, id)
+			return
 		}
 		if err := s.startGoalDrive(id); err != nil {
 			writeGoalErr(w, err)
@@ -339,17 +581,9 @@ func (s *Server) handleGoalItem(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, g)
 
 	case "resume":
-		g, err := store.Resume(id)
-		if err != nil {
-			writeGoalErr(w, err)
-			return
-		}
-		// resume re-drives from the checkpoint
-		if err := s.startGoalDrive(id); err != nil {
-			writeGoalErr(w, err)
-			return
-		}
-		writeJSON(w, g)
+		// resume re-drives from the checkpoint through the ONE
+		// serialized path (the old generation unwinds first — bounded).
+		s.resumeAndDrive(w, store, id)
 
 	case "cancel":
 		g, err := store.Cancel(id, "cancelled by the user")
@@ -380,7 +614,29 @@ func (s *Server) handleGoalItem(w http.ResponseWriter, r *http.Request) {
 		}
 		// An approved goal resumes the EXACT approved step.
 		if decision == "approved" {
-			_ = s.startGoalDrive(id)
+			// v1.10.13 SWALLOWED-ERRORS repair: the restart failure is
+			// returned and typed — never ignored. The parked generation
+			// unwound when the goal parked, but the bounded wait keeps
+			// the admission honest under automation-speed callers.
+			if !goalDriveWaitStop(id, goalDriveStopWait) {
+				writeGoalErr(w, fmt.Errorf("%w: goal %s is still stopping — the approved decision is armed; resume once the previous drive generation has unwound", goal.ErrDriveConflict, id))
+				return
+			}
+			if err := s.startGoalDrive(id); err != nil {
+				// The approved decision stays durable (evidence + ONE-USE
+				// grant armed); the goal is parked paused so it never sits
+				// active without a drive (I6) — an explicit resume
+				// executes the approved step.
+				_, _ = store.AppendEvidence(id, goal.Evidence{
+					Phase:  g.Phase,
+					Action: "approved decision armed — the drive restart failed; resume to execute the approved step",
+					Status: "conflict",
+					Detail: err.Error(),
+				})
+				_, _ = store.Pause(id)
+				writeGoalErr(w, err)
+				return
+			}
 		}
 		writeJSON(w, g)
 
@@ -389,19 +645,24 @@ func (s *Server) handleGoalItem(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// writeGoalErr maps the goal package's typed errors onto the HTTP
+// contract. Sentinel identity is matched with errors.Is — a wrapped
+// sentinel IS the sentinel; sentinel identity is never string-matched
+// (the former strings.Contains matched an error whose TEXT happened to
+// embed another error's text).
 func writeGoalErr(w http.ResponseWriter, err error) {
-	switch err {
-	case goal.ErrNotFound:
+	switch {
+	case errors.Is(err, goal.ErrNotFound):
 		writeErr(w, http.StatusNotFound, err)
-	case goal.ErrNotResumable:
+	case errors.Is(err, goal.ErrDriveConflict):
 		writeErr(w, http.StatusConflict, err)
-	case goal.ErrTooMany:
+	case errors.Is(err, goal.ErrNotResumable):
+		writeErr(w, http.StatusConflict, err)
+	case errors.Is(err, goal.ErrTooMany):
 		writeErr(w, http.StatusInsufficientStorage, err)
+	case errors.Is(err, goal.ErrInvalid):
+		writeErr(w, http.StatusBadRequest, err)
 	default:
-		if err != nil && strings.Contains(err.Error(), goal.ErrInvalid.Error()) {
-			writeErr(w, http.StatusBadRequest, err)
-			return
-		}
 		writeErr(w, http.StatusInternalServerError, err)
 	}
 }
