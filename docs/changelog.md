@@ -10,6 +10,12 @@ concern, evidence over confidence, no sleep-based correctness, honest
 hardware claims, the codename gate enabled.
 
 ---
+## v1.10.13 (run #27 cycle) — 2026-10-20 — Qt compile repair (duplicate diagnostic block) + CoreClient openSession silent-return surfaced
+Run 39321045295 (commit 7fdee73): audit + Go race gate fully green (incl. TestGoalAskAllTwoGoalsParkConcurrently); both platform jobs red at "Build Qt host" — MSVC C2084 (523) + C3861 (282, 312): dumpChatPersistDiagnostics defined twice, both call sites above both definitions; the Qt acceptance never started on either platform (NOT RUN, never pass).
+COMPILE-REPAIR: tst_acceptance.cpp — the second byte-identical dumpChatPersistDiagnostics block (comment + definition at 512–546 at 7fdee73) deleted, the first body kept; one forward declaration added after the includes; call sites, waits, bounds and the surviving body byte-identical; Csymbol inventory (duplicate-definition + use-before-declaration) recorded PASS on the edited file.
+STRUCTURAL: coreclient.cpp openSession — the malformed-payload silent `if (!ok) return;` now sets the typed client error "session %1: transcript reload: malformed payload" through the existing setError channel before returning; well-formed path byte-identical, no new signals, no API change; arms the chat-persist slot's next hosted verdict with a named client error instead of silence.
+Local battery: go build ./..., go test -race ./internal/goal ./internal/api, gofmt — green; Csymbol inventory PASS on both edited C files. The Qt host build stays NOT RUN locally (no Qt toolchain in the cycle sandbox); the hosted verdict for this cycle is recorded at delivery — nothing here claims a hosted gate that has not run.
+
 ## v1.10.13 (run #26 cycle) — 2026-10-19 — phantom approval gate wired + pure drive-registry extraction + anonymous QWARN diagnostics
 Run 39287807508 (commit ffcf2c8): audit green; both platform jobs built the Qt host and RAN the live-answer acceptance — Windows exit 2 (16 passed / 2 failed), Linux exit 1 (17 passed / 1 failed, quoted: goalsApproveRejectParkedGoal "'parked' returned FALSE"), chatStreamPersistRepeatAndClose failed only on Windows at the first persisted-assistant wait; packaging, smokes and uploads after the acceptance gate NOT RUN.
 PHANTOM-GATE: goalRunFunc now wires agent.WithApprovalGate(goalApprovalGate{}) when a system snapshot is bound — the documented denial gate exists in code, denial-as-evidence, never a run error; unbound goals run exactly as before.

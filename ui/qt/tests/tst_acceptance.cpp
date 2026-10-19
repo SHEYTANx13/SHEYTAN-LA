@@ -46,6 +46,8 @@
 
 #include "coreclient.h"
 
+static void dumpChatPersistDiagnostics(const CoreClient &, const QString &);
+
 class Acceptance : public QObject {
     Q_OBJECT
 
@@ -471,42 +473,6 @@ static void dumpGoalDiagnostics(const QString &endpoint, const QStringList &ids)
                                   g.value("lastAction").toString(),
                                   lastEv)));
     }
-}
-
-// dumpChatPersistDiagnostics — the settle→persist snapshot for
-// chatStreamPersistRepeatAndClose's two assistant-count waits (the
-// Windows-only first-wait failure class). On a timed-out wait it QWARNs
-// the observable facts that discriminate a slow-runner persistence race
-// from a CoreClient settle→transcript-reload defect: the transcript
-// size, the role list, whether any assistant content carries the
-// fixture marker, and the client's own error/busy/liveActive/session
-// state at the moment of the timeout. QWARN rides the QtTest -o report
-// and (from this cycle) the workflow failure summaries, so the facts
-// are anonymously readable on a red run — never a tail dump, the
-// assertion and its bound stay exactly as they were.
-static void dumpChatPersistDiagnostics(const CoreClient &core, const QString &which)
-{
-    QStringList roles;
-    bool anyAssistantWorkingFine = false;
-    const auto msgs = core.messages();
-    for (const auto &m : msgs) {
-        const QVariantMap mm = m.toMap();
-        const QString role = mm.value("role").toString();
-        roles << role;
-        if (role == QStringLiteral("assistant")
-            && mm.value("content").toString().contains(QStringLiteral("working fine")))
-            anyAssistantWorkingFine = true;
-    }
-    QWARN(qPrintable(QStringLiteral(
-                         "chat-persist[%1] → messages=%2 roles=[%3] anyAssistantWorkingFine=%4 error=%5 busy=%6 liveActive=%7 session=%8")
-                         .arg(which,
-                              QString::number(msgs.size()),
-                              roles.join(QLatin1Char(',')),
-                              anyAssistantWorkingFine ? QStringLiteral("true") : QStringLiteral("false"),
-                              core.error(),
-                              core.busy() ? QStringLiteral("true") : QStringLiteral("false"),
-                              core.liveActive() ? QStringLiteral("true") : QStringLiteral("false"),
-                              core.currentSession().value("id").toString())));
 }
 
 // dumpChatPersistDiagnostics — the settle→persist snapshot for

@@ -353,7 +353,11 @@ void CoreClient::openSession(const QString &id) {
                 }
                 bool ok = false;
                 const auto m = toMap(body, &ok);
-                if (!ok) return;
+                if (!ok) {
+                    setError(QStringLiteral("session %1: transcript reload: malformed payload")
+                                 .arg(id));
+                    return;
+                }
                 m_sessionId = id;
                 applySession(m);
             });

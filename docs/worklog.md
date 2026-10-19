@@ -9,6 +9,14 @@ hazard by construction).
 
 ---
 ---
+Task ID: 27 (v1.10.13 run #27 cycle) — agent: compile-repair + silent-return session; tree pinned at 7fdee73
+Task: repair the run #27 Qt compile break (duplicate dumpChatPersistDiagnostics) so the acceptance suite finally executes hosted, land the one structural item (CoreClient openSession silent-return → typed error), read the first real hosted verdicts for the parked-goal and chat-persist slots
+Work Log: tst_acceptance.cpp — exactly two hunks: the byte-identical second dumpChatPersistDiagnostics block (comment + definition, 512–546 at 7fdee73) deleted, one forward declaration added after the includes; call sites (284/314 post-edit), waits, bounds and the surviving body untouched; Csymbol inventory PASS — every file-scope definition unique, declaration line 49 above both call sites.
+coreclient.cpp — openSession malformed-payload branch: the silent `if (!ok) return;` (354–356 at 7fdee73) now sets the typed error "session %1: transcript reload: malformed payload" via the existing setError channel before returning; well-formed path byte-identical, no new signals, no API change; inventory PASS.
+Local — go build ./... green; go test -race ./internal/goal (1.3s) and ./internal/api (119.4s) green; gofmt clean; diff vs 7fdee73 = exactly the two files above; workflow, Go tree and protected docs byte-identical. NOT RUN locally — Qt host build and Qt acceptance (no Qt toolchain in the sandbox); hosted proof belongs to run #28 on the pushed commit.
+Future work (scope unchanged): CI restructuring, Qt suite splitting, revision-addressed snapshot history, installer/NSIS work, any frontend or publish-job change, any workflow edit (frozen this cycle), raising any wait bound without hosted evidence. Workspace-path restructuring (flattening D:\a\SHEYTAN-LA\SHEYTAN-LA) is CLOSED-WONT-FIX — GITHUB_WORKSPACE is fixed by the GitHub-hosted runner contract (https://docs.github.com/en/actions/reference/workflows-and-actions/variables — GITHUB_WORKSPACE defaults cannot be overwritten; https://github.com/actions/checkout#inputs — the checkout path is constrained beneath github.workspace) and nothing in the repo references the absolute path.
+
+---
 Task ID: 26 (v1.10.13 run #26 cycle) — agent: park diagnosis + structural session; tree pinned at ffcf2c8
 Task: root-cause the deterministic ask-all park failure (goalsApproveRejectParkedGoal, red on three consecutive hosted runs), deliver anonymous diagnosability for it and the Windows-only chat-persist failure, land the two structural items (phantom gate wiring, drive-registry extraction)
 Work Log: probe TestGoalAskAllTwoGoalsParkConcurrently — the exact Qt shape (two ask-all goals started at creation through the real HTTP surface, chunked SSE fixture engine) parks BOTH goals in 0.17s locally, full race battery green — NOT REPRODUCED; the probe stays as the regression pin and the hosted QWARN facts discriminate the client/packaged path.
