@@ -541,3 +541,57 @@ func TestRunRequestsCarryFrozenRevision(t *testing.T) {
 		}
 	}
 }
+
+// TestTerminalGoalRefusesLateSettlements pins the v1.10.13 TERMINAL-GUARD
+// repair (Task ID 28 R1, PROBE A): a terminal goal's status can never be
+// re-classified by a late drive settlement. The reproduced run-#28 race
+// chain was cancelled → blocked (MarkStep on the late acting outcome) →
+// paused (the drive's ctx path) within ~10ms of the cancel POST, so the
+// acceptance poll never observed "cancelled". Every status-changing
+// settlement write must refuse typed (ErrNotResumable) on a terminal
+// goal; the durable status stays exactly what the cancel wrote.
+func TestTerminalGoalRefusesLateSettlements(t *testing.T) {
+	store := openStore(t)
+	g, err := store.Create("terminal guard fixture", "", "", 0, "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.SetPlan(g.GoalID, []string{"step one", "step two"}); err != nil {
+		t.Fatalf("SetPlan: %v", err)
+	}
+	if _, err := store.Cancel(g.GoalID, "cancelled by the user"); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	// The late acting-outcome write (the PROBE A overwrite site).
+	if _, err := store.MarkStep(g.GoalID, 0, StepBlocked, "late run failed", nil, nil, nil); !errors.Is(err, ErrNotResumable) {
+		t.Fatalf("MarkStep on a cancelled goal = %v, want typed ErrNotResumable", err)
+	}
+	// The late verification settlement (both verdict directions).
+	if _, err := store.SetVerification(g.GoalID, false, "late verification run failed"); !errors.Is(err, ErrNotResumable) {
+		t.Fatalf("SetVerification(false) on a cancelled goal = %v, want typed ErrNotResumable", err)
+	}
+	if _, err := store.SetVerification(g.GoalID, true, "late verification"); !errors.Is(err, ErrNotResumable) {
+		t.Fatalf("SetVerification(true) on a cancelled goal = %v, want typed ErrNotResumable", err)
+	}
+	// The late approval park (a parked state must not bury a cancel).
+	if _, err := store.RequestApproval(g.GoalID, &PendingApproval{ApprovalID: "late", ToolName: "goal.step"}); !errors.Is(err, ErrNotResumable) {
+		t.Fatalf("RequestApproval on a cancelled goal = %v, want typed ErrNotResumable", err)
+	}
+
+	// The durable status is EXACTLY what the cancel wrote — no drift, no
+	// resurrection, and the reload contract still holds.
+	final, err := store.Get(g.GoalID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if final.Status != StatusCancelled || !final.IsTerminal() {
+		t.Fatalf("status after late settlements = %q, want untouched cancelled", final.Status)
+	}
+	if len(final.Plan) != 2 || final.Plan[0].Status != StepPending {
+		t.Fatalf("the late MarkStep must not mutate the plan of a terminal goal: %+v", final.Plan)
+	}
+	if final.Verification != "" {
+		t.Fatalf("the late SetVerification must not write verification of a terminal goal: %q", final.Verification)
+	}
+}

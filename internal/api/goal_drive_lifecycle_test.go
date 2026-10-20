@@ -626,3 +626,361 @@ func TestGoalSystemRevisionFrozenContract(t *testing.T) {
 		t.Fatalf("revised system = %v; want typed goal.ErrInvalid (frozen-revision contract)", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Task ID 28 (v1.10.13 cycle) — §12 probes and the deterministic I6
+// regression. The fixture engine mirrors scripts/fake-remote-engine.py
+// EXACTLY (the script stays read-only; the contract lives here): 9 SSE
+// chunks, ~150ms pacing per chunk, OpenAI chat.completions delta framing,
+// "data: [DONE]" terminator, the SAME answer for every request. The fast
+// chunkedParkEngine fixture above is retained unchanged.
+// ---------------------------------------------------------------------------
+
+// exactFixtureEngine is the PACKAGED-PROFILE engine (register V9): the
+// exact wire shape and pacing of scripts/fake-remote-engine.py, which the
+// Qt acceptance's core really drives (initTestCase pins it on port 18652).
+// The fast fixture (15ms, 4 chunks) never exercised this timing class.
+func exactFixtureEngine(t *testing.T) *httptest.Server {
+	t.Helper()
+	chunks := []string{"Hello", " — ", "I ", "am ", "here ", "and ", "working", " ", "fine."}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, c := range chunks {
+			payload := map[string]any{
+				"id": "chatcmpl-fixture",
+				"choices": []map[string]any{{
+					"index":         0,
+					"delta":         map[string]any{"role": "assistant", "content": c},
+					"finish_reason": nil,
+				}},
+			}
+			enc, _ := json.Marshal(payload)
+			if _, err := w.Write(append(append([]byte("data: "), enc...), []byte("\n\n")...)); err != nil {
+				return
+			}
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			time.Sleep(150 * time.Millisecond)
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	t.Cleanup(server.Close)
+	return server
+}
+
+// dumpProbeGoalRecord dumps ONE goal's FULL durable record (status, phase,
+// plan, every evidence record) — the §12 requirement that a reproduction
+// names the exact mechanism through the durable documents, never a bare
+// timeout.
+func dumpProbeGoalRecord(t *testing.T, srv *Server, id string) {
+	t.Helper()
+	g, err := srv.goalStore().Get(id)
+	if err != nil {
+		t.Logf("goal %s → Get failed: %v", id, err)
+		return
+	}
+	t.Logf("goal %s → status=%s phase=%s turns=%d replans=%d lastAction=%q pending=%+v",
+		id, g.Status, g.Phase, g.TurnsUsed, g.Replans, g.LastAction, g.PendingApproval)
+	for i, st := range g.Plan {
+		t.Logf("goal %s → plan[%d] index=%d status=%s objective=%q result=%q", id, i, st.Index, st.Status, st.Objective, st.Result)
+	}
+	for _, e := range g.Evidence {
+		t.Logf("goal %s → evidence: %s phase=%s action=%q status=%s detail=%q",
+			id, e.Timestamp.Format("15:04:05.000"), e.Phase, e.Action, e.Status, e.Detail)
+	}
+}
+
+// TestGoalRoundTripCancelReplayPackagedProfile is PROBE A (§12): the
+// goalsStartPauseResumeCancelRoundTrip replay — start → phase leaves
+// understanding → pause → paused → resume → active → cancel → poll
+// "cancelled" under the suite's 15s bound class — through the REAL server
+// stack with the EXACT packaged engine profile (9 chunks × 150ms). The
+// goal is created WITHOUT systemId: a fresh acceptance data dir binds no
+// active system, so the acceptance goal runs UNBOUND (the probe asserts
+// that precondition explicitly — V5's gate-live assumption is checked,
+// not assumed). On failure the full durable record is dumped and the
+// exact status transition chain names the mechanism.
+func TestGoalRoundTripCancelReplayPackagedProfile(t *testing.T) {
+	engine := exactFixtureEngine(t)
+	srv, server := newRemoteServerWithHandle(t, engine.URL)
+
+	code, created := postGoalJSON(t, server.URL, "/api/goals", `{"goal":"acceptance round trip fixture"}`)
+	if code != http.StatusOK {
+		t.Fatalf("POST /api/goals = %d: %+v", code, created)
+	}
+	goalID, _ := created["goalId"].(string)
+	if goalID == "" {
+		t.Fatalf("no goalId in response: %+v", created)
+	}
+	if g, err := srv.goalStore().Get(goalID); err != nil {
+		t.Fatalf("fixture precondition failed: Get: %v", err)
+	} else if g.SystemID != aisystem.ReservedID {
+		// Register correction verified here (Task ID 28): a no-systemId
+		// goal binds the ALWAYS-PRESENT ACTIVE default system
+		// (aisystem.ReservedID) — V5's gate-live assumption HOLDS, the
+		// acceptance round-trip goal is BOUND. The default system's
+		// approval policy is not ask-all (the slot's pause/resume legs
+		// passed on run #28), so no park fires — the gate is wired but
+		// the fixture emits no ask-class tool calls.
+		t.Fatalf("fixture precondition failed: the no-systemId goal binds %q, want the reserved active default %q", g.SystemID, aisystem.ReservedID)
+	}
+
+	// Start: the bounded drive begins; the phase leaves understanding
+	// (45s bound class — the slot's own bound).
+	if code, _ := postGoalJSON(t, server.URL, "/api/goals/"+goalID+"/start", `{}`); code != http.StatusOK {
+		t.Fatalf("POST start = %d", code)
+	}
+	leftUnderstanding := false
+	deadline := time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) {
+		if g, err := srv.goalStore().Get(goalID); err == nil && g.Phase != goal.PhaseUnderstanding {
+			leftUnderstanding = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !leftUnderstanding {
+		dumpProbeGoalRecord(t, srv, goalID)
+		t.Fatalf("the phase never left understanding within 45s")
+	}
+
+	// Pause → paused (15s bound class).
+	if code, _ := postGoalJSON(t, server.URL, "/api/goals/"+goalID+"/pause", `{}`); code != http.StatusOK {
+		t.Fatalf("POST pause = %d", code)
+	}
+	pauseOK := false
+	deadline = time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if g, err := srv.goalStore().Get(goalID); err == nil && g.Status == goal.StatusPaused {
+			pauseOK = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !pauseOK {
+		dumpProbeGoalRecord(t, srv, goalID)
+		t.Fatalf("the goal never reached paused within 15s")
+	}
+
+	// Resume → active (15s bound class).
+	if code, _ := postGoalJSON(t, server.URL, "/api/goals/"+goalID+"/resume", `{}`); code != http.StatusOK {
+		t.Fatalf("POST resume = %d", code)
+	}
+	resumeOK := false
+	deadline = time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if g, err := srv.goalStore().Get(goalID); err == nil && g.Status == goal.StatusActive {
+			resumeOK = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !resumeOK {
+		dumpProbeGoalRecord(t, srv, goalID)
+		t.Fatalf("the goal never reached active within 15s after resume")
+	}
+
+	// Cancel: the SAME immediate cancel the Qt client fires once the
+	// active status is observed — mid-acting-run under the packaged
+	// pacing. Poll "cancelled" under the slot's 15s bound.
+	if code, _ := postGoalJSON(t, server.URL, "/api/goals/"+goalID+"/cancel", `{}`); code != http.StatusOK {
+		t.Fatalf("POST cancel = %d", code)
+	}
+	cancelled := false
+	var finalStatus string
+	deadline = time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if g, err := srv.goalStore().Get(goalID); err == nil {
+			finalStatus = g.Status
+			if g.Status == goal.StatusCancelled {
+				cancelled = true
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !cancelled {
+		dumpProbeGoalRecord(t, srv, goalID)
+		t.Fatalf("REPRODUCED-class outcome: the goal never read 'cancelled' within 15s after cancel — final durable status %q (the full record above names the exact transition chain)", finalStatus)
+	}
+
+	// The terminal status must ALSO survive the drive's full unwind —
+	// the poll may observe cancelled while a late settlement is still in
+	// flight (the run-#28 class): re-read after the generation unwinds.
+	if !goalDriveWaitStop(goalID, 30*time.Second) {
+		dumpProbeGoalRecord(t, srv, goalID)
+		t.Fatalf("the cancelled drive generation never unwound")
+	}
+	if g, err := srv.goalStore().Get(goalID); err != nil || g.Status != goal.StatusCancelled {
+		dumpProbeGoalRecord(t, srv, goalID)
+		t.Fatalf("REPRODUCED-class outcome: the cancelled status was OVERWRITTEN during the drive unwind (status=%q err=%v) — a late settlement resurrected a terminal goal", g.Status, err)
+	}
+}
+
+// TestGoalAskAllTwoGoalsParkPackagedProfile is PROBE B (§12): the
+// goalsApproveRejectParkedGoal replay at the EXACT fixture timing — an
+// ask-all system via POST /api/systems, TWO goals with explicit systemId
+// and start:true, both polled to waiting_for_approval under the suite's
+// 60s park bound through the packaged engine profile. NOT-REPRODUCED here
+// exonerates the Go park machinery at this timing and moves the residual
+// delta to the packaged core/IPC/Qt-client layer (V8's silent downgrade
+// stays the next discriminating action — never fixed blind).
+func TestGoalAskAllTwoGoalsParkPackagedProfile(t *testing.T) {
+	engine := exactFixtureEngine(t)
+	srv, server := newRemoteServerWithHandle(t, engine.URL)
+
+	code, sys := postGoalJSON(t, server.URL, "/api/systems",
+		`{"name":"acceptance ask-all","instructions":"fixture policy: park before every acting step","approvalPolicy":"ask-all"}`)
+	if code != http.StatusOK {
+		t.Fatalf("POST /api/systems = %d", code)
+	}
+	systemID, _ := sys["systemId"].(string)
+	if systemID == "" {
+		t.Fatalf("no systemId in response: %+v", sys)
+	}
+
+	createParked := func(text string) string {
+		code, created := postGoalJSON(t, server.URL, "/api/goals",
+			`{"goal":"`+text+`","systemId":"`+systemID+`","start":true}`)
+		if code != http.StatusOK {
+			t.Fatalf("POST /api/goals = %d: %+v", code, created)
+		}
+		id, _ := created["goalId"].(string)
+		if id == "" {
+			t.Fatalf("no goalId in response: %+v", created)
+		}
+		return id
+	}
+	approveID := createParked("acceptance approval fixture")
+	rejectID := createParked("acceptance rejection fixture")
+
+	parked := false
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		a, aerr := srv.goalStore().Get(approveID)
+		r, rerr := srv.goalStore().Get(rejectID)
+		if aerr == nil && rerr == nil &&
+			a.Status == goal.StatusWaitingApproval && r.Status == goal.StatusWaitingApproval {
+			parked = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !parked {
+		dumpParkDiagnostics(t, srv, approveID, rejectID)
+		t.Fatalf("the two-goal ask-all park never landed within 60s at the packaged profile — the durable dumps above name the failing layer")
+	}
+	for _, id := range []string{approveID, rejectID} {
+		g, err := srv.goalStore().Get(id)
+		if err != nil {
+			t.Fatalf("Get %s: %v", id, err)
+		}
+		if g.PendingApproval == nil || g.PendingApproval.ApprovalID == "" {
+			t.Fatalf("parked goal %s carries no durable pending approval", id)
+		}
+		if g.PendingApproval.ToolName != "goal.step" {
+			t.Fatalf("parked goal %s pending tool = %q, want goal.step", id, g.PendingApproval.ToolName)
+		}
+	}
+}
+
+// phaseGateEngine answers understanding/planning/acting immediately and
+// BLOCKS the verifying call until released — the deterministic barrier
+// that parks the drive mid-verify so the cancel race is constructed, not
+// waited for. Planning answers with a real JSON plan (parsePlan path).
+func phaseGateEngine(t *testing.T) (*httptest.Server, chan struct{}) {
+	t.Helper()
+	release := make(chan struct{})
+	calls := 0
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		// SSE Content-Type is load-bearing: without it the client takes
+		// the non-SSE plain-JSON fallback path and chokes on "data:".
+		w.Header().Set("Content-Type", "text/event-stream")
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		var text string
+		switch {
+		case n == 2:
+			text = `["acceptance step one"]`
+		case n >= 4:
+			// The verifying call: hold until the test releases it.
+			<-release
+			text = "verification aborted by the race fixture"
+		default:
+			text = "classification prose for the phase gate"
+		}
+		payload := map[string]any{
+			"id": "chatcmpl-gate",
+			"choices": []map[string]any{{
+				"index":         0,
+				"delta":         map[string]any{"role": "assistant", "content": text},
+				"finish_reason": nil,
+			}},
+		}
+		enc, _ := json.Marshal(payload)
+		_, _ = w.Write(append(append([]byte("data: "), enc...), []byte("\n\n")...))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	t.Cleanup(server.Close)
+	return server, release
+}
+
+// TestGoalCancelDuringVerifyKeepsCancelledStatus pins I6 deterministically:
+// a cancel that lands while the drive is parked in the VERIFYING model
+// call must survive the late settlement — the verify run's failure path
+// writes verification evidence, never a new terminal status over a
+// cancelled goal. This test FAILS on the unguarded SetVerification path
+// (the run-#28 round-trip mechanism): the goal would flip cancelled →
+// failed during the unwind.
+func TestGoalCancelDuringVerifyKeepsCancelledStatus(t *testing.T) {
+	engine, release := phaseGateEngine(t)
+	srv, server := newRemoteServerWithHandle(t, engine.URL)
+
+	code, created := postGoalJSON(t, server.URL, "/api/goals", `{"goal":"cancel-during-verify fixture"}`)
+	if code != http.StatusOK {
+		t.Fatalf("POST /api/goals = %d", code)
+	}
+	goalID, _ := created["goalId"].(string)
+
+	if code, _ := postGoalJSON(t, server.URL, "/api/goals/"+goalID+"/start", `{}`); code != http.StatusOK {
+		t.Fatalf("POST start = %d", code)
+	}
+	pollFor(t, 30*time.Second, "the drive must reach the verifying phase", func() bool {
+		g, err := srv.goalStore().Get(goalID)
+		return err == nil && g.Phase == goal.PhaseVerifying
+	})
+
+	if code, _ := postGoalJSON(t, server.URL, "/api/goals/"+goalID+"/cancel", `{}`); code != http.StatusOK {
+		t.Fatalf("POST cancel = %d", code)
+	}
+	if g, err := srv.goalStore().Get(goalID); err != nil || g.Status != goal.StatusCancelled {
+		t.Fatalf("status right after cancel = %q (err=%v), want cancelled", g.Status, err)
+	}
+
+	// Free the parked verify call: the drive's late settlement runs now.
+	close(release)
+	if !goalDriveWaitStop(goalID, 30*time.Second) {
+		dumpProbeGoalRecord(t, srv, goalID)
+		t.Fatal("the cancelled drive generation never unwound")
+	}
+	g, err := srv.goalStore().Get(goalID)
+	if err != nil {
+		t.Fatalf("Get after unwind: %v", err)
+	}
+	if g.Status != goal.StatusCancelled {
+		dumpProbeGoalRecord(t, srv, goalID)
+		t.Fatalf("I6 REGRESSION: the cancelled status was overwritten during the verify unwind (status=%q) — a late settlement resurrected a terminal goal", g.Status)
+	}
+}

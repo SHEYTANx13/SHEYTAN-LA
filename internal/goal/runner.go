@@ -20,6 +20,7 @@ package goal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -31,6 +32,16 @@ type RunResult struct {
 	Phase     string
 	Notes     string
 	TurnsUsed int
+}
+
+// settledElsewhere reports whether a store-write error is the TYPED
+// terminal refusal (the goal was cancelled/completed/failed by another
+// actor while this drive was in flight — the run-#28 cancel race). The
+// drive must then stop CLEANLY at its next re-read: never overwrite the
+// durable state (I6), never swallow the outcome as a silent discard
+// (I3) — the refusal is observed and acted on at every site below.
+func settledElsewhere(err error) bool {
+	return errors.Is(err, ErrNotResumable)
 }
 
 // Drive executes the long-horizon loop until a terminal state, a bound,
@@ -66,9 +77,24 @@ func Drive(ctx context.Context, store *Store, goalID string, runs RunFunc, opts 
 	// persisted checkpoint.
 	for {
 		if ctx.Err() != nil {
-			_, _ = store.Pause(goalID)
-			res.Status = StatusPaused
-			res.Notes = "context cancelled — parked at a checkpoint"
+			// v1.10.13 (Task ID 28 I3/I6): the pause is OBSERVED —
+			// a typed terminal refusal means the goal was settled
+			// (cancelled) while the drive unwound; the durable
+			// state wins and is reported honestly.
+			if _, err := store.Pause(goalID); err != nil && !settledElsewhere(err) {
+				return res, err
+			}
+			if g2, gerr := store.Get(goalID); gerr == nil {
+				res.Status, res.Phase = g2.Status, g2.Phase
+				if res.Status == StatusPaused {
+					res.Notes = "context cancelled — parked at a checkpoint"
+				} else {
+					res.Notes = "context cancelled — the goal was settled during the unwind (" + res.Status + ")"
+				}
+			} else {
+				res.Status = StatusPaused
+				res.Notes = "context cancelled — parked at a checkpoint"
+			}
 			return res, ctx.Err()
 		}
 
@@ -81,18 +107,38 @@ func Drive(ctx context.Context, store *Store, goalID string, runs RunFunc, opts 
 		res.TurnsUsed = g.TurnsUsed
 
 		if g.TurnsUsed >= opts.TurnBudget {
-			_, _ = store.AppendEvidence(goalID, Evidence{
+			if _, err := store.AppendEvidence(goalID, Evidence{
 				Phase: g.Phase, Action: "turn budget exhausted",
 				Status: "blocked", Detail: fmt.Sprintf("budget %d turns reached", opts.TurnBudget),
-			})
-			_, _ = store.Pause(goalID)
+			}); err != nil {
+				return res, err
+			}
+			if _, err := store.Pause(goalID); err != nil && !settledElsewhere(err) {
+				return res, err
+			}
+			if g2, gerr := store.Get(goalID); gerr == nil {
+				res.Status, res.Phase = g2.Status, g2.Phase
+			}
+			if res.Status != StatusPaused {
+				res.Notes = "turn budget exhausted — the goal was settled during the unwind (" + res.Status + ")"
+				return res, nil
+			}
 			res.Status = StatusPaused
 			res.Notes = "turn budget exhausted — parked for explicit resume or cancel"
 			return res, nil
 		}
 
 		if opts.PauseCheck != nil && opts.PauseCheck(goalID) {
-			_, _ = store.Pause(goalID)
+			if _, err := store.Pause(goalID); err != nil && !settledElsewhere(err) {
+				return res, err
+			}
+			if g2, gerr := store.Get(goalID); gerr == nil {
+				res.Status, res.Phase = g2.Status, g2.Phase
+			}
+			if res.Status != StatusPaused {
+				res.Notes = "pause requested — the goal was settled during the unwind (" + res.Status + ")"
+				return res, nil
+			}
 			res.Status = StatusPaused
 			res.Notes = "pause requested"
 			return res, nil
@@ -175,16 +221,21 @@ func driveUnderstanding(ctx context.Context, store *Store, runs RunFunc, goalID 
 		Prompt: understandingPrompt(g.OriginalGoal), SystemID: g.SystemID, SystemRevision: g.SystemRevision,
 	})
 	if err != nil {
-		_, _ = store.AppendEvidence(goalID, Evidence{
+		if _, evErr := store.AppendEvidence(goalID, Evidence{
 			Phase: PhaseUnderstanding, Action: "understanding run failed",
 			Status: "error", Detail: err.Error(),
-		})
+		}); evErr != nil {
+			// I3 (Task ID 28): the primary run error is preserved.
+			return fmt.Errorf("understanding run failed (%v); the evidence append also failed: %w", err, evErr)
+		}
 		return err
 	}
-	_, _ = store.AppendEvidence(goalID, Evidence{
+	if _, evErr := store.AppendEvidence(goalID, Evidence{
 		Phase: PhaseUnderstanding, Action: "goal classified",
 		Status: "ok", Detail: firstLine(out.Text),
-	})
+	}); evErr != nil {
+		return evErr
+	}
 	_, err = store.SetPhase(goalID, PhasePlanning)
 	return err
 }
@@ -196,10 +247,13 @@ func drivePlanning(ctx context.Context, store *Store, runs RunFunc, goalID strin
 		Prompt: planningPrompt(g.OriginalGoal), SystemID: g.SystemID, SystemRevision: g.SystemRevision,
 	})
 	if err != nil {
-		_, _ = store.AppendEvidence(goalID, Evidence{
+		if _, evErr := store.AppendEvidence(goalID, Evidence{
 			Phase: PhasePlanning, Action: "planning run failed",
 			Status: "error", Detail: err.Error(),
-		})
+		}); evErr != nil {
+			// I3 (Task ID 28): the primary run error is preserved.
+			return fmt.Errorf("planning run failed (%v); the evidence append also failed: %w", err, evErr)
+		}
 		return err
 	}
 
@@ -208,10 +262,12 @@ func drivePlanning(ctx context.Context, store *Store, runs RunFunc, goalID strin
 		// Honest fallback: ONE step carrying the goal itself, marked as
 		// the unplanned fallback — never a fabricated decomposition.
 		steps = []string{"(fallback) " + g.OriginalGoal}
-		_, _ = store.AppendEvidence(goalID, Evidence{
+		if _, evErr := store.AppendEvidence(goalID, Evidence{
 			Phase: PhasePlanning, Action: "plan parse failed — fallback single-step plan",
 			Status: "ok", Detail: firstLine(out.Text),
-		})
+		}); evErr != nil {
+			return evErr
+		}
 	}
 	_, err = store.SetPlan(goalID, steps)
 	return err
@@ -237,8 +293,10 @@ func driveActing(ctx context.Context, store *Store, runs RunFunc, goalID string,
 	}
 	if blockedIdx >= 0 {
 		if g.Replans >= opts.MaxReplans {
-			_, _ = store.SetVerification(goalID, false,
-				fmt.Sprintf("step %d stayed blocked after %d bounded replans", blockedIdx, g.Replans))
+			if _, err := store.SetVerification(goalID, false,
+				fmt.Sprintf("step %d stayed blocked after %d bounded replans", blockedIdx, g.Replans)); err != nil && !settledElsewhere(err) {
+				return false, err
+			}
 			return true, nil
 		}
 		if _, err := store.mutate(goalID, func(gg *Goal) error {
@@ -253,14 +311,18 @@ func driveActing(ctx context.Context, store *Store, runs RunFunc, goalID string,
 			Prompt: replanPrompt(g.OriginalGoal, g.Plan, blockedIdx), SystemID: g.SystemID, SystemRevision: g.SystemRevision,
 		})
 		if err != nil {
-			_, _ = store.AppendEvidence(goalID, Evidence{
+			if _, evErr := store.AppendEvidence(goalID, Evidence{
 				Phase: PhaseActing, Action: "replanning run failed",
 				Status: "error", Detail: err.Error(),
-			})
+			}); evErr != nil {
+				// I3 (Task ID 28): the primary run error is
+				// preserved; the evidence failure is wrapped in.
+				return false, fmt.Errorf("replanning run failed (%v); the evidence append also failed: %w", err, evErr)
+			}
 			return false, err
 		}
 		if revised := parsePlan(out.Text); len(revised) > 0 {
-			_, _ = store.mutate(goalID, func(gg *Goal) error {
+			if _, pmErr := store.mutate(goalID, func(gg *Goal) error {
 				// Replace only PENDING steps from the blocked one on;
 				// completed steps keep their evidence (no replay).
 				added := make([]PlanStep, 0, len(revised))
@@ -282,16 +344,29 @@ func driveActing(ctx context.Context, store *Store, runs RunFunc, goalID string,
 				}
 				gg.Plan = kept
 				return nil
-			})
-			_, _ = store.AppendEvidence(goalID, Evidence{
+			}); pmErr != nil {
+				return false, pmErr
+			}
+			if _, evErr := store.AppendEvidence(goalID, Evidence{
 				Phase: PhaseActing, Action: "plan revised after evidence",
 				Status: "ok", Detail: fmt.Sprintf("%d revised steps", len(revised)),
-			})
+			}); evErr != nil {
+				return false, evErr
+			}
 		}
 		if _, err := store.mutate(goalID, func(gg *Goal) error {
+			// v1.10.13 TERMINAL-GUARD (I6, Task ID 28 R1(b) — the
+			// pre-committed V7 fix): the replan path must never
+			// resurrect a terminal goal to active.
+			if gg.IsTerminal() {
+				return ErrNotResumable
+			}
 			gg.Status = StatusActive
 			return nil
 		}); err != nil {
+			if settledElsewhere(err) {
+				return true, nil
+			}
 			return false, err
 		}
 		return true, nil
@@ -337,14 +412,25 @@ func driveActing(ctx context.Context, store *Store, runs RunFunc, goalID string,
 		// the step is marked blocked (evidence kept at GOAL level too,
 		// so a plan revision cannot erase the failure record) and
 		// bounded replanning owns the recovery.
-		_, _ = store.AppendEvidence(goalID, Evidence{
+		if _, evErr := store.AppendEvidence(goalID, Evidence{
 			Phase: PhaseActing, Action: "step run failed", Target: g.Plan[next].Objective,
 			Status: "error", Detail: err.Error(),
-		})
-		_, _ = store.MarkStep(goalID, next, StepBlocked, "run failed: "+err.Error(), []Evidence{{
+		}); evErr != nil {
+			// I3 (Task ID 28): the primary run error is preserved.
+			return false, fmt.Errorf("step run failed (%v); the evidence append also failed: %w", err, evErr)
+		}
+		if _, msErr := store.MarkStep(goalID, next, StepBlocked, "run failed: "+err.Error(), []Evidence{{
 			Phase: PhaseActing, Action: "step run failed", Target: g.Plan[next].Objective,
 			Status: "error", Detail: err.Error(),
-		}}, nil, nil)
+		}}, nil, nil); msErr != nil {
+			if settledElsewhere(msErr) {
+				// The goal was settled (cancelled) while the run
+				// was in flight — unwind at the re-read; the
+				// durable status stays terminal (I6).
+				return false, nil
+			}
+			return false, msErr
+		}
 		return true, nil
 	}
 
@@ -353,6 +439,12 @@ func driveActing(ctx context.Context, store *Store, runs RunFunc, goalID string,
 		status = StepBlocked
 	}
 	_, err = store.MarkStep(goalID, next, status, firstLine(out.Text), out.Evidence, out.ChangedFiles, out.Artifacts)
+	if err != nil && settledElsewhere(err) {
+		// v1.10.13 (Task ID 28, PROBE A's exact overwrite site): the
+		// late settlement of a cancelled goal is REFUSED typed — the
+		// drive stops cleanly and the cancelled status survives.
+		return false, nil
+	}
 	return true, err
 }
 
@@ -363,13 +455,20 @@ func driveVerifying(ctx context.Context, store *Store, runs RunFunc, goalID stri
 		Prompt: verifyPrompt(g.OriginalGoal, g.Plan), SystemID: g.SystemID, SystemRevision: g.SystemRevision,
 	})
 	if err != nil {
-		_, _ = store.SetVerification(goalID, false, "verification run failed: "+err.Error())
+		if _, svErr := store.SetVerification(goalID, false, "verification run failed: "+err.Error()); svErr != nil && !settledElsewhere(svErr) {
+			return svErr
+		}
 		return nil
 	}
 	// The verdict must be EVIDENCE-backed: the runner (the orchestrator
 	// adapter) derives out.Verified from objective checks — the model's
 	// prose claim in out.Text alone can never set it.
 	_, err = store.SetVerification(goalID, out.Verified, verifyNotes(out, g))
+	if err != nil && settledElsewhere(err) {
+		// v1.10.13 (Task ID 28): a concurrent cancel owns the terminal
+		// state — the verdict is never written over it (I6).
+		return nil
+	}
 	return err
 }
 

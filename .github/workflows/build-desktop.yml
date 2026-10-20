@@ -1722,22 +1722,113 @@ jobs:
           $summaryPath = $env:GITHUB_STEP_SUMMARY
           if ([string]::IsNullOrEmpty($summaryPath)) { exit 0 }
 
-          # v1.10.13 W-VIS: conservative redaction for lines from the NEW
-          # post-verification logs — no IPC keys, capability tokens,
-          # runIds, sessionIds or model content (rule 7). Named-pipe
-          # endpoints are redacted wholesale; key-shaped assignments are
-          # masked. The proven Go logs keep their audited byte-identical
-          # path below.
-          function Redact-Anonymous([string]$line) {
+          # v1.10.13 §9 CI SEVERITY CONTRACT (Task ID 28, R5): classify →
+          # dedup → caps → escape → truncate → redact → emit notices →
+          # warnings → errors → ONE accounting line.
+          #   ::error   — failed assertions, gate failures, crashes, real
+          #               capture/report instrumentation failures, compile
+          #               errors (priority: assertions/gates → capture →
+          #               compile; the failing gate is named first).
+          #   ::warning — QWARN log lines (run #28 measured 5 of the
+          #               Windows job's failure-level annotations as
+          #               QWARN warnings — V10) and toolchain warnings.
+          #   ::notice  — diagnostic context: the goal/chat-persist dump
+          #               lines, QDEBUG/QINFO/QSKIP, and the
+          #               "captures were empty" line — C1 CONFIRMED (Qt
+          #               Test docs, "-o filename,format" routes ALL
+          #               QtTest output into the report file; stdout only
+          #               when no -o is given), so empty native captures
+          #               beside a non-empty report are documented routing,
+          #               not an instrumentation failure. A missing/empty
+          #               REPORT on a nonzero exit stays a real
+          #               instrumentation failure (::error, I5).
+          # The failing gate itself is never masked (the acceptance step's
+          # own ::error names it); a green gate never executes this step.
+          # D1 preserved: signal lines only, no tail dumps; full logs stay
+          # in the artifacts.
+
+          $stepName = "Failure summary (Windows)"
+          $fullList = "windows-go-verification-logs-attempt${{ github.run_attempt }}"
+          $errCap = 10; $warnCap = 10; $noticeCap = 10
+          $global:Redacted = 0
+
+          # v1.10.13 §9 redaction (extends the proven W-VIS conservative
+          # redaction: no IPC keys, capability tokens, runIds, sessionIds or
+          # model content — rule 7). Every emitted and summary line is
+          # redacted; $count marks the annotation-pipeline pass whose
+          # changed-line count the accounting line reports.
+          function Redact-Anonymous([string]$line, [bool]$count = $false) {
             $r = $line -replace '\\\\\.\\pipe\\\S+', '\\.\pipe\<redacted>'
-            $r = $r -replace '(?i)(key|token|secret|password)\s*[=:]\s*\S+', '$1=<redacted>'
+            $r = $r -replace '(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}', '<REDACTED>'
+            $r = $r -replace 'github_pat_[A-Za-z0-9_]{82,}', '<REDACTED>'
+            $r = $r -replace '(AKIA|ASIA)[0-9A-Z]{16}', '<REDACTED>'
+            $r = $r -replace 'sk-proj-[A-Za-z0-9_-]{80,}', '<REDACTED>'
+            $r = $r -replace 'sk-[A-Za-z0-9]{48}', '<REDACTED>'
+            $r = $r -replace '(?i)bearer [A-Za-z0-9._~-]+', 'bearer <REDACTED>'
+            $r = $r -replace "(?i)((password|passwd|pwd|token|secret|api[_-]?key)[:=])\S*", '$1<REDACTED>'
+            if ($env:USERPROFILE) { $r = $r -replace [regex]::Escape($env:USERPROFILE), '<HOME>' }
+            if ($env:RUNNER_TEMP) { $r = $r -replace [regex]::Escape($env:RUNNER_TEMP), '<TMP>' }
+            if ($count -and ($r -cne $line)) { $global:Redacted++ }
             return $r
+          }
+
+          # §9 classification (precedence: error → DUMP-DIAGNOSTIC notice →
+          # warning → informational notice; the dump classes OUTRANK the
+          # QWARN rule — a dump line wrapped in a QWARN prefix is diagnostic
+          # context (G4), not a real warning; via §10 the same line arrives
+          # bare on stderr and dedup collapses the two copies into one
+          # notice). Same escaped patterns as the Linux half.
+          $errRe  = '^(FAIL!|--- FAIL|FAIL\s)|panic: |fatal error: |^Totals: .*, [1-9][0-9]* failed|QFATAL|^Fatal|^Aborted|terminate called|core dumped|\.go:[0-9]+: |: (fatal )?error( [A-Z0-9]+)?: |CMake Error|^FAILED: |ninja: build stopped|^acceptance (exit code|instrumentation failure)'
+          $dumpNoticeRe = 'goal [^ ]+ → |chat-persist\[|^acceptance output captures were empty'
+          $warnRe = '^(QWARN|warning: |W[0-9]{4}: )'
+          $infoNoticeRe = 'QDEBUG|QINFO|QSKIP'
+          $errARe = '^(FAIL!|--- FAIL|FAIL\s)|panic: |fatal error: |^Totals: .*, [1-9][0-9]* failed|QFATAL|^Fatal|^Aborted|terminate called|core dumped'
+          $errBRe = '^acceptance (exit code|instrumentation failure)'
+
+          function Classify-Line([string]$l) {
+            if ($l -match $errRe) { return 'error' }
+            if ($l -match $dumpNoticeRe) { return 'notice' }
+            if ($l -match $warnRe) { return 'warning' }
+            if ($l -match $infoNoticeRe) { return 'notice' }
+            return $null
+          }
+
+          # §9 dedup normalization: strip ANSI, the QtTest prefix, and the
+          # file:line prefix (unless the line starts with
+          # FAIL!/QVERIFY/QCOMPARE/QFATAL), collapse whitespace.
+          function Norm-Line([string]$l) {
+            $x = $l.TrimStart()
+            $x = [regex]::Replace($x, "\x1B\[[0-9;]*[A-Za-z]", "")
+            $x = [regex]::Replace($x, '^(QWARN|QDEBUG|QINFO|QFAIL|QSYSTEM)\s*:\s*[A-Za-z0-9_:]+\(\)\s*', '')
+            if ($x -notmatch '^(FAIL!|QVERIFY|QCOMPARE|QFATAL)') {
+              $x = [regex]::Replace($x, '^[^ :]+:[0-9]+:\s*', '')
+            }
+            return (($x -replace '\s+', ' ').Trim())
+          }
+
+          # §9 workflow-command escaping (%→%25, CR→%0D, LF→%0A) and
+          # truncation (500 diagnostics / 250 generic, "… [truncated]").
+          function Esc-WF([string]$s) {
+            return ($s -replace '%', '%25' -replace "`r", '%0D' -replace "`n", '%0A')
+          }
+          function Trunc-Line([string]$s, [int]$cap) {
+            if ($s.Length -gt $cap) { return ($s.Substring(0, $cap) + "… [truncated]") }
+            return $s
+          }
+          function Emit-Line([string]$sev, [string]$msg) {
+            switch ($sev) {
+              'notice'  { Write-Host "::notice::$msg" }
+              'warning' { Write-Host "::warning::$msg" }
+              'error'   { Write-Host "::error::$msg" }
+            }
           }
 
           $lines = @()
           $lines += "## Windows job FAILED"
           $lines += ""
           $lines += "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          $lines += ""
+          $lines += "Full evidence artifacts: windows-go-verification-logs-attempt${{ github.run_attempt }} (all ci-logs/*.log + gate order) and windows-qt-acceptance-report-attempt${{ github.run_attempt }} (the QtTest -o report)."
 
           # v1.10.13 W-VIS: name the failing gate from the tracked markers
           # (RUN without OK/FAIL = the gate that started and never
@@ -1769,49 +1860,25 @@ jobs:
 
           # v1.10.13 D1 (operator directive 1): errors-only summaries. The
           # per-log "last 200 lines" tail dumps are REMOVED — the summary
-          # publishes ONLY failing/error lines, capped, each block carrying
-          # its source name. Nothing about which tests run changes; the
-          # full logs remain in the uploaded artifacts. The failing-line
-          # classes grow the native coverage so the acceptance and Qt
-          # build errors are captured anonymously: QtTest "FAIL!" + failed
-          # Totals, MSVC/LNK ": error", CMake/ninja build-tool errors, and
-          # the W-ACC acceptance launch/no-output evidence lines.
-          $errClasses = {
-            param([string]$l)
-            $l -match '^(--- FAIL|FAIL|panic:|fatal error:)' -or
-            $l -match '\.go:[0-9]+: ' -or
-            $l -match '^FAIL!' -or
-            $l -match '^Totals: .*, [1-9][0-9]* failed' -or
-            $l -match ': (fatal )?error( [A-Z0-9]+)?:' -or
-            $l -match 'CMake Error' -or
-            $l -match '^FAILED: ' -or
-            $l -match 'ninja: build stopped' -or
-            $l -match '^acceptance (launch failed|produced no output)' -or
-            # v1.10.13 W-ANN-ORDER: the acceptance evidence lines the gate
-            # step writes on failure, plus the crash classes — an abort must
-            # name its site (the run #23 Linux class died with zero FAIL
-            # lines; the stderr now carries the qFatal/glibc message).
-            $l -match '^acceptance (exit code|output captures|instrumentation failure)' -or
-            $l -match '^Fatal|^Aborted|terminate called|core dumped|QFATAL' -or
-            $l -match '^QWARN'
-          }
-          # v1.10.13 WINDOWS-REPORT: the -o report (.txt) is evidence —
-          # its FAIL!/assertion lines ride the same errors-only summary.
+          # publishes ONLY classified error lines, capped, each block
+          # carrying its source name; the full logs remain in the uploaded
+          # artifacts.
           foreach ($log in (Get-ChildItem "ci-logs" -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in ".log", ".txt" })) {
             $raw = @(Get-Content $log.FullName -ErrorAction SilentlyContinue)
             $text = if ($goLogs -contains $log.Name) { $raw } else { @($raw | ForEach-Object { Redact-Anonymous $_ }) }
             $lines += ""
             $lines += "### $($log.Name) — failing/error lines"
-            $failing = @($text | Where-Object { & $errClasses $_ })
+            $failing = @($text | Where-Object { (Classify-Line $_) -eq 'error' })
             $lines += '```'
             if ($failing.Count -gt 0) { $lines += ($failing | Select-Object -First 60) } else { $lines += "(no FAIL lines captured)" }
             $lines += '```'
           }
 
-          # v1.10.13 W-ANN-ORDER: mirror the FAILING SLOT NAMES and the first
-          # FAIL! lines of the failing gate into the job SUMMARY — the summary
-          # is public and uncapped; the 10-per-step annotation budget is
-          # spent on failure lines first, the slot names ride here forever.
+          # v1.10.13 W-ANN-ORDER: mirror the FAILING SLOT NAMES and the
+          # first error-class lines of the failing gate into the job
+          # SUMMARY — the summary is public and uncapped; the per-class
+          # annotation budgets are spent on signal lines first, the slot
+          # names ride here forever.
           if ($failingGate) {
             # v1.10.13 WINDOWS-REPORT: the gate's evidence may be several
             # files (native log + the -o report) — concatenate them.
@@ -1825,7 +1892,7 @@ jobs:
               # QtTest emits "FAIL!  : tst_acceptance::slotName()" — the
               # capture must cross the :: namespace separator.
               $slotNames = @($gateLines | Where-Object { $_ -match '^FAIL!\s*:\s*([A-Za-z0-9_:]+)\(' } | ForEach-Object { $_ -replace '^FAIL!\s*:\s*([A-Za-z0-9_:]+)\(.*$', '$1' } | Select-Object -Unique)
-              $firstFails = @($gateLines | Where-Object { & $errClasses $_ } | Select-Object -First 8)
+              $firstFails = @($gateLines | Where-Object { (Classify-Line $_) -eq 'error' } | Select-Object -First 8)
               if ($slotNames.Count -gt 0) {
                 $lines += ""
                 $lines += "### Failing test slots — $failingGate"
@@ -1840,87 +1907,104 @@ jobs:
 
           Add-Content -Path $summaryPath -Value ($lines -join [Environment]::NewLine)
 
-          # v1.10.13 W-VIS: failing-gate annotations (anonymous, redacted,
-          # capped — emitted FIRST so a cap drop can never hide them).
-          # v1.10.13 W-ANN-ORDER (run #23): the gate tail is SIGNAL-FIRST.
-          # Run #23 emitted the gate name and then the log's LAST 12 lines —
-          # which were the 9-line process-facts prelude (the process captures
-          # were empty), so the prelude consumed the entire 10-per-step cap
-          # and not one FAIL line surfaced. The order is now: (a) the gate
-          # name, (b) FAIL-class evidence lines, (c) remaining evidence,
-          # (d) prelude lines LAST — a cap drop can then only hide prelude.
-          $gateEmitted = 0
-          if ($tracked) {
-            if ($failingGate) {
-              Write-Host "::error::failing gate: $failingGate"
-              $gateEmitted++
-              # v1.10.13 WINDOWS-REPORT: concatenate every evidence file
-              # of the failing gate (native log + the -o report).
-              $all = @()
-              foreach ($gl in @($gateLogMap[$failingGate])) {
-                if ($gl -and (Test-Path $gl)) {
-                  $all += @(Get-Content $gl -ErrorAction SilentlyContinue |
-                    ForEach-Object { Redact-Anonymous $_ } |
-                    Where-Object { $_.Trim().Length -gt 0 })
+          # §9 unified classified annotation pipeline. The failing gate's
+          # own evidence files are read FIRST so their lines win the
+          # keep-first dedup (signal-first, W-ANN-ORDER's intent). Prelude
+          # and other unclassified lines match no class and are never
+          # emitted as errors — the run-#23/#28 classes that consumed the
+          # cap or inflated severity are structurally gone.
+          $orderedFiles = @()
+          if ($failingGate) {
+            foreach ($gl in @($gateLogMap[$failingGate])) {
+              if ($gl -and (Test-Path $gl)) { $orderedFiles += (Resolve-Path $gl).Path }
+            }
+          }
+          foreach ($log in (Get-ChildItem "ci-logs" -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in ".log", ".txt" })) {
+            if ($orderedFiles -notcontains $log.FullName) { $orderedFiles += $log.FullName }
+          }
+
+          $seen = @{}
+          $dup = 0
+          $errA = @(); $errB = @(); $errC = @(); $warnL = @(); $noticeL = @()
+          $errSel = 0; $warnSel = 0; $noticeSel = 0
+
+          foreach ($f in $orderedFiles) {
+            $base = (Split-Path $f -Leaf)
+            $raw = @(Get-Content $f -ErrorAction SilentlyContinue)
+            $isGo = $goLogs -contains $base
+            foreach ($line in $raw) {
+              if ([string]::IsNullOrWhiteSpace($line)) { continue }
+              $r = if ($isGo) { $line } else { Redact-Anonymous $line $true }
+              $sev = Classify-Line $r
+              if (-not $sev) { continue }
+              $key = "$sev|" + (Norm-Line $r)
+              if ($seen.ContainsKey($key)) { $dup++; continue }
+              $seen[$key] = 1
+              $disp = "$base" + ": " + $r
+              switch ($sev) {
+                'error' {
+                  $errSel++
+                  if ($r -match $errARe) { $errA += $disp }
+                  elseif ($r -match $errBRe) { $errB += $disp }
+                  else { $errC += $disp }
                 }
+                'warning' { $warnSel++; $warnL += $disp }
+                'notice'  { $noticeSel++; $noticeL += $disp }
               }
-              if ($all.Count -gt 0) {
-                $failTail = @($all | Where-Object { & $errClasses $_ })
-                $isPrelude = {
-                  param([string]$l)
-                  $l -match '^=== (Process Facts|Process Output) ===$' -or
-                  $l -match '^(exe|exe exists|exe size|exe LastWriteTime|QT_QPA_PLATFORM|QT_QUICK_BACKEND|SHEYTAN_CORE_BIN|SHEYTAN_CORE_BIN exists):'
-                }
-                $preludeTail = @($all | Where-Object { & $isPrelude $_ })
-                $midTail = @($all | Where-Object {
-                  (-not ($failTail -contains $_)) -and (-not ($preludeTail -contains $_))
-                })
-                foreach ($line in @($failTail + $midTail + $preludeTail)) {
-                  if ($gateEmitted -ge 10) { break }
-                  $msg = $line
-                  if ($msg.Length -gt 250) { $msg = $msg.Substring(0, 247) + "..." }
-                  Write-Host "::error::${failingGate}: $msg"
-                  $gateEmitted++
-                }
-              } else {
-                Write-Host "::error::${failingGate}: (no teed log for this gate — see the red step on the run page)"
-                $gateEmitted++
-              }
-            } else {
-              Write-Host "::error::all tracked post-verification gates passed; the failure occurred outside them — see the red step on the run page"
-              $gateEmitted++
             }
           }
 
-          # v1.10.7 VISIBILITY 2.0: machine-readable error annotations.
-          # This proven loop runs unchanged; when the failure is at or
-          # before Go verification (no markers) it is the ONLY annotation
-          # source, exactly as before.
-          # v1.10.13 WINDOWS-REPORT: the -o report (.txt) is evidence —
-          # the capped annotation loop reads it beside the .log files.
-          $emitted = 0
-          foreach ($log in (Get-ChildItem "ci-logs" -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -in ".log", ".txt" })) {
-            if ($emitted -ge 10) { break }
-            $text = @(Get-Content $log.FullName -ErrorAction SilentlyContinue)
-            $failing = @($text | Where-Object { & $errClasses $_ })
-            foreach ($line in ($failing | Select-Object -First 10)) {
-              if ($emitted -ge 10) { break }
-              $msg = "$($log.BaseName): $line"
-              if ($msg.Length -gt 250) { $msg = $msg.Substring(0, 247) + "..." }
-              Write-Host "::error::$msg"
-              $emitted++
+          # §9 emission order: notices → warnings → errors → accounting.
+          $noticeEm = 0; $warnEm = 0; $errEm = 0
+          foreach ($l in $noticeL) {
+            if ($noticeEm -ge $noticeCap) { break }
+            Emit-Line notice (Esc-WF (Trunc-Line $l 500))
+            $noticeEm++
+          }
+          foreach ($l in $warnL) {
+            if ($warnEm -ge $warnCap) { break }
+            Emit-Line warning (Esc-WF (Trunc-Line $l 250))
+            $warnEm++
+          }
+          if ($tracked) {
+            if ($failingGate) {
+              Emit-Line error (Esc-WF "failing gate: $failingGate")
+              $errEm++
+            } else {
+              Emit-Line error (Esc-WF "all tracked post-verification gates passed; the failure occurred outside them — see the red step on the run page")
+              $errEm++
             }
           }
-          if ($emitted -eq 0 -and -not $tracked) {
+          foreach ($l in $errA) {
+            if ($errEm -ge $errCap) { break }
+            Emit-Line error (Esc-WF (Trunc-Line $l 250))
+            $errEm++
+          }
+          foreach ($l in $errB) {
+            if ($errEm -ge $errCap) { break }
+            Emit-Line error (Esc-WF (Trunc-Line $l 250))
+            $errEm++
+          }
+          foreach ($l in $errC) {
+            if ($errEm -ge $errCap) { break }
+            Emit-Line error (Esc-WF (Trunc-Line $l 250))
+            $errEm++
+          }
+          if (($errEm + $warnEm + $noticeEm) -eq 0 -and -not $tracked) {
             $gofmtLog = "ci-logs/win-gofmt.log"
             if ((Test-Path $gofmtLog) -and (Get-Content $gofmtLog -ErrorAction SilentlyContinue)) {
               $first = @(Get-Content $gofmtLog | Select-Object -First 8)
-              foreach ($f in $first) { Write-Host "::error::gofmt violation: $f (run gofmt -w . )" }
-              Write-Host "::error::Windows Go verification failed at the gofmt gate — $($first.Count)+ file(s) listed in win-gofmt.log"
+              foreach ($f in $first) { Emit-Line error (Esc-WF "gofmt violation: $f (run gofmt -w . )") }
+              Emit-Line error (Esc-WF "Windows Go verification failed at the gofmt gate — $($first.Count)+ file(s) listed in win-gofmt.log")
+              $errEm += $first.Count + 1
             } else {
-              Write-Host "::error::Windows Go verification failed with no FAIL-prefixed lines captured — read the step summary and the windows-go-verification-logs artifact"
+              Emit-Line error (Esc-WF "Windows Go verification failed with no FAIL-prefixed lines captured — read the step summary and the windows-go-verification-logs artifact")
+              $errEm++
             }
           }
+
+          # §9 ONE accounting line per step.
+          Emit-Line notice (Esc-WF "ci-summary step=$stepName errors=$errEm/$errSel | warnings=$warnEm/$warnSel | notices=$noticeEm/$noticeSel | duplicates_removed=$dup redacted=$($global:Redacted) | full_list=$fullList")
 
       - name: Upload Go verification logs (Windows)
         if: failure()
@@ -2711,64 +2795,204 @@ jobs:
             echo "## Qt live-answer acceptance FAILED"
             echo ""
             echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo ""
+            echo "Full evidence artifacts: linux-qt-acceptance-report-attempt${{ github.run_attempt }} (the QtTest -o report + native log + gate order) and linux-verification-logs-attempt${{ github.run_attempt }} (all ci-logs/*.log, including the stderr capture)."
           } >> "$GITHUB_STEP_SUMMARY" || true
 
-          emitted=0
-          emit() {
-            if [ "$emitted" -lt 10 ]; then
-              msg="$1"
-              if [ "${#msg}" -gt 250 ]; then msg="${msg:0:247}..."; fi
-              printf '::error::%s\n' "$msg"
-              emitted=$((emitted + 1))
-            fi
-          }
+          # v1.10.13 §9 CI SEVERITY CONTRACT (Task ID 28, R5): classify →
+          # dedup → caps → escape → truncate → redact → emit notices →
+          # warnings → errors → ONE accounting line.
+          #   ::error   — failed assertions, gate failures, crashes, real
+          #               capture/report instrumentation failures, compile
+          #               errors (priority: assertions/gates → capture →
+          #               compile).
+          #   ::warning — QWARN log lines (run #28 measured 6 of 19
+          #               failure-level annotations as QWARN warnings —
+          #               V10) and toolchain warnings; a warning is never
+          #               masked into an error and never demotes one.
+          #   ::notice  — diagnostic context: the goal/chat-persist dump
+          #               lines, QDEBUG/QINFO/QSKIP, and the
+          #               "captures were empty" line — C1 CONFIRMED (Qt
+          #               Test docs, "-o filename,format" routes ALL
+          #               QtTest output into the report file; stdout only
+          #               when no -o is given), so empty native captures
+          #               beside a non-empty report are documented routing,
+          #               not an instrumentation failure.
+          # The failing gate itself is never masked (the acceptance step's
+          # own ::error names it before this step runs); a green gate never
+          # executes this step, so a green run emits no failure
+          # annotations. D1 preserved: signal lines only, no tail dumps;
+          # full logs stay in the artifacts.
 
           accLog="ci-logs/linux-qt-acceptance.log"
-          # v1.10.13 LINUX-REPORT: the -o report carries the
-          # FAIL!/assertion lines now — the summary reads it beside the
-          # native captures.
           accRep="ci-logs/linux-qt-acceptance-report.txt"
-          # v1.10.13 R-UNBUF: stderr is a separate capture now — an abort's
-          # qFatal/glibc message lives there even when stdout tore.
           accErr="ci-logs/linux-qt-acceptance.err.log"
-          # v1.10.13 W-ANN-ORDER (Linux half): the classes grow the abort
-          # evidence (qFatal/terminate/Aborted/core dumped) and the exit-code
-          # contract lines so a crash names its actual site, never "no FAIL
-          # lines" alone. Errors-only, capped, D1.
-          failClasses='(^FAIL!|^Totals:.*failed|^--- FAIL|QVERIFY|QCOMPARE|QFATAL|QWARN|^Fatal|^Aborted|terminate called|core dumped|^acceptance (exit code|output captures|instrumentation failure))'
           gateOrder="ci-logs/gate-order.txt"
+          STEP_NAME="Qt acceptance failure summary (Linux)"
+          FULL_LIST="linux-qt-acceptance-report-attempt${{ github.run_attempt }}"
+          ERR_CAP=10; WARN_CAP=10; NOTICE_CAP=10
+
+          # §9 redaction — every emitted and summary line. The COUNTER is
+          # maintained in the caller (command substitution would swallow
+          # the increment): redact() returns text only.
+          redact() {
+            printf '%s' "$1" | sed -E \
+              -e 's/(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}/<REDACTED>/g' \
+              -e 's/github_pat_[A-Za-z0-9_]{82,}/<REDACTED>/g' \
+              -e 's/(AKIA|ASIA)[0-9A-Z]{16}/<REDACTED>/g' \
+              -e 's/sk-proj-[A-Za-z0-9_-]{80,}/<REDACTED>/g' \
+              -e 's/sk-[A-Za-z0-9]{48}/<REDACTED>/g' \
+              -e 's/[Bb]earer [A-Za-z0-9._~-]+/bearer <REDACTED>/g' \
+              -e 's/((password|passwd|pwd|token|secret|api[_-]?key)[:=])[^[:space:]]+/\1<REDACTED>/Ig' \
+              -e "s#${HOME}#<HOME>#g" \
+              -e 's#/tmp/#<TMP>/#g'
+          }
+
+          # §9 classification (correctly escaped ERE; a literal [ stays a
+          # literal bracket). Precedence: error → DUMP-DIAGNOSTIC notice →
+          # warning → informational notice. The dump classes (goal … →,
+          # chat-persist[, captures-empty) OUTRANK the QWARN rule: a dump
+          # line wrapped in a QWARN prefix is diagnostic context (G4), not
+          # a real warning — and via §10 the SAME line arrives bare on
+          # stderr, where dedup collapses the two copies into one notice.
+          errRe='^FAIL!|^--- FAIL|^FAIL[[:space:]]|panic: |fatal error: |^Totals: .*, [1-9][0-9]* failed|QFATAL|^Fatal|^Aborted|terminate called|core dumped|\.go:[0-9]+: |: (fatal )?error( [A-Z0-9]+)?: |CMake Error|^FAILED: |ninja: build stopped|^acceptance (exit code|instrumentation failure)'
+          dumpNoticeRe='goal [^ ]+ → |chat-persist\[|^acceptance output captures were empty'
+          warnRe='^QWARN|^warning: |W[0-9]{4}: '
+          infoNoticeRe='QDEBUG|QINFO|QSKIP'
+          errARe='^FAIL!|^--- FAIL|^FAIL[[:space:]]|panic: |fatal error: |^Totals: .*, [1-9][0-9]* failed|QFATAL|^Fatal|^Aborted|terminate called|core dumped'
+          errBRe='^acceptance (exit code|instrumentation failure)'
+
+          classify() {
+            if printf '%s' "$1" | grep -qE "$errRe"; then echo error
+            elif printf '%s' "$1" | grep -qE "$dumpNoticeRe"; then echo notice
+            elif printf '%s' "$1" | grep -qE "$warnRe"; then echo warning
+            elif printf '%s' "$1" | grep -qE "$infoNoticeRe"; then echo notice
+            else echo none; fi
+          }
+
+          # §9 dedup normalization: strip ANSI escapes, the QtTest prefix,
+          # and the file:line prefix (unless the line starts with
+          # FAIL!/QVERIFY/QCOMPARE/QFATAL), collapse whitespace.
+          normalize() {
+            printf '%s' "$1" \
+              | sed -E 's/^[[:space:]]+//' \
+              | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' \
+              | sed -E 's/^(QWARN|QDEBUG|QINFO|QFAIL|QSYSTEM)[[:space:]]*:[[:space:]]*[A-Za-z0-9_:]+\(\)[[:space:]]*//' \
+              | sed -E '/^(FAIL!|QVERIFY|QCOMPARE|QFATAL)/!s/^[^ :]+:[0-9]+:[[:space:]]*//' \
+              | tr -s ' \t' ' ' \
+              | sed -E 's/[[:space:]]$//'
+          }
+
+          # §9 workflow-command escaping (%→%25, CR→%0D, LF→%0A) and
+          # truncation (500 diagnostics / 250 generic, "… [truncated]").
+          esc() {
+            printf '%s' "$1" | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e 's/\n/%0A/g'
+          }
+          trunc() {
+            awk -v cap="$2" '{ if (length($0) > cap) print substr($0, 1, cap) "… [truncated]"; else print }' <<<"$1"
+          }
+
+          ERR_S=0; WARN_S=0; NOTICE_S=0; DUP=0; REDACTED=0
+          ERR_A=(); ERR_B=(); ERR_C=(); WARN_L=(); NOTICE_L=()
+          declare -A SEEN
+
+          if [ -f "$accLog" ] || [ -f "$accErr" ] || [ -f "$accRep" ]; then
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              r="$(redact "$line")"
+              if [ "$r" != "$line" ]; then REDACTED=$((REDACTED + 1)); fi
+              sev="$(classify "$r")"
+              [ "$sev" = "none" ] && continue
+              key="$sev|$(normalize "$r")"
+              if [ -n "${SEEN[$key]+x}" ]; then DUP=$((DUP + 1)); continue; fi
+              SEEN[$key]=1
+              case "$sev" in
+                error)
+                  ERR_S=$((ERR_S + 1))
+                  if printf '%s' "$r" | grep -qE "$errARe"; then ERR_A+=("$r")
+                  elif printf '%s' "$r" | grep -qE "$errBRe"; then ERR_B+=("$r")
+                  else ERR_C+=("$r"); fi
+                  ;;
+                warning) WARN_S=$((WARN_S + 1)); WARN_L+=("$r") ;;
+                notice)  NOTICE_S=$((NOTICE_S + 1)); NOTICE_L+=("$r") ;;
+              esac
+            done < <(cat "$accLog" "$accErr" "$accRep" 2>/dev/null)
+          fi
+
+          # The public job summary keeps the FAILING TEST NAMES (uncapped —
+          # annotation caps can never hide a failed slot's name) plus the
+          # failed Totals line. §9: summary lines are redacted too.
+          if [ -f "$accLog" ] || [ -f "$accRep" ]; then
+            {
+              echo ""
+              echo "### linux-qt-acceptance — failing test names"
+              echo '```'
+              cat "$accLog" "$accErr" "$accRep" 2>/dev/null | grep -aE '^FAIL!|^Totals: .*, [1-9][0-9]* failed' | head -60 | while IFS= read -r sl; do redact "$sl"; echo; done
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY" || true
+          fi
+
           accStarted=false
           if [ -f "$gateOrder" ] && grep -q 'RUN Qt live-answer acceptance' "$gateOrder" 2>/dev/null; then
             accStarted=true
           fi
-          if [ ! -f "$accLog" ] && [ ! -f "$accErr" ] && [ "$accStarted" = false ]; then
+          if [ "$accStarted" = false ] && [ "$((ERR_S + WARN_S + NOTICE_S))" -eq 0 ]; then
             {
               echo ""
               echo "### Live-answer acceptance: NEVER STARTED"
               echo ""
               echo "No acceptance log and no RUN marker in gate-order.txt — the failure is upstream of the acceptance gate."
             } >> "$GITHUB_STEP_SUMMARY" || true
-            emit "The live-answer acceptance never started — the failure is upstream (read the red step above)"
+            printf '::notice::%s\n' "$(esc "linux-qt-acceptance: The live-answer acceptance never started — the failure is upstream (read the red step above)")"
+            printf '::notice::ci-summary step=%s errors=0/0 | warnings=0/0 | notices=1/1 | duplicates_removed=0 redacted=%d | full_list=%s\n' "$(esc "$STEP_NAME")" "$REDACTED" "$FULL_LIST"
             exit 0
           fi
-          if [ -f "$accLog" ] || [ -f "$accErr" ]; then
-            {
-              echo ""
-              echo "### linux-qt-acceptance.log — failing test names"
-              echo '```'
-              cat "$accLog" "$accErr" "$accRep" 2>/dev/null | grep -aE "$failClasses" | head -60 || true
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY" || true
 
-            while IFS= read -r line; do
-              emit "linux-qt-acceptance: $line"
-            done < <(cat "$accLog" "$accErr" "$accRep" 2>/dev/null | grep -aE "$failClasses" | head -10 || true)
-          else
-            emit "Qt live-answer acceptance failed with no log captured (see ci-logs/ directory in artifact)"
+          # §9 emission order: notices → warnings → errors → accounting.
+          # Caps are per class; the error priority is bucket A (assertions
+          # and gate failures) → bucket B (capture/report failures) →
+          # bucket C (compile/link errors).
+          emit_line() {
+            case "$1" in
+              notice)  printf '::notice::%s\n'  "$2" ;;
+              warning) printf '::warning::%s\n' "$2" ;;
+              error)   printf '::error::%s\n'   "$2" ;;
+            esac
+          }
+          NOTICE_EM=0; WARN_EM=0; ERR_EM=0
+          for l in "${NOTICE_L[@]}"; do
+            [ "$NOTICE_EM" -ge "$NOTICE_CAP" ] && break
+            emit_line notice "$(esc "$(trunc "linux-qt-acceptance: $l" 500)")"
+            NOTICE_EM=$((NOTICE_EM + 1))
+          done
+          for l in "${WARN_L[@]}"; do
+            [ "$WARN_EM" -ge "$WARN_CAP" ] && break
+            emit_line warning "$(esc "$(trunc "linux-qt-acceptance: $l" 250)")"
+            WARN_EM=$((WARN_EM + 1))
+          done
+          for l in "${ERR_A[@]}"; do
+            [ "$ERR_EM" -ge "$ERR_CAP" ] && break
+            emit_line error "$(esc "$(trunc "linux-qt-acceptance: $l" 250)")"
+            ERR_EM=$((ERR_EM + 1))
+          done
+          for l in "${ERR_B[@]}"; do
+            [ "$ERR_EM" -ge "$ERR_CAP" ] && break
+            emit_line error "$(esc "$(trunc "linux-qt-acceptance: $l" 250)")"
+            ERR_EM=$((ERR_EM + 1))
+          done
+          for l in "${ERR_C[@]}"; do
+            [ "$ERR_EM" -ge "$ERR_CAP" ] && break
+            emit_line error "$(esc "$(trunc "linux-qt-acceptance: $l" 250)")"
+            ERR_EM=$((ERR_EM + 1))
+          done
+          if [ "$((ERR_EM + WARN_EM + NOTICE_EM))" -eq 0 ]; then
+            emit_line notice "$(esc "linux-qt-acceptance: no classified lines captured — read the step summary and the artifacts")"
+            NOTICE_EM=$((NOTICE_EM + 1)); NOTICE_S=$((NOTICE_S + 1))
           fi
-          if [ "$emitted" -eq 0 ]; then
-            emit "Qt live-answer acceptance failed with no FAIL lines captured — read the step summary and the linux-verification-logs artifact"
-          fi
+
+          # §9 ONE accounting line per step.
+          printf '::notice::ci-summary step=%s errors=%d/%d | warnings=%d/%d | notices=%d/%d | duplicates_removed=%d redacted=%d | full_list=%s\n' \
+            "$(esc "$STEP_NAME")" "$ERR_EM" "$ERR_S" "$WARN_EM" "$WARN_S" "$NOTICE_EM" "$NOTICE_S" "$DUP" "$REDACTED" "$FULL_LIST"
 
       - name: Headless surface runtime smoke (embedded UI + API over HTTP)
         shell: bash

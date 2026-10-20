@@ -595,6 +595,19 @@ func (s *Store) SetPlan(id string, objectives []string) (Goal, error) {
 // MarkStep records the outcome of one step execution and CHECKPOINTS.
 func (s *Store) MarkStep(id string, stepIdx int, status, result string, ev []Evidence, changedFiles, artifacts []string) (Goal, error) {
 	return s.mutate(id, func(g *Goal) error {
+		// v1.10.13 TERMINAL-GUARD (I6, Task ID 28 R1 — PROBE A
+		// REPRODUCED): a late drive settlement must never
+		// re-classify a terminal goal. The reproduced race chain
+		// was cancelled → blocked (this write) → paused (the
+		// drive's ctx path) within ~10ms of the cancel POST, so
+		// the acceptance poll never observed "cancelled". The
+		// refusal is typed (ErrNotResumable); the drive observes
+		// it and unwinds at its next re-read. Legitimate callers
+		// are never terminal here: Drive() refuses terminal goals
+		// up front, so only the cancel race can hit this guard.
+		if g.IsTerminal() {
+			return ErrNotResumable
+		}
 		if stepIdx < 0 || stepIdx >= len(g.Plan) {
 			return fmt.Errorf("%w: step %d out of range", ErrInvalid, stepIdx)
 		}
@@ -648,6 +661,14 @@ func (s *Store) MarkStep(id string, stepIdx int, status, result string, ev []Evi
 // never reaches here.
 func (s *Store) SetVerification(id string, passed bool, notes string) (Goal, error) {
 	return s.mutate(id, func(g *Goal) error {
+		// v1.10.13 TERMINAL-GUARD (I6, Task ID 28 R1 — PROBE A
+		// family): the verifying phase's late settlement (including
+		// its "verification run failed" branch) must never overwrite
+		// a terminal status written by a concurrent cancel. Typed
+		// refusal; the drive observes it and unwinds.
+		if g.IsTerminal() {
+			return ErrNotResumable
+		}
 		g.Phase = PhaseCompleted
 		g.Verification = notes
 		g.VerificationPassed = passed

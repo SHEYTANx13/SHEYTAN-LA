@@ -44,6 +44,11 @@
 #include <QLocalSocket>
 #include <QCryptographicHash>
 
+// §10 diagnostics-channel contract (v1.10.13 cycle, Task ID 28): every
+// dump line must reach BOTH channels — the QtTest -o report (QWARN, the
+// record of record) AND native stderr, independent of the QtTest logger.
+#include <cstdio>
+
 #include "coreclient.h"
 
 static void dumpChatPersistDiagnostics(const CoreClient &, const QString &);
@@ -419,22 +424,41 @@ static QVariantMap goalById(const QVariantList &goals, const QString &id) {
     return {};
 }
 
+// emitDumpLine — §10 DUAL-CHANNEL emission (run-#28 repair): one local
+// QString, emitted byte-identically through BOTH channels —
+//   (a) QWARN → the QtTest -o report (the record of record), and
+//   (b) std::fputs + std::fflush to native stderr, independent of the
+//       QtTest logger. C1 (Qt Test docs, "-o filename,format"): with an
+//       -o file given, ALL QtTest output routes to the report file and
+//       the console captures stay empty BY DOCUMENTATION — so the native
+//       stderr channel is what the workflow's stderr captures and failure
+//       summaries can always see, and the report keeps the QWARN form.
+// No assertion, condition or bound is touched here; this widens the
+// transport of the diagnostics only.
+static void emitDumpLine(const QString &line)
+{
+    QWARN(qPrintable(line));
+    std::fputs(qPrintable(line), stderr);
+    std::fputs("\n", stderr);
+    std::fflush(stderr);
+}
+
 // dumpGoalDiagnostics — the failure snapshot the run #24 test lacked (I5:
 // the failure NAMES its state). On a bounded wait timeout, read each
 // goal's durable document through the real IPC channel and print status,
 // phase, the live driving flag, last action and the LAST evidence record
 // BEFORE the assertion fails — the hosted run then shows exactly which
 // phase stalled and why (the swallowed-error class died here with zero
-// diagnostics). QWARN rides the QtTest report file, so the snapshot
-// lands in the -o report and the anonymous artifacts, not just stderr.
+// diagnostics). §10: every line rides BOTH channels (emitDumpLine) —
+// the QtTest -o report AND native stderr.
 static void dumpGoalDiagnostics(const QString &endpoint, const QStringList &ids)
 {
     for (const QString &id : ids) {
         const auto item = ipcRequest(endpoint, QStringLiteral("acceptance"), "GET",
                                      QStringLiteral("/api/goals/") + id, QByteArray());
         if (item.first != 200) {
-            QWARN(qPrintable(QStringLiteral("goal %1 → GET failed (status %2)")
-                                 .arg(id).arg(item.first)));
+            emitDumpLine(QStringLiteral("goal %1 → GET failed (status %2)")
+                             .arg(id).arg(item.first));
             continue;
         }
         // QJsonValue has no toMap() (run #25 C2039 on both toolchains):
@@ -442,14 +466,14 @@ static void dumpGoalDiagnostics(const QString &endpoint, const QStringList &ids)
         // Every malformed path emits a named QWARN — never a silent empty map.
         const QJsonDocument diag = QJsonDocument::fromJson(item.second);
         if (!diag.isObject()) {
-            QWARN(qPrintable(QStringLiteral("goal %1 → diagnostics body is not a JSON object (bytes=%2)")
-                                 .arg(id).arg(item.second.size())));
+            emitDumpLine(QStringLiteral("goal %1 → diagnostics body is not a JSON object (bytes=%2)")
+                             .arg(id).arg(item.second.size()));
             continue;
         }
         const QJsonValue goalVal = diag.object().value(QStringLiteral("goal"));
         if (!goalVal.isObject()) {
-            QWARN(qPrintable(QStringLiteral("goal %1 → diagnostics JSON carries no object 'goal' field")
-                                 .arg(id)));
+            emitDumpLine(QStringLiteral("goal %1 → diagnostics JSON carries no object 'goal' field")
+                             .arg(id));
             continue;
         }
         const QVariantMap g = goalVal.toObject().toVariantMap();
@@ -462,16 +486,16 @@ static void dumpGoalDiagnostics(const QString &endpoint, const QStringList &ids)
                               em.value("status").toString(),
                               em.value("detail").toString().left(160));
         }
-        QWARN(qPrintable(QStringLiteral(
-                             "goal %1 → status=%2 phase=%3 driving=%4 lastAction=%5 lastEvidence=%6")
-                             .arg(id,
-                                  g.value("status").toString(),
-                                  g.value("phase").toString(),
-                                  g.value("driving").toBool()
-                                      ? QStringLiteral("true")
-                                      : QStringLiteral("false"),
-                                  g.value("lastAction").toString(),
-                                  lastEv)));
+        emitDumpLine(QStringLiteral(
+                         "goal %1 → status=%2 phase=%3 driving=%4 lastAction=%5 lastEvidence=%6")
+                         .arg(id,
+                              g.value("status").toString(),
+                              g.value("phase").toString(),
+                              g.value("driving").toBool()
+                                  ? QStringLiteral("true")
+                                  : QStringLiteral("false"),
+                              g.value("lastAction").toString(),
+                              lastEv));
     }
 }
 
@@ -499,16 +523,16 @@ static void dumpChatPersistDiagnostics(const CoreClient &core, const QString &wh
             && mm.value("content").toString().contains(QStringLiteral("working fine")))
             anyAssistantWorkingFine = true;
     }
-    QWARN(qPrintable(QStringLiteral(
-                         "chat-persist[%1] → messages=%2 roles=[%3] anyAssistantWorkingFine=%4 error=%5 busy=%6 liveActive=%7 session=%8")
-                         .arg(which,
-                              QString::number(msgs.size()),
-                              roles.join(QLatin1Char(',')),
-                              anyAssistantWorkingFine ? QStringLiteral("true") : QStringLiteral("false"),
-                              core.error(),
-                              core.busy() ? QStringLiteral("true") : QStringLiteral("false"),
-                              core.liveActive() ? QStringLiteral("true") : QStringLiteral("false"),
-                              core.currentSession().value("id").toString())));
+    emitDumpLine(QStringLiteral(
+                     "chat-persist[%1] → messages=%2 roles=[%3] anyAssistantWorkingFine=%4 error=%5 busy=%6 liveActive=%7 session=%8")
+                     .arg(which,
+                          QString::number(msgs.size()),
+                          roles.join(QLatin1Char(',')),
+                          anyAssistantWorkingFine ? QStringLiteral("true") : QStringLiteral("false"),
+                          core.error(),
+                          core.busy() ? QStringLiteral("true") : QStringLiteral("false"),
+                          core.liveActive() ? QStringLiteral("true") : QStringLiteral("false"),
+                          core.currentSession().value("id").toString())));
 }
 
 // goalsListFieldContract — the list contract the client mirrors: a created
@@ -634,11 +658,19 @@ void Acceptance::goalsStartPauseResumeCancelRoundTrip() {
     QVERIFY(resumed);
 
     // Cancel: terminal; the re-driven loop stops at its next boundary.
+    // v1.10.13 §10 (run-#28 repair): the cancel leg — the ONLY failing leg
+    // of the round trip on runs #26/#28 — gains its missing dump, mirroring
+    // the start and resume legs above. The assertion, its condition and
+    // the 15000 ms bound are unchanged.
     core.cancelGoal(goalId);
-    QVERIFY(waitForGoalState(&core, [&]() {
+    const bool cancelled = waitForGoalState(&core, [&]() {
         return goalById(core.goals(), goalId).value("status").toString()
                == QStringLiteral("cancelled");
-    }, 15000));
+    }, 15000);
+    if (!cancelled) {
+        dumpGoalDiagnostics(m_endpoint, {goalId});
+    }
+    QVERIFY(cancelled);
     QVERIFY2(core.error().isEmpty(), qPrintable(core.error()));
 }
 

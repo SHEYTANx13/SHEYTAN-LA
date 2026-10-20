@@ -9,6 +9,11 @@ hazard by construction).
 
 ---
 ---
+Task ID: 28 (v1.10.13 cycle) — tree pinned at 57d2592 (baseline 0cdd705 + operator doc uploads, all three follow-up hosted runs canceled)
+  Actual results: Probe A reproduced 2/2 (cancel race: cancelled → blocked → paused, unguarded MarkStep/SetVerification); fixed at the pinned layer, green 2/2; Probe B NOT-REPRODUCED 2/2 (park machinery exonerated at the packaged timing). §10 dual-channel dumps + cancel-leg dump shipped; §9 severity contract + accounting line in both failure summaries; C1 confirmed per Qt docs. Battery: gofmt/build/-race/vet/internal-65/65/YAML/C++ inventory/workflow fixtures 30/30 — green. Docs caps honored (FEATURES.md 119 lines; one ≤10-line entry each here and in changelog.md).
+  Unresolved risks: hosted verdict for the whole cycle NOT RUN (no push authority) — run #29 on the pushed commit owns G1-G5's hosted proof; Windows capture fixture NOT RUN (no pwsh); the parked-goal residual delta (packaged core/IPC/Qt-client, V8 fallback) and Main.qml:569:41/OpenThemeData/CI-font QWARNs remain classified, never chased.
+  Future work: step-activation discarded mutate (~runner.go:390) needs a deterministic failing-without-it test; V8's silent ask-risky downgrade on systems-store lookup failure; warnings digest on green runs; Qt suite splitting.
+---
 Task ID: 27 (v1.10.13 run #27 cycle) — agent: compile-repair + silent-return session; tree pinned at 7fdee73
 Task: repair the run #27 Qt compile break (duplicate dumpChatPersistDiagnostics) so the acceptance suite finally executes hosted, land the one structural item (CoreClient openSession silent-return → typed error), read the first real hosted verdicts for the parked-goal and chat-persist slots
 Work Log: tst_acceptance.cpp — exactly two hunks: the byte-identical second dumpChatPersistDiagnostics block (comment + definition, 512–546 at 7fdee73) deleted, one forward declaration added after the includes; call sites (284/314 post-edit), waits, bounds and the surviving body untouched; Csymbol inventory PASS — every file-scope definition unique, declaration line 49 above both call sites.
