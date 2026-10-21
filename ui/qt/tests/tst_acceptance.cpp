@@ -383,12 +383,25 @@ void Acceptance::aiSystemsListActivate() {
 // goals) WITHOUT widening the CoreClient surface beyond the roadmap's seven
 // goal invokables: the client contract stays exactly list + control +
 // decisions, and the fixtures still travel the real channel.
+//
+// v1.10.13 run-#35 framing visibility: the optional framingOut receives the
+// response's framing headers EXACTLY as they arrived — the client's
+// documented transport contract (coreclient.cpp) completes every body by
+// declared Content-Length or close-delimited framing, and a chunked body is
+// the typed-parse failure class the parked slot died on (run #34: an
+// oversized list arrived chunked on BOTH platforms while every smaller
+// answer carried Content-Length). Diagnostics only: no assertion, condition
+// or bound is touched; existing call sites are unchanged (defaulted param).
 static QPair<int, QByteArray> ipcRequest(const QString &endpoint, const QString &key,
                                          const char *method, const QString &path,
-                                         const QByteArray &body) {
+                                         const QByteArray &body,
+                                         QString *framingOut = nullptr) {
     QLocalSocket sock;
     sock.connectToServer(endpoint);
-    if (!sock.waitForConnected(5000)) return {0, QByteArray()};
+    if (!sock.waitForConnected(5000)) {
+        if (framingOut) *framingOut = QStringLiteral("<no response head>");
+        return {0, QByteArray()};
+    }
 
     QByteArray req;
     req += QByteArray(method) + " " + path.toUtf8() + " HTTP/1.1\r\n";
@@ -410,7 +423,25 @@ static QPair<int, QByteArray> ipcRequest(const QString &endpoint, const QString 
         sock.waitForReadyRead(100);
     }
     const int headEnd = int(all.indexOf("\r\n\r\n"));
-    if (headEnd < 0) return {0, QByteArray()};
+    if (headEnd < 0) {
+        if (framingOut) *framingOut = QStringLiteral("<no response head>");
+        return {0, QByteArray()};
+    }
+    if (framingOut) {
+        QString cl = QStringLiteral("<absent>");
+        QString te = QStringLiteral("<absent>");
+        const QList<QByteArray> headLines = all.left(headEnd).split('\n');
+        for (const QByteArray &hl : headLines) {
+            const QByteArray trimmed = hl.trimmed();
+            const QByteArray low = trimmed.toLower();
+            if (low.startsWith("content-length:"))
+                cl = QString::fromLatin1(trimmed.mid(int(qstrlen("content-length:")))).trimmed();
+            else if (low.startsWith("transfer-encoding:"))
+                te = QString::fromLatin1(trimmed.mid(int(qstrlen("transfer-encoding:")))).trimmed();
+        }
+        *framingOut = QStringLiteral("Content-Length: %1; Transfer-Encoding: %2")
+                          .arg(cl, te);
+    }
     const QByteArray statusLine = all.left(int(all.indexOf("\r\n")));
     const QList<QByteArray> parts = statusLine.split(' ');
     return {parts.value(1).toInt(), all.mid(headEnd + 4)};
@@ -508,8 +539,13 @@ static void dumpGoalDiagnostics(const QString &endpoint, const QStringList &ids)
     // fields the LIST item actually carries — the exact bytes the client's
     // list model parses (no client code between this body and the slot's
     // condition). Both channels; no assertion or bound is touched.
+    QString listFraming;
     const auto list = ipcRequest(endpoint, QStringLiteral("acceptance"), "GET",
-                                 QStringLiteral("/api/goals"), QByteArray());
+                                 QStringLiteral("/api/goals"), QByteArray(), &listFraming);
+    // v1.10.13 run-#35 framing line (V9): ONE extra dump line, both channels,
+    // emitted BEFORE any status/parse branch — the wire's framing state is
+    // visible hosted even on the failure paths. No assertion is touched.
+    emitDumpLine(QStringLiteral("goal LIST → framing headers: %1").arg(listFraming));
     if (list.first != 200) {
         emitDumpLine(QStringLiteral("goal LIST → GET /api/goals failed (status %1)")
                          .arg(list.first));

@@ -3623,14 +3623,40 @@ func (s *Server) handleActivityWS(w http.ResponseWriter, r *http.Request) {
 
 // --- helpers ---
 
-func writeJSON(w http.ResponseWriter, v any) {
+// framedJSON is the ONE response-writing boundary for complete JSON
+// responses: the value marshals fully, the EXACT byte count is declared as
+// Content-Length, and only then do the bytes go out. This is the client's
+// documented transport contract (coreclient.cpp: every body completes by
+// declared Content-Length or close-delimited framing; chunked transfer
+// encoding is not claimed by the client and fails JSON parsing upstream —
+// a typed error, not a hang). Go's net/http buffers only ~2 KB before it
+// must choose a framing: an undeclared body larger than that went out
+// chunked (HTTP/1.1) — run #34's parked goals list was the project's
+// first response to cross the buffer, arrived chunked on BOTH platforms,
+// and the parked acceptance slot died parsing it while every smaller
+// answer carried Content-Length. Declaring the length here kills the
+// entire class: no JSON response of any size can reach the client
+// unframed again (I6 at the transport boundary).
+func framedJSON(w http.ResponseWriter, status int, v any) {
+	body, err := json.Marshal(v)
+	if err != nil {
+		// Marshaling an API response value failing is a server bug; still
+		// answer framed — never swap a bad body for an unframed one.
+		body = []byte(`{"error":"response encoding failed"}`)
+	}
+	body = append(body, '\n') // byte-identical to the previous Encoder form
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(v)
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
+func writeJSON(w http.ResponseWriter, v any) {
+	framedJSON(w, http.StatusOK, v)
 }
 
 func writeErr(w http.ResponseWriter, code int, err error) {
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{
+	framedJSON(w, code, map[string]string{
 		"error": err.Error(),
 	})
 }

@@ -18,11 +18,15 @@ package api
 //           live or finishing drive; the invariant is tested, not assumed.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1168,5 +1172,219 @@ func TestGoalCancelDuringVerifyKeepsCancelledStatus(t *testing.T) {
 	if g.Status != goal.StatusCancelled {
 		dumpProbeGoalRecord(t, srv, goalID)
 		t.Fatalf("I6 REGRESSION: the cancelled status was overwritten during the verify unwind (status=%q) — a late settlement resurrected a terminal goal", g.Status)
+	}
+}
+
+// rawTCPGET issues ONE HTTP/1.1 request over a bare net.Conn and returns
+// {head, body} EXACTLY as the wire delivered them — no http.Client, no
+// de-chunking, no normalization: the same read discipline the Qt client
+// applies (coreclient.cpp completes a body by declared Content-Length or
+// close-delimited framing and refuses chunked bodies upstream). Every
+// framing assertion in this file reads through this probe or not at all.
+func rawTCPGET(t *testing.T, serverURL, path string) (string, []byte) {
+	t.Helper()
+	addr := strings.TrimPrefix(serverURL, "http://")
+	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		t.Fatalf("dial %s: %v", addr, err)
+	}
+	defer conn.Close()
+	req := "GET " + path + " HTTP/1.1\r\nHost: sheytan-core\r\nConnection: close\r\n\r\n"
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatalf("write raw request: %v", err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	raw, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatalf("read raw response: %v", err)
+	}
+	headEnd := bytes.Index(raw, []byte("\r\n\r\n"))
+	if headEnd < 0 {
+		t.Fatalf("raw response carries no head (bytes=%d): %q", len(raw), raw[:min(len(raw), 200)])
+	}
+	return string(raw[:headEnd]), raw[headEnd+4:]
+}
+
+// TestGoalParkedStateListRawTCPFraming is the R1 framing probe (register
+// V6): the parked slot goalsApproveRejectParkedGoal died on BOTH platforms
+// in run #34 with the discriminator "goal LIST → list body is not a JSON
+// object" while the SAME dump's single-goal GET parsed fine — an HTTP 200
+// whose body the client's JSON parser refuses. The client's documented
+// contract (coreclient.cpp) completes every body by declared
+// Content-Length or close and does NOT claim chunked transfer encoding;
+// Go's net/http switches a response to chunked the moment its writes
+// exceed the internal response buffer (~2 KB) and no Content-Length is
+// declared. The parked list (two goals carrying pendingApproval, the
+// fallback single-step plan and the evidence trail) is the project's
+// first response to cross that buffer. This probe drives the parked state
+// through the exact acceptance fixture (ask-all system, two goals
+// start:true, the packaged fallback route — no new seam), then reads the
+// list and the single-goal views over a BARE net.Conn and asserts the
+// framing at the byte level.
+func TestGoalParkedStateListRawTCPFraming(t *testing.T) {
+	engine := exactFixtureEngine(t)
+	srv, server := newRemoteServerWithHandle(t, engine.URL)
+
+	code, sys := postGoalJSON(t, server.URL, "/api/systems",
+		`{"name":"acceptance ask-all","instructions":"fixture policy: park before every acting step","approvalPolicy":"ask-all"}`)
+	if code != http.StatusOK {
+		t.Fatalf("POST /api/systems = %d", code)
+	}
+	systemID, _ := sys["systemId"].(string)
+	if systemID == "" {
+		t.Fatalf("no systemId in response: %+v", sys)
+	}
+	createParked := func(text string) string {
+		code, created := postGoalJSON(t, server.URL, "/api/goals",
+			`{"goal":"`+text+`","systemId":"`+systemID+`","start":true}`)
+		if code != http.StatusOK {
+			t.Fatalf("POST /api/goals = %d: %+v", code, created)
+		}
+		id, _ := created["goalId"].(string)
+		if id == "" {
+			t.Fatalf("no goalId in response: %+v", created)
+		}
+		return id
+	}
+	approveID := createParked("acceptance approval fixture")
+	rejectID := createParked("acceptance rejection fixture")
+
+	parked := false
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		a, aerr := srv.goalStore().Get(approveID)
+		r, rerr := srv.goalStore().Get(rejectID)
+		if aerr == nil && rerr == nil &&
+			a.Status == goal.StatusWaitingApproval && r.Status == goal.StatusWaitingApproval {
+			parked = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !parked {
+		dumpParkDiagnostics(t, srv, approveID, rejectID)
+		t.Fatalf("the two-goal ask-all park never landed within 60s — the framing probe's precondition is unreachable")
+	}
+
+	// The raw list read: the exact bytes the Qt client's list model parses.
+	head, body := rawTCPGET(t, server.URL, "/api/goals")
+	t.Logf("parked-state GET /api/goals raw response head (verbatim):\n%s", head)
+	t.Logf("parked-state GET /api/goals body bytes=%d", len(body))
+	if len(body) <= 2048 {
+		t.Fatalf("premise lost: the parked list body is %d bytes — at or under net/http's 2048-byte buffer, the response can no longer exercise the framing class this test pins", len(body))
+	}
+	if strings.Contains(head, "Transfer-Encoding:") {
+		t.Fatalf("identity-framing regression (I6 at the transport boundary): the parked list head claims transfer framing:\n%s", head)
+	}
+	clIndex := strings.Index(head, "Content-Length:")
+	if clIndex < 0 {
+		t.Fatalf("identity-framing regression (I6 at the transport boundary): the parked list head carries no Content-Length (the run #34 failure, byte-level):\n%s", head)
+	}
+	clValue := strings.TrimSpace(head[clIndex+len("Content-Length:"):])
+	if nl := strings.IndexAny(clValue, "\r\n"); nl >= 0 {
+		clValue = clValue[:nl]
+	}
+	declared, err := strconv.Atoi(clValue)
+	if err != nil {
+		t.Fatalf("unparseable Content-Length in head:\n%s", head)
+	}
+	if declared != len(body) {
+		t.Fatalf("framing mismatch: the head declares Content-Length %d, the wire delivered %d body bytes", declared, len(body))
+	}
+	// The body must parse as a JSON object EXACTLY as delivered — the read
+	// the parked slot's condition depends on (no client de-chunking exists).
+	var listEnv struct {
+		Goals []struct {
+			GoalID string `json:"goalId"`
+			Status string `json:"status"`
+		} `json:"goals"`
+	}
+	if err := json.Unmarshal(body, &listEnv); err != nil {
+		t.Fatalf("parked list body does not parse as a JSON object (the run #34 failure class): %v", err)
+	}
+	seen := map[string]bool{}
+	for _, it := range listEnv.Goals {
+		if it.GoalID == approveID || it.GoalID == rejectID {
+			if it.Status != "waiting_for_approval" {
+				t.Fatalf("parked goal %s carries status %q in the list view, want waiting_for_approval", it.GoalID, it.Status)
+			}
+			seen[it.GoalID] = true
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("the parked goals are missing from the list view (%d of 2 present) — the slot's condition could never be satisfied", len(seen))
+	}
+
+	// Control: the SAME dump's single-goal GET — the response that parsed
+	// fine on both platforms in run #34 (small body, inside the buffer).
+	singleHead, singleBody := rawTCPGET(t, server.URL, "/api/goals/"+approveID)
+	t.Logf("parked-state GET /api/goals/%s raw response head (verbatim):\n%s", approveID, singleHead)
+	if !strings.Contains(singleHead, "Content-Length:") {
+		t.Fatalf("control contradicted: the single-goal head carries no Content-Length:\n%s", singleHead)
+	}
+	if len(singleBody) == 0 {
+		t.Fatalf("control contradicted: the single-goal body is empty")
+	}
+	var singleObj map[string]json.RawMessage
+	if err := json.Unmarshal(singleBody, &singleObj); err != nil {
+		t.Fatalf("single-goal body does not parse as a JSON object: %v", err)
+	}
+}
+
+// TestGoalListOverBufferFramingDeterministic is the V8 raw-byte regression:
+// a list response sized OVER net/http's internal response buffer (2048
+// bytes) must carry Content-Length, must carry no Transfer-Encoding, and
+// its body must parse as a JSON object when read exactly like the Qt
+// client reads — bare net.Conn, raw bytes, no de-chunking. Unlike the
+// parked-state probe this test needs no engine: unstarted goals never
+// drive, so the oversized list is built deterministically from long goal
+// texts alone, and the >2048 premise is ASSERTED before any framing
+// assertion — the test can never silently stop exercising the defect
+// class. On the pre-fix tree (no declared length) net/http sends this
+// body chunked and both framing assertions fail — verified against the
+// pristine 6141c6c tree before this cycle's commit.
+func TestGoalListOverBufferFramingDeterministic(t *testing.T) {
+	srv, server := newRemoteServerWithHandle(t, "http://127.0.0.1:1") // no drive starts: the engine is unreachable by construction
+	_ = srv
+
+	bigGoal := strings.Repeat("framing regression oversized list premise ", 10) // 480 bytes per goal text
+	for i := 0; i < 20; i++ {
+		code, created := postGoalJSON(t, server.URL, "/api/goals",
+			`{"goal":"`+fmt.Sprintf("goal-%02d ", i)+bigGoal+`"}`)
+		if code != http.StatusOK {
+			t.Fatalf("POST /api/goals #%d = %d: %+v", i, code, created)
+		}
+	}
+
+	head, body := rawTCPGET(t, server.URL, "/api/goals")
+	t.Logf("oversized GET /api/goals raw response head (verbatim):\n%s", head)
+	t.Logf("oversized GET /api/goals body bytes=%d", len(body))
+	if len(body) <= 2048 {
+		t.Fatalf("premise lost: the list body is %d bytes — at or under net/http's 2048-byte buffer", len(body))
+	}
+	if strings.Contains(head, "Transfer-Encoding:") {
+		t.Fatalf("identity-framing regression (I6 at the transport boundary): an oversized list left the server chunked:\n%s", head)
+	}
+	clIndex := strings.Index(head, "Content-Length:")
+	if clIndex < 0 {
+		t.Fatalf("identity-framing regression (I6 at the transport boundary): an oversized list carries no Content-Length:\n%s", head)
+	}
+	clValue := strings.TrimSpace(head[clIndex+len("Content-Length:"):])
+	if nl := strings.IndexAny(clValue, "\r\n"); nl >= 0 {
+		clValue = clValue[:nl]
+	}
+	declared, err := strconv.Atoi(clValue)
+	if err != nil {
+		t.Fatalf("unparseable Content-Length in head:\n%s", head)
+	}
+	if declared != len(body) {
+		t.Fatalf("framing mismatch: the head declares Content-Length %d, the wire delivered %d body bytes", declared, len(body))
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("oversized list body does not parse as a JSON object (the run #34 failure class): %v", err)
+	}
+	if _, ok := envelope["goals"]; !ok {
+		t.Fatalf("oversized list body carries no goals field: %.200s", body)
 	}
 }
