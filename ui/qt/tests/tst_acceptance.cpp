@@ -532,7 +532,7 @@ static void dumpChatPersistDiagnostics(const CoreClient &core, const QString &wh
                           core.error(),
                           core.busy() ? QStringLiteral("true") : QStringLiteral("false"),
                           core.liveActive() ? QStringLiteral("true") : QStringLiteral("false"),
-                          core.currentSession().value("id").toString())));
+                          core.currentSession().value("id").toString()));
 }
 
 // goalsListFieldContract — the list contract the client mirrors: a created

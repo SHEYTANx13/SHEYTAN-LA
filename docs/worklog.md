@@ -9,6 +9,11 @@ hazard by construction).
 
 ---
 ---
+Task ID: 29 (v1.10.13 run #32 cycle) — tree pinned at 1960bb5 (audit green incl. race gate; both Qt host builds red on the single C2059)
+  Shipped: tst_acceptance.cpp line 535 — exactly one ')' deleted in dumpChatPersistDiagnostics's chat-persist dump (the emitDumpLine rewrite dropped one closer at four of five sites and missed this one). I7 added to the never-regress set: no C++ edit commits without a recorded whole-file balance scan + symbol inventory — both ran clean pre-commit (1257/1257 parens, 213/213 braces, duplicate bodies none).
+  Boundary: run #32's acceptance never started (compile gate); run #33 will be only the second hosted acceptance ever. Hosted verification NOT RUN at doc time (operator push pending); the audit job must not move on run #33.
+  Future work: if the parked-goal slot stays red on run #33, its now-visible goal-dump diagnostics (§9 DUMP-DIAGNOSTIC notices) pin the discriminating layer — the silent ask-risky downgrade on a failed systems-store read stays prime suspect — for the next cycle.
+---
 Task ID: 28 (v1.10.13 cycle) — tree pinned at 57d2592 (baseline 0cdd705 + operator doc uploads, all three follow-up hosted runs canceled)
   Actual results: Probe A reproduced 2/2 (cancel race: cancelled → blocked → paused, unguarded MarkStep/SetVerification); fixed at the pinned layer, green 2/2; Probe B NOT-REPRODUCED 2/2 (park machinery exonerated at the packaged timing). §10 dual-channel dumps + cancel-leg dump shipped; §9 severity contract + accounting line in both failure summaries; C1 confirmed per Qt docs. Battery: gofmt/build/-race/vet/internal-65/65/YAML/C++ inventory/workflow fixtures 30/30 — green. Docs caps honored (FEATURES.md 119 lines; one ≤10-line entry each here and in changelog.md).
   Unresolved risks: hosted verdict for the whole cycle NOT RUN (no push authority) — run #29 on the pushed commit owns G1-G5's hosted proof; Windows capture fixture NOT RUN (no pwsh); the parked-goal residual delta (packaged core/IPC/Qt-client, V8 fallback) and Main.qml:569:41/OpenThemeData/CI-font QWARNs remain classified, never chased.
