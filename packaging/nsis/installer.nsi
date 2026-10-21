@@ -133,7 +133,7 @@ VIAddVersionKey "CompanyName" "${PUBLISHER}"
 VIAddVersionKey "InternalName" "${PRODUCT}"
 VIAddVersionKey "OriginalFilename" "SHEYTAN-LA-v${VERSION}-windows-x64-installer.exe"
 VIAddVersionKey "FileVersion" "${VERSION}.0"
-VIAddVersionKey "ProductVersion" "${VERSION}"
+VIAddVersionKey "ProductVersion" "${VERSION}.0" ; four-part identity: this string key shadows VIProductVersion in .NET FileVersionInfo.ProductVersion (run #35 class)
 VIAddVersionKey "LegalCopyright" "(c) 2024-2026 Parsaetak. All rights reserved."
 
 !define MUI_ICON   "..\..\build\sheytan.ico"

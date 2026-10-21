@@ -1290,6 +1290,13 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
+          # v1.10.13 Task-32 (run #35 class): every post-acceptance
+          # packaging step is gate-order-tracked — RUN at the step start,
+          # OK as the step's final statement; a trailing RUN without OK
+          # makes the failure summary name the gate instead of falling
+          # back to "outside them". Additive only: no gate logic changes.
+          Add-Content "ci-logs/gate-order.txt" "RUN Windows package prepare"
+
           # Canonical package root — the same value controls staging, ZIP
           # creation, ZIP verification and artifact naming.
           $root = "dist/windows/app/${env:WIN_PKG_ROOT}"
@@ -1356,10 +1363,14 @@ jobs:
               -Force
           }
 
+          Add-Content "ci-logs/gate-order.txt" "OK Windows package prepare"
+
       - name: Create Windows ZIP
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+
+          Add-Content "ci-logs/gate-order.txt" "RUN Windows ZIP create"
 
           New-Item `
             -ItemType Directory `
@@ -1385,10 +1396,14 @@ jobs:
             throw "Windows ZIP is empty."
           }
 
+          Add-Content "ci-logs/gate-order.txt" "OK Windows ZIP create"
+
       - name: Verify Windows ZIP
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+
+          Add-Content "ci-logs/gate-order.txt" "RUN Windows ZIP verify"
 
           Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -1468,10 +1483,14 @@ jobs:
             $archive.Dispose()
           }
 
+          Add-Content "ci-logs/gate-order.txt" "OK Windows ZIP verify"
+
       - name: Verify Windows ZIP integrity
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+
+          Add-Content "ci-logs/gate-order.txt" "RUN Windows ZIP integrity"
 
           Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -1505,6 +1524,8 @@ jobs:
           }
 
           Write-Host "Windows ZIP integrity verification passed."
+
+          Add-Content "ci-logs/gate-order.txt" "OK Windows ZIP integrity"
 
       - name: Build Windows NSIS installer
         shell: pwsh
@@ -1593,6 +1614,7 @@ jobs:
             throw "makensis exited with code $LASTEXITCODE (log: ci-logs/win-nsis.log)."
           }
           Add-Content "ci-logs/gate-order.txt" "OK NSIS makensis"
+          Add-Content "ci-logs/gate-order.txt" "RUN NSIS post-build contract"
 
           # Post-build assertions: the installer must exist, be non-empty,
           # and its version resource must carry the release identity.
@@ -1618,6 +1640,7 @@ jobs:
           if ($versionInfo.ProductName -ne "SHEYTAN-LA") {
             throw "Installer ProductName '$($versionInfo.ProductName)' != expected identity 'SHEYTAN-LA'."
           }
+          Add-Content "ci-logs/gate-order.txt" "OK NSIS post-build contract"
 
           Write-Host "NSIS installer built: $installerPath"
 
@@ -1625,6 +1648,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+
+          Add-Content "ci-logs/gate-order.txt" "RUN Windows installer verify"
 
           $installer = Get-Item "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe"
 
@@ -1654,6 +1679,8 @@ jobs:
           Write-Host "Installer identity: $($vi.ProductName) v$($vi.ProductVersion) ($([math]::Round($installer.Length/1MB,1)) MB)"
 
           Write-Host "Installer verification passed: $($installer.Name) ($([math]::Round($installer.Length/1MB,1)) MB)"
+
+          Add-Content "ci-logs/gate-order.txt" "OK Windows installer verify"
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v6

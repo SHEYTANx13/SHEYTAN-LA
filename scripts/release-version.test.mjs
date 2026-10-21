@@ -588,3 +588,47 @@ test("the real repository workflow satisfies the full v1.3.3 contract", () => {
   );
   assert.deepEqual(workflowContractViolations(wf), []);
 });
+
+// ---------------------------------------------------------------------------
+// 8. v1.10.13 installer identity contract (run #35 class, Task ID 32).
+// ---------------------------------------------------------------------------
+
+test("installer.nsi carries ONE four-part identity in its version resource", () => {
+  // Run #35 root cause: the VIProductVersion fixed block was four-part
+  // ("${VERSION}.0") while the VIAddVersionKey "ProductVersion" string
+  // table entry carried the three-part display form ("${VERSION}").
+  // .NET's FileVersionInfo.ProductVersion returns the string-table value
+  // when present, so the workflow's W-INST-VR post-build gate — which
+  // demands "<APP_VERSION>.0" — threw deterministically on every build
+  // of that .nsi. ONE identity, four-part, in ONE version resource: the
+  // string key must equal the fixed block, and the three-part form must
+  // never return.
+  const repoRoot = join(scriptDir, "..");
+  const nsi = readFileSync(
+    join(repoRoot, "packaging", "nsis", "installer.nsi"),
+    "utf8",
+  );
+
+  const fixedBlock = nsi.match(/^VIProductVersion\s+"([^"]+)"/m);
+  assert.ok(fixedBlock, "VIProductVersion directive present");
+  assert.equal(
+    fixedBlock[1],
+    "${VERSION}.0",
+    "the fixed VS_FIXEDFILEINFO block stays four-part (<version>.0)",
+  );
+
+  const productVersion = nsi.match(
+    /^VIAddVersionKey\s+"ProductVersion"\s+"([^"]+)"/m,
+  );
+  assert.ok(productVersion, 'VIAddVersionKey "ProductVersion" present');
+  assert.equal(
+    productVersion[1],
+    "${VERSION}.0",
+    'the ProductVersion string key must carry the same four-part identity as VIProductVersion (run #35: the three-part form made FileVersionInfo.ProductVersion read "1.10.13" and threw the W-INST-VR gate)',
+  );
+  assert.doesNotMatch(
+    nsi,
+    /^VIAddVersionKey\s+"ProductVersion"\s+"\$\{VERSION\}"\s*$/m,
+    "the three-part ProductVersion string key (run #35 defect) must never return",
+  );
+});
