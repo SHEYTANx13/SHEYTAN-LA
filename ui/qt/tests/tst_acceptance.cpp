@@ -51,7 +51,8 @@
 
 #include "coreclient.h"
 
-static void dumpChatPersistDiagnostics(const CoreClient &, const QString &);
+static void dumpChatPersistDiagnostics(const CoreClient &, const QString &,
+                                       const QString &);
 
 class Acceptance : public QObject {
     Q_OBJECT
@@ -286,7 +287,7 @@ void Acceptance::chatStreamPersistRepeatAndClose() {
         return assistants == 1;
     }, 15000);
     if (!firstPersisted) {
-        dumpChatPersistDiagnostics(core, QStringLiteral("first-persisted-assistant==1"));
+        dumpChatPersistDiagnostics(core, m_endpoint, QStringLiteral("first-persisted-assistant==1"));
     }
     QVERIFY(firstPersisted);
 
@@ -316,7 +317,7 @@ void Acceptance::chatStreamPersistRepeatAndClose() {
         return assistants == 2;
     }, 15000);
     if (!repeatPersisted) {
-        dumpChatPersistDiagnostics(core, QStringLiteral("repeat-assistant-count==2"));
+        dumpChatPersistDiagnostics(core, m_endpoint, QStringLiteral("repeat-assistant-count==2"));
     }
     QVERIFY(repeatPersisted);
 }
@@ -497,6 +498,67 @@ static void dumpGoalDiagnostics(const QString &endpoint, const QStringList &ids)
                               g.value("lastAction").toString(),
                               lastEv));
     }
+
+    // v1.10.13 run #33 R1 discriminator (I6 at the LIST boundary): both
+    // HTTP views read the SAME durable documents, so a parked goal the
+    // single-goal GET shows while the list never carries it names the LIST
+    // PROJECTION as the failing layer; a list that carries the identical
+    // status exonerates the serializer and moves the delta to the client's
+    // list parsing. ONE raw list read per dump: per requested id, the wire
+    // fields the LIST item actually carries — the exact bytes the client's
+    // list model parses (no client code between this body and the slot's
+    // condition). Both channels; no assertion or bound is touched.
+    const auto list = ipcRequest(endpoint, QStringLiteral("acceptance"), "GET",
+                                 QStringLiteral("/api/goals"), QByteArray());
+    if (list.first != 200) {
+        emitDumpLine(QStringLiteral("goal LIST → GET /api/goals failed (status %1)")
+                         .arg(list.first));
+        return;
+    }
+    const QJsonDocument ld = QJsonDocument::fromJson(list.second);
+    if (!ld.isObject()) {
+        emitDumpLine(QStringLiteral("goal LIST → list body is not a JSON object (bytes=%1)")
+                         .arg(list.second.size()));
+        return;
+    }
+    const auto items = ld.object().value(QStringLiteral("goals")).toArray();
+    for (const QString &id : ids) {
+        bool found = false;
+        for (const auto &iv : items) {
+            const QJsonObject im = iv.toObject();
+            if (im.value(QStringLiteral("goalId")).toString() != id) continue;
+            found = true;
+            const QJsonValue stv = im.value(QStringLiteral("status"));
+            const QString st = stv.toString();
+            QString rawNote;
+            if (st != QStringLiteral("waiting_for_approval")) {
+                rawNote = QStringLiteral(" rawStatusJson=") + QString::fromUtf8(
+                    QJsonDocument(QJsonObject{{QStringLiteral("status"), stv}})
+                        .toJson(QJsonDocument::Compact));
+            }
+            emitDumpLine(QStringLiteral(
+                             "goal %1-list → status=%2 phase=%3 pendingApproval=%4 toolName=%5 drivingField=%6%7")
+                             .arg(id,
+                                  st,
+                                  im.value(QStringLiteral("phase")).toString(),
+                                  im.value(QStringLiteral("pendingApproval")).isObject()
+                                      ? QStringLiteral("present")
+                                      : QStringLiteral("absent"),
+                                  im.value(QStringLiteral("pendingApproval"))
+                                      .toObject()
+                                      .value(QStringLiteral("toolName"))
+                                      .toString(),
+                                  im.contains(QStringLiteral("driving"))
+                                      ? QStringLiteral("present")
+                                      : QStringLiteral("absent"),
+                                  rawNote));
+            break;
+        }
+        if (!found) {
+            emitDumpLine(QStringLiteral("goal %1-list → MISSING from list (items=%2)")
+                             .arg(id).arg(items.size()));
+        }
+    }
 }
 
 // dumpChatPersistDiagnostics — the settle→persist snapshot for
@@ -510,7 +572,8 @@ static void dumpGoalDiagnostics(const QString &endpoint, const QStringList &ids)
 // and (from this cycle) the workflow failure summaries, so the facts
 // are anonymously readable on a red run — never a tail dump, the
 // assertion and its bound stay exactly as they were.
-static void dumpChatPersistDiagnostics(const CoreClient &core, const QString &which)
+static void dumpChatPersistDiagnostics(const CoreClient &core, const QString &endpoint,
+                                       const QString &which)
 {
     QStringList roles;
     bool anyAssistantWorkingFine = false;
@@ -533,6 +596,51 @@ static void dumpChatPersistDiagnostics(const CoreClient &core, const QString &wh
                           core.busy() ? QStringLiteral("true") : QStringLiteral("false"),
                           core.liveActive() ? QStringLiteral("true") : QStringLiteral("false"),
                           core.currentSession().value("id").toString()));
+
+    // v1.10.13 run #33 R2 discriminator: the numbers above read ONLY the
+    // client model — they cannot tell a core-persist failure from a
+    // client-reload failure. ONE raw transcript read through the SAME wire
+    // the reload path uses (GET /api/sessions/{id}): if the raw transcript
+    // already carries the assistant reply while the client model does not,
+    // the persist committed and the RELOAD path is the defect; if the raw
+    // transcript lacks it too, the persist itself never committed. Both
+    // channels; no assertion, condition or bound is touched.
+    const QString sid = core.currentSession().value(QStringLiteral("id")).toString();
+    if (sid.isEmpty()) {
+        emitDumpLine(QStringLiteral("chat-persist[raw:%1] → no current session id; raw transcript not read")
+                         .arg(which));
+        return;
+    }
+    const auto raw = ipcRequest(endpoint, QStringLiteral("acceptance"), "GET",
+                                QStringLiteral("/api/sessions/") + sid, QByteArray());
+    if (raw.first != 200) {
+        emitDumpLine(QStringLiteral("chat-persist[raw:%1] → GET /api/sessions/%2 failed (status %3)")
+                         .arg(which, sid).arg(raw.first));
+        return;
+    }
+    const QJsonDocument rd = QJsonDocument::fromJson(raw.second);
+    if (!rd.isObject()) {
+        emitDumpLine(QStringLiteral("chat-persist[raw:%1] → transcript body is not a JSON object (bytes=%2)")
+                         .arg(which).arg(raw.second.size()));
+        return;
+    }
+    const auto rmsgs = rd.object().value(QStringLiteral("messages")).toArray();
+    QStringList rroles;
+    bool rawAssistantWorkingFine = false;
+    for (const auto &mv : rmsgs) {
+        const QJsonObject mm = mv.toObject();
+        const QString role = mm.value(QStringLiteral("role")).toString();
+        rroles << role;
+        if (role == QStringLiteral("assistant")
+            && mm.value(QStringLiteral("content")).toString().contains(QStringLiteral("working fine")))
+            rawAssistantWorkingFine = true;
+    }
+    emitDumpLine(QStringLiteral(
+                     "chat-persist[raw:%1] → rawMessages=%2 rawRoles=[%3] rawAssistantWorkingFine=%4")
+                     .arg(which,
+                          QString::number(rmsgs.size()),
+                          rroles.join(QLatin1Char(',')),
+                          rawAssistantWorkingFine ? QStringLiteral("true") : QStringLiteral("false")));
 }
 
 // goalsListFieldContract — the list contract the client mirrors: a created

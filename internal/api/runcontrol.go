@@ -104,6 +104,11 @@ type successRunParams struct {
 	settle          func(result string, caption string, persisted bool, replyText, reasonText string)
 	publish         func(agent.Activity)
 	stampRun        func(agent.Activity) agent.Activity
+	// v1.10.13 Task 30 (run #33 R2): publishes the orchestrator's held
+	// terminal frames the moment the transcript write commits. Nil for
+	// the resume path (its settlement keeps today's broadcast timing —
+	// the same-class resume race is recorded as future work).
+	flushTerminal func()
 }
 
 // finishSuccessfulRun is the ONE durable settlement path for a successful
@@ -130,6 +135,15 @@ func (s *Server) finishSuccessfulRun(p successRunParams) {
 		); err != nil {
 			// v1.1.4: a lost reply is a REAL failure the user must see,
 			// not a swallowed error.
+			// v1.10.13 Task 30: flush any held terminal frames
+			// BEFORE the error publication — the true sequence
+			// (the orchestrator finished, the persist failed)
+			// reaches the client in order; no held frame is
+			// silently dropped (I3).
+			if p.flushTerminal != nil {
+				p.flushTerminal()
+			}
+
 			p.publish(p.stampRun(agent.Activity{
 				Type:      "error",
 				Caption:   "The reply was generated but could not be saved to the session: " + err.Error(),
@@ -148,6 +162,17 @@ func (s *Server) finishSuccessfulRun(p successRunParams) {
 	}
 
 	p.tl.persistedAt = time.Now()
+
+	// v1.10.13 Task 30 (run #33 R2): the transcript write has committed —
+	// publish the orchestrator's held terminal frames NOW, before the
+	// remaining durable steps, so every client that reloads the
+	// transcript on their arrival (the Qt settle path) reads the reply
+	// that is already on disk. This is v1.2.9's ordering rule (durable
+	// writes before terminal publication) enforced at the one boundary
+	// the chat-persist race rides.
+	if p.flushTerminal != nil {
+		p.flushTerminal()
+	}
 
 	// v1.2.9 DURABLE COMPLETION ORDERING (see the original comment in the
 	// run goroutine): every durable write happens BEFORE the terminal

@@ -2693,6 +2693,35 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// v1.10.13 Task 30 (run #33 R2 root cause): the orchestrator's
+		// terminal `done`/`complete` activities hold here until the durable
+		// transcript write commits. The pinned defect: those frames are
+		// published INSIDE RunDetailed, while the assistant reply's
+		// AppendMessage runs in finishSuccessfulRun — after RunDetailed
+		// returns. A client that reloads the transcript when the settle
+		// frame arrives (the Qt client's handleActivityFrame reloads
+		// EXACTLY once on done/complete) races the append; on a fast local
+		// pipe the reload wins, reads a transcript without the reply, and
+		// a plain chat publishes nothing after the append — so the stale
+		// one-message model persists past every bound (the Windows
+		// run-#26/#33 chat-persist 'firstPersisted' FALSE class).
+		// v1.2.9's own rule already states the contract: "every durable
+		// write happens BEFORE the terminal publication". Enforced at this
+		// ONE broadcast boundary: relative frame order and the monotonic
+		// seq contract are unchanged (seq stamps assign at flush); the
+		// frames are re-ordered behind the durability they announce —
+		// never dropped: every post-orchestrator exit path below reaches
+		// a flush, and a run that panics after a hold settles as error,
+		// whose terminal truth makes the held pre-panic frames
+		// deliberately redundant.
+		var heldTerminal []agent.Activity
+		flushHeldTerminal := func() {
+			for _, a := range heldTerminal {
+				publish(a)
+			}
+			heldTerminal = nil
+		}
+
 		// v1.6.0 P0 ordering invariant (repair): maintenance
 		// completion < engine prewarm/start — the STARTUP gate owns
 		// that ordering for the boot prewarm, and the run gate must
@@ -2800,6 +2829,31 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 			ctx,
 			messages,
 			func(a agent.Activity) {
+				// v1.10.13 Task 30: the orchestrator's terminal
+				// frames hold behind the durable append (see
+				// flushHeldTerminal above). Their session
+				// activity log keeps the origin moment — the
+				// same AppendActivity the unheld path performs;
+				// only the CLIENT broadcast defers.
+				if a.Type == "done" || a.Type == "complete" {
+					captureTerminal(a)
+					if err := s.store.AppendActivity(
+						sess.ID,
+						sessions.ActivityEntry{
+							Type:      a.Type,
+							Caption:   a.Caption,
+							Timestamp: a.Timestamp,
+						},
+					); err != nil {
+						logging.Default().Warn(
+							"api",
+							"append activity: %v",
+							err,
+						)
+					}
+					heldTerminal = append(heldTerminal, a)
+					return
+				}
 				publish(a)
 
 				captureTerminal(a)
@@ -2868,6 +2922,11 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		// persisted BEFORE the state promises PAUSED, and the run
 		// (registry entry + hub + runLive) stays alive for resume.
 		if err == nil && res.Paused {
+			// v1.10.13 Task 30: a paused run cannot hold terminal
+			// frames (the orchestrator pauses at its boundaries,
+			// before any done publish) — flush defensively so no
+			// early return can ever silently drop a held frame.
+			flushHeldTerminal()
 			// v1.7.5 ZOMBIE CHECKPOINT GUARD: a run whose session
 			// slot was taken by a newer run must never checkpoint.
 			// The replacement cancelled this context and consumed
@@ -2948,6 +3007,13 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err != nil {
+			// v1.10.13 Task 30: flush before the error settles —
+			// if the orchestrator ever held a terminal frame and
+			// then returned an error (a contract violation), the
+			// client still sees the true sequence done→error;
+			// nothing is silently swallowed (I3).
+			flushHeldTerminal()
+
 			settle("error", err.Error(), false, res.Text, res.Reasoning)
 
 			publish(stampRun(agent.Activity{
@@ -2987,6 +3053,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 			settle:          settle,
 			publish:         publish,
 			stampRun:        stampRun,
+			flushTerminal:   flushHeldTerminal,
 		})
 	}()
 

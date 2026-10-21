@@ -889,6 +889,192 @@ func TestGoalAskAllTwoGoalsParkPackagedProfile(t *testing.T) {
 	}
 }
 
+// TestGoalParkedStateListMatchesSingleGoalEnvelope is the R1 byte-compare
+// probe (Task ID 30): the acceptance slot goalsApproveRejectParkedGoal
+// waits for the parked state through the client's LIST view
+// (GET /api/goals items) while the run #33 failure dump read the
+// SINGLE-GOAL view (GET /api/goals/{id}) — the two views were never
+// byte-compared at the parked state, so a serializer divergence at that
+// state was invisible (I6 at the list boundary). This probe drives TWO
+// ask-all goals to waiting_for_approval through the packaged fallback
+// route (the exact fixture engine, no new seam), then fetches BOTH views
+// through the real HTTP stack and byte-compares every wire field the
+// acceptance reads from a list item (status, phase, pendingApproval with
+// its approvalId and toolName, and the evidence records the approve leg
+// scans) against the single-goal document. A divergence FAILS here with
+// the verbatim bytes — the regression test that fails on the diverging
+// serializer; full equality exonerates the server projection and moves
+// the residual delta to the client's list parsing (V3b). While parked the
+// durable documents are static (no drive writes), so the two reads are
+// compared at a stable byte state.
+func TestGoalParkedStateListMatchesSingleGoalEnvelope(t *testing.T) {
+	engine := exactFixtureEngine(t)
+	srv, server := newRemoteServerWithHandle(t, engine.URL)
+
+	code, sys := postGoalJSON(t, server.URL, "/api/systems",
+		`{"name":"acceptance ask-all","instructions":"fixture policy: park before every acting step","approvalPolicy":"ask-all"}`)
+	if code != http.StatusOK {
+		t.Fatalf("POST /api/systems = %d", code)
+	}
+	systemID, _ := sys["systemId"].(string)
+	if systemID == "" {
+		t.Fatalf("no systemId in response: %+v", sys)
+	}
+
+	createParked := func(text string) string {
+		code, created := postGoalJSON(t, server.URL, "/api/goals",
+			`{"goal":"`+text+`","systemId":"`+systemID+`","start":true}`)
+		if code != http.StatusOK {
+			t.Fatalf("POST /api/goals = %d: %+v", code, created)
+		}
+		id, _ := created["goalId"].(string)
+		if id == "" {
+			t.Fatalf("no goalId in response: %+v", created)
+		}
+		return id
+	}
+	approveID := createParked("acceptance approval fixture")
+	rejectID := createParked("acceptance rejection fixture")
+
+	parked := false
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		a, aerr := srv.goalStore().Get(approveID)
+		r, rerr := srv.goalStore().Get(rejectID)
+		if aerr == nil && rerr == nil &&
+			a.Status == goal.StatusWaitingApproval && r.Status == goal.StatusWaitingApproval {
+			parked = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !parked {
+		dumpParkDiagnostics(t, srv, approveID, rejectID)
+		t.Fatalf("the two-goal ask-all park never landed within 60s at the packaged profile — the byte-compare precondition is unreachable")
+	}
+
+	// getJSON fetches one view through the REAL server stack and returns
+	// the raw body — the comparison is defined at the byte level.
+	getJSON := func(path string) []byte {
+		t.Helper()
+		resp, err := http.Get(server.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("GET %s body: %v", path, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %d: %s", path, resp.StatusCode, string(raw))
+		}
+		return raw
+	}
+
+	var listEnv struct {
+		Goals []json.RawMessage `json:"goals"`
+	}
+	listRaw := getJSON("/api/goals")
+	if err := json.Unmarshal(listRaw, &listEnv); err != nil {
+		t.Fatalf("list body is not a goals envelope: %v", err)
+	}
+	byID := map[string]json.RawMessage{}
+	for _, item := range listEnv.Goals {
+		var id struct {
+			GoalID string `json:"goalId"`
+		}
+		if err := json.Unmarshal(item, &id); err != nil {
+			t.Fatalf("list item without goalId: %s", string(item))
+		}
+		byID[id.GoalID] = item
+	}
+
+	// formatOrAbsent renders a verbatim field (or its absence) for the
+	// failure record — never a normalized re-marshaling.
+	formatOrAbsent := func(raw json.RawMessage, ok bool) string {
+		if !ok {
+			return "<ABSENT>"
+		}
+		return string(raw)
+	}
+
+	for _, id := range []string{approveID, rejectID} {
+		item, ok := byID[id]
+		if !ok {
+			t.Fatalf("I6 LIST-BOUNDARY DIVERGENCE: parked goal %s is MISSING from GET /api/goals (items=%d) while GET /api/goals/%s serves it — the list projection dropped a parked goal",
+				id, len(listEnv.Goals), id)
+		}
+
+		singleRaw := getJSON("/api/goals/" + id)
+		var singleEnv struct {
+			Goal    json.RawMessage `json:"goal"`
+			Driving json.RawMessage `json:"driving"`
+		}
+		if err := json.Unmarshal(singleRaw, &singleEnv); err != nil {
+			t.Fatalf("single-goal body is not a goal envelope: %v", err)
+		}
+
+		// fieldBytes extracts the raw JSON bytes of one field.
+		fieldBytes := func(doc json.RawMessage, field string) (json.RawMessage, bool) {
+			var m map[string]json.RawMessage
+			if err := json.Unmarshal(doc, &m); err != nil {
+				return nil, false
+			}
+			v, present := m[field]
+			return v, present
+		}
+
+		// compareField fails with the VERBATIM bytes on any divergence.
+		compareField := func(field string) {
+			t.Helper()
+			itemVal, itemOK := fieldBytes(item, field)
+			singleVal, singleOK := fieldBytes(singleEnv.Goal, field)
+			if !itemOK && !singleOK {
+				t.Logf("goal %s → %s identical: <ABSENT in both views>", id, field)
+				return
+			}
+			if itemOK != singleOK || string(itemVal) != string(singleVal) {
+				t.Fatalf("I6 LIST-BOUNDARY DIVERGENCE on goal %s field %q at the parked state:\n  list item bytes:    %s\n  single-goal bytes:  %s",
+					id, field, formatOrAbsent(itemVal, itemOK), formatOrAbsent(singleVal, singleOK))
+			}
+			t.Logf("goal %s → %s identical: %s", id, field, string(singleVal))
+		}
+
+		t.Logf("goal %s → list item bytes:    %s", id, string(item))
+		t.Logf("goal %s → single-goal bytes:  %s", id, string(singleEnv.Goal))
+		// Every wire field the acceptance slot reads from a list item
+		// at the parked state (status/phase/pendingApproval/approvalId/
+		// toolName ride inside the compared objects; evidence is the
+		// approve leg's scan target).
+		compareField("status")
+		compareField("phase")
+		compareField("pendingApproval")
+		compareField("evidence")
+
+		// pendingApproval's identity fields, byte-exact, both views.
+		for _, doc := range []struct {
+			name string
+			raw  json.RawMessage
+		}{{"list", item}, {"single", singleEnv.Goal}} {
+			paRaw, paOK := fieldBytes(doc.raw, "pendingApproval")
+			if !paOK || len(paRaw) == 0 {
+				t.Fatalf("I6 LIST-BOUNDARY DIVERGENCE: parked goal %s carries no pendingApproval in the %s view (the slot's QCOMPARE needs approvalId and toolName there)", id, doc.name)
+			}
+			approvalID, aOK := fieldBytes(paRaw, "approvalId")
+			toolName, tOK := fieldBytes(paRaw, "toolName")
+			if !aOK || !tOK || len(approvalID) < 2 || string(toolName) != `"goal.step"` {
+				t.Fatalf("I6 LIST-BOUNDARY DIVERGENCE: parked goal %s pendingApproval in the %s view carries approvalId=%s toolName=%s, want a stable approvalId and \"goal.step\"",
+					id, doc.name, formatOrAbsent(approvalID, aOK), formatOrAbsent(toolName, tOK))
+			}
+		}
+
+		// The envelope's driving flag stays a single-goal-only wire
+		// field by design — recorded, not compared against the item.
+		t.Logf("goal %s → envelope driving bytes: %s (list items carry no driving field by design — the client never reads it from the list)", id, string(singleEnv.Driving))
+	}
+}
+
 // phaseGateEngine answers understanding/planning/acting immediately and
 // BLOCKS the verifying call until released — the deterministic barrier
 // that parks the drive mid-verify so the cancel race is constructed, not
