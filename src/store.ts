@@ -39,6 +39,7 @@ import { resolveInitialView, viewModeBinding } from "./workspace";
 import {
   isLivePhase,
   nextPhase,
+  planFinalisation,
   type RunEventKind,
   type RunPhase,
 } from "./run-phase";
@@ -1352,6 +1353,18 @@ function releaseIdleOwnedResources(): void {
 // message so errors/aborts/lost-runs never discard the entire response.
 // The message is marked via its `at` stamp + a visible note appended to
 // the content (never presented as a fully persisted reply).
+//
+// v1.10.14-fixed (R3): the preserved row is ALSO recorded in
+// promotedPartial so a later authoritative reload that still lacks the
+// reply can re-attach it — the transcript never drops below exactly one
+// assistant row between the two confirmation attempts. finalAttempt
+// derives from it (no separate flag to drift).
+let promotedPartial: {
+  role: "assistant";
+  content: string;
+  reasoning?: string;
+} | null = null;
+
 function promotePartialOutput(note: string | null): void {
   const state = useRuntimeStore.getState();
   const partial = state.streaming;
@@ -1362,22 +1375,33 @@ function promotePartialOutput(note: string | null): void {
 
   const marker = note ? `\n\n— ${note}` : "";
 
+  const row: {
+    role: "assistant";
+    content: string;
+    reasoning?: string;
+  } = {
+    role: "assistant",
+    content: (partial.content || "*(no answer text arrived)*") + marker,
+    ...(partial.reasoning ? { reasoning: partial.reasoning } : {}),
+  };
+
   useRuntimeStore.setState({
-    messages: [
-      ...state.messages,
-      {
-        role: "assistant" as const,
-        content: (partial.content || "*(no answer text arrived)*") + marker,
-        ...(partial.reasoning ? { reasoning: partial.reasoning } : {}),
-      },
-    ],
+    messages: [...state.messages, row],
     streaming: null,
   });
+
+  promotedPartial = row;
 }
 
 // finaliseRun performs the authoritative-history confirmation for one run
-// end. Called via setTimeout AFTER the backend had time to persist, and
-// again as a bounded fallback if the first attempt saw no reply land.
+// end. Called via setTimeout AFTER the backend had time to persist, and —
+// v1.10.14-fixed (R3) — re-armed ONCE as a bounded retry when the first
+// reload raced the persist: the run then stays "finalising" (the composer
+// stays honestly locked) instead of settling on a transcript that does
+// not contain the reply (the run-#39 "exactly one assistant message" red
+// class, e2e/live-stream.spec.ts:266). The decision itself is the PURE
+// planFinalisation contract; every settled path shows EXACTLY ONE
+// assistant row: the authoritative reply, or the preserved partial.
 async function finaliseRun(sessionId: string): Promise<void> {
   const state = useRuntimeStore.getState();
 
@@ -1389,6 +1413,9 @@ async function finaliseRun(sessionId: string): Promise<void> {
   const hadPartial = Boolean(
     state.streaming && (state.streaming.content || state.streaming.reasoning),
   );
+  // A partial preserved by an earlier attempt counts even though this
+  // attempt's authoritative reload is about to replace the messages.
+  const hasPartial = hadPartial || promotedPartial !== null;
 
   await state.loadSession(sessionId);
 
@@ -1402,6 +1429,9 @@ async function finaliseRun(sessionId: string): Promise<void> {
   // authoritative status (used/pressure).
   void after.refreshSessionContext();
 
+  // The reload replaced the messages array, so this count is the
+  // HISTORY's assistant count (any preserved partial row was wiped with
+  // it and is re-attached below when the decision says so).
   const assistants = after.messages.filter(
     (message) => message.role === "assistant",
   ).length;
@@ -1409,43 +1439,58 @@ async function finaliseRun(sessionId: string): Promise<void> {
   const historyGainedReply =
     runAssistantBaseline === null ? true : assistants > runAssistantBaseline;
 
-  if (!historyGainedReply && hadPartial) {
-    // The reply never persisted (abort, lost run, persistence failure) —
-    // keep the partial output visible instead of dropping it.
-    promotePartialOutput(
-      runOutcome === "done"
-        ? "partial reply preserved locally (session history did not record it)"
-        : runOutcome === "aborted"
-          ? "stopped — partial reply preserved locally"
-          : "run ended while the view was away — partial reply preserved locally",
-    );
-  } else {
+  const decision = planFinalisation(
+    {
+      historyGainedReply,
+      hasPartial,
+      finalAttempt: promotedPartial !== null,
+    },
+    runOutcome ?? "done",
+  );
+
+  if (decision.preservePartial) {
+    if (promotedPartial !== null) {
+      // The reload wiped the preserved row while history STILL lacks the
+      // reply — re-attach it (exactly-one-row contract, v1.2.2 partial
+      // preservation preserved across attempts).
+      useRuntimeStore.setState({
+        messages: [...after.messages, promotedPartial],
+      });
+    } else {
+      promotePartialOutput(
+        runOutcome === "done"
+          ? "partial reply preserved locally (session history did not record it)"
+          : runOutcome === "aborted"
+            ? "stopped — partial reply preserved locally"
+            : "run ended while the view was away — partial reply preserved locally",
+      );
+    }
+  }
+
+  if (decision.clearStreaming) {
     useRuntimeStore.setState({ streaming: null });
   }
 
   useRuntimeStore.setState({
-    // "lost" (run ended while detached) settles as Stopped — honest: the
-    // run is no longer active and its state was re-synced from history.
-    runPhase:
-      runOutcome === "done"
-        ? "complete"
-        : runOutcome === "lost"
-          ? "aborted"
-          : (runOutcome ?? "aborted"),
+    // "finalising" keeps the run LIVE for the bounded retry; "lost" (run
+    // ended while detached) settles as Stopped — honest: the run is no
+    // longer active and its state was re-synced from history.
+    runPhase: decision.phase,
   });
+
+  if (decision.armRetry) {
+    scheduleRunFinalisation(sessionId, 500);
+
+    return;
+  }
 
   // v1.9.4 (P0-A): close the client-side run window with the settled
   // phase (trace-only; no product behavior).
-  recordRunEnd(
-    runOutcome === "done"
-      ? "complete"
-      : runOutcome === "lost"
-        ? "aborted"
-        : (runOutcome ?? "aborted"),
-  );
+  recordRunEnd(decision.phase === "complete" ? "complete" : "aborted");
 
   runOutcome = null;
   runAssistantBaseline = null;
+  promotedPartial = null;
   releaseIdleOwnedResources();
 }
 
@@ -1464,19 +1509,12 @@ function scheduleRunFinalisation(sessionId: string, delayMs: number): void {
       return;
     }
 
-    void finaliseRun(sessionId).then(() => {
-      // Bounded second attempt: if the first reload raced the persist
-      // write AND no partial was promoted, retry once more.
-      const current = useRuntimeStore.getState();
-
-      if (
-        current.activeSessionId === sessionId &&
-        current.runPhase === "finalising" &&
-        !current.streaming
-      ) {
-        void finaliseRun(sessionId);
-      }
-    });
+    // v1.10.14-fixed (R3): the bounded retry is armed by finaliseRun
+    // itself (planFinalisation's armRetry). The old .then() re-entry here
+    // required runPhase "finalising" AFTER finaliseRun returned — which
+    // its unconditional terminal settle made impossible, so the designed
+    // second attempt never ran (dead code).
+    void finaliseRun(sessionId);
   }, delayMs);
 }
 
@@ -1670,6 +1708,7 @@ function handleRunSnapshot(payload: Record<string, unknown>): void {
   // the backend is authoritative.
   if (!state.running && !isLivePhase(state.runPhase)) {
     // The UI was idle (page reload mid-run): open a fresh timeline.
+    promotedPartial = null;
     useRuntimeStore.setState({
       running: true,
       runPhase: "preparing",
@@ -3091,6 +3130,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
     // a reload in that window killed the pipeline before the run POST
     // ever fired and the message silently never happened (proven by the
     // zero-session reload E2E trace: no POST /api/run, total:0 transcript).
+    promotedPartial = null;
     set({
       running: true,
       error: null,
@@ -3260,6 +3300,7 @@ export const useRuntimeStore = create<RuntimeState>((set, get) => ({
       // Proceed — the replay + grace re-check recover.
     }
 
+    promotedPartial = null;
     set({
       running: true,
       error: null,

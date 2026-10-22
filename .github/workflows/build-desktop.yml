@@ -77,7 +77,11 @@ permissions:
 # Select-String -SimpleMatch block treated the AppVersion pattern's regex
 # whitespace-escapes as literal text and failed every run: 35542000811).
 env:
-  GO_VERSION: "1.26"
+  # v1.10.14-fixed (R4/D19): the go1.27 line — latest stable go1.27.3
+  # (2026-10-19, security fixes to crypto/x509; source: go.dev release
+  # history, re-derived at P1 2026-10-23). go.mod's `go 1.26` is a MINIMUM
+  # below the toolchain: no go.mod edit (charter).
+  GO_VERSION: "1.27"
   NODE_VERSION: "24"
   # Canonical package-root variables — ONE root per platform, from which
   # every staging directory, ZIP name, ZIP entry check, artifact name and
@@ -108,7 +112,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup Go 1.26
+      - name: Setup Go 1.27
         uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -134,11 +138,25 @@ jobs:
 
       - name: Upload preflight logs
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: preflight-verification-logs-attempt${{ github.run_attempt }}
           path: ci-logs/
           if-no-files-found: error
+
+      # v1.10.14-fixed (D18/I18): the preflight job's complete ci-logs set
+      # (build log + gate order) rides in its own artifact on EVERY
+      # outcome — the run-#39 all-logs gap, closed per job.
+      - name: Upload preflight ci-logs (all outcomes)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: preflight-ci-logs-attempt${{ github.run_attempt }}
+          path: |
+            ci-logs/*.log
+            ci-logs/gate-order.txt
+          if-no-files-found: error
+          retention-days: 14
 
   audit:
     name: Source & frontend audit
@@ -330,7 +348,7 @@ jobs:
 
           echo "Native temp-path portability gate passed."
 
-      - name: Setup Go 1.26
+      - name: Setup Go 1.27
         uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -451,10 +469,24 @@ jobs:
 
       - name: Upload verification logs (audit job)
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: audit-verification-logs-attempt${{ github.run_attempt }}
           path: ci-logs/*.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # v1.10.14-fixed (D18/I18): the audit job's complete ci-logs set on
+      # EVERY outcome — the gate logs now exist from their commands' first
+      # bytes (typecheck/lint/units/release/build).
+      - name: Upload audit ci-logs (all outcomes)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: audit-ci-logs-attempt${{ github.run_attempt }}
+          path: |
+            ci-logs/*.log
+            ci-logs/gate-order.txt
           if-no-files-found: ignore
           retention-days: 14
 
@@ -575,29 +607,42 @@ jobs:
           # v1.4.0: native-command exit codes are asserted explicitly —
           # npm failures must fail the job, not fall through to the next
           # statement (the run 35996462352 failure-hiding class).
+          #
+          # v1.10.14-fixed (R2/D15/D18): the audit gates leave first-byte
+          # logs like every other gate, so the all-logs artifact carries
+          # real evidence on every outcome.
           function Invoke-Gate {
-            param([scriptblock]$Command, [string]$Label)
-            & $Command
+            param([scriptblock]$Command, [string]$Label, [string]$LogFile)
+            if ($LogFile) {
+              New-Item -ItemType Directory -Force -Path "ci-logs" | Out-Null
+              New-Item -ItemType File -Path $LogFile -Force | Out-Null
+              & $Command 2>&1 | Tee-Object -FilePath $LogFile
+            } else {
+              & $Command
+            }
             if ($LASTEXITCODE -ne 0) {
               throw "[gate] $Label failed with exit code $LASTEXITCODE."
             }
+            if ($LogFile) {
+              Write-Host "::notice::gate OK: $Label"
+            }
           }
 
-          Invoke-Gate { npm run typecheck } "npm run typecheck"
-          Invoke-Gate { npm run lint } "npm run lint"
-          Invoke-Gate { npm run test:units } "npm run test:units"
+          Invoke-Gate { npm run typecheck } "npm run typecheck" "ci-logs/audit-typecheck.log"
+          Invoke-Gate { npm run lint } "npm run lint" "ci-logs/audit-lint.log"
+          Invoke-Gate { npm run test:units } "npm run test:units" "ci-logs/audit-test-units.log"
 
           # v1.3.2: release-metadata regression suite (semver shapes,
           # drift/missing markers, whitespace/CRLF, --env identity,
           # workflow contract — the run 35542000811 failure class).
-          Invoke-Gate { npm run test:release } "npm run test:release"
+          Invoke-Gate { npm run test:release } "npm run test:release" "ci-logs/audit-test-release.log"
 
           # Production build contract: start from a CLEAN dist so no
           # previous-generation asset can survive into web/static.
           if (Test-Path "dist") {
             Remove-Item "dist" -Recurse -Force
           }
-          Invoke-Gate { npm run build } "npm run build"
+          Invoke-Gate { npm run build } "npm run build" "ci-logs/audit-build.log"
 
       - name: Verify embedded frontend
         shell: pwsh
@@ -629,7 +674,7 @@ jobs:
             throw "Static asset contract verification failed."
           }
 
-      - name: Setup Go 1.26
+      - name: Setup Go 1.27
         uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -724,10 +769,23 @@ jobs:
             # to its OWN log file so a red run can name the exact failing
             # command and tests. Tee-Object passes output through; the
             # $LASTEXITCODE below still belongs to the native command.
+            #
+            # v1.10.14-fixed (R2/D17, run #39): FIRST-BYTE CAPTURE. PowerShell's
+            # Tee-Object never runs on empty pipeline input, so a
+            # silent-on-success gate (go vet) left NO log file at all and
+            # the end-of-job summary fired false "capture defect" catchers
+            # for gates that had actually passed. The log now exists
+            # (empty) BEFORE the command starts, on every exit path (I15).
+            New-Item -ItemType Directory -Force -Path "ci-logs" | Out-Null
+            New-Item -ItemType File -Path $LogFile -Force | Out-Null
+            Add-Content "ci-logs/gate-order.txt" "RUN $Label"
             & $Command 2>&1 | Tee-Object -FilePath $LogFile
             if ($LASTEXITCODE -ne 0) {
+              Add-Content "ci-logs/gate-order.txt" "FAIL $Label"
               throw "[gate] $Label failed with exit code $LASTEXITCODE (log: $LogFile)."
             }
+            Add-Content "ci-logs/gate-order.txt" "OK $Label"
+            Write-Host "::notice::gate OK: $Label"
           }
 
           go version
@@ -740,17 +798,26 @@ jobs:
           # gate, fast-fail before the expensive suites. The listing IS
           # the fix list: every file named in the log needs `gofmt -w`.
           # No gate is weakened: this grows the battery.
+          #
+          # v1.10.14-fixed (R2): first-byte capture — the log exists
+          # before the listing runs, green or red (I15).
+          New-Item -ItemType File -Path "ci-logs/win-gofmt.log" -Force | Out-Null
+          Add-Content "ci-logs/gate-order.txt" "RUN gofmt -l ."
           $gofmtOut = @(gofmt -l . 2>&1)
           $gofmtOut | Tee-Object -FilePath "ci-logs/win-gofmt.log" | Out-Null
           if ($LASTEXITCODE -ne 0) {
+            Add-Content "ci-logs/gate-order.txt" "FAIL gofmt -l ."
             throw "[gate] gofmt -l . failed to run (exit $LASTEXITCODE)."
           }
           if ($gofmtOut.Count -gt 0) {
             foreach ($f in ($gofmtOut | Select-Object -First 8)) {
               Write-Host "::error::gofmt violation: $f (run gofmt -w . )"
             }
+            Add-Content "ci-logs/gate-order.txt" "FAIL gofmt -l ."
             throw "[gate] gofmt -l . is not clean: $($gofmtOut.Count) file(s) violate gofmt (log: ci-logs/win-gofmt.log)."
           }
+          Add-Content "ci-logs/gate-order.txt" "OK gofmt -l ."
+          Write-Host "::notice::gate OK: gofmt -l ."
           Write-Host "gofmt: clean"
 
           # Each Go-verification command tees SEPARATELY: the failure
@@ -1332,7 +1399,7 @@ jobs:
       # the named slots, assertions and line numbers on any exit.
       - name: Upload Qt acceptance report (Windows)
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: windows-qt-acceptance-report-attempt${{ github.run_attempt }}
           path: |
@@ -1754,9 +1821,21 @@ jobs:
 
           # v1.10.13 W-VIS: makensis output is teed into ci-logs and the
           # gate is tracked like every other post-verification command.
+          #
+          # v1.10.14-fixed (R2/I15): the log exists (empty) BEFORE makensis
+          # starts — a toolchain crash still leaves its log behind.
+          New-Item -ItemType File -Path "ci-logs/win-nsis.log" -Force | Out-Null
           Add-Content "ci-logs/gate-order.txt" "STEP Build Windows NSIS installer"
           Add-Content "ci-logs/gate-order.txt" "RUN NSIS makensis"
+          # v1.10.14-fixed (R1, compile-proven locally with makensis 3.10):
+          # -V4 is the MINIMUM verbosity at which NSIS !echo output reaches
+          # stdout. At the default verbosity (and at -V1/-V2/-V3) the
+          # uninstall-symmetry include marker never appears in the captured
+          # log, so the assertion below was dead-on-arrival — runs #37 and
+          # #39 red regardless of the chain's correctness. installer.nsi
+          # stays byte-identical; the gate keeps its teeth.
           & $makensis `
+            -V4 `
             -DVERSION="$env:APP_VERSION" `
             -DEXE="SHEYTAN-LA.exe" `
             -DBUILDDIR="$payloadDir" `
@@ -1768,6 +1847,7 @@ jobs:
             throw "makensis exited with code $LASTEXITCODE (log: ci-logs/win-nsis.log)."
           }
           Add-Content "ci-logs/gate-order.txt" "OK NSIS makensis"
+          Write-Host "::notice::gate OK: NSIS makensis"
 
           # UNINSTALL SYMMETRY, compile-proven (run #37 red gate class):
           # the generated payload-uninstall.nsh opens with its own guard
@@ -2024,7 +2104,7 @@ jobs:
       # naming map.
       - name: Upload Windows installer
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer
           path: dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer.exe
@@ -2033,7 +2113,7 @@ jobs:
 
       - name: Upload Windows package
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64
           path: dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip
@@ -2204,6 +2284,17 @@ jobs:
           # finished; explicit FAIL = the gate that threw).
           $goLogs = @("win-gofmt.log", "win-go-test-headless.log", "win-go-test-full.log", "win-go-vet.log")
 
+          # v1.10.14-fixed (R2/D17): name the COMMAND each missing log
+          # belonged to. With first-byte capture this guard is a true last
+          # resort; when it fires it carries the gate's command and the
+          # expected path (I17) — never a bare path again.
+          $goLogCommands = @{
+            "win-gofmt.log"            = "gofmt -l ."
+            "win-go-test-headless.log" = "go test ./internal/... (headless)"
+            "win-go-test-full.log"     = "go test ./... (full)"
+            "win-go-vet.log"           = "go vet ./..."
+          }
+
           # v1.10.14-fixed (R3/D15): a gate log that is absent or EMPTY at
           # failure time is a NAMED instrumentation failure — never silence
           # (I15). The tee'd logs must exist from their gate's first byte;
@@ -2212,9 +2303,9 @@ jobs:
           foreach ($name in $goLogs) {
             $p = Join-Path "ci-logs" $name
             if (-not (Test-Path $p)) {
-              Write-Host "::error::gate produced no log — capture defect: $p absent at failure time"
+              Write-Host "::error::gate produced no log — capture defect: $p absent at failure time (gate: $($goLogCommands[$name]) — it died before its first log byte)"
             } elseif ((Get-Item $p).Length -eq 0) {
-              Write-Host "::error::gate produced no log — capture defect: $p exists but is EMPTY"
+              Write-Host "::error::gate produced no log — capture defect: $p exists but is EMPTY (gate: $($goLogCommands[$name]))"
             }
           }
           $gateLogMap = @{
@@ -2391,7 +2482,7 @@ jobs:
 
       - name: Upload Go verification logs (Windows)
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: windows-go-verification-logs-attempt${{ github.run_attempt }}
           # v1.10.13 W-VIS-2 (run 39038248810): gate-order.txt is the full
@@ -2402,6 +2493,22 @@ jobs:
             ci-logs/*.log
             ci-logs/gate-order.txt
           if-no-files-found: ignore
+          retention-days: 14
+
+      # v1.10.14-fixed (D18/I18, run #39): the Windows job's COMPLETE
+      # ci-logs set on EVERY outcome — including win-nsis.log (which rode
+      # in no artifact at all in run #39) and the first-byte gofmt/vet
+      # logs that the failure-class uploads miss on green runs.
+      - name: Upload Windows ci-logs (all outcomes)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-windows-ci-logs-attempt${{ github.run_attempt }}
+          path: |
+            ci-logs/*.log
+            ci-logs/*.txt
+            ci-logs/gate-order.txt
+          if-no-files-found: error
           retention-days: 14
 
       # v1.10.14-fixed (D7, D1-compliant): ONE run-summary per job — the
@@ -2626,7 +2733,7 @@ jobs:
 
           node scripts/verify-static-assets.mjs --dist
 
-      - name: Setup Go 1.26
+      - name: Setup Go 1.27
         uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -2676,9 +2783,32 @@ jobs:
           # names + tails to $GITHUB_STEP_SUMMARY and upload the full logs.
           # pipefail keeps the gate strict: a failing go test still fails
           # the step through the tee pipeline.
+          #
+          # v1.10.14-fixed (R2/D17, run #39): FIRST-BYTE CAPTURE — each log
+          # exists (empty) BEFORE its command runs. `cmd | tee` on a
+          # silent-on-success command (go vet) previously created NO file
+          # at all (tee never ran on empty input) and the failure machinery
+          # then saw an absent log for a gate that had passed. Each gate
+          # also leaves RUN/OK markers in gate-order.txt and ONE green
+          # success notice (I17) — a dangling RUN names the gate that
+          # never finished.
+          : > ci-logs/linux-go-test-headless.log
+          echo "RUN go test ./internal/... (headless)" >> ci-logs/gate-order.txt
           go test ./internal/... -tags headless -count=1 2>&1 | tee ci-logs/linux-go-test-headless.log
+          echo "OK go test ./internal/... (headless)" >> ci-logs/gate-order.txt
+          echo "::notice::gate OK: go test ./internal/... (headless)"
+
+          : > ci-logs/linux-go-test-full.log
+          echo "RUN go test ./... (full)" >> ci-logs/gate-order.txt
           go test ./... -run Test -count=1 2>&1 | tee ci-logs/linux-go-test-full.log
+          echo "OK go test ./... (full)" >> ci-logs/gate-order.txt
+          echo "::notice::gate OK: go test ./... (full)"
+
+          : > ci-logs/linux-go-vet.log
+          echo "RUN go vet ./..." >> ci-logs/gate-order.txt
           go vet ./... 2>&1 | tee ci-logs/linux-go-vet.log
+          echo "OK go vet ./..." >> ci-logs/gate-order.txt
+          echo "::notice::gate OK: go vet ./..."
 
           # v1.10.7 Wails is REMOVED — the dependency graph must stay
           # free of it. The check asserts ABSENCE (a `go list -m` hit here
@@ -2694,6 +2824,9 @@ jobs:
           # IS the fix list; each violating file is additionally emitted as
           # an anonymously readable ::error:: annotation (capped). No gate
           # is weakened: this grows the battery.
+          # v1.10.14-fixed (R2): first-byte capture + gate-order markers.
+          echo "RUN gofmt -l ." >> ci-logs/gate-order.txt
+          : > ci-logs/linux-gofmt.log
           gofmt_out="$(gofmt -l .)"
           if [ -n "$gofmt_out" ]; then
             printf '%s\n' "$gofmt_out" | tee ci-logs/linux-gofmt.log
@@ -2701,6 +2834,8 @@ jobs:
             echo "::error::gofmt -l . is not clean: $(printf '%s\n' "$gofmt_out" | wc -l) file(s) violate gofmt (log: ci-logs/linux-gofmt.log)"
             exit 1
           fi
+          echo "OK gofmt -l ." >> ci-logs/gate-order.txt
+          echo "::notice::gate OK: gofmt -l ."
           echo "gofmt: clean"
 
       # v1.10.14-fixed (R2/D16) PLAYWRIGHT BROWSER CACHE — best-effort:
@@ -2711,7 +2846,7 @@ jobs:
       # non-fatal and the install step below still runs unconditionally.
       - name: Cache Playwright browsers
         id: pwcache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-ms-playwright-${{ hashFiles('package-lock.json') }}
@@ -3249,7 +3384,7 @@ jobs:
       # on any exit.
       - name: Upload Qt acceptance report (Linux)
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: linux-qt-acceptance-report-attempt${{ github.run_attempt }}
           path: |
@@ -3257,6 +3392,21 @@ jobs:
             ci-logs/linux-qt-acceptance.log
             ci-logs/gate-order.txt
           if-no-files-found: ignore
+          retention-days: 14
+
+      # v1.10.14-fixed (D18/I18): the Linux job's COMPLETE ci-logs set on
+      # EVERY outcome — the E2E logs, the gofmt/vet first-byte logs and
+      # the full gate chain, green or red.
+      - name: Upload Linux ci-logs (all outcomes)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-linux-ci-logs-attempt${{ github.run_attempt }}
+          path: |
+            ci-logs/*.log
+            ci-logs/*.txt
+            ci-logs/gate-order.txt
+          if-no-files-found: error
           retention-days: 14
 
       - name: Qt acceptance failure summary (Linux)
@@ -3745,7 +3895,7 @@ jobs:
           echo "Linux ZIP integrity and content verification passed."
 
       - name: Upload Linux package
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64
           path: dist/${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64.zip
@@ -3754,7 +3904,7 @@ jobs:
 
       - name: Upload verification logs (Linux)
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: linux-verification-logs-attempt${{ github.run_attempt }}
           path: ci-logs/*.log

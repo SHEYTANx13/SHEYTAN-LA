@@ -497,7 +497,9 @@ function jobBlocks() {
 
 function jobNeeds(job) {
   // The needs value: scalar (`needs: audit`) or flow list (`needs: [a, b]`).
-  const line = job.body.find((l) => /^    needs: /.test(l));
+  // v1.10.14-fixed (R4 lint): String#startsWith instead of the caret regex
+  // (unicorn prefer-string-starts-ends-with, run-#39 audit warning).
+  const line = job.body.find((l) => l.startsWith("    needs: "));
   if (!line) return [];
   return line
     .slice("    needs: ".length)
@@ -636,4 +638,266 @@ test("the v1.10.14-fixed workflow contract keeps every heritage fragment intact"
   assert.match(wf, /- name: Browser E2E \(real application stack\)/);
   assert.match(wf, /npm run build:e2e 2>&1 \| tee ci-logs\/e2e-build\.log/);
   assert.match(wf, /npm run test:e2e 2>&1 \| tee ci-logs\/e2e-playwright\.log/);
+});
+
+// ---------------------------------------------------------------------------
+// v1.10.14-fixed run-#40 cycle (R1/R2/R4 — D15/D17/D18/D19).
+//
+// RED-FIRST: every assertion below FAILED against the run-#39 tree
+// (ace68fd). Run #39 proved three capture classes the operator must
+// never see again:
+//
+//   1. PowerShell `| Tee-Object` NEVER RUNS on empty pipeline input, so
+//      a silent-on-success gate (go vet) or a clean gofmt left NO log
+//      file at all — the end-of-job failure summary then fired two false
+//      "gate produced no log — capture defect" catchers for gates that
+//      had actually PASSED. First-byte capture: the log EXISTS before
+//      the command starts, on every platform, for every gate.
+//   2. makensis runs at default verbosity, where `!echo` output is
+//      SUPPRESSED — the uninstall-symmetry include marker can never
+//      reach ci-logs/win-nsis.log, so the include-marker assertion was
+//      dead-on-arrival (compile-proven locally with makensis 3.10:
+//      verbosity 1/2/3/default carry 0 marker hits, only -V4 carries
+//      the marker). The gate must compile at -V4.
+//   3. No job uploaded its COMPLETE ci-logs set; win-nsis.log rode in
+//      no artifact at all (D18). Every job now uploads <job>-ci-logs
+//      with if: always().
+//
+// Additive only: a cache miss, a cancelled superseded run, a timeout
+// bound or an upload path change must never change, mask or reorder a
+// gate outcome (I16).
+// ---------------------------------------------------------------------------
+
+function jobStepBodies(job) {
+  // Steps inside a job: `      - name: X` keys, bodies indented deeper.
+  const steps = [];
+  let current = null;
+  for (const line of job.body) {
+    const start = line.match(/^      - name: (.+)$/);
+    if (start) {
+      current = { name: start[1].trim(), body: [] };
+      steps.push(current);
+      continue;
+    }
+    if (current) current.body.push(line);
+  }
+  return steps;
+}
+
+function findJobStep(jobName, stepName) {
+  const job = jobBlocks().find((j) => j.name === jobName);
+  assert.ok(job, `job ${jobName} exists`);
+  const step = jobStepBodies(job).find((s) => s.name === stepName);
+  assert.ok(step, `job ${jobName} has a "${stepName}" step`);
+  return step.body.join("\n");
+}
+
+function eagerCreationIndex(stepBody, logPath) {
+  // The first line that creates the log file EAGERLY: shell truncation,
+  // New-Item, Out-File, Set-Content or Clear-Content — anything that
+  // materializes the file BEFORE the gated command runs.
+  const escaped = logPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const eager = new RegExp(
+    "(?::\\s*>\\s*|New-Item [^\\n]*|Out-File [^\\n]*|Set-Content [^\\n]*|Clear-Content [^\\n]*)" +
+      escaped,
+  );
+  return stepBody.search(eager);
+}
+
+test("every Windows Go gate creates its log before the command runs (first-byte capture, I15)", () => {
+  const body = findJobStep("build-windows", "Go verification");
+  // Gates routed through Invoke-Gate: the EAGER creation of $LogFile must
+  // sit inside the function, BEFORE `& $Command` — the call sites pass the
+  // path as an argument, so the function body is the capture point.
+  const invokeGate = body.match(/function Invoke-Gate \{[\s\S]*?\n          \}/);
+  assert.ok(invokeGate, "the Invoke-Gate helper is defined in the step");
+  const fn = invokeGate[0];
+  const eagerAt = fn.search(/New-Item[^\n]*\$LogFile|Clear-Content[^\n]*\$LogFile|Out-File[^\n]*\$LogFile|: > \.\$LogFile/);
+  assert.ok(eagerAt >= 0, "Invoke-Gate creates $LogFile EAGERLY");
+  const execAt = fn.search(/& \$Command/);
+  assert.ok(execAt >= 0, "Invoke-Gate executes its command");
+  assert.ok(
+    eagerAt < execAt,
+    "the gate's log exists BEFORE the command's first byte (run-#39 no-log class)",
+  );
+  // The three Invoke-Gate call sites carry their own log paths.
+  for (const [log, command] of [
+    ["ci-logs/win-go-test-headless.log", /go test \.\/internal/],
+    ["ci-logs/win-go-test-full.log", /go test \.\/\.\.\./],
+    ["ci-logs/win-go-vet.log", /go vet/],
+  ]) {
+    const commandAt = body.search(command);
+    assert.ok(commandAt >= 0, `the gated command for ${log} exists`);
+    assert.ok(
+      body.includes(log),
+      `${log} is captured (passed to Invoke-Gate)`,
+    );
+  }
+  // The gofmt gate runs inline: its log must be created eagerly before
+  // the gofmt command itself.
+  const gofmtEagerAt = eagerCreationIndex(body, "ci-logs/win-gofmt.log");
+  assert.ok(gofmtEagerAt >= 0, "ci-logs/win-gofmt.log is created EAGERLY");
+  const gofmtAt = body.search(/gofmt -l \./);
+  assert.ok(gofmtAt >= 0, "the gofmt -l . command exists");
+  assert.ok(gofmtEagerAt < gofmtAt, "win-gofmt.log exists BEFORE gofmt runs");
+});
+
+test("every Linux Go gate creates its log before the command runs (first-byte capture, I15)", () => {
+  const body = findJobStep("build-linux", "Go verification");
+  // Anchored on each gate's TEE line (the capture point) — prose in
+  // comments may legitimately mention the command names.
+  for (const log of [
+    "ci-logs/linux-go-test-headless.log",
+    "ci-logs/linux-go-test-full.log",
+    "ci-logs/linux-go-vet.log",
+    "ci-logs/linux-gofmt.log",
+  ]) {
+    const eagerAt = eagerCreationIndex(body, log);
+    assert.ok(eagerAt >= 0, `${log} is created EAGERLY before its command`);
+    const escaped = log.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const teeAt = body.search(new RegExp(`tee ${escaped}`));
+    assert.ok(teeAt >= 0, `the tee capture for ${log} exists`);
+    assert.ok(
+      eagerAt < teeAt,
+      `${log} exists BEFORE the command's first byte`,
+    );
+  }
+});
+
+test("makensis compiles at -V4 so the include marker reaches the captured log (R1)", () => {
+  // Local compile-proof (makensis 3.10, this cycle): the generated
+  // payload-uninstall.nsh's guard define, the !ifdef and the !insertmacro
+  // all work — but `!echo` output is only emitted at verbosity 4. At the
+  // default verbosity the uninstall-symmetry marker can NEVER appear in
+  // ci-logs/win-nsis.log, so the marker assertion failed in runs #37 and
+  // #39 regardless of the chain's correctness. -V4 is the minimal fix:
+  // installer.nsi stays byte-identical and the gate keeps its teeth.
+  const body = findJobStep("build-windows", "Build Windows NSIS installer");
+  const invocation = body.match(/& \$makensis[\s\S]*?installer\.nsi/);
+  assert.ok(invocation, "the makensis invocation exists");
+  assert.match(
+    invocation[0],
+    /-V4\b/,
+    "makensis runs at -V4 (the only verbosity at which !echo output reaches stdout)",
+  );
+  const eagerAt = eagerCreationIndex(body, "ci-logs/win-nsis.log");
+  assert.ok(eagerAt >= 0, "ci-logs/win-nsis.log is created EAGERLY");
+  assert.ok(
+    eagerAt < body.search(/& \$makensis/),
+    "win-nsis.log exists BEFORE makensis starts",
+  );
+});
+
+test("every build job uploads its complete ci-logs set with if: always() (D18, I18)", () => {
+  const jobs = jobBlocks();
+  for (const name of ["preflight", "audit", "build-windows", "build-linux"]) {
+    const job = jobs.find((j) => j.name === name);
+    assert.ok(job, `job ${name} exists`);
+    const steps = jobStepBodies(job);
+    const allLogs = steps.find((s) =>
+      new RegExp(`uses: actions/upload-artifact@`).test(s.body.join("\n")) &&
+      new RegExp(`name: ${name}-ci-logs-attempt`).test(s.body.join("\n")),
+    );
+    assert.ok(
+      allLogs,
+      `${name} uploads a ${name}-ci-logs-attempt$\{{ github.run_attempt }} artifact`,
+    );
+    const body = allLogs.body.join("\n");
+    assert.match(body, /if: always\(\)/, `${name}'s all-logs upload runs on EVERY outcome`);
+    assert.match(body, /ci-logs/, `${name}'s all-logs upload covers the ci-logs directory`);
+  }
+});
+
+test("every actions pin is at or above its verified latest major (R4/D19, re-derived 2026-10-23)", () => {
+  // Verified against the primary sources (GitHub releases pages) at P1:
+  //   actions/cache v6.1.0 (2026-06-26, Node 24 line),
+  //   actions/upload-artifact v7.0.2 (2026-10-07),
+  //   actions/checkout v7.0.1, actions/setup-node v7.1.0,
+  //   actions/setup-go v7.0.0, actions/setup-python v7,
+  //   actions/download-artifact v7.
+  // install-qt-action stays frozen (charter: no Qt/aqtinstall changes).
+  const floors = {
+    "actions/cache": 6,
+    "actions/upload-artifact": 7,
+    "actions/checkout": 7,
+    "actions/setup-node": 7,
+    "actions/setup-go": 7,
+    "actions/setup-python": 7,
+    "actions/download-artifact": 7,
+  };
+  const wf = loadWorkflow();
+  const pins = [...wf.matchAll(/uses: ([\w-]+\/[\w-]+)@(v\d+)/g)];
+  assert.ok(pins.length >= 10, "the workflow declares its action pins");
+  for (const [, action, tag] of pins) {
+    const floor = floors[action];
+    if (!floor) continue; // jurplel/install-qt-action: charter-frozen
+    const major = Number(tag.slice(1));
+    assert.ok(
+      major >= floor,
+      `${action}@${tag} is below the verified latest major v${floor}`,
+    );
+  }
+});
+
+test("the Go toolchain is the 1.27 line and Node stays the 24 LTS line (R4/D19)", () => {
+  // go1.27.3 (2026-10-19, security fixes) is the latest stable per
+  // go.dev/doc/devel/release; Node 24 "Krypton" is the active LTS per
+  // nodejs.org. Node 26 becomes LTS 2026-10-28 — future work, never
+  // pinned pre-LTS. Go versions are 1.MINOR: the LINE is the minor.
+  const wf = loadWorkflow();
+  const goVer = wf.match(/^  GO_VERSION: "([^"]+)"$/m);
+  assert.ok(goVer, "env.GO_VERSION is declared");
+  const goParts = goVer[1].split(".").map(Number);
+  assert.ok(
+    goParts[0] > 1 || (goParts[0] === 1 && goParts[1] >= 27),
+    `GO_VERSION ${goVer[1]} is on the 1.27 line or newer (run-#39 tree pinned 1.26)`,
+  );
+  const nodeVer = wf.match(/^  NODE_VERSION: "([^"]+)"$/m);
+  assert.ok(nodeVer, "env.NODE_VERSION is declared");
+  assert.equal(
+    nodeVer[1].split(".")[0],
+    "24",
+    "NODE_VERSION stays the 24 LTS line",
+  );
+});
+
+test("green gates emit one ::notice success line each (D17: content or success, never silence)", () => {
+  const cases = [
+    // Windows: the Invoke-Gate helper carries the green notice for every
+    // gate it drives; the inline gofmt gate emits its own literal notice.
+    ["build-windows", "Go verification", /Write-Host "::notice::gate OK: \$Label"/],
+    ["build-windows", "Go verification", /Write-Host "::notice::gate OK: gofmt -l \."/],
+    // Linux: the bash gates emit one literal notice each.
+    ["build-linux", "Go verification", /echo "::notice::gate OK: go vet \.\/\.\.\."/],
+    ["build-linux", "Go verification", /echo "::notice::gate OK: gofmt -l \."/],
+    // The NSIS compile gate emits its own literal notice.
+    ["build-windows", "Build Windows NSIS installer", /::notice::gate OK: NSIS makensis/],
+  ];
+  for (const [job, step, pattern] of cases) {
+    const body = findJobStep(job, step);
+    assert.match(
+      body,
+      pattern,
+      `${job}/${step} emits a green-gate success notice`,
+    );
+  }
+});
+
+test("the Windows no-log guard names its gate commands, never a bare path (D17)", () => {
+  // With first-byte capture the guard becomes a TRUE last resort; when
+  // it fires it must carry the command and the expected path (I17).
+  const wf = loadWorkflow();
+  const guardAt = wf.indexOf("$goLogCommands");
+  assert.ok(guardAt >= 0, "the guard's command map exists");
+  const guard = wf.slice(guardAt, guardAt + 900);
+  assert.match(
+    guard,
+    /"win-go-vet\.log"\s+=\s+"go vet \.\/\.\.\."/,
+    "the guard maps win-go-vet.log to its command",
+  );
+  assert.match(
+    guard,
+    /"win-gofmt\.log"\s+=\s+"gofmt -l \."/,
+    "the guard maps win-gofmt.log to its command",
+  );
 });

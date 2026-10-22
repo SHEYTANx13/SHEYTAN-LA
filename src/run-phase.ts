@@ -133,6 +133,101 @@ export function nextPhase(phase: RunPhase, event: RunEventKind): RunPhase {
   }
 }
 
+export type RunOutcome = "done" | "aborted" | "lost";
+
+export interface FinalisationFacts {
+  // The authoritative history reload gained a NEW assistant reply (vs the
+  // run's baseline count).
+  historyGainedReply: boolean;
+  // The run streamed content (the streaming snapshot carries text) OR an
+  // earlier attempt already preserved a partial row on screen.
+  hasPartial: boolean;
+  // The bounded retry already ran once — this is the final attempt.
+  finalAttempt: boolean;
+}
+
+export interface FinalisationDecision {
+  // "finalising" keeps the run LIVE (composer locked) while the bounded
+  // retry re-confirms history; any terminal phase settles the timeline.
+  phase: RunPhase;
+  // Append/keep the local partial row so the transcript never shows a
+  // reply-less settlement for a run that streamed content.
+  preservePartial: boolean;
+  clearStreaming: boolean;
+  // Schedule the bounded second confirmation attempt.
+  armRetry: boolean;
+}
+
+// terminalPhaseFor maps the backend's run outcome onto the timeline's
+// terminal phase (the v1.2.8 "lost" sentinel settles as Stopped).
+export function terminalPhaseFor(outcome: RunOutcome): RunPhase {
+  return outcome === "done" ? "complete" : "aborted";
+}
+
+// planFinalisation is the WHOLE finalisation decision, extracted as a
+// PURE function so the settlement contract is unit-testable without the
+// store or the WebSocket (the same discipline as nextPhase above).
+//
+// THE RUN-#39 DEFECT CLASS (e2e/live-stream.spec.ts:266, "Error: exactly
+// one assistant message"): finaliseRun always settled the phase to a
+// TERMINAL state even when the authoritative history did not yet contain
+// the reply (a first reload that raced the persist on a slow host), and
+// its designed bounded retry could never fire (it required the phase to
+// still be "finalising" — which the terminal settle made impossible).
+// Under hosted contention with a suspended rAF the transcript then showed
+// the WRONG number of assistant rows at settlement: zero (the reload
+// wiped the visible partial), or the degraded "partial preserved locally"
+// state standing in for a reply that HAD persisted milliseconds later.
+//
+// The contract keeps the transcript at EXACTLY ONE assistant row on every
+// path:
+//   - reply confirmed by history  → settle terminal, streaming dropped;
+//   - reply missing + partial seen, FIRST attempt → stay "finalising",
+//     preserve the partial as the visible row, arm the bounded retry;
+//   - reply missing + partial seen, FINAL attempt → settle terminal on
+//     the preserved partial (the reply genuinely never persisted);
+//   - reply missing + nothing streamed → settle terminal (nothing ever
+//     existed to show; the error path carries captions).
+export function planFinalisation(
+  facts: FinalisationFacts,
+  outcome: RunOutcome,
+): FinalisationDecision {
+  const terminal = terminalPhaseFor(outcome);
+
+  if (facts.historyGainedReply) {
+    return {
+      phase: terminal,
+      preservePartial: false,
+      clearStreaming: true,
+      armRetry: false,
+    };
+  }
+
+  if (facts.hasPartial) {
+    if (facts.finalAttempt) {
+      return {
+        phase: terminal,
+        preservePartial: true,
+        clearStreaming: true,
+        armRetry: false,
+      };
+    }
+    return {
+      phase: "finalising",
+      preservePartial: true,
+      clearStreaming: true,
+      armRetry: true,
+    };
+  }
+
+  return {
+    phase: terminal,
+    preservePartial: false,
+    clearStreaming: true,
+    armRetry: false,
+  };
+}
+
 // isLivePhase reports whether the phase belongs to an in-flight run.
 // v1.7.4: pausing/resuming are live CONTROL phases (the run is still
 // registered and can still be stopped); "paused" is deliberately NOT live —

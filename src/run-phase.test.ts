@@ -6,6 +6,8 @@ import {
   isTerminalPhase,
   nextPhase,
   PHASE_LABELS,
+  planFinalisation,
+  terminalPhaseFor,
   type RunPhase,
 } from "./run-phase.ts";
 
@@ -220,4 +222,96 @@ test("phase labels cover the run-control phases", () => {
   assert.equal(PHASE_LABELS.pausing, "Pausing…");
   assert.equal(PHASE_LABELS.paused, "Paused");
   assert.equal(PHASE_LABELS.resuming, "Resuming…");
+});
+
+// ---------------------------------------------------------------------------
+// v1.10.14-fixed (R3) — the run-finalisation settlement contract.
+//
+// Run #39's Linux E2E red ("Error: exactly one assistant message") came
+// from the store settling a run TERMINALLY even when the authoritative
+// history did not yet contain the reply, with a bounded retry that could
+// never fire. planFinalisation is the pure contract the store must follow:
+// the transcript shows EXACTLY ONE assistant row on every settled path.
+// ---------------------------------------------------------------------------
+
+test("a confirmed reply settles the run terminal and drops the streaming snapshot", () => {
+  const decision = planFinalisation(
+    { historyGainedReply: true, hasPartial: true, finalAttempt: false },
+    "done",
+  );
+  assert.equal(decision.phase, "complete");
+  assert.equal(decision.preservePartial, false);
+  assert.equal(decision.clearStreaming, true);
+  assert.equal(decision.armRetry, false);
+});
+
+test("a raced persist on the FIRST attempt stays finalising and arms the bounded retry", () => {
+  // THE run-#39 hosted class: the first reload beat the persist. The run
+  // must stay LIVE (the composer stays locked) while the retry re-checks.
+  const decision = planFinalisation(
+    { historyGainedReply: false, hasPartial: true, finalAttempt: false },
+    "done",
+  );
+  assert.equal(decision.phase, "finalising");
+  assert.equal(isLivePhase(decision.phase), true, "the run is not settled yet");
+  assert.equal(decision.preservePartial, true, "the partial stays visible");
+  assert.equal(decision.clearStreaming, true);
+  assert.equal(decision.armRetry, true, "the designed bounded retry arms");
+});
+
+test("the FINAL attempt settles on the preserved partial — never a reply-less settlement", () => {
+  const decision = planFinalisation(
+    { historyGainedReply: false, hasPartial: true, finalAttempt: true },
+    "done",
+  );
+  assert.equal(decision.phase, "complete");
+  assert.equal(decision.preservePartial, true, "exactly one assistant row survives");
+  assert.equal(decision.armRetry, false, "the retry is bounded");
+});
+
+test("a run that streamed nothing settles terminal without inventing a reply", () => {
+  const decision = planFinalisation(
+    { historyGainedReply: false, hasPartial: false, finalAttempt: false },
+    "done",
+  );
+  assert.equal(decision.phase, "complete");
+  assert.equal(decision.preservePartial, false);
+  assert.equal(decision.armRetry, false);
+});
+
+test("abort and lost outcomes settle as Stopped on every path", () => {
+  assert.equal(terminalPhaseFor("aborted"), "aborted");
+  assert.equal(terminalPhaseFor("lost"), "aborted");
+  assert.equal(terminalPhaseFor("done"), "complete");
+  const abortedRetry = planFinalisation(
+    { historyGainedReply: false, hasPartial: true, finalAttempt: false },
+    "aborted",
+  );
+  assert.equal(abortedRetry.phase, "finalising");
+  const abortedFinal = planFinalisation(
+    { historyGainedReply: false, hasPartial: true, finalAttempt: true },
+    "aborted",
+  );
+  assert.equal(abortedFinal.phase, "aborted");
+  const lostFinal = planFinalisation(
+    { historyGainedReply: false, hasPartial: true, finalAttempt: true },
+    "lost",
+  );
+  assert.equal(lostFinal.phase, "aborted");
+});
+
+test("the retry is bounded to exactly one re-confirmation", () => {
+  // attempt 1 (no reply, partial): keep-finalising + retry…
+  const first = planFinalisation(
+    { historyGainedReply: false, hasPartial: true, finalAttempt: false },
+    "done",
+  );
+  assert.equal(first.armRetry, true);
+  // …attempt 2 (still no reply): settle. No third attempt exists.
+  const second = planFinalisation(
+    { historyGainedReply: false, hasPartial: true, finalAttempt: true },
+    "done",
+  );
+  assert.equal(second.armRetry, false);
+  assert.equal(isTerminalPhase(second.phase), true);
 });
