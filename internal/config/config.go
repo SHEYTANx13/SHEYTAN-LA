@@ -19,7 +19,7 @@ import (
 
 const (
 	AppName    = "SHEYTAN-Local-Agent"
-	AppVersion = "1.10.13"
+	AppVersion = "1.10.14"
 )
 
 // The product identity is version-only: AppName + AppVersion (synchronized

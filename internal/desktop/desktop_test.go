@@ -16,6 +16,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
 )
 
 func TestUIExecutableNoneSentinel(t *testing.T) {
@@ -142,5 +144,50 @@ func TestUIExecutableMissingEverywhereIsAHardRefusal(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "SHEYTAN_UI_EXECUTABLE") {
 		t.Fatalf("refusal must point at the override, got: %v", err)
+	}
+}
+
+// TestUILogWriterReachesAppLog pins the v1.10.14 warning catcher: the UI
+// child's stdout/stderr flow through the adapter into the REAL log
+// manager (stdout → Info, stderr → Warn, tagged "ui"), line-buffered,
+// CRLF-tolerant, with the final unterminated partial line flushed at
+// child exit. Run #36's wiring pointed these streams at the core's
+// os.Stdout/os.Stderr — lost entirely under -H=windowsgui, which is how
+// every Qt host warning vanished from the packaged runtime log.
+func TestUILogWriterReachesAppLog(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := logging.New(dir)
+	if err != nil {
+		t.Fatalf("logging.New: %v", err)
+	}
+	defer mgr.Close()
+	logging.SetDefault(mgr)
+	t.Cleanup(func() { logging.SetDefault(nil) })
+
+	stdout := newUILogWriter(false)
+	stderr := newUILogWriter(true)
+
+	n, err := stdout.Write([]byte("QML Main.qml:42: expected token\r\npartial-line-no-newline"))
+	if err != nil || n == 0 {
+		t.Fatalf("stdout write: n=%d err=%v", n, err)
+	}
+	if _, err := stderr.Write([]byte("QWARN : qmlLoadsCleanly() something")); err != nil {
+		t.Fatalf("stderr write: %v", err)
+	}
+	stdout.Flush()
+	stderr.Flush()
+
+	data, err := os.ReadFile(filepath.Join(dir, "app.log"))
+	if err != nil {
+		t.Fatalf("app.log missing: %v", err)
+	}
+	log := string(data)
+	for _, want := range []string{"[ui] ", "QML Main.qml:42", "partial-line-no-newline", "QWARN"} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("app.log missing %q after flush; log:\n%s", want, log)
+		}
+	}
+	if !strings.Contains(log, "WARN") || !strings.Contains(log, "INFO") {
+		t.Fatalf("stream severity lost: stdout must land INFO, stderr WARN; log:\n%s", log)
 	}
 }

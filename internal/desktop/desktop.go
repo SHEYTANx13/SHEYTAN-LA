@@ -26,6 +26,7 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/api"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/localipc"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/platform"
 )
 
@@ -42,6 +43,31 @@ var uiExecutableNames = map[string]string{
 // a liveness watchdog, not a gate on UI functionality.
 const uiSpawnTimeout = 0 // disabled: the launcher waits on the child unconditionally
 
+// failBoot reports a fatal boot failure through EVERY visibility channel
+// the process has: the named-step ERROR line in app.log (the catcher the
+// operator greps) and a Windows message box naming the step, the error
+// and the log path (the catcher the operator's eyes read — under
+// -H=windowsgui the console channels are detached, which is exactly how
+// run #36's installed launches closed instantly with zero words on
+// screen and zero ERROR lines in the log). Exit codes and control flow
+// are UNCHANGED — visibility only: every caller returns 1 right after.
+func failBoot(step string, err error) int {
+	logging.Default().Error("desktop", "boot failed at %s: %v", step, err)
+
+	logPath := ""
+	if mgr := logging.Default(); mgr.Enabled() {
+		logPath = filepath.Join(mgr.Dir(), "app.log")
+	}
+	text := fmt.Sprintf("SHEYTAN-LA failed to start.\n\nStep: %s\nError: %v\n", step, err)
+	if logPath != "" {
+		text += "\nThe details were written to the log:\n" + logPath
+	} else {
+		text += "\nThe log could not be located; start the app from a console to see the error."
+	}
+	_ = platform.MessageBox("SHEYTAN-LA — startup failed", text)
+	return 1
+}
+
 // Run starts the SHEYTAN desktop application and blocks until it exits.
 //
 // Launch order is deterministic: core up → IPC endpoint bound → UI child
@@ -49,8 +75,7 @@ const uiSpawnTimeout = 0 // disabled: the launcher waits on the child unconditio
 // exiting or a termination signal → clean core shutdown.
 func Run(cfg *config.Config) int {
 	if cfg == nil {
-		fmt.Println("desktop: missing configuration")
-		return 1
+		return failBoot("config", errors.New("missing configuration"))
 	}
 
 	// Taskbar/notification identity (no-op where the concept does not
@@ -59,14 +84,12 @@ func Run(cfg *config.Config) int {
 
 	srv, err := api.New(cfg)
 	if err != nil {
-		fmt.Println("desktop: initialize server:", err)
-		return 1
+		return failBoot("server init", err)
 	}
 	defer srv.Close()
 
 	if err := srv.EnsureSetup(); err != nil {
-		fmt.Println("desktop: setup:", err)
-		return 1
+		return failBoot("setup", err)
 	}
 
 	// The ONE local channel to the Qt host. A transport failure is a HARD,
@@ -78,22 +101,23 @@ func Run(cfg *config.Config) int {
 	if key == "" {
 		key, err = localipc.NewKey()
 		if err != nil {
-			fmt.Println("desktop: ipc key:", err)
-			return 1
+			return failBoot("ipc key", err)
 		}
 	}
 
 	ipc, err := localipc.Serve(srv, cfg, key)
 	if err != nil {
-		fmt.Println("desktop: local IPC unavailable:", err)
-		return 1
+		return failBoot("ipc serve", err)
 	}
 	defer ipc.Stop()
 
 	uiPath, err := uiExecutable()
 	if err != nil {
-		fmt.Println("desktop:", err)
-		return 1
+		// THE run-#36 installed path: the installer shipped only the
+		// core, so this resolution failed on every installed launch
+		// and the message died on a detached stdout. The named-step
+		// ERROR line + the message box now carry it.
+		return failBoot("ui resolve", err)
 	}
 
 	fmt.Printf("%s v%s (Qt desktop)\n", config.AppName, config.AppVersion)
@@ -113,14 +137,18 @@ func Run(cfg *config.Config) int {
 		localipc.EnvEndpoint+"="+ipc.Endpoint(),
 		localipc.EnvKey+"="+key,
 	)
-	// The UI's stdout/stderr flow into the core's log streams so a QML
-	// error is visible in the packaged runtime log.
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// v1.10.14: the UI's stdout/stderr flow through the log adapter
+	// (tagged "ui") into app.log — NOT into the core's os.Stdout/
+	// os.Stderr anymore. The old comment claimed they "flow into the
+	// core's log streams"; under -H=windowsgui they flowed nowhere,
+	// and every Qt host warning was lost with the console.
+	uiStdout := newUILogWriter(false)
+	uiStderr := newUILogWriter(true)
+	cmd.Stdout = uiStdout
+	cmd.Stderr = uiStderr
 
 	if err := cmd.Start(); err != nil {
-		fmt.Println("desktop: launch Qt host:", err)
-		return 1
+		return failBoot("ui spawn", err)
 	}
 
 	// Termination signals: stop the child, then the core, then exit.
@@ -140,8 +168,7 @@ func Run(cfg *config.Config) int {
 			if errors.As(err, &ee) {
 				exitCode = ee.ExitCode()
 			} else {
-				fmt.Println("desktop: ui wait:", err)
-				exitCode = 1
+				return failBoot("ui wait", err)
 			}
 		}
 	case sig := <-sigCh:
@@ -155,6 +182,10 @@ func Run(cfg *config.Config) int {
 		}
 		exitCode = 0
 	}
+
+	// Flush the UI streams' final partial lines before the sinks close.
+	uiStdout.Flush()
+	uiStderr.Flush()
 
 	return exitCode
 }

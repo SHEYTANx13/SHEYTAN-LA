@@ -189,7 +189,17 @@ func dispatch(cfg *config.Config, defaultFn func() int) int {
 
 	if len(args) == 0 {
 		if defaultFn != nil {
-			return defaultFn()
+			code := defaultFn()
+			if code != 0 {
+				// v1.10.14 (run #36 class): ONE ERROR-level summary
+				// line for a non-zero exit from the default desktop
+				// path. The exit-code line below stays INFO for every
+				// path; the named step ERROR lines inside desktop.Run
+				// carry the reason. Visibility only — the code is
+				// returned unchanged.
+				logging.Default().Error("boot", "default desktop path exited with code %d (see the named step ERROR above)", code)
+			}
+			return code
 		}
 		return Sysinfo(cfg)
 	}

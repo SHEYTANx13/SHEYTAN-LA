@@ -42,13 +42,28 @@
 ;     so the desktop/Start Menu entries and their removal are symmetric
 ;     for every user of the machine.
 ;
+; v1.10.14 PAYLOAD CONTRACT (run #36 class):
+;   - the installer stages the COMPLETE application — the exact pair the
+;     portable ZIP ships: SHEYTAN-LA.exe (Go core + launcher) +
+;     sheytan-ui.exe (Qt host) + the deployed Qt runtime (the windeployqt
+;     output: Qt6Core.dll, plugins, QML imports). Compile-time assertions
+;     below refuse to build an installer that cannot boot the desktop —
+;     the run-#36 installer staged only the Go core, so every installed
+;     launch died silently at the ui-resolve step.
+;   - UNINSTALL SYMMETRY: CI enumerates the exact payload tree into
+;     payload-uninstall.nsh (one Delete per file, bottom-up RMDir per
+;     directory) and the uninstaller includes it — the uninstaller
+;     removes EXACTLY what was written. Anything the runtime created
+;     later (data/, models/, workspace/, sessions/, logs/, any user
+;     file) is never in that list and survives by construction.
+;
 ; Directory selection is unchanged (MUI_PAGE_DIRECTORY) and the selected
 ; directory is genuinely used: every payload file, shortcut and registry
 ; entry below resolves through $INSTDIR.
 ;
 ; Contract:
-;   - installs the APPLICATION ONLY (exe + license + readme); models are
-;     NEVER bundled and NEVER deleted;
+;   - installs the COMPLETE APPLICATION (the pair + Qt runtime + license
+;     + readme); models are NEVER bundled and NEVER deleted;
 ;   - per-machine install to $PROGRAMFILES64\SHEYTAN-LA;
 ;   - v1.3.6: the canonical data root is the INSTALL-LOCAL data tree
 ;     (<AppRoot>\data) created and made user-writable by the installer;
@@ -97,6 +112,23 @@ ManifestDPIAware true
 !if ! /FileExists "${BUILDDIR}\${EXE}"
   !error "NSIS: staging executable not found: ${BUILDDIR}\${EXE} (build the portable application first; pass an ABSOLUTE -DBUILDDIR from CI)"
 !endif
+
+; v1.10.14: the installer must ship the COMPLETE pair — a staging tree
+; without the Qt host or the Qt runtime builds an installer that closes
+; instantly on every launch (the run-#36 defect); it is refused here.
+!if ! /FileExists "${BUILDDIR}\sheytan-ui.exe"
+  !error "NSIS: staging Qt host not found: ${BUILDDIR}\sheytan-ui.exe (build the Qt host and run windeployqt first — the installer must ship the complete pair)"
+!endif
+!if ! /FileExists "${BUILDDIR}\Qt6Core.dll"
+  !error "NSIS: staging Qt runtime not found: ${BUILDDIR}\Qt6Core.dll (windeployqt must have deployed the Qt runtime beside the host)"
+!endif
+
+; v1.10.14 UNINSTALL SYMMETRY: CI generates payload-uninstall.nsh from
+; the exact payload tree (Delete per file, bottom-up RMDir per directory)
+; and defines SHEYTAN_PAYLOAD_UNINSTALL in it. /nonfatal: a developer
+; build without the generated list still compiles (the macro insert is
+; !ifdef-guarded in the uninstall section); CI always generates it.
+!include /nonfatal "payload-uninstall.nsh"
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
@@ -215,6 +247,14 @@ upgrade_replaced:
   File /nonfatal "${BUILDDIR}\README.md"
   File /nonfatal "${BUILDDIR}\SIGNATURE"
   File "..\..\build\sheytan.ico"
+  ; v1.10.14 PAYLOAD: everything else the staged application carries —
+  ; sheytan-ui.exe, the Qt runtime (Qt6Core.dll + plugins + QML imports).
+  ; The CI payload-staging step excluded the portable-only files
+  ; (README.txt, BUILD-INFO.txt, AI-CONTEXT.md, SHEYTAN-LA.bat, models/,
+  ; workspace/) before makensis ran, so what lands in $INSTDIR is the
+  ; installed application. The hosted silent-install smoke asserts the
+  ; pair in the INSTALLED tree — the executable proof of this line.
+  File /r "${BUILDDIR}\*.*"
 
   ; Version-aware upgrade bookkeeping.
   WriteRegStr HKLM "${REGKEY}" "InstallDir" "$INSTDIR"
@@ -306,6 +346,16 @@ Section "Uninstall"
   ; Per-machine shell context — the exact mirror of the install section,
   ; so the shortcuts removed here are the ones the installer created.
   SetShellVarContext all
+
+  ; v1.10.14 UNINSTALL SYMMETRY: remove the enumerated payload first —
+  ; EXACTLY the files and directories the installer staged (the CI-
+  ; generated list). Plain Delete/RMDir only: a missing file is a no-op,
+  ; a non-empty directory is left in place, and anything the runtime
+  ; created after install (data/, models/, workspace/, sessions/, logs/,
+  ; any user file) is NOT in the list — it survives this uninstall.
+  !ifdef SHEYTAN_PAYLOAD_UNINSTALL
+    !insertmacro SHEYTAN_PAYLOAD_UNINSTALL
+  !endif
 
   ; Remove the application — and NOTHING else.
   ;

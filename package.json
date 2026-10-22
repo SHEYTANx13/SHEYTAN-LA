@@ -1,6 +1,6 @@
 {
   "name": "sheytan-local-agent",
-  "version": "1.10.13",
+  "version": "1.10.14",
   "private": true,
   "type": "module",
   "engines": {
@@ -21,7 +21,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test:units": "node --test src/ai-systems-view.test.ts src/run-phase.test.ts src/stream-accumulator.test.ts src/stream-fast-path.test.ts src/stream-flush-scheduler.test.ts src/stream-trace.test.ts src/run-events.test.ts src/resources.test.ts src/mode-sessions.test.ts src/history-ref.test.ts src/parse-ended-at.test.ts src/scroll-contract.test.ts src/settings-sections.test.ts src/clone-url.test.ts src/repoindex-view.test.ts src/workspace-v136.test.ts src/net-search.test.ts src/version-contract.test.ts src/history-surface.test.ts src/model-selection.test.ts src/engine-backend.test.ts src/automation-view.test.ts src/session-list-guard.test.ts src/memory-evidence.test.ts src/session-delete-regression.test.ts src/context-refresh-race.test.ts src/zero-session-send.test.ts src/reasoning-controls.test.ts src/loopback-origin.test.ts",
-    "test:release": "node --test scripts/release-version.test.mjs scripts/codename-gate.test.mjs"
+    "test:release": "node --test scripts/release-version.test.mjs scripts/codename-gate.test.mjs scripts/installer-contract.test.mjs"
   },
   "dependencies": {
     "react": "19.2.8",
