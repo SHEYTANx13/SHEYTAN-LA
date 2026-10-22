@@ -47,6 +47,13 @@ function loadNsi() {
   );
 }
 
+function loadWorkflow() {
+  return readFileSync(
+    join(repoRoot, ".github", "workflows", "build-desktop.yml"),
+    "utf8",
+  );
+}
+
 // ---------------------------------------------------------------------------
 // 1. Payload contract — the installed product IS the complete application.
 // ---------------------------------------------------------------------------
@@ -223,5 +230,224 @@ test("installer.nsi NEVER gains the recursive-delete instruction", () => {
   assert.ok(
     !nsi.includes("RMDir /r"),
     "installer.nsi contains 'RMDir /r' — recursive deletes are forbidden in the uninstaller (user data must be preserved)",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 4. Uninstall-symmetry NAMESPACE contract — run #37's red gate.
+//
+// Run #37 (39772975839, Windows x64) died at the silent-uninstall smoke:
+// the generator wrote payload-uninstall.nsh containing ONLY
+// "!macro SHEYTAN_PAYLOAD_UNINSTALL … !macroend", while installer.nsi
+// guards the insert with "!ifdef SHEYTAN_PAYLOAD_UNINSTALL". NSIS
+// "!ifdef" tests symbols "defined using !define or the /D switch" —
+// defines and macros live in SEPARATE namespaces — so the guard was
+// compile-time FALSE, the !insertmacro never compiled in, the
+// uninstaller removed only the six legacy files, sheytan-ui.exe /
+// Qt6Core.dll / the Qt tree survived, the 90-second poll timed out,
+// exit 1. These tests pin the repair: the generated list must define
+// its own guard symbol BEFORE the macro, the .nsi comment must match
+// that reality, and the makensis gate must assert the include marker —
+// a preprocessor skip can never again hide (invariant I9).
+// ---------------------------------------------------------------------------
+
+test("the uninstall-list generator defines its guard symbol in the namespace the .nsi tests", () => {
+  // RED at the run-#37 tree: the generator emitted ONLY the !macro —
+  // the "!ifdef" in installer.nsi therefore tested a symbol nothing
+  // ever defined, in a DIFFERENT namespace from the macro. The repair
+  // emits "!define SHEYTAN_PAYLOAD_UNINSTALL" immediately before the
+  // "!macro SHEYTAN_PAYLOAD_UNINSTALL" line — same namespace the
+  // uninstall section's guard tests.
+  const wf = loadWorkflow();
+
+  const defineAt = wf.indexOf("!define SHEYTAN_PAYLOAD_UNINSTALL");
+  assert.ok(
+    defineAt >= 0,
+    "the workflow generator must emit !define SHEYTAN_PAYLOAD_UNINSTALL — a macro name and a define name are DIFFERENT NSIS namespaces; the .nsi's !ifdef guard never saw a macro (run #37 red gate)",
+  );
+
+  const macroAt = wf.indexOf("!macro SHEYTAN_PAYLOAD_UNINSTALL");
+  assert.ok(macroAt >= 0, "the generator still emits the uninstall macro");
+  assert.ok(
+    defineAt < macroAt,
+    "!define SHEYTAN_PAYLOAD_UNINSTALL must be emitted BEFORE the !macro line (the guard symbol exists whether or not the include carries content)",
+  );
+});
+
+test("installer.nsi echoes the include marker inside the guard and its comment matches reality", () => {
+  // The .nsi comment previously CLAIMED the .nsh "defines
+  // SHEYTAN_PAYLOAD_UNINSTALL in it" — the contract text was true, the
+  // generator output was not. The corrected comment plus the in-guard
+  // !echo give the hosted makensis log a positive, greppable proof
+  // that the insert compiled in.
+  const nsi = loadNsi();
+
+  const guardAt = nsi.indexOf("!ifdef SHEYTAN_PAYLOAD_UNINSTALL");
+  assert.ok(guardAt >= 0, "the !ifdef guard stays");
+
+  const echoAt = nsi.indexOf('!echo "sheytan: payload uninstall list included"');
+  assert.ok(
+    echoAt > guardAt,
+    'the guard must !echo "sheytan: payload uninstall list included" — the marker CI asserts in win-nsis.log (I9: the compile-time skip becomes visible)',
+  );
+
+  const insertAt = nsi.indexOf("!insertmacro SHEYTAN_PAYLOAD_UNINSTALL");
+  assert.ok(
+    insertAt > echoAt,
+    "the !echo must precede the !insertmacro inside the guard",
+  );
+
+  assert.ok(
+    !nsi.includes("defines SHEYTAN_PAYLOAD_UNINSTALL in it"),
+    "the stale guard comment claiming the .nsh 'defines SHEYTAN_PAYLOAD_UNINSTALL in it' must be corrected — it described a namespace that never received the symbol",
+  );
+});
+
+test("the makensis gate asserts the include marker in win-nsis.log", () => {
+  // Post-compile assertion: if the marker line is absent from the
+  // makensis log, the uninstall list did NOT compile in — fail the
+  // step instead of shipping an installer whose uninstaller keeps the
+  // Qt tree on disk (the run-#37 physical result).
+  const wf = loadWorkflow();
+  assert.match(
+    wf,
+    /win-nsis\.log[\s\S]{0,600}?sheytan: payload uninstall list included[\s\S]{0,600}?(throw|exit 1)/,
+    "after makensis, the step must assert the 'sheytan: payload uninstall list included' marker inside ci-logs/win-nsis.log and fail the step when absent",
+  );
+});
+
+test("the uninstall smoke names the surviving targets in its failure", () => {
+  // D1/D6: when the poll times out, the thrown annotation must carry
+  // the capped list of surviving targets — the next reader sees WHAT
+  // survived, not merely THAT something did.
+  const wf = loadWorkflow();
+  assert.match(
+    wf,
+    /[Ss]urviving targets:/,
+    "the smoke's poll-timeout failure must enumerate the surviving targets (capped) — the annotation names WHAT survived",
+  );
+  assert.match(
+    wf,
+    /\$survivors/,
+    "the smoke must collect the surviving targets into $survivors before throwing",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 5. Publish visuals and naming — ONE naming map (invariant I11), D7.
+// ---------------------------------------------------------------------------
+
+test("both package roots spell the product identically (ONE naming map)", () => {
+  const wf = loadWorkflow();
+  assert.match(
+    wf,
+    /LINUX_PKG_ROOT:\s*"SHEYTAN-LA"/,
+    'LINUX_PKG_ROOT must be "SHEYTAN-LA" — the run-#37 page spelled the Linux package SHEYTAN-Local-Agent and the Windows package SHEYTAN-LA on one release page (I11)',
+  );
+  assert.match(
+    wf,
+    /WIN_PKG_ROOT:\s*"SHEYTAN-LA"/,
+    'WIN_PKG_ROOT stays "SHEYTAN-LA"',
+  );
+  assert.ok(
+    !wf.includes("SHEYTAN-Local-Agent-Linux-x64"),
+    "the old divergent Linux asset spelling SHEYTAN-Local-Agent-Linux-x64-… must not survive anywhere in the workflow",
+  );
+});
+
+test("release assets follow the unified v{ver}-<os>-<arch> pattern", () => {
+  const wf = loadWorkflow();
+  // Old Linux order/casing: ${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}.zip
+  // Unified: ${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip — the
+  // Windows pattern's field order, applied to every asset.
+  assert.ok(
+    !wf.includes("Linux-x64-v"),
+    "the old Linux-x64-v asset order must be gone",
+  );
+  assert.match(
+    wf,
+    /\$\{LINUX_PKG_ROOT\}-v\$\{APP_VERSION\}-linux-x64\.zip/,
+    "the Linux ZIP must follow the unified pattern",
+  );
+  assert.match(
+    wf,
+    /\$\{WIN_PKG_ROOT\}-v\$\{APP_VERSION\}-windows-x64\.zip/,
+    "the Windows ZIP keeps the unified pattern",
+  );
+  assert.match(
+    wf,
+    /\$\{WIN_PKG_ROOT\}-v\$\{APP_VERSION\}-windows-x64-installer\.exe/,
+    "the installer keeps the unified pattern",
+  );
+});
+
+test("artifact display names follow the same map", () => {
+  const wf = loadWorkflow();
+  assert.ok(
+    !wf.includes("-Windows-x64-installer-v"),
+    "the old Windows-x64-installer-v artifact display name must follow the map",
+  );
+  assert.ok(
+    !wf.includes("-Windows-x64-v"),
+    "the old Windows-x64-v artifact display name must follow the map",
+  );
+  assert.match(
+    wf,
+    /name:\s*\$\{\{ env\.WIN_PKG_ROOT \}\}-v\$\{\{ env\.APP_VERSION \}\}-windows-x64-installer/,
+    "the installer artifact display name follows the map",
+  );
+  assert.match(
+    wf,
+    /name:\s*\$\{\{ env\.LINUX_PKG_ROOT \}\}-v\$\{\{ env\.APP_VERSION \}\}-linux-x64/,
+    "the Linux artifact display name follows the map",
+  );
+});
+
+test("the release title carries the product prefix and the verify asserts it in lockstep", () => {
+  // D7 supersedes the v1.3.3 bare-version title: "SHEYTAN-LA v{APP_VERSION}".
+  const wf = loadWorkflow();
+  assert.match(
+    wf,
+    /name:\s*SHEYTAN-LA v\$\{\{ env\.APP_VERSION \}\}/,
+    'the release title must be "SHEYTAN-LA v${{ env.APP_VERSION }}" (D7 supersedes the v1.3.3 bare-title comment)',
+  );
+  assert.match(
+    wf,
+    /\.name\s*==\s*\$name/,
+    "the publish-verify jq must assert the SAME prefixed title (.name == $name) in lockstep",
+  );
+  assert.match(
+    wf,
+    /--arg name "SHEYTAN-LA v\$\{APP_VERSION\}"/,
+    "the jq invocation must pass the prefixed title as $name",
+  );
+});
+
+test("red runs still expose their binaries (uploads if: always())", () => {
+  // Run #37's artifact table had no installer and no ZIP — the uploads
+  // sat behind the failing smoke gate. The Windows package/installer
+  // uploads gain `if: always()` so a red run still shows WHAT was built.
+  const wf = loadWorkflow();
+  const uploadBlocks = [...wf.matchAll(
+    /- name: Upload (?:Windows installer|Windows package)\n(?:.*\n)*?\s*uses: actions\/upload-artifact@v\d+\n(?:.*\n)*?\s*retention-days: \d+/g,
+  )];
+  assert.ok(uploadBlocks.length === 2, "both Windows package uploads exist");
+  for (const block of uploadBlocks) {
+    assert.match(
+      block[0],
+      /if:\s*always\(\)/,
+      "the Windows upload steps must carry if: always() so red runs expose binaries",
+    );
+  }
+});
+
+test("every build job publishes ONE success-path run summary", () => {
+  // D1-compliant: one $GITHUB_STEP_SUMMARY table per build job — gates
+  // from gate-order.txt, artifact names + sizes, version.
+  const wf = loadWorkflow();
+  const summaries = [...wf.matchAll(/## SHEYTAN-LA build summary/g)];
+  assert.ok(
+    summaries.length >= 2,
+    "Windows and Linux build jobs each write a '## SHEYTAN-LA build summary' table to $GITHUB_STEP_SUMMARY",
   );
 });

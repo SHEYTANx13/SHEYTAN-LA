@@ -38,11 +38,6 @@ var uiExecutableNames = map[string]string{
 	"darwin":  "sheytan-ui",
 }
 
-// uiSpawnTimeout bounds the wait for the Qt host process to attach its
-// IPC handshake. The UI may take longer on a cold machine — this is only
-// a liveness watchdog, not a gate on UI functionality.
-const uiSpawnTimeout = 0 // disabled: the launcher waits on the child unconditionally
-
 // failBoot reports a fatal boot failure through EVERY visibility channel
 // the process has: the named-step ERROR line in app.log (the catcher the
 // operator greps) and a Windows message box naming the step, the error
@@ -68,6 +63,55 @@ func failBoot(step string, err error) int {
 	return 1
 }
 
+// reportUIExit is the RUN-phase counterpart of failBoot (the v1.10.14-fixed
+// run-phase catcher, D8): the boot catcher makes a failing launch loud, this
+// makes a UI child that dies MID-SESSION loud. At the run-#37 tree the
+// childDone arm recorded the exit code and returned silently — under
+// -H=windowsgui nobody saw a thing, the run-#36 symptom one boot phase
+// later. Exit codes and control flow are UNCHANGED — visibility only: a
+// clean close logs ONE Info line; an abnormal exit logs a named ERROR line
+// ("ui exit") carrying the child's code AND raises the platform message box
+// naming the exit, the log path and the reason (the box's physical
+// appearance is the operator's retest).
+func reportUIExit(err error) {
+	if err == nil {
+		logging.Default().Info("desktop", "ui exit: clean close (exit code 0)")
+		return
+	}
+	reason := uiExitReason(err)
+	logging.Default().Error("desktop", "ui exit: the Qt host terminated abnormally (%s) — the [ui] lines above carry the host's own output", reason)
+	showUIExitBox(reason)
+}
+
+// uiExitReason names the child's exit for both the log line and the box:
+// an ExitError becomes "exit code N" — the operator's grep target; any
+// other wait failure carries its own text.
+func uiExitReason(err error) string {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return fmt.Sprintf("exit code %d", ee.ExitCode())
+	}
+	return err.Error()
+}
+
+// showUIExitBox raises the operator-facing box for an abnormal UI death —
+// the same channel failBoot uses, so the story (what died, why, where the
+// log is) reaches the screen the console cannot. Best-effort: the named
+// ERROR line in app.log remains the primary catcher.
+func showUIExitBox(reason string) {
+	logPath := ""
+	if mgr := logging.Default(); mgr.Enabled() {
+		logPath = filepath.Join(mgr.Dir(), "app.log")
+	}
+	text := fmt.Sprintf("SHEYTAN-LA's interface closed unexpectedly.\n\nReason: %s\n", reason)
+	if logPath != "" {
+		text += "\nThe details were written to the log:\n" + logPath
+	} else {
+		text += "\nThe log could not be located; start the app from a console to see the error."
+	}
+	_ = platform.MessageBox("SHEYTAN-LA — the interface closed unexpectedly", text)
+}
+
 // Run starts the SHEYTAN desktop application and blocks until it exits.
 //
 // Launch order is deterministic: core up → IPC endpoint bound → UI child
@@ -86,7 +130,13 @@ func Run(cfg *config.Config) int {
 	if err != nil {
 		return failBoot("server init", err)
 	}
-	defer srv.Close()
+	// v1.10.14-fixed (D8): a failed core shutdown is a named ERROR line —
+	// no discarded consequential outcome (I3).
+	defer func() {
+		if err := srv.Close(); err != nil {
+			logging.Default().Error("desktop", "core shutdown failed: %v", err)
+		}
+	}()
 
 	if err := srv.EnsureSetup(); err != nil {
 		return failBoot("setup", err)
@@ -109,7 +159,13 @@ func Run(cfg *config.Config) int {
 	if err != nil {
 		return failBoot("ipc serve", err)
 	}
-	defer ipc.Stop()
+	// v1.10.14-fixed (D8): a failed IPC stop is a named ERROR line —
+	// no discarded consequential outcome (I3).
+	defer func() {
+		if err := ipc.Stop(); err != nil {
+			logging.Default().Error("desktop", "ipc stop failed: %v", err)
+		}
+	}()
 
 	uiPath, err := uiExecutable()
 	if err != nil {
@@ -120,7 +176,11 @@ func Run(cfg *config.Config) int {
 		return failBoot("ui resolve", err)
 	}
 
+	// v1.10.14-fixed (D8): the banner and endpoint prints are invisible
+	// under -H=windowsgui — each console line gains its paired log line.
+	logging.Default().Info("desktop", "%s v%s (Qt desktop)", config.AppName, config.AppVersion)
 	fmt.Printf("%s v%s (Qt desktop)\n", config.AppName, config.AppVersion)
+	logging.Default().Info("desktop", "core endpoint: %s", ipc.Endpoint())
 	fmt.Printf("  core endpoint: %s\n", ipc.Endpoint())
 
 	// SHEYTAN_UI_EXECUTABLE=none keeps the core serving WITHOUT spawning a
@@ -163,6 +223,10 @@ func Run(cfg *config.Config) int {
 	exitCode := 0
 	select {
 	case err := <-childDone:
+		// v1.10.14-fixed (D8): the exit is REPORTED — a clean close logs
+		// ONE Info line; an abnormal child death logs the named ERROR line
+		// and raises the operator's box. The exit code and the control
+		// flow below are UNCHANGED.
 		if err != nil {
 			var ee *exec.ExitError
 			if errors.As(err, &ee) {
@@ -171,7 +235,9 @@ func Run(cfg *config.Config) int {
 				return failBoot("ui wait", err)
 			}
 		}
+		reportUIExit(err)
 	case sig := <-sigCh:
+		logging.Default().Info("desktop", "signal %v — stopping ui and core", sig)
 		fmt.Println("desktop: signal", sig, "— stopping ui and core")
 		_ = cmd.Process.Signal(syscall.SIGTERM)
 		select {

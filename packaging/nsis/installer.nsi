@@ -124,10 +124,16 @@ ManifestDPIAware true
 !endif
 
 ; v1.10.14 UNINSTALL SYMMETRY: CI generates payload-uninstall.nsh from
-; the exact payload tree (Delete per file, bottom-up RMDir per directory)
-; and defines SHEYTAN_PAYLOAD_UNINSTALL in it. /nonfatal: a developer
-; build without the generated list still compiles (the macro insert is
-; !ifdef-guarded in the uninstall section); CI always generates it.
+; the exact payload tree (Delete per file, bottom-up RMDir per directory).
+; v1.10.14-fixed (run #37 red gate): the generated file OPENS with
+; "!define SHEYTAN_PAYLOAD_UNINSTALL" — NSIS keeps defines and macros in
+; SEPARATE namespaces, and the !ifdef below tests the define, so the
+; generated list must define its own guard symbol (the file once carried
+; only the !macro and this guard never fired; the uninstaller kept the
+; Qt tree on disk). /nonfatal: a developer build without the generated
+; list still compiles (the macro insert is !ifdef-guarded in the
+; uninstall section); CI always generates it and asserts the
+; "sheytan: payload uninstall list included" marker in the makensis log.
 !include /nonfatal "payload-uninstall.nsh"
 
 !include "MUI2.nsh"
@@ -354,6 +360,7 @@ Section "Uninstall"
   ; created after install (data/, models/, workspace/, sessions/, logs/,
   ; any user file) is NOT in the list — it survives this uninstall.
   !ifdef SHEYTAN_PAYLOAD_UNINSTALL
+    !echo "sheytan: payload uninstall list included"
     !insertmacro SHEYTAN_PAYLOAD_UNINSTALL
   !endif
 

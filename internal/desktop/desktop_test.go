@@ -11,7 +11,9 @@
 package desktop
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -189,5 +191,123 @@ func TestUILogWriterReachesAppLog(t *testing.T) {
 	}
 	if !strings.Contains(log, "WARN") || !strings.Contains(log, "INFO") {
 		t.Fatalf("stream severity lost: stdout must land INFO, stderr WARN; log:\n%s", log)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// v1.10.14-fixed run-phase catcher (D8): a UI child that dies MID-SESSION
+// becomes a named ERROR line in app.log and a user-visible box — never an
+// invisible exit. At the run-#37 tree the childDone arm recorded the exit
+// code and returned silently; these tests fail to COMPILE against that
+// tree (undefined reportUIExit / uiExitReason), which is their RED.
+// ---------------------------------------------------------------------------
+
+// uiExitTestChild runs a real child process that exits with the given
+// non-zero code and returns the resulting error — the exact shape the
+// childDone arm receives from cmd.Wait when the Qt host dies mid-session.
+// Windows and POSIX each get a native one-liner (the portability gate
+// bans POSIX-only shell fixtures from Go tests).
+func uiExitTestChild(t *testing.T, code int) error {
+	t.Helper()
+	var err error
+	if runtime.GOOS == "windows" {
+		err = exec.Command("cmd", "/c", "exit", itoa(code)).Run()
+	} else {
+		err = exec.Command("sh", "-c", "exit "+itoa(code)).Run()
+	}
+	if err == nil {
+		t.Fatalf("fixture child must exit non-zero (%d)", code)
+	}
+	return err
+}
+
+// itoa avoids strconv for one digit-range need with zero formatting
+// ambiguity across the two fixture shells.
+func itoa(n int) string {
+	if n < 0 || n > 9 {
+		panic("uiExitTestChild supports single-digit codes only")
+	}
+	return string(rune('0' + n))
+}
+
+// TestUIExitReasonCarriesTheCode pins the reason naming: an ExitError
+// becomes "exit code N" (the operator's grep target on the box and in the
+// log line); any other wait failure carries its own text. Pure — runs on
+// every platform.
+func TestUIExitReasonCarriesTheCode(t *testing.T) {
+	exitErr := uiExitTestChild(t, 3)
+	var ee *exec.ExitError
+	if !errors.As(exitErr, &ee) {
+		t.Fatalf("fixture must yield *exec.ExitError, got %T", exitErr)
+	}
+	if got := uiExitReason(exitErr); got != "exit code 3" {
+		t.Fatalf("uiExitReason = %q, want %q", got, "exit code 3")
+	}
+	if got := uiExitReason(errors.New("boom")); got != "boom" {
+		t.Fatalf("uiExitReason(non-ExitError) = %q, want %q", got, "boom")
+	}
+}
+
+// TestReportUIExitAbnormalCloseIsVisible pins the catcher's emission: a
+// named ERROR line ("ui exit") carrying the child's code lands in app.log.
+// Windows skips: platform.MessageBox is a BLOCKING modal there — a test
+// invocation would park the hosted runner until someone clicks OK. The
+// emission path is identical on every platform (only the box is
+// platform-conditional); the box's physical appearance is the operator's
+// retest.
+func TestReportUIExitAbnormalCloseIsVisible(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("platform.MessageBox is a blocking modal on Windows — the box is the operator's physical retest; the line format is pinned by TestUIExitReasonCarriesTheCode and this test's non-Windows run")
+	}
+	dir := t.TempDir()
+	mgr, err := logging.New(dir)
+	if err != nil {
+		t.Fatalf("logging.New: %v", err)
+	}
+	defer mgr.Close()
+	logging.SetDefault(mgr)
+	t.Cleanup(func() { logging.SetDefault(nil) })
+
+	exitErr := uiExitTestChild(t, 7)
+	reportUIExit(exitErr)
+
+	data, err := os.ReadFile(filepath.Join(dir, "app.log"))
+	if err != nil {
+		t.Fatalf("app.log missing: %v", err)
+	}
+	log := string(data)
+	for _, want := range []string{"ERROR", "ui exit", "exit code 7"} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("app.log missing %q after an abnormal UI exit — the run-phase catcher is blind; log:\n%s", want, log)
+		}
+	}
+}
+
+// TestReportUIExitCleanCloseIsQuiet pins the other half of the catcher: a
+// normal user close (exit 0) logs ONE Info line and raises NO error and
+// NO box — visibility must not cry wolf on the healthy path. The clean
+// path never reaches the platform box, so this runs on every platform.
+func TestReportUIExitCleanCloseIsQuiet(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := logging.New(dir)
+	if err != nil {
+		t.Fatalf("logging.New: %v", err)
+	}
+	defer mgr.Close()
+	logging.SetDefault(mgr)
+	t.Cleanup(func() { logging.SetDefault(nil) })
+
+	reportUIExit(nil)
+
+	data, err := os.ReadFile(filepath.Join(dir, "app.log"))
+	if err != nil {
+		t.Fatalf("app.log missing: %v", err)
+	}
+	log := string(data)
+	if !strings.Contains(log, "ui exit: clean close") || !strings.Contains(log, "INFO") {
+		t.Fatalf("a clean UI close must log the ONE Info line; log:\n%s", log)
+	}
+	if strings.Contains(log, "ERROR") {
+		t.Fatalf("a clean UI close must NOT log an ERROR line; log:\n%s", log)
 	}
 }

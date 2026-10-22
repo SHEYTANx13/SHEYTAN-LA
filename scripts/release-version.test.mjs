@@ -112,7 +112,7 @@ const GOOD_WORKFLOW = [
   "        uses: softprops/action-gh-release@v3",
   "        with:",
   "          tag_name: ${{ github.ref_name }}",
-  "          name: ${{ env.APP_VERSION }}",
+  "          name: SHEYTAN-LA v${{ env.APP_VERSION }}",
   "",
 ].join("\n");
 
@@ -507,31 +507,52 @@ test("repair is a no-op on an already-consistent tree", () => {
 
 
 // ---------------------------------------------------------------------------
-// 5b. v1.3.3 version-only tag/release identity contract.
+// 5b. Release-identity contract (v1.3.3 version-only title SUPERSEDED by
+// D7: the title is the product-prefixed canonical version).
 // ---------------------------------------------------------------------------
 
-test("release title must be the plain canonical version (version-only identity)", () => {
-  // The pre-v1.3.3 shape: title derived from the tag with a product prefix.
+test("release title must be the product-prefixed canonical version (D7)", () => {
+  // The superseded v1.3.3 shape: the bare canonical-version title. Under
+  // D7 it is now a BANNED fragment, and its absence from the workflow is
+  // a missing required fragment — two violations.
   const wf = GOOD_WORKFLOW.replace(
+    "name: SHEYTAN-LA v${{ env.APP_VERSION }}",
     "name: ${{ env.APP_VERSION }}",
+  );
+  const v = workflowContractViolations(wf);
+  assert.equal(v.length, 2, JSON.stringify(v));
+  assert.ok(
+    v.some((x) => x.includes("superseded version-only release title")),
+    "the bare version-only title must be named a superseded shape",
+  );
+  assert.ok(
+    v.some((x) => x.includes("required release-identity fragment")),
+    "the missing product-prefixed title fragment must be reported",
+  );
+});
+
+test("release title derived from the tag stays banned (D7)", () => {
+  // The pre-v1.3.3 shape: title derived from the tag. D7 keeps it banned.
+  const wf = GOOD_WORKFLOW.replace(
+    "name: SHEYTAN-LA v${{ env.APP_VERSION }}",
     "name: SHEYTAN-LA ${{ github.ref_name }}",
   );
   const v = workflowContractViolations(wf);
   assert.equal(v.length, 2, JSON.stringify(v));
   assert.ok(
-    v.some((x) => x.includes("version-only identity")),
-    "the tag/product-derived title must be named a banned shape",
+    v.some((x) => x.includes("derives from the tag")),
+    "the tag-derived title must be named a banned shape",
   );
   assert.ok(
     v.some((x) => x.includes("required release-identity fragment")),
-    "the missing version-only title fragment must be reported",
+    "the missing product-prefixed title fragment must be reported",
   );
 });
 
 test("release title must not carry a codename suffix", () => {
   const wf = GOOD_WORKFLOW.replace(
-    "name: ${{ env.APP_VERSION }}",
-    `name: \${{ env.APP_VERSION }}-${RETIRED_CODENAME}`,
+    "name: SHEYTAN-LA v${{ env.APP_VERSION }}",
+    `name: SHEYTAN-LA v\${{ env.APP_VERSION }}-${RETIRED_CODENAME}`,
   );
   const v = workflowContractViolations(wf);
   assert.equal(v.length, 1, JSON.stringify(v));

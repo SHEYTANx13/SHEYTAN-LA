@@ -154,13 +154,25 @@ export const bannedWorkflowFragments = [
       "bash reimplementation of the SIGNATURE check; use release-version.mjs --check",
   },
   {
-    // v1.3.3 version-only release identity: the GitHub Release title is
-    // the PLAIN canonical version, never the tag or a product prefix.
+    // v1.3.3 banned the tag/product-derived title; v1.10.14-fixed (D7)
+    // keeps that ban: the title must derive from APP_VERSION with the
+    // product prefix. The fragment is prefixed ("SHEYTAN-LA ${{") so it
+    // can never collide with tag_name:.
     fragment: "name: SHEYTAN-LA ${{",
     reason:
-      "release title derives from the tag/product name instead of the " +
-      "plain canonical version — the title must be `name: ${{ env.APP_VERSION }}` " +
-      "(version-only identity, v1.3.3 contract)",
+      "release title derives from the tag instead of the canonical " +
+      "version — the title must be `name: SHEYTAN-LA v${{ env.APP_VERSION }}` " +
+      "(product-prefixed identity, D7)",
+  },
+  {
+    // v1.10.14-fixed (D7): the v1.3.3 version-only title is SUPERSEDED —
+    // a workflow still carrying the bare canonical-version title now
+    // fails the contract instead of satisfying it.
+    fragment: "name: ${{ env.APP_VERSION }}",
+    reason:
+      "superseded version-only release title — the title must be " +
+      "`name: SHEYTAN-LA v${{ env.APP_VERSION }}` (D7 supersedes the v1.3.3 " +
+      "version-only identity)",
   },
   {
     // v1.3.3: no codename may appear anywhere in the workflow. The
@@ -183,23 +195,24 @@ export const bannedWorkflowFragments = [
 ];
 
 /**
- * Required workflow fragments — the v1.3.3 version-only tag/release
- * contract, enforced structurally so a future edit cannot silently
- * regress the release identity:
- *   - the GitHub Release title is the PLAIN canonical version
- *     (`name: ${{ env.APP_VERSION }}` → "1.3.3"), not the tag, not a
- *     product prefix, not a codename;
+ * Required workflow fragments — the release-identity contract, enforced
+ * structurally so a future edit cannot silently regress the release
+ * identity:
+ *   - the GitHub Release title is the PRODUCT-PREFIXED canonical version
+ *     (`name: SHEYTAN-LA v${{ env.APP_VERSION }}` → "SHEYTAN-LA v1.3.3";
+ *     D7 supersedes the v1.3.3 bare-version title), never the tag, never
+ *     a codename;
  *   - the release job verifies the pushed tag equals v${APP_VERSION}
  *     before anything is published;
  *   - the published release is re-verified with the tag AND the
- *     version-only title.
+ *     product-prefixed title.
  */
 export const requiredWorkflowFragments = [
   {
-    fragment: "name: ${{ env.APP_VERSION }}",
+    fragment: "name: SHEYTAN-LA v${{ env.APP_VERSION }}",
     reason:
-      "GitHub Release title must be the plain canonical version " +
-      "(version-only identity)",
+      "GitHub Release title must be the product-prefixed canonical version " +
+      "(D7 supersedes the v1.3.3 version-only identity)",
   },
   {
     fragment: 'test "${GITHUB_REF_NAME}" = "v${APP_VERSION}"',

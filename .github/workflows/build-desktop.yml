@@ -79,8 +79,12 @@ env:
   # below; the Go contract (internal/releasecontract) mirrors these values
   # and the stress gate fails the build if the two copies of the truth ever
   # drift apart.
+  # v1.10.14-fixed (D7/I11): ONE naming map — both roots spell the product
+  # identically. The Linux executable inside the package KEEPS its name
+  # (SHEYTAN-Local-Agent); only the package root, the ZIP/asset names and
+  # the artifact display names follow this map.
   WIN_PKG_ROOT: "SHEYTAN-LA"
-  LINUX_PKG_ROOT: "SHEYTAN-Local-Agent"
+  LINUX_PKG_ROOT: "SHEYTAN-LA"
 
 jobs:
   audit:
@@ -1592,6 +1596,9 @@ jobs:
             "; installer staged from the payload tree, bottom-up directories last. User",
             "; data (data/, models/, workspace/, sessions/, logs/, any user file) is never",
             "; in this list and survives uninstall by construction. DO NOT EDIT — CI regenerates.",
+            "; v1.10.14-fixed: the file OPENS with the guard define — NSIS keeps defines and",
+            "; macros in separate namespaces, and installer.nsi's !ifdef tests the define.",
+            "!define SHEYTAN_PAYLOAD_UNINSTALL",
             "!macro SHEYTAN_PAYLOAD_UNINSTALL"
           )
           foreach ($f in $files) { $lines += ('  Delete "$INSTDIR\{0}"' -f $f) }
@@ -1708,6 +1715,21 @@ jobs:
             throw "makensis exited with code $LASTEXITCODE (log: ci-logs/win-nsis.log)."
           }
           Add-Content "ci-logs/gate-order.txt" "OK NSIS makensis"
+
+          # UNINSTALL SYMMETRY, compile-proven (run #37 red gate class):
+          # the generated payload-uninstall.nsh opens with its own guard
+          # define and installer.nsi echoes the include marker from inside
+          # the !ifdef. If the marker is absent from the log, the
+          # preprocessor skipped the insert — fail the step instead of
+          # shipping an uninstaller that leaves sheytan-ui.exe and the Qt
+          # tree on disk.
+          $nsisLog = Get-Content "ci-logs/win-nsis.log" -Raw
+          if (-not $nsisLog.Contains("sheytan: payload uninstall list included")) {
+            Add-Content "ci-logs/gate-order.txt" "FAIL NSIS makensis"
+            throw "uninstall-symmetry include marker missing from ci-logs/win-nsis.log — the payload uninstall list did not compile in (run #37 red gate class)."
+          }
+          Write-Host "Uninstall-symmetry include marker present in win-nsis.log."
+
           Add-Content "ci-logs/gate-order.txt" "RUN NSIS post-build contract"
 
           # Post-build assertions: the installer must exist, be non-empty,
@@ -1926,7 +1948,13 @@ jobs:
             Start-Sleep -Milliseconds 500
           }
           if (-not $gone) {
-            throw "silent-uninstall smoke: the payload survived the silent uninstall (uninstall symmetry broken)."
+            # D1/D6: the failure names WHAT survived — capped list, no
+            # dumps — so the anonymous annotation is self-describing.
+            $targets = @("sheytan-ui.exe", "Qt6Core.dll", "SHEYTAN-LA.exe")
+            $survivors = @($targets | Where-Object { Test-Path (Join-Path $instDir $_) })
+            $listed = ($survivors | Select-Object -First 10) -join ", "
+            if ([string]::IsNullOrWhiteSpace($listed)) { $listed = "install root itself survived" }
+            throw ("silent-uninstall smoke: the payload survived the silent uninstall (uninstall symmetry broken). Surviving targets: {0}" -f $listed)
           }
           if (-not (Test-Path $userFile)) {
             throw "silent-uninstall smoke: USER DATA WAS DELETED — the data tree must survive uninstall."
@@ -1937,18 +1965,24 @@ jobs:
 
           Write-Host ("::notice::ci-summary step=silent-install-smoke errors=0/0 | warnings=0/0 | notices=2/2 | installed-boot=verified uninstall-symmetry=verified | installer={0}MB" -f [math]::Round((Get-Item $installer).Length/1MB, 2))
 
+      # v1.10.14-fixed (D7/I11): if: always() — a red run still exposes its
+      # binaries (run #37's artifact table hid the installer and the ZIP
+      # behind the failing uninstall smoke). Display names follow the ONE
+      # naming map.
       - name: Upload Windows installer
+        if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ env.WIN_PKG_ROOT }}-Windows-x64-installer-v${{ env.APP_VERSION }}
+          name: ${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer
           path: dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer.exe
           if-no-files-found: error
           retention-days: 30
 
       - name: Upload Windows package
+        if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ env.WIN_PKG_ROOT }}-Windows-x64-v${{ env.APP_VERSION }}
+          name: ${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64
           path: dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip
           if-no-files-found: error
           retention-days: 30
@@ -2302,6 +2336,51 @@ jobs:
             ci-logs/gate-order.txt
           if-no-files-found: ignore
           retention-days: 14
+
+      # v1.10.14-fixed (D7, D1-compliant): ONE run-summary per job — the
+      # publicly visible $GITHUB_STEP_SUMMARY table: version, the packaged
+      # artifacts with their sizes, the gate chain from gate-order.txt.
+      # Tables, not dumps; missing artifacts print "absent" (this step can
+      # never fail the job); error details stay in the failure-summary step.
+      - name: Run summary (Windows)
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $lines = @()
+          $lines += "## SHEYTAN-LA build summary"
+          $lines += ""
+          $lines += "| Item | Value |"
+          $lines += "| --- | --- |"
+          $lines += ("| Version | ${env:APP_VERSION} |")
+          $lines += ("| Installer | ${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe |")
+          $lines += ("| Windows ZIP | ${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip |")
+          $lines += ""
+          $lines += "| Artifact | Size |"
+          $lines += "| --- | --- |"
+          foreach ($pair in @(
+            @("Installer", "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe"),
+            @("Windows ZIP", "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip")
+          )) {
+            if (Test-Path $pair[1]) {
+              $mb = [math]::Round((Get-Item $pair[1]).Length / 1MB, 2)
+              $lines += ("| {0} | {1} MB |" -f $pair[0], $mb)
+            } else {
+              $lines += ("| {0} | absent |" -f $pair[0])
+            }
+          }
+          $lines += ""
+          $lines += "| Gate chain (ci-logs/gate-order.txt) |"
+          $lines += "| --- |"
+          if (Test-Path "ci-logs/gate-order.txt") {
+            foreach ($g in Get-Content "ci-logs/gate-order.txt") {
+              if ($g.Trim()) { $lines += ("| {0} |" -f $g.Trim()) }
+            }
+          } else {
+            $lines += "| (gate-order.txt not yet written) |"
+          }
+          Add-Content $env:GITHUB_STEP_SUMMARY ($lines -join "`n")
+          Add-Content "ci-logs/gate-order.txt" "OK run summary (Windows)"
 
   build-linux:
     name: Linux x64
@@ -3380,11 +3459,11 @@ jobs:
             "$root/workspace"
 
           cat > "$root/README.txt" <<EOF
-          SHEYTAN-Local-Agent ${APP_VERSION}
+          SHEYTAN-LA ${APP_VERSION}
 
           Portable Linux x64 distribution.
 
-          Keep the complete SHEYTAN-Local-Agent folder together.
+          Keep the complete SHEYTAN-LA folder together.
           EOF
 
           cat > "$root/models/README.txt" <<EOF
@@ -3461,7 +3540,7 @@ jobs:
 
           mkdir -p dist
 
-          zip="dist/${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}.zip"
+          zip="dist/${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip"
 
           rm -f "$zip"
 
@@ -3483,7 +3562,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          zip="dist/${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}.zip"
+          zip="dist/${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip"
 
           test -f "$zip"
           test -s "$zip"
@@ -3549,8 +3628,8 @@ jobs:
       - name: Upload Linux package
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ env.LINUX_PKG_ROOT }}-Linux-x64-v${{ env.APP_VERSION }}
-          path: dist/${{ env.LINUX_PKG_ROOT }}-Linux-x64-v${{ env.APP_VERSION }}.zip
+          name: ${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64
+          path: dist/${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64.zip
           if-no-files-found: error
           retention-days: 30
 
@@ -3562,6 +3641,45 @@ jobs:
           path: ci-logs/*.log
           if-no-files-found: ignore
           retention-days: 14
+
+      # v1.10.14-fixed (D7, D1-compliant): ONE run-summary per job — the
+      # publicly visible $GITHUB_STEP_SUMMARY table: version, the packaged
+      # artifact with its size, the gate chain from gate-order.txt. Tables,
+      # not dumps; a missing artifact prints "absent" (never fails the job).
+      - name: Run summary (Linux)
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## SHEYTAN-LA build summary"
+            echo ""
+            echo "| Item | Value |"
+            echo "| --- | --- |"
+            echo "| Version | ${APP_VERSION} |"
+            echo "| Linux ZIP | ${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip |"
+            echo ""
+            echo "| Artifact | Size |"
+            echo "| --- | --- |"
+            zip_path="dist/${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip"
+            if test -f "$zip_path"; then
+              sz="$(stat -c%s "$zip_path")"
+              mb="$(awk -v s="$sz" 'BEGIN { printf "%.2f", s / 1048576 }')"
+              echo "| Linux ZIP | ${mb} MB |"
+            else
+              echo "| Linux ZIP | absent |"
+            fi
+            echo ""
+            echo "| Gate chain (ci-logs/gate-order.txt) |"
+            echo "| --- |"
+            if test -f ci-logs/gate-order.txt; then
+              while IFS= read -r gate; do
+                test -n "$gate" && echo "| $gate |"
+              done < ci-logs/gate-order.txt
+            else
+              echo "| (gate-order.txt not yet written) |"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+          echo "OK run summary (Linux)" >> ci-logs/gate-order.txt
 
   release:
     name: Publish and verify ${{ github.ref_name }}
@@ -3600,19 +3718,19 @@ jobs:
       - name: Download Windows package
         uses: actions/download-artifact@v7
         with:
-          name: ${{ env.WIN_PKG_ROOT }}-Windows-x64-v${{ env.APP_VERSION }}
+          name: ${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64
           path: dist/windows
 
       - name: Download Windows installer
         uses: actions/download-artifact@v7
         with:
-          name: ${{ env.WIN_PKG_ROOT }}-Windows-x64-installer-v${{ env.APP_VERSION }}
+          name: ${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer
           path: dist/installer
 
       - name: Download Linux package
         uses: actions/download-artifact@v7
         with:
-          name: ${{ env.LINUX_PKG_ROOT }}-Linux-x64-v${{ env.APP_VERSION }}
+          name: ${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64
           path: dist/linux
 
       - name: Verify release ZIP payloads
@@ -3622,7 +3740,7 @@ jobs:
 
           # Artifact names derive from the canonical roots.
           windows_zip_name="${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64.zip"
-          linux_zip_name="${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}.zip"
+          linux_zip_name="${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip"
           installer_name="${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64-installer.exe"
 
           windows="$(find dist/windows -type f -name "$windows_zip_name" -print -quit)"
@@ -3833,11 +3951,44 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
-          # v1.3.3 version-only release identity: the title is the PLAIN
-          # canonical version ("1.3.3"), never the tag, never a product
-          # prefix, never a codename. The tag itself stays "v1.3.3".
-          name: ${{ env.APP_VERSION }}
-          generate_release_notes: true
+          # v1.10.14-fixed (D7): the title carries the product prefix —
+          # "SHEYTAN-LA v{APP_VERSION}". This SUPERSEDES the v1.3.3
+          # bare-version title rule ("the title is the PLAIN canonical
+          # version"): the release page is a product surface now, and the
+          # verify step below asserts the same prefixed identity in
+          # lockstep. The tag itself stays "v{APP_VERSION}".
+          name: SHEYTAN-LA v${{ env.APP_VERSION }}
+          # v1.10.14-fixed (D7): a structured release body replaces the
+          # bare auto-notes — product header, what's new, install links,
+          # verification summary. Fixed strings + APP_VERSION only.
+          body: |
+            SHEYTAN-LA v${{ env.APP_VERSION }} — the local agent, one product, one payload.
+
+            ## What's new in v${{ env.APP_VERSION }}
+
+            - Uninstall symmetry is now compile-proven: the generated
+              uninstall list defines its own guard symbol, the NSIS include
+              is asserted in the build log, and the silent-uninstall smoke
+              names exactly what survived if it ever fails again.
+            - Run-phase error catcher: a desktop interface that closes
+              unexpectedly mid-session now logs a named ERROR line and
+              shows a message box with the reason and the log path — no
+              silent exits, boot or run.
+            - Publishing visuals: one naming map for every artifact and
+              asset, a titled release page with structured notes, and
+              binaries exposed on red runs.
+
+            ## Install
+
+            - Windows: download SHEYTAN-LA-v${{ env.APP_VERSION }}-windows-x64-installer.exe
+              (or the portable SHEYTAN-LA-v${{ env.APP_VERSION }}-windows-x64.zip).
+            - Linux: download SHEYTAN-LA-v${{ env.APP_VERSION }}-linux-x64.zip.
+
+            ## Verification
+
+            - SHA256SUMS.txt names all three published assets.
+            - release-manifest.json is the updater's machine-readable source.
+          generate_release_notes: false
           fail_on_unmatched_files: true
           files: |
             ${{ env.WINDOWS_ZIP }}
@@ -3863,19 +4014,19 @@ jobs:
           echo "$payload"
 
           windows_asset="${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64.zip"
-          linux_asset="${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}.zip"
+          linux_asset="${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip"
           installer_asset="${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64-installer.exe"
 
           echo "$payload" |
             jq -e \
               --arg tag "${GITHUB_REF_NAME}" \
-              --arg version "${APP_VERSION}" \
+              --arg name "SHEYTAN-LA v${APP_VERSION}" \
               --arg windows "$windows_asset" \
               --arg linux "$linux_asset" \
               --arg installer "$installer_asset" \
               '
                 .tagName == $tag and
-                .name == $version and
+                .name == $name and
                 .isDraft == false and
                 .isPrerelease == false and
                 ([.assets[].name] | index($windows)) != null and
@@ -3886,4 +4037,4 @@ jobs:
               ' \
             >/dev/null
 
-          echo "${GITHUB_REF_NAME} release asset + version-only title verification passed."
+          echo "${GITHUB_REF_NAME} release asset + prefixed title verification passed (SHEYTAN-LA v${APP_VERSION})."

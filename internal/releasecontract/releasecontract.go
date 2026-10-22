@@ -22,13 +22,14 @@ import (
 	"strings"
 )
 
-// App roots and executable identity. The Windows app root follows the
-// v1.2.0 short identity (SHEYTAN-LA); the Linux portable root keeps the
-// long historical name because the Linux package layout predates it and
-// the rename is a Windows-only contract change.
+// App roots and executable identity. Both app roots follow the
+// v1.10.14-fixed ONE-naming-map rule (D7/I11): the package roots spell the
+// product identically on the release page. The Linux EXECUTABLE inside the
+// package keeps its long historical name — only the package root, the ZIP
+// name and the artifact display names follow the map.
 const (
 	WindowsAppRoot = "SHEYTAN-LA"
-	LinuxAppRoot   = "SHEYTAN-Local-Agent"
+	LinuxAppRoot   = "SHEYTAN-LA"
 	WindowsExeName = "SHEYTAN-LA.exe"
 	LinuxExeName   = "SHEYTAN-Local-Agent"
 	LauncherScript = "SHEYTAN-LA.bat"
@@ -61,9 +62,9 @@ const (
 type Contract struct {
 	Version string
 
-	// Portable ZIPs.
+	// Portable ZIPs — ONE pattern for every platform: ROOT-vVER-<os>-<arch>.
 	WindowsZip string // SHEYTAN-LA-v1.3.1-windows-x64.zip
-	LinuxZip   string // SHEYTAN-Local-Agent-Linux-x64-v1.2.1.zip
+	LinuxZip   string // SHEYTAN-LA-v1.2.1-linux-x64.zip
 
 	// Windows NSIS installer.
 	WindowsInstaller string // SHEYTAN-LA-v1.3.1-windows-x64-installer.exe
@@ -73,7 +74,7 @@ type Contract struct {
 	// and the package root slot left to the canonical root variables.
 	WindowsZipWorkflowSlot string // ${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip
 	WindowsInstallerSlot   string // ${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe
-	LinuxZipWorkflowSlot   string // ${LINUX_PKG_ROOT}-Linux-x64-v${APP_VERSION}.zip
+	LinuxZipWorkflowSlot   string // ${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip
 }
 
 // For resolves the artifact-name contract for a semantic version (with or
@@ -85,12 +86,12 @@ func For(version string) Contract {
 		Version: v,
 
 		WindowsZip:       fmt.Sprintf("%s-v%s-windows-x64.zip", WindowsAppRoot, v),
-		LinuxZip:         fmt.Sprintf("%s-Linux-x64-v%s.zip", LinuxAppRoot, v),
+		LinuxZip:         fmt.Sprintf("%s-v%s-linux-x64.zip", LinuxAppRoot, v),
 		WindowsInstaller: fmt.Sprintf("%s-v%s-windows-x64-installer.exe", WindowsAppRoot, v),
 
 		WindowsZipWorkflowSlot: WinRootPwsh + "-v${env:APP_VERSION}-windows-x64.zip",
 		WindowsInstallerSlot:   WinRootPwsh + "-v${env:APP_VERSION}-windows-x64-installer.exe",
-		LinuxZipWorkflowSlot:   LinuxRootBash + "-Linux-x64-v${APP_VERSION}.zip",
+		LinuxZipWorkflowSlot:   LinuxRootBash + "-v${APP_VERSION}-linux-x64.zip",
 	}
 }
 
