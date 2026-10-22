@@ -11,9 +11,15 @@ on:
       - main
   workflow_dispatch:
 
+# v1.10.14-fixed (R2/D16) CAPACITY — SUPERSEDE STALE RUNS: a new push
+# cancels the superseded run instead of letting it burn 20+ minutes of
+# runner time to a verdict nobody reads (the run-#38 class). Group from
+# workflow+ref so the same policy covers push/PR/dispatch. Best-effort
+# capacity only: a cancellation can never change, mask or reorder a gate
+# outcome on the run that matters (I16).
 concurrency:
-  group: sheytan-desktop-${{ github.ref }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -87,6 +93,53 @@ env:
   LINUX_PKG_ROOT: "SHEYTAN-LA"
 
 jobs:
+  # v1.10.14-fixed (R2/D16) PREFLIGHT COMPILE GATE — the run-#38 case
+  # study: 21m29s to learn one file did not compile (13m07s Windows and
+  # 14m55s Linux both died in go test, plus audit). This fast ubuntu job
+  # runs the compile gate FIRST; both platform jobs wait on it, so a
+  # compile defect dies in ~2 minutes with ONE red job, not three.
+  # Additive only: the platform jobs' gates, step order and exit
+  # contracts are untouched (I16).
+  preflight:
+    name: Preflight compile gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go 1.26
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Compile gate (go build ./...)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          go version
+
+          # v1.10.14-fixed (R3/D15) FIRST-BYTE CAPTURE: the gate's log
+          # exists (empty) BEFORE the command starts — even a toolchain
+          # failure leaves its log behind (I15).
+          mkdir -p ci-logs
+          : > ci-logs/preflight-build.log
+          echo "RUN go build (preflight)" > ci-logs/gate-order.txt
+
+          go build ./... 2>&1 | tee ci-logs/preflight-build.log
+
+          echo "OK go build (preflight)" >> ci-logs/gate-order.txt
+
+      - name: Upload preflight logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: preflight-verification-logs-attempt${{ github.run_attempt }}
+          path: ci-logs/
+          if-no-files-found: error
+
   audit:
     name: Source & frontend audit
     runs-on: ubuntu-24.04
@@ -407,7 +460,7 @@ jobs:
 
   build-windows:
     name: Windows x64
-    needs: audit
+    needs: [audit, preflight]
     timeout-minutes: 60
 
     # Identity flows from the audit job's runtime resolution of
@@ -2150,6 +2203,20 @@ jobs:
           # (RUN without OK/FAIL = the gate that started and never
           # finished; explicit FAIL = the gate that threw).
           $goLogs = @("win-gofmt.log", "win-go-test-headless.log", "win-go-test-full.log", "win-go-vet.log")
+
+          # v1.10.14-fixed (R3/D15): a gate log that is absent or EMPTY at
+          # failure time is a NAMED instrumentation failure — never silence
+          # (I15). The tee'd logs must exist from their gate's first byte;
+          # a missing one means the gate never started or the capture
+          # wiring is broken, and either way the operator reads it here.
+          foreach ($name in $goLogs) {
+            $p = Join-Path "ci-logs" $name
+            if (-not (Test-Path $p)) {
+              Write-Host "::error::gate produced no log — capture defect: $p absent at failure time"
+            } elseif ((Get-Item $p).Length -eq 0) {
+              Write-Host "::error::gate produced no log — capture defect: $p exists but is EMPTY"
+            }
+          }
           $gateLogMap = @{
             "Qt host cmake configure"   = "ci-logs/win-qt-configure.log"
             "Qt host cmake build"       = "ci-logs/win-qt-build.log"
@@ -2384,7 +2451,7 @@ jobs:
 
   build-linux:
     name: Linux x64
-    needs: audit
+    needs: [audit, preflight]
     timeout-minutes: 50
 
     # Identity flows from the audit job's runtime resolution of
@@ -2636,6 +2703,31 @@ jobs:
           fi
           echo "gofmt: clean"
 
+      # v1.10.14-fixed (R2/D16) PLAYWRIGHT BROWSER CACHE — best-effort:
+      # on a hit the chromium download is skipped; on a miss the path is
+      # byte-identical to the old green one, only slower (I16). The key
+      # is pinned by the lockfile, which pins the Playwright version.
+      # The cache itself never gates: actions/cache failures are
+      # non-fatal and the install step below still runs unconditionally.
+      - name: Cache Playwright browsers
+        id: pwcache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-ms-playwright-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-ms-playwright-
+
+      - name: Playwright cache hit notice
+        if: steps.pwcache.outputs.cache-hit == 'true'
+        shell: bash
+        run: echo "::notice::Playwright browser cache HIT — chromium restore skipped"
+
+      - name: Playwright cache miss notice
+        if: steps.pwcache.outputs.cache-hit != 'true'
+        shell: bash
+        run: echo "::notice::Playwright browser cache MISS — chromium downloads this run (identical green path)"
+
       # v1.5.0 (run 36083843376): the E2E fixture generator is a REAL
       # Python program (e2e/make-e2e-model.py → the canonical GGUF writer
       # in native/engine/tests/reference/make_fixture.py) with a REAL
@@ -2666,6 +2758,16 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           set -euo pipefail
+
+          # v1.10.14-fixed (R3/D15) FIRST-BYTE CAPTURE: both gate logs are
+          # created (empty) at the step's first byte — a failure BEFORE any
+          # tee (the pip install / fixture probe below, a toolchain error)
+          # still leaves its log behind. run #38's Linux job could only say
+          # "E2E produced no build log (the step failed before tee captured
+          # output)" — the file did not exist to even be empty (I15).
+          mkdir -p ci-logs
+          : > ci-logs/e2e-build.log
+          : > ci-logs/e2e-playwright.log
 
           # The fixture generator's dependency is provisioned explicitly
           # (numpy) and proven working before any test executes — the
@@ -2728,7 +2830,7 @@ jobs:
             fi
           }
 
-          if [ -f "$build_log" ]; then
+          if [ -s "$build_log" ]; then
             # v1.10.13 D1: errors-only — the 200-line tail dump is gone;
             # the build log publishes its build-tool error lines instead.
             {
@@ -2738,12 +2840,22 @@ jobs:
               grep -aE '(npm error|error TS[0-9]+|ERROR in |Build failed)' "$build_log" | head -60 || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY" || true
+          elif [ -f "$build_log" ]; then
+            # v1.10.14-fixed (R3/D15): the log EXISTS but carries not one
+            # byte — the gate died before its tee wrote anything. Name the
+            # capture defect; never silence (I15).
+            emit "gate produced no log — capture defect: ci-logs/e2e-build.log exists but is EMPTY (the gate died before its tee wrote a byte)"
           else
-            emit "E2E produced no build log (the step failed before tee captured output) — read the step log and the linux-verification-logs artifact"
+            emit "gate produced no log — capture defect: ci-logs/e2e-build.log absent at failure time (the step died before the log was created)"
           fi
 
-          if [ ! -f "$pw_log" ]; then
+          if [ ! -s "$pw_log" ]; then
             emit "Browser E2E failed BEFORE Playwright ran — the build:e2e stage is the failing gate (e2e-build.log errors are in the step summary)"
+            if [ -f "$pw_log" ]; then
+              emit "gate produced no log — capture defect: ci-logs/e2e-playwright.log exists but is EMPTY"
+            else
+              emit "gate produced no log — capture defect: ci-logs/e2e-playwright.log absent at failure time"
+            fi
           else
             {
               echo ""
@@ -3023,6 +3135,13 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY" || true
             cp -f "$f" "ci-logs/smoke-$base" 2>/dev/null || true
           done
+
+          # v1.10.14-fixed (R3/D15): the smoke started (its work directory
+          # exists) but wrote not one log byte — a named capture defect,
+          # never silence (I15).
+          if ! compgen -G "$work/*.log" > /dev/null; then
+            echo "::error::gate produced no log — capture defect: $work exists but contains no *.log"
+          fi
 
           # v1.10.7 VISIBILITY 2.0: named gate + bounded evidence tails as
           # ::error:: annotations (9 of the 10-per-step budget).

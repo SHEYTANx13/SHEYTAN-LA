@@ -451,3 +451,189 @@ test("every build job publishes ONE success-path run summary", () => {
     "Windows and Linux build jobs each write a '## SHEYTAN-LA build summary' table to $GITHUB_STEP_SUMMARY",
   );
 });
+
+// ---------------------------------------------------------------------------
+// v1.10.14-fixed capacity + log-capture contract (run #39 cycle, D15/D16).
+//
+// RED-FIRST: every assertion below FAILED against the run-#38 tree
+// (4755df8). Run #38 spent 21m29s to learn that one file did not compile:
+// no preflight gate (13-15 minutes per platform to discover a ~2-minute
+// defect), superseded runs kept burning minutes (cancel-in-progress:
+// false), the Playwright browsers redownloaded every run, and the E2E
+// gate could die BEFORE its tee created a single log byte ("E2E produced
+// no build log (the step failed before tee captured output)"). These
+// tests pin the capacity block and the log-first-byte contract so the
+// run-#38 class cannot be committed. Additive only: a cache miss, a
+// cancelled superseded run or a timeout bound must never change, mask
+// or reorder a gate outcome (I16).
+// ---------------------------------------------------------------------------
+
+function jobBlocks() {
+  // Top-level jobs under `jobs:`: 2-space-indented keys, bodies deeper.
+  const lines = loadWorkflow().split("\n");
+  const jobs = [];
+  let inJobs = false;
+  let current = null;
+  for (const line of lines) {
+    if (/^jobs:\s*$/.test(line)) {
+      inJobs = true;
+      continue;
+    }
+    if (inJobs && /^[^\s#]/.test(line)) {
+      inJobs = false;
+      current = null;
+    }
+    if (!inJobs) continue;
+    const start = line.match(/^  ([a-z][a-z0-9-]*):\s*$/);
+    if (start) {
+      current = { name: start[1], body: [] };
+      jobs.push(current);
+      continue;
+    }
+    if (current && /^\s+\S/.test(line)) current.body.push(line);
+  }
+  return jobs;
+}
+
+function jobNeeds(job) {
+  // The needs value: scalar (`needs: audit`) or flow list (`needs: [a, b]`).
+  const line = job.body.find((l) => /^    needs: /.test(l));
+  if (!line) return [];
+  return line
+    .slice("    needs: ".length)
+    .replace(/[[\]]/g, "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+test("superseded runs are cancelled (concurrency group from workflow+ref, cancel-in-progress)", () => {
+  const wf = loadWorkflow();
+  const block = wf.match(/^concurrency:\n((?:  [^\n]*\n?)+)/m);
+  assert.ok(block, "a top-level concurrency block exists");
+  assert.match(
+    block[1],
+    /group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.ref \}\}/,
+    "the group derives from github.workflow + github.ref, not a workflow-specific prefix",
+  );
+  assert.match(
+    block[1],
+    /cancel-in-progress: true/,
+    "a new push supersedes the stale run (run-#38 capacity class)",
+  );
+});
+
+test("a preflight compile gate exists and both platform jobs wait for it", () => {
+  const jobs = jobBlocks();
+  const preflight = jobs.find((j) => j.name === "preflight");
+  assert.ok(preflight, "a preflight job exists");
+  const preflightBody = preflight.body.join("\n");
+  assert.match(
+    preflightBody,
+    /go build \.\/\.\.\./,
+    "preflight runs the compile gate (a compile defect dies in ~2 minutes, not 13-15)",
+  );
+  for (const name of ["build-windows", "build-linux"]) {
+    const job = jobs.find((j) => j.name === name);
+    assert.ok(job, `${name} exists`);
+    const needs = jobNeeds(job);
+    assert.ok(
+      needs.includes("preflight"),
+      `${name} needs preflight (got: [${needs.join(", ")}])`,
+    );
+    assert.ok(
+      needs.includes("audit"),
+      `${name} still needs audit — the preflight wiring is additive (got: [${needs.join(", ")}])`,
+    );
+  }
+});
+
+test("every job is time-bounded (timeout-minutes on each, preflight included)", () => {
+  const jobs = jobBlocks();
+  assert.ok(
+    jobs.some((j) => j.name === "preflight"),
+    "preflight exists (the bound inventory covers it too)",
+  );
+  for (const job of jobs) {
+    assert.match(
+      job.body.join("\n"),
+      /^    timeout-minutes: \d+/m,
+      `job ${job.name} declares timeout-minutes`,
+    );
+  }
+});
+
+test("the Playwright browsers are cached (the E2E gate stops redownloading chromium)", () => {
+  const lines = loadWorkflow().split("\n");
+  const cacheBodies = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/uses: actions\/cache@/.test(lines[i])) {
+      const body = [];
+      for (
+        let j = i + 1;
+        j < lines.length && /^\s{8,}/.test(lines[j]);
+        j++
+      ) {
+        body.push(lines[j].trim());
+      }
+      cacheBodies.push(body.join("\n"));
+    }
+  }
+  const pw = cacheBodies.find((b) => /ms-playwright/.test(b));
+  assert.ok(
+    pw,
+    "an actions/cache step targets the runner's ms-playwright browser path (best-effort: a miss must behave identically, only slower)",
+  );
+  assert.match(pw, /key: /, "the cache declares a key");
+  assert.match(
+    pw,
+    /hashFiles\(['"]package-lock\.json['"]\)/,
+    "the key is pinned by the lockfile (which pins the Playwright version)",
+  );
+});
+
+test("the Linux E2E gate captures its logs from the first byte", () => {
+  const wf = loadWorkflow();
+  const step = wf.match(
+    /- name: Browser E2E \(real application stack\)\n([\s\S]*?)(?=\n      - name: )/,
+  );
+  assert.ok(step, "the Browser E2E step exists");
+  const body = step[1];
+  const firstCommand = body.search(/python3 -m pip install/);
+  assert.ok(firstCommand > 0, "the step body was located (fixture sanity)");
+  for (const log of ["ci-logs/e2e-build.log", "ci-logs/e2e-playwright.log"]) {
+    const eager = body.search(new RegExp(`:\\s*>[^\\n]*${log.replace(/\./g, "\\.")}`));
+    assert.ok(
+      eager >= 0,
+      `${log} is created eagerly (\`: >\`) at the step's first byte`,
+    );
+    assert.ok(
+      eager < firstCommand,
+      `${log} exists BEFORE the first command runs — a pre-tee failure still leaves the log`,
+    );
+  }
+});
+
+test("an absent or empty gate log is a NAMED instrumentation failure, never silence", () => {
+  // I15: every gate leaves a log; a log that never got a byte is a
+  // capture defect and must say so by name (run-#38 Linux class).
+  const wf = loadWorkflow();
+  const hits = [...wf.matchAll(/gate produced no log — capture defect/g)];
+  assert.ok(
+    hits.length >= 2,
+    `the named no-log guard is wired for the E2E summary AND the Windows go-log summary (found ${hits.length})`,
+  );
+});
+
+test("the v1.10.14-fixed workflow contract keeps every heritage fragment intact", () => {
+  // The capacity block is additive: gates, step order and exit contracts
+  // stay byte-identical in intent. Spot-pin the run-#38 heritage rows so
+  // a future "cleanup" cannot ride the capacity commit.
+  const wf = loadWorkflow();
+  assert.match(wf, /uninstall-symmetry include marker missing from ci-logs\/win-nsis\.log/);
+  assert.match(wf, /WIN_PKG_ROOT: "SHEYTAN-LA"/);
+  assert.match(wf, /LINUX_PKG_ROOT: "SHEYTAN-LA"/);
+  assert.match(wf, /- name: Browser E2E \(real application stack\)/);
+  assert.match(wf, /npm run build:e2e 2>&1 \| tee ci-logs\/e2e-build\.log/);
+  assert.match(wf, /npm run test:e2e 2>&1 \| tee ci-logs\/e2e-playwright\.log/);
+});

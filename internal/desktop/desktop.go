@@ -130,12 +130,13 @@ func Run(cfg *config.Config) int {
 	if err != nil {
 		return failBoot("server init", err)
 	}
-	// v1.10.14-fixed (D8): a failed core shutdown is a named ERROR line —
-	// no discarded consequential outcome (I3).
+	// v1.10.14-fixed (D8): the core shutdown is VISIBLE. Close returns
+	// nothing (internal/api/lifecycle.go) — the run-#38 defect captured
+	// it as a value and killed the compile, so the catcher shipped as
+	// dead code. The named Info line after the call is the record.
 	defer func() {
-		if err := srv.Close(); err != nil {
-			logging.Default().Error("desktop", "core shutdown failed: %v", err)
-		}
+		srv.Close()
+		logging.Default().Info("desktop", "server closed")
 	}()
 
 	if err := srv.EnsureSetup(); err != nil {
@@ -159,12 +160,13 @@ func Run(cfg *config.Config) int {
 	if err != nil {
 		return failBoot("ipc serve", err)
 	}
-	// v1.10.14-fixed (D8): a failed IPC stop is a named ERROR line —
-	// no discarded consequential outcome (I3).
+	// v1.10.14-fixed (D8): the IPC stop is VISIBLE. Stop returns
+	// nothing (internal/localipc/serve.go) — the run-#38 defect
+	// captured it as a value and killed the compile. The named Info
+	// line after the call is the record.
 	defer func() {
-		if err := ipc.Stop(); err != nil {
-			logging.Default().Error("desktop", "ipc stop failed: %v", err)
-		}
+		ipc.Stop()
+		logging.Default().Info("desktop", "ipc stopped")
 	}()
 
 	uiPath, err := uiExecutable()
