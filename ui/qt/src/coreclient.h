@@ -38,6 +38,24 @@ class CoreClient : public QObject {
     // and no goal state is kept in QML beyond display.
     Q_PROPERTY(QVariantList goals READ goals NOTIFY goalsChanged)
     Q_PROPERTY(bool canStop READ canStop NOTIFY busyChanged)
+    // v1.10.15-fixed R1 (D28/I21): the Wails-parity state surfaces. Each
+    // property is a PURE IPC read of an EXISTING /api handler — no new
+    // backend endpoint, no second authority; every refresh re-reads the
+    // authoritative source and surfaces a typed error on failure (the
+    // v1.10.3 rule: a failed refresh is never a silent stale panel).
+    Q_PROPERTY(QVariantMap config READ config NOTIFY configChanged)
+    Q_PROPERTY(QVariantMap workspace READ workspace NOTIFY workspaceChanged)
+    Q_PROPERTY(QVariantMap repoIndex READ repoIndex NOTIFY repoIndexChanged)
+    Q_PROPERTY(QVariantList labTasks READ labTasks NOTIFY labTasksChanged)
+    Q_PROPERTY(QVariantList automationTasks READ automationTasks NOTIFY automationTasksChanged)
+    Q_PROPERTY(QVariantList automationArtifacts READ automationArtifacts NOTIFY automationArtifactsChanged)
+    Q_PROPERTY(QVariantList logs READ logs NOTIFY logsChanged)
+    Q_PROPERTY(QVariantList historyHits READ historyHits NOTIFY historyHitsChanged)
+    Q_PROPERTY(QVariantList models READ models NOTIFY modelsChanged)
+    Q_PROPERTY(QVariantMap preflight READ preflight NOTIFY preflightChanged)
+    Q_PROPERTY(QVariantMap governor READ governor NOTIFY governorChanged)
+    Q_PROPERTY(QVariantMap maintenance READ maintenance NOTIFY maintenanceChanged)
+    Q_PROPERTY(QVariantList tools READ tools NOTIFY toolsChanged)
 
 public:
     explicit CoreClient(QObject *parent = nullptr);
@@ -66,6 +84,26 @@ public:
     Q_INVOKABLE void rejectGoal(const QString &id, const QString &approvalId);
     Q_INVOKABLE void refreshApprovals();
     Q_INVOKABLE void resolveApproval(const QString &id, bool approve);
+    // v1.10.15-fixed R1 (D28): Wails-parity invokables. Each maps 1:1 to
+    // an EXISTING /api handler (list + bounded control actions); the
+    // store, the scheduler and the policy stay server-owned.
+    Q_INVOKABLE void refreshWorkspace();
+    Q_INVOKABLE void switchWorkspace(const QString &path);
+    Q_INVOKABLE void revealWorkspace(const QString &path);
+    Q_INVOKABLE void refreshRepoIndex();
+    Q_INVOKABLE void refreshRepoIndexNow();
+    Q_INVOKABLE void refreshLab();
+    Q_INVOKABLE void labRun(const QString &rawJson);
+    Q_INVOKABLE void refreshAutomation();
+    Q_INVOKABLE void automationTaskAction(const QString &id, const QString &action);
+    Q_INVOKABLE void refreshAutomationArtifacts();
+    Q_INVOKABLE void refreshLogs();
+    Q_INVOKABLE void searchHistory(const QString &q, const QString &mode);
+    Q_INVOKABLE void refreshModels();
+    Q_INVOKABLE void refreshPreflight();
+    Q_INVOKABLE void refreshGovernor();
+    Q_INVOKABLE void refreshMaintenance();
+    Q_INVOKABLE void refreshTools();
 
     bool connected() const { return m_connected; }
     bool busy() const { return m_busy; }
@@ -80,6 +118,19 @@ public:
     QVariantList systems() const { return m_systems; }
     QString activeSystemId() const { return m_activeSystemId; }
     QVariantList goals() const { return m_goals; }
+    QVariantMap config() const { return m_config; }
+    QVariantMap workspace() const { return m_workspace; }
+    QVariantMap repoIndex() const { return m_repoIndex; }
+    QVariantList labTasks() const { return m_labTasks; }
+    QVariantList automationTasks() const { return m_automationTasks; }
+    QVariantList automationArtifacts() const { return m_automationArtifacts; }
+    QVariantList logs() const { return m_logs; }
+    QVariantList historyHits() const { return m_historyHits; }
+    QVariantList models() const { return m_models; }
+    QVariantMap preflight() const { return m_preflight; }
+    QVariantMap governor() const { return m_governor; }
+    QVariantMap maintenance() const { return m_maintenance; }
+    QVariantList tools() const { return m_tools; }
     bool canStop() const { return m_busy; }
 
 signals:
@@ -97,6 +148,20 @@ signals:
     void activeSystemIdChanged();
     void goalsChanged();
     void settled(const QString &outcome, const QString &caption);
+    // v1.10.15-fixed R1 (D28): parity-surface change signals.
+    void configChanged();
+    void workspaceChanged();
+    void repoIndexChanged();
+    void labTasksChanged();
+    void automationTasksChanged();
+    void automationArtifactsChanged();
+    void logsChanged();
+    void historyHitsChanged();
+    void modelsChanged();
+    void preflightChanged();
+    void governorChanged();
+    void maintenanceChanged();
+    void toolsChanged();
 
 private:
     // --- IPC plumbing ---
@@ -140,6 +205,19 @@ private:
     QVariantList m_systems;
     QString m_activeSystemId;
     QVariantList m_goals;
+    QVariantMap m_config;
+    QVariantMap m_workspace;
+    QVariantMap m_repoIndex;
+    QVariantList m_labTasks;
+    QVariantList m_automationTasks;
+    QVariantList m_automationArtifacts;
+    QVariantList m_logs;
+    QVariantList m_historyHits;
+    QVariantList m_models;
+    QVariantMap m_preflight;
+    QVariantMap m_governor;
+    QVariantMap m_maintenance;
+    QVariantList m_tools;
 
     // activity WS state
     QLocalSocket *m_wsSock = nullptr;

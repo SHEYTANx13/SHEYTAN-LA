@@ -72,6 +72,18 @@ private slots:
     // production Main.qml loads in a real engine, offscreen, and creates
     // its root object. The interactive QML journey is future work.
     void qmlLoadsCleanly();
+    // v1.10.15-fixed R1 (D28/I21): the Wails-parity surface assertions —
+    // every landed manifest row names its gate here. Loading the shell
+    // proves the seven-view chrome; per-view loads prove each parity
+    // surface creates over the registered Core singleton.
+    void navChromeSevenViewsLoad();
+    void settingsEightSectionsAllFields();
+    void agentViewLoads();
+    void workspaceViewLoads();
+    void labViewLoads();
+    void automationViewLoads();
+    void systemViewLoads();
+    void extrasSurfacesLoad();
     // v1.10.3 framing + contract suite (byte-level CoreClient rules against
     // a raw hand-written HTTP fake; the REAL-core slots above prove live
     // behavior, these prove the framing/handshake/encoding contract):
@@ -969,6 +981,247 @@ void Acceptance::qmlLoadsCleanly() {
              "the production Main.qml must create a non-empty rootObjects() list");
     QVERIFY2(qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst()) != nullptr,
              "the production Main.qml root must be a QQuickWindow");
+}
+
+// ============================================================================
+// v1.10.15-fixed R1 (D28/I21) — Wails-parity surface gates
+//
+// Every landed parity-manifest row names its gate here. The shell load
+// proves the seven-view navigation chrome; the per-view loads prove each
+// parity surface creates over the registered Core singleton with its
+// declared objectName; the settings gate proves the full eight-section
+// FIELD_PLACEMENT census. These are creation-and-wiring gates — the
+// hosted Qt run (compile + acceptance over the real core) is the
+// authoritative proof (I20/I21).
+// ============================================================================
+
+// findParityQml resolves a production QML file exactly the way
+// qmlLoadsCleanly resolves Main.qml: SHEYTAN_REPO first, then the
+// build-tree layout. Empty result = the environment cannot reach the
+// production surface — the slot SKIPS honestly (NOT RUN), never fakes.
+static QString findParityQml(const QString &name) {
+    const QString repo = qEnvironmentVariable("SHEYTAN_REPO");
+    QList<QString> candidates;
+    if (!repo.isEmpty())
+        candidates << (repo + QStringLiteral("/ui/qt/qml/") + name);
+    candidates << (QCoreApplication::applicationDirPath()
+                   + QStringLiteral("/../qml/") + name);
+    for (const QString &c : candidates)
+        if (QFileInfo::exists(c)) return c;
+    return QString();
+}
+
+// registerCoreSingleton registers the CoreClient singleton ONCE for the
+// whole process (the same wiring qmlLoadsCleanly mirrors from main.cpp).
+// Repeated registration with identical arguments would also work, but the
+// guard keeps the fixture deterministic.
+static void registerCoreSingleton() {
+    static bool done = false;
+    if (!done) {
+        qmlRegisterSingletonInstance("sheytan.ui", 1, 0, "Core", new CoreClient());
+        done = true;
+    }
+}
+
+void Acceptance::navChromeSevenViewsLoad() {
+    const QString mainQml = findParityQml(QStringLiteral("Main.qml"));
+    if (mainQml.isEmpty())
+        QSKIP("production QML not reachable (no SHEYTAN_REPO, no build-tree layout) — NOT RUN");
+
+    QQmlApplicationEngine engine;
+    registerCoreSingleton();
+    bool creationFailed = false;
+    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
+                     [&creationFailed]() { creationFailed = true; });
+    engine.load(QUrl::fromLocalFile(mainQml));
+
+    QVERIFY2(!creationFailed,
+             qPrintable(QStringLiteral("the production Main.qml failed to create objects (nav chrome): %1")
+                            .arg(mainQml)));
+    QVERIFY2(!engine.rootObjects().isEmpty(),
+             "the shell must create its root window");
+    QObject *win = engine.rootObjects().constFirst();
+    QVERIFY2(qobject_cast<QQuickWindow *>(win) != nullptr,
+             "the shell root must be a QQuickWindow");
+
+    // The navigation contract: the SAME seven views as src/workspace.ts,
+    // same ids, same order.
+    const QStringList navViews = win->property("navViews").toStringList();
+    QCOMPARE(navViews.size(), 7);
+    const QStringList expected = {QStringLiteral("chat"), QStringLiteral("agent"),
+                                  QStringLiteral("workspace"), QStringLiteral("lab"),
+                                  QStringLiteral("automation"), QStringLiteral("system"),
+                                  QStringLiteral("settings")};
+    QCOMPARE(navViews, expected);
+
+    // Every tab button must exist and navigate (the chrome wires
+    // currentView; the StackLayout binds currentIndex to it).
+    for (const QString &id : expected) {
+        QObject *btn = win->findChild<QObject *>(QStringLiteral("nav-") + id);
+        QVERIFY2(btn != nullptr,
+                 qPrintable(QStringLiteral("nav button missing for view: %1").arg(id)));
+    }
+    const QVariant stack = win->property("currentViewIndex");
+    QVERIFY2(stack.isValid(), "the shell must expose the currentViewIndex binding");
+}
+
+void Acceptance::settingsEightSectionsAllFields() {
+    const QString qml = findParityQml(QStringLiteral("SettingsView.qml"));
+    if (qml.isEmpty())
+        QSKIP("production QML not reachable (no SHEYTAN_REPO, no build-tree layout) — NOT RUN");
+
+    QQmlApplicationEngine engine;
+    registerCoreSingleton();
+    bool creationFailed = false;
+    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
+                     [&creationFailed]() { creationFailed = true; });
+    engine.load(QUrl::fromLocalFile(qml));
+
+    QVERIFY2(!creationFailed,
+             qPrintable(QStringLiteral("SettingsView.qml failed to create: %1").arg(qml)));
+    QVERIFY2(!engine.rootObjects().isEmpty(), "SettingsView must create its root object");
+    QObject *rootObj = engine.rootObjects().constFirst();
+    QCOMPARE(rootObj->objectName(), QStringLiteral("settingsView"));
+
+    // The eight-section IA (src/settings-sections.ts SETTINGS_SECTIONS).
+    QCOMPARE(rootObj->property("sectionCount").toInt(), 8);
+
+    // Every FIELD_PLACEMENT field must be present in the view's
+    // declarative registry — the full 72-field census.
+    const QVariantList keys = rootObj->property("allFieldKeys").toList();
+    QVERIFY2(keys.size() >= 72,
+             qPrintable(QStringLiteral("the settings registry must carry the full FIELD_PLACEMENT census (found %1)")
+                            .arg(keys.size())));
+    QList<QVariant> got;
+    for (const QVariant &k : keys) got << k;
+    const char *census[] = {
+        "llamaAutoStart", "smoothStream", "showPerfHud", "targetFps",
+        "provider", "model", "remoteBaseUrl", "remoteModel", "visionEnabled",
+        "numCtx", "historyWindowPct", "continuumEnabled", "performanceMode",
+        "maxIterations", "parallelTools", "thinkingMode", "recallEnabled",
+        "recallTopK", "enabledTools", "labEnabled", "labKeepWorkspaces",
+        "labAllowNetwork", "sandboxEnabled",
+        "researchEnabled", "researchBackend", "researchSearxngUrl",
+        "researchMaxResults", "researchGitHub", "researchReddit", "researchWeb",
+        "updateSchedule",
+        "llamaBinPath", "llamaHost", "llamaPort", "llamaExtraArgs", "llmBaseUrl",
+        "modelsDir", "visionMmproj", "visionMmprojOffload", "flashAttention",
+        "gpuAutoOffload", "mlock", "cacheReuse", "ubatchSize", "threadsBatch",
+        "kvCacheQuant", "draftModel", "sandboxMemory", "sandboxCPU",
+        "maxWorkspaceMb", "maxSessionsKept", "maxLogMb", "labWorkspaceRoot",
+        "labCommandTimeoutSec", "labMaxIterations", "runTimeoutMinutes",
+        "attachmentsBudgetKb", "multiAgentDepth", "researchTimeoutSec",
+        "researchCacheTtlMin", "researchUserAgent", "browserExecutablePath",
+        "browserSlowMoMs", "browserHeadless", "browserSlowMoMsAlias",
+        "temperature", "topP", "topK", "minP", "maxTokens", "repeatPenalty", "seed",
+    };
+    for (const char *key : census) {
+        QVERIFY2(got.contains(QVariant(QString::fromLatin1(key))),
+                 qPrintable(QStringLiteral("settings registry is missing FIELD_PLACEMENT key: %1").arg(key)));
+    }
+}
+
+// One generic creation gate for the five parity views. Each asserts the
+// view creates over the registered Core singleton and exposes its
+// contract objectName.
+void Acceptance::agentViewLoads() {
+    const QString qml = findParityQml(QStringLiteral("AgentView.qml"));
+    if (qml.isEmpty())
+        QSKIP("production QML not reachable (no SHEYTAN_REPO, no build-tree layout) — NOT RUN");
+    QQmlApplicationEngine engine;
+    registerCoreSingleton();
+    bool creationFailed = false;
+    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
+                     [&creationFailed]() { creationFailed = true; });
+    engine.load(QUrl::fromLocalFile(qml));
+    QVERIFY2(!creationFailed, "AgentView.qml failed to create (agent parity row)");
+    QVERIFY2(!engine.rootObjects().isEmpty(), "AgentView must create its root object");
+    QCOMPARE(engine.rootObjects().constFirst()->objectName(), QStringLiteral("agentView"));
+}
+
+void Acceptance::workspaceViewLoads() {
+    const QString qml = findParityQml(QStringLiteral("WorkspaceView.qml"));
+    if (qml.isEmpty())
+        QSKIP("production QML not reachable (no SHEYTAN_REPO, no build-tree layout) — NOT RUN");
+    QQmlApplicationEngine engine;
+    registerCoreSingleton();
+    bool creationFailed = false;
+    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
+                     [&creationFailed]() { creationFailed = true; });
+    engine.load(QUrl::fromLocalFile(qml));
+    QVERIFY2(!creationFailed, "WorkspaceView.qml failed to create (workspace parity row)");
+    QVERIFY2(!engine.rootObjects().isEmpty(), "WorkspaceView must create its root object");
+    QCOMPARE(engine.rootObjects().constFirst()->objectName(), QStringLiteral("workspaceView"));
+}
+
+void Acceptance::labViewLoads() {
+    const QString qml = findParityQml(QStringLiteral("LabView.qml"));
+    if (qml.isEmpty())
+        QSKIP("production QML not reachable (no SHEYTAN_REPO, no build-tree layout) — NOT RUN");
+    QQmlApplicationEngine engine;
+    registerCoreSingleton();
+    bool creationFailed = false;
+    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
+                     [&creationFailed]() { creationFailed = true; });
+    engine.load(QUrl::fromLocalFile(qml));
+    QVERIFY2(!creationFailed, "LabView.qml failed to create (lab parity row)");
+    QVERIFY2(!engine.rootObjects().isEmpty(), "LabView must create its root object");
+    QCOMPARE(engine.rootObjects().constFirst()->objectName(), QStringLiteral("labView"));
+}
+
+void Acceptance::automationViewLoads() {
+    const QString qml = findParityQml(QStringLiteral("AutomationView.qml"));
+    if (qml.isEmpty())
+        QSKIP("production QML not reachable (no SHEYTAN_REPO, no build-tree layout) — NOT RUN");
+    QQmlApplicationEngine engine;
+    registerCoreSingleton();
+    bool creationFailed = false;
+    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
+                     [&creationFailed]() { creationFailed = true; });
+    engine.load(QUrl::fromLocalFile(qml));
+    QVERIFY2(!creationFailed, "AutomationView.qml failed to create (automation parity row)");
+    QVERIFY2(!engine.rootObjects().isEmpty(), "AutomationView must create its root object");
+    QCOMPARE(engine.rootObjects().constFirst()->objectName(), QStringLiteral("automationView"));
+}
+
+void Acceptance::systemViewLoads() {
+    const QString qml = findParityQml(QStringLiteral("SystemView.qml"));
+    if (qml.isEmpty())
+        QSKIP("production QML not reachable (no SHEYTAN_REPO, no build-tree layout) — NOT RUN");
+    QQmlApplicationEngine engine;
+    registerCoreSingleton();
+    bool creationFailed = false;
+    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
+                     [&creationFailed]() { creationFailed = true; });
+    engine.load(QUrl::fromLocalFile(qml));
+    QVERIFY2(!creationFailed, "SystemView.qml failed to create (system parity row)");
+    QVERIFY2(!engine.rootObjects().isEmpty(), "SystemView must create its root object");
+    QCOMPARE(engine.rootObjects().constFirst()->objectName(), QStringLiteral("systemView"));
+}
+
+void Acceptance::extrasSurfacesLoad() {
+    // The extras rows: History, ModelPicker, MyTools, LogViewer,
+    // PerfStrip. Each must create standalone over the Core singleton.
+    const QStringList extras = {
+        QStringLiteral("HistoryDrawer.qml"), QStringLiteral("ModelPickerDrawer.qml"),
+        QStringLiteral("MyToolsDrawer.qml"), QStringLiteral("LogViewerDrawer.qml"),
+        QStringLiteral("PerfStrip.qml"),
+    };
+    for (const QString &name : extras) {
+        const QString qml = findParityQml(name);
+        if (qml.isEmpty())
+            QSKIP(qPrintable(QStringLiteral("production QML not reachable for %1 — NOT RUN").arg(name)));
+        QQmlApplicationEngine engine;
+        registerCoreSingleton();
+        bool creationFailed = false;
+        QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
+                         [&creationFailed]() { creationFailed = true; });
+        engine.load(QUrl::fromLocalFile(qml));
+        QVERIFY2(!creationFailed,
+                 qPrintable(QStringLiteral("%1 failed to create (extras parity row)").arg(name)));
+        QVERIFY2(!engine.rootObjects().isEmpty(),
+                 qPrintable(QStringLiteral("%1 must create its root object").arg(name)));
+    }
 }
 
 // ============================================================================

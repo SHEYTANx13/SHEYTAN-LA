@@ -64,6 +64,20 @@ QVariantList toList(const QByteArray &json, const char *field, bool *ok = nullpt
     return l;
 }
 
+// toListRoot parses a BARE JSON ARRAY root (the /api/automation/tasks,
+// /api/history/search, /api/models, /api/custom-tools and artifact list
+// handlers answer with a bare array — the shapes are mirrored from the Go
+// handlers, never invented here).
+QVariantList toListRoot(const QByteArray &json, bool *ok = nullptr) {
+    QJsonParseError err;
+    const auto doc = QJsonDocument::fromJson(json, &err);
+    bool parsed = err.error == QJsonParseError::NoError && doc.isArray();
+    QVariantList l;
+    if (parsed) l = doc.array().toVariantList();
+    if (ok) *ok = parsed;
+    return l;
+}
+
 } // namespace
 
 QLocalSocket *CoreClient::openSocket() {
@@ -437,16 +451,36 @@ void CoreClient::stop() {
             [this](int, const QByteArray &) {}, 5000);
 }
 
-// Not migrated on purpose (v1.10.3 honesty note): the settings surface
-// carries NO live config values — refreshConfig is an explicit stub and the
-// QML renders no config property, so nothing here can claim data it does
-// not have. Loading /api/config happens with the settings migration only.
-void CoreClient::refreshConfig() {}
+// v1.10.15-fixed R1 (D28/I21): the settings surface READS the ONE config
+// source. refreshConfig GETs /api/config (the redacted view the server
+// already serves the Wails UI) into the config property; the QML renders
+// only what the server sent — no local defaults, no second authority.
+// Edits go through the existing patchConfig (POST /api/config); the
+// accepted patch is re-read from the source (configChanged after PATCH).
+void CoreClient::refreshConfig() {
+    request("GET", "/api/config", QByteArray(), [this](int status, const QByteArray &body) {
+        if (status != 200) {
+            setError(QStringLiteral("config refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        bool ok = false;
+        const QVariantMap m = toMap(body, &ok);
+        if (!ok) {
+            setError(QStringLiteral("config refresh failed (malformed payload)"));
+            return;
+        }
+        m_config = m;
+        emit configChanged();
+    });
+}
 
 void CoreClient::patchConfig(const QVariantMap &patch) {
     request("POST", "/api/config", QJsonDocument(QJsonObject::fromVariantMap(patch)).toJson(),
             [this](int status, const QByteArray &) {
                 if (status != 200) setError(QStringLiteral("config update failed (status %1)").arg(status));
+                // The server is the authority: re-read the redacted config
+                // either way, so the UI never drifts from the store.
+                refreshConfig();
             });
 }
 
@@ -593,6 +627,284 @@ static void sendWsFrameControl(QLocalSocket *sock, quint8 opcode, const QByteArr
     for (int i = 0; i < n; ++i)
         frame[frame.size() - n + i] = char(frame[frame.size() - n + i] ^ mk[i % 4]);
     sock->write(frame);
+}
+
+// --- v1.10.15-fixed R1 (D28/I21): Wails-parity surfaces ---------------------
+//
+// ONE glue section for the Qt parity views. Every method maps 1:1 to an
+// EXISTING /api handler (the wire shapes are mirrored from the Go source,
+// never invented); the stores, the scheduler and the policy stay
+// server-owned. Each failed refresh is a TYPED, visible error (the
+// v1.10.3 rule) and each accepted action re-reads the authoritative list.
+
+void CoreClient::refreshWorkspace() {
+    request("GET", "/api/workspace", QByteArray(), [this](int status, const QByteArray &body) {
+        if (status != 200) {
+            setError(QStringLiteral("workspace refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        bool ok = false;
+        const QVariantMap m = toMap(body, &ok);
+        if (!ok) {
+            setError(QStringLiteral("workspace refresh failed (malformed payload)"));
+            return;
+        }
+        m_workspace = m;
+        emit workspaceChanged();
+    });
+}
+
+void CoreClient::switchWorkspace(const QString &path) {
+    if (path.trimmed().isEmpty()) return;
+    QJsonObject payload{{"path", path}};
+    request("POST", "/api/workspace/switch", QJsonDocument(payload).toJson(),
+            [this](int status, const QByteArray &body) {
+                if (status != 200) {
+                    setError(QStringLiteral("workspace switch failed (%1)").arg(transportReason(status, body)));
+                    return;
+                }
+                refreshWorkspace();
+            });
+}
+
+void CoreClient::revealWorkspace(const QString &path) {
+    QJsonObject payload{{"path", path}};
+    request("POST", "/api/workspace/reveal", QJsonDocument(payload).toJson(),
+            [this](int status, const QByteArray &body) {
+                if (status != 200) {
+                    setError(QStringLiteral("workspace reveal failed (%1)").arg(transportReason(status, body)));
+                }
+            });
+}
+
+void CoreClient::refreshRepoIndex() {
+    request("GET", "/api/repo/index", QByteArray(), [this](int status, const QByteArray &body) {
+        if (status != 200) {
+            setError(QStringLiteral("repo index refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        bool ok = false;
+        const QVariantMap m = toMap(body, &ok);
+        if (!ok) {
+            setError(QStringLiteral("repo index refresh failed (malformed payload)"));
+            return;
+        }
+        m_repoIndex = m;
+        emit repoIndexChanged();
+    });
+}
+
+void CoreClient::refreshRepoIndexNow() {
+    request("POST", "/api/repo/index/refresh", QByteArray(), [this](int status, const QByteArray &) {
+        if (status != 200) {
+            setError(QStringLiteral("repo re-index failed (status %1)").arg(status));
+            return;
+        }
+        refreshRepoIndex();
+    });
+}
+
+void CoreClient::refreshLab() {
+    request("GET", "/api/lab", QByteArray(), [this](int status, const QByteArray &body) {
+        if (status != 200) {
+            setError(QStringLiteral("lab refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        bool ok = false;
+        const QVariantList l = toList(body, "tasks", &ok);
+        if (!ok) {
+            setError(QStringLiteral("lab refresh failed (malformed payload)"));
+            return;
+        }
+        m_labTasks = l;
+        emit labTasksChanged();
+    });
+}
+
+void CoreClient::labRun(const QString &rawJson) {
+    request("POST", "/api/lab", rawJson.toUtf8(), [this](int status, const QByteArray &body) {
+        if (status != 200) {
+            setError(QStringLiteral("lab request failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        refreshLab();
+    });
+}
+
+void CoreClient::refreshAutomation() {
+    request("GET", "/api/automation/tasks", QByteArray(), [this](int status, const QByteArray &body) {
+        if (status != 200) {
+            setError(QStringLiteral("automation refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        bool ok = false;
+        const QVariantList l = toListRoot(body, &ok);
+        if (!ok) {
+            setError(QStringLiteral("automation refresh failed (malformed payload)"));
+            return;
+        }
+        m_automationTasks = l;
+        emit automationTasksChanged();
+    });
+}
+
+void CoreClient::automationTaskAction(const QString &id, const QString &action) {
+    if (id.isEmpty()) return;
+    if (action != QStringLiteral("pause") && action != QStringLiteral("resume")
+            && action != QStringLiteral("cancel") && action != QStringLiteral("run")) {
+        setError(QStringLiteral("automation action refused (unknown action)"));
+        return;
+    }
+    request("POST", QStringLiteral("/api/automation/tasks/%1/%2").arg(encodeSegment(id), action),
+            QByteArray(), [this](int status, const QByteArray &body) {
+                if (status != 200) {
+                    setError(QStringLiteral("automation action failed (%1)").arg(transportReason(status, body)));
+                    return;
+                }
+                refreshAutomation();
+            });
+}
+
+void CoreClient::refreshAutomationArtifacts() {
+    request("GET", "/api/automation/artifacts", QByteArray(), [this](int status, const QByteArray &body) {
+        if (status != 200) {
+            setError(QStringLiteral("artifacts refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        bool ok = false;
+        const QVariantList l = toListRoot(body, &ok);
+        if (!ok) {
+            setError(QStringLiteral("artifacts refresh failed (malformed payload)"));
+            return;
+        }
+        m_automationArtifacts = l;
+        emit automationArtifactsChanged();
+    });
+}
+
+void CoreClient::refreshLogs() {
+    request("GET", QStringLiteral("/api/logs?limit=%1").arg(200), QByteArray(),
+            [this](int status, const QByteArray &body) {
+                if (status != 200) {
+                    setError(QStringLiteral("logs refresh failed (%1)").arg(transportReason(status, body)));
+                    return;
+                }
+                bool ok = false;
+                const QVariantList l = toList(body, "entries", &ok);
+                if (!ok) {
+                    setError(QStringLiteral("logs refresh failed (malformed payload)"));
+                    return;
+                }
+                m_logs = l;
+                emit logsChanged();
+            });
+}
+
+void CoreClient::searchHistory(const QString &q, const QString &mode) {
+    // GET /api/history/search?q=&mode=&limit= — the server returns a bare
+    // array of hits; the search terms are percent-encoded segments.
+    const QString path = QStringLiteral("/api/history/search?limit=20")
+        + (q.isEmpty() ? QString() : QStringLiteral("&q=") + encodeSegment(q))
+        + (mode.isEmpty() ? QString() : QStringLiteral("&mode=") + encodeSegment(mode));
+    request("GET", path, QByteArray(), [this](int status, const QByteArray &body) {
+        if (status != 200) {
+            setError(QStringLiteral("history search failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        bool ok = false;
+        const QVariantList l = toListRoot(body, &ok);
+        if (!ok) {
+            setError(QStringLiteral("history search failed (malformed payload)"));
+            return;
+        }
+        m_historyHits = l;
+        emit historyHitsChanged();
+    });
+}
+
+void CoreClient::refreshModels() {
+    request("GET", "/api/models", QByteArray(), [this](int status, const QByteArray &body) {
+        if (status != 200) {
+            setError(QStringLiteral("models refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        bool ok = false;
+        const QVariantList l = toListRoot(body, &ok);
+        if (!ok) {
+            setError(QStringLiteral("models refresh failed (malformed payload)"));
+            return;
+        }
+        m_models = l;
+        emit modelsChanged();
+    });
+}
+
+void CoreClient::refreshPreflight() {
+    request("GET", "/api/preflight", QByteArray(), [this](int status, const QByteArray &body) {
+        if (status != 200) {
+            setError(QStringLiteral("preflight refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        bool ok = false;
+        const QVariantMap m = toMap(body, &ok);
+        if (!ok) {
+            setError(QStringLiteral("preflight refresh failed (malformed payload)"));
+            return;
+        }
+        m_preflight = m;
+        emit preflightChanged();
+    });
+}
+
+void CoreClient::refreshGovernor() {
+    request("GET", "/api/governor", QByteArray(), [this](int status, const QByteArray &body) {
+        if (status != 200) {
+            setError(QStringLiteral("governor refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        bool ok = false;
+        const QVariantMap m = toMap(body, &ok);
+        if (!ok) {
+            setError(QStringLiteral("governor refresh failed (malformed payload)"));
+            return;
+        }
+        m_governor = m;
+        emit governorChanged();
+    });
+}
+
+void CoreClient::refreshMaintenance() {
+    request("GET", "/api/maintenance", QByteArray(), [this](int status, const QByteArray &body) {
+        if (status != 200) {
+            setError(QStringLiteral("maintenance refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        bool ok = false;
+        const QVariantMap m = toMap(body, &ok);
+        if (!ok) {
+            setError(QStringLiteral("maintenance refresh failed (malformed payload)"));
+            return;
+        }
+        m_maintenance = m;
+        emit maintenanceChanged();
+    });
+}
+
+void CoreClient::refreshTools() {
+    request("GET", "/api/custom-tools", QByteArray(), [this](int status, const QByteArray &body) {
+        if (status != 200) {
+            setError(QStringLiteral("tools refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        bool ok = false;
+        const QVariantList l = toListRoot(body, &ok);
+        if (!ok) {
+            setError(QStringLiteral("tools refresh failed (malformed payload)"));
+            return;
+        }
+        m_tools = l;
+        emit toolsChanged();
+    });
 }
 
 void CoreClient::openActivityStream() {

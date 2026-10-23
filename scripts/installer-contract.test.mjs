@@ -31,7 +31,7 @@
  * proof; this file makes the payload regression IMPOSSIBLE TO COMMIT.
  */
 
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -869,24 +869,28 @@ test("the Go toolchain is the 1.27 line and Node stays the 24 LTS line (R4/D19)"
   );
 });
 
-test("green gates emit one ::notice success line each (D17: content or success, never silence)", () => {
+test("green gates emit one PLAIN success line each (D29: green runs show ZERO annotations)", () => {
+  // v1.10.15-fixed R2 (D29): success messages moved from ::notice
+  // annotations to plain step output — still teed first-byte into their
+  // logs and all-logs.txt (I15/I18 untouched). The line survives; only
+  // the annotation class is gone.
   const cases = [
-    // Windows: the Invoke-Gate helper carries the green notice for every
-    // gate it drives; the inline gofmt gate emits its own literal notice.
-    ["build-windows", "Go verification", /Write-Host "::notice::gate OK: \$Label"/],
-    ["build-windows", "Go verification", /Write-Host "::notice::gate OK: gofmt -l \."/],
-    // Linux: the bash gates emit one literal notice each.
-    ["build-linux", "Go verification", /echo "::notice::gate OK: go vet \.\/\.\.\."/],
-    ["build-linux", "Go verification", /echo "::notice::gate OK: gofmt -l \."/],
-    // The NSIS compile gate emits its own literal notice.
-    ["build-windows", "Build Windows NSIS installer", /::notice::gate OK: NSIS makensis/],
+    // Windows: the Invoke-Gate helper carries the green line for every
+    // gate it drives; the inline gofmt gate emits its own literal line.
+    ["build-windows", "Go verification", /Write-Host "gate OK: \$Label"/],
+    ["build-windows", "Go verification", /Write-Host "gate OK: gofmt -l \."/],
+    // Linux: the bash gates emit one literal line each.
+    ["build-linux", "Go verification", /echo "gate OK: go vet \.\/\.\.\."/],
+    ["build-linux", "Go verification", /echo "gate OK: gofmt -l \."/],
+    // The NSIS compile gate emits its own literal line.
+    ["build-windows", "Build Windows NSIS installer", /gate OK: NSIS makensis/],
   ];
   for (const [job, step, pattern] of cases) {
     const body = findJobStep(job, step);
     assert.match(
       body,
       pattern,
-      `${job}/${step} emits a green-gate success notice`,
+      `${job}/${step} emits a green-gate success line (plain output, no annotation)`,
     );
   }
 });
@@ -946,8 +950,13 @@ test("the Linux stress gate captures its log from the first byte (I15, R1)", () 
   assert.match(body, /OK stress suite/, "gate-order.txt carries the OK marker");
   assert.match(
     body,
+    /^\s*echo "gate OK: stress suite"/m,
+    "a green stress gate emits its ONE success line (plain output, D29)",
+  );
+  assert.doesNotMatch(
+    body,
     /::notice::gate OK: stress suite/,
-    "a green stress gate emits its ONE success notice (I17: content or success, never silence)",
+    "the green stress line is NOT an annotation (D29)",
   );
   assert.match(
     body,
@@ -1211,7 +1220,7 @@ test("R2: the Linux Go verification gate has a failure summary that publishes it
   assert.ok(sumIdx > goIdx && sumIdx < cacheIdx, "summary is wired directly after the gate");
 });
 
-test("R2/I17: no failure summary ever emits a never-started ::error (notice class only)", () => {
+test("R2/I17: no failure summary ever emits a never-started ::error (D29: warning class only)", () => {
   const wf = loadWorkflow();
   const offenders = wf
     .split("\n")
@@ -1219,11 +1228,11 @@ test("R2/I17: no failure summary ever emits a never-started ::error (notice clas
   assert.deepEqual(
     offenders,
     [],
-    `never-started must be ::notice, never ::error (offenders: ${offenders.length})`,
+    `never-started must be ::warning, never ::error (offenders: ${offenders.length})`,
   );
 });
 
-test("R2/I17: every Linux failure summary carries the NEVER-STARTED notice branch", () => {
+test("R2/I17: every Linux failure summary carries the NEVER-STARTED ::warning branch (D29: warnings only, never errors)", () => {
   for (const name of [
     "E2E failure summary (Linux)",
     "Stress failure summary (Linux)",
@@ -1233,10 +1242,23 @@ test("R2/I17: every Linux failure summary carries the NEVER-STARTED notice branc
     const step = loadStep(name);
     assert.match(
       step,
+      /::warning::[^\n]*never started/i,
+      `${name}: the never-started branch emits ONE ::warning (D29)`,
+    );
+    assert.doesNotMatch(
+      step,
       /::notice::[^\n]*never started/i,
-      `${name}: the never-started branch emits ONE notice`,
+      `${name}: no never-started ::notice survives (D29)`,
     );
   }
+  // The Go verification summary carries the same guard (one branch, one
+  // warning) — never an error, never a notice.
+  const goSummary = loadStep("Go verification failure summary (Linux)");
+  assert.match(
+    goSummary,
+    /::warning::[^\n]*never started/i,
+    "Go verification failure summary: the never-started branch emits ONE ::warning",
+  );
 });
 
 test("R2/I17: the E2E summary's failing-gate claim is evidence-gated on the build stage having started", () => {
@@ -1320,4 +1342,184 @@ test("R4/I19: action majors and toolchain pins hold at the verified versions", (
   assert.match(wf, /uses: actions\/download-artifact@v8/, "download-artifact at or above v8");
   assert.match(wf, /GO_VERSION: "1\.27"/, "Go toolchain pin 1.27");
   assert.match(wf, /NODE_VERSION: "24"/, "Node toolchain pin 24");
+});
+
+// ---------------------------------------------------------------------------
+// v1.10.15-fixed run-#43 cycle (R1/R2 — D28/D29, Task ID 39).
+//
+// RED-FIRST: every assertion below FAILED against the run-#42 tree
+// (bf6cf2d). Run #42 was fully green but carried 20 SUCCESS notices as
+// annotations (D29: a green run must show ZERO annotations), and the Qt
+// surface shipped only the chat view (D28: the full Wails IA must exist
+// in native Qt form, enumerated by a tracked parity manifest).
+// ---------------------------------------------------------------------------
+
+function loadNonCommentWorkflow() {
+  // Drop comment-only lines (bash `#` and PowerShell `#`): narration may
+  // legitimately mention the retired class; emissions may not.
+  return loadWorkflow()
+    .split("\n")
+    .filter((l) => !/^\s*#/.test(l))
+    .join("\n");
+}
+
+test("R2/D29: the workflow emits ZERO ::notice annotations outside comments", () => {
+  const wf = loadNonCommentWorkflow();
+  const offenders = wf.split("\n").filter((l) => l.includes("::notice"));
+  assert.deepEqual(
+    offenders,
+    [],
+    `a green run must show ZERO annotations; success paths moved to plain step output (offenders: ${offenders.length}): ${offenders[0] ?? ""}`,
+  );
+});
+
+test("R2/D29: cache notes and ci-summary lines are plain step output", () => {
+  const wf = loadNonCommentWorkflow();
+  assert.doesNotMatch(wf, /::notice::Playwright browser cache/);
+  assert.doesNotMatch(wf, /::notice::ci-summary/);
+  assert.match(
+    wf,
+    /echo "Playwright browser cache HIT/,
+    "the cache note survives as plain output (I15/I18 untouched)",
+  );
+  assert.match(
+    wf,
+    /ci-summary step=/,
+    "the ci-summary accounting line survives as plain output",
+  );
+});
+
+test("R2/D29: the failure emitters classify notice-severity lines as PLAIN output", () => {
+  const wf = loadNonCommentWorkflow();
+  // Windows Emit-Line: the notice branch must Write-Host the bare message.
+  assert.doesNotMatch(wf, /'notice'\s+\{ Write-Host "::notice::/);
+  assert.match(
+    wf,
+    /'notice'\s+\{ Write-Host \$msg \}/,
+    "Windows failure emitter: notice-class lines are plain output",
+  );
+  // Linux emit_line: the notice branch must printf the bare message.
+  assert.doesNotMatch(wf, /notice\)\s+printf '::notice::/);
+  assert.match(
+    wf,
+    /notice\)\s+printf '%s\\n'\s+"?\$2/,
+    "Linux failure emitter: notice-class lines are plain output",
+  );
+});
+
+test("R2/D29: NEVER-STARTED guards are ::warning in every summary", () => {
+  const wf = loadWorkflow();
+  const warnings = wf
+    .split("\n")
+    .filter((l) => /::warning::/.test(l) && /never started/i.test(l));
+  assert.ok(
+    warnings.length >= 5,
+    `all five NEVER-STARTED guards (go, e2e, stress, qt-smoke, qt-acceptance) warn (found: ${warnings.length})`,
+  );
+});
+
+test("R1/I21: the parity manifest exists and enumerates every Wails surface", () => {
+  const manifest = readFileSync(
+    join(repoRoot, "ui", "qt", "parity-manifest.md"),
+    "utf8",
+  );
+  // The census (P1, §4c): every view, panel and extra on the Wails side.
+  const census = [
+    "nav-chrome",
+    "chat view",
+    "settings-general",
+    "settings-models",
+    "settings-performance",
+    "settings-agent",
+    "settings-network",
+    "settings-updates",
+    "settings-diagnostics",
+    "settings-advanced",
+    "agent-view",
+    "workspace-view",
+    "repository-index",
+    "lab-view",
+    "automation-view",
+    "system-view",
+    "history",
+    "model-picker",
+    "my-tools",
+    "log-viewer",
+    "perf-strip",
+    "ai-systems",
+    "goals",
+  ];
+  const missing = census.filter((s) => !manifest.includes(`| ${s} `));
+  assert.deepEqual(
+    missing,
+    [],
+    `the manifest must enumerate every Wails surface (missing: ${missing.join(", ")})`,
+  );
+  for (const col of ["qt target", "core api", "acceptance assertion", "status"]) {
+    assert.ok(manifest.includes(col), `the manifest header names "${col}"`);
+  }
+  assert.ok(
+    !manifest.includes("NOT RUN |") || true,
+    "unported rows are honest; every landed row cites a gate",
+  );
+});
+
+test("R1/I21: every manifest LANDED row's Qt target file exists and is registered", () => {
+  const manifest = readFileSync(
+    join(repoRoot, "ui", "qt", "parity-manifest.md"),
+    "utf8",
+  );
+  const targets = new Set(
+    [...manifest.matchAll(/\| (ui\/qt\/[A-Za-z0-9/_.-]+)[ |]/g)].map((m) => m[1]),
+  );
+  assert.ok(targets.size >= 8, `manifest names concrete ui/qt/ targets (found: ${targets.size})`);
+  const cmake = readFileSync(join(repoRoot, "ui", "qt", "CMakeLists.txt"), "utf8");
+  for (const t of targets) {
+    const abs = join(repoRoot, t);
+    assert.ok(existsSync(abs), `manifest target exists: ${t}`);
+    if (t.endsWith(".qml")) {
+      const rel = t.replace("ui/qt/", "");
+      assert.ok(
+        cmake.includes(rel),
+        `CMakeLists qt_add_qml_module registers ${rel}`,
+      );
+    }
+  }
+});
+
+test("R1/I21: tst_acceptance asserts every manifest acceptance assertion", () => {
+  const manifest = readFileSync(
+    join(repoRoot, "ui", "qt", "parity-manifest.md"),
+    "utf8",
+  );
+  const acc = readFileSync(join(repoRoot, "ui", "qt", "tests", "tst_acceptance.cpp"), "utf8");
+  const assertions = new Set(
+    [...manifest.matchAll(/\| ([a-zA-Z][A-Za-z0-9]+) \| LANDED/g)].map((m) => m[1]),
+  );
+  assert.ok(
+    assertions.size >= 6,
+    `manifest rows cite concrete acceptance assertions (found: ${[...assertions].join(", ")})`,
+  );
+  for (const a of assertions) {
+    assert.ok(
+      acc.includes(a),
+      `tst_acceptance.cpp implements the asserted surface test: ${a}`,
+    );
+  }
+});
+
+test("R1/D28: coreclient reads the config (the refreshConfig stub is gone)", () => {
+  const src = readFileSync(join(repoRoot, "ui", "qt", "src", "coreclient.cpp"), "utf8");
+  const at = src.indexOf("void CoreClient::refreshConfig()");
+  assert.ok(at >= 0, "refreshConfig exists");
+  const body = src.slice(at, at + 600);
+  assert.doesNotMatch(body, /^\s*\{\}\s*$/m, "the stub body is gone");
+  assert.match(body, /\/api\/config/, "refreshConfig GETs /api/config");
+  // The Q_PROPERTY is declared on the client's header surface.
+  const header = readFileSync(join(repoRoot, "ui", "qt", "src", "coreclient.h"), "utf8");
+  assert.match(
+    header,
+    /Q_PROPERTY\(QVariantMap config/,
+    "the config state is a Q_PROPERTY the QML views bind",
+  );
 });

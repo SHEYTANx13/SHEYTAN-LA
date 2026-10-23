@@ -664,7 +664,7 @@ jobs:
               throw "[gate] $Label failed with exit code $LASTEXITCODE."
             }
             if ($LogFile) {
-              Write-Host "::notice::gate OK: $Label"
+              Write-Host "gate OK: $Label"
             }
           }
 
@@ -825,7 +825,7 @@ jobs:
               throw "[gate] $Label failed with exit code $LASTEXITCODE (log: $LogFile)."
             }
             Add-Content "ci-logs/gate-order.txt" "OK $Label"
-            Write-Host "::notice::gate OK: $Label"
+            Write-Host "gate OK: $Label"
           }
 
           go version
@@ -857,7 +857,7 @@ jobs:
             throw "[gate] gofmt -l . is not clean: $($gofmtOut.Count) file(s) violate gofmt (log: ci-logs/win-gofmt.log)."
           }
           Add-Content "ci-logs/gate-order.txt" "OK gofmt -l ."
-          Write-Host "::notice::gate OK: gofmt -l ."
+          Write-Host "gate OK: gofmt -l ."
           Write-Host "gofmt: clean"
 
           # Each Go-verification command tees SEPARATELY: the failure
@@ -1878,7 +1878,7 @@ jobs:
             throw "makensis exited with code $LASTEXITCODE (log: ci-logs/win-nsis.log)."
           }
           Add-Content "ci-logs/gate-order.txt" "OK NSIS makensis"
-          Write-Host "::notice::gate OK: NSIS makensis"
+          Write-Host "gate OK: NSIS makensis"
 
           # UNINSTALL SYMMETRY, compile-proven (run #37 red gate class):
           # the generated payload-uninstall.nsh opens with its own guard
@@ -2127,7 +2127,7 @@ jobs:
 
           Add-Content "ci-logs/gate-order.txt" "OK silent-uninstall smoke"
 
-          Write-Host ("::notice::ci-summary step=silent-install-smoke errors=0/0 | warnings=0/0 | notices=2/2 | installed-boot=verified uninstall-symmetry=verified | installer={0}MB" -f [math]::Round((Get-Item $installer).Length/1MB, 2))
+          Write-Host ("ci-summary step=silent-install-smoke errors=0/0 | warnings=0/0 | notices=2/2 | installed-boot=verified uninstall-symmetry=verified | installer={0}MB" -f [math]::Round((Get-Item $installer).Length/1MB, 2))
 
       # v1.10.14-fixed (D7/I11): if: always() — a red run still exposes its
       # binaries (run #37's artifact table hid the installer and the ZIP
@@ -2202,9 +2202,10 @@ jobs:
           $summaryPath = $env:GITHUB_STEP_SUMMARY
           if ([string]::IsNullOrEmpty($summaryPath)) { exit 0 }
 
-          # v1.10.13 §9 CI SEVERITY CONTRACT (Task ID 28, R5): classify →
-          # dedup → caps → escape → truncate → redact → emit notices →
-          # warnings → errors → ONE accounting line.
+          # v1.10.13 §9 CI SEVERITY CONTRACT (Task ID 28, R5); amended
+          # v1.10.15-fixed R2 (D29): classify → dedup → caps → escape →
+          # truncate → redact → emit plain-info → warnings → errors → ONE
+          # accounting line. A green run shows ZERO annotations.
           #   ::error   — failed assertions, gate failures, crashes, real
           #               capture/report instrumentation failures, compile
           #               errors (priority: assertions/gates → capture →
@@ -2212,7 +2213,7 @@ jobs:
           #   ::warning — QWARN log lines (run #28 measured 5 of the
           #               Windows job's failure-level annotations as
           #               QWARN warnings — V10) and toolchain warnings.
-          #   ::notice  — diagnostic context: the goal/chat-persist dump
+          #   'notice'  — diagnostic context: the goal/chat-persist dump
           #               lines, QDEBUG/QINFO/QSKIP, and the
           #               "captures were empty" line — C1 CONFIRMED (Qt
           #               Test docs, "-o filename,format" routes ALL
@@ -2221,7 +2222,9 @@ jobs:
           #               beside a non-empty report are documented routing,
           #               not an instrumentation failure. A missing/empty
           #               REPORT on a nonzero exit stays a real
-          #               instrumentation failure (::error, I5).
+          #               instrumentation failure (::error, I5). The
+          #               'notice' class is PLAIN step output (D29) —
+          #               never an annotation.
           # The failing gate itself is never masked (the acceptance step's
           # own ::error names it); a green gate never executes this step.
           # D1 preserved: signal lines only, no tail dumps; full logs stay
@@ -2299,7 +2302,9 @@ jobs:
           }
           function Emit-Line([string]$sev, [string]$msg) {
             switch ($sev) {
-              'notice'  { Write-Host "::notice::$msg" }
+              # D29: the notice class is diagnostic CONTEXT — plain step
+              # output, never an annotation. Errors and warnings only.
+              'notice'  { Write-Host $msg }
               'warning' { Write-Host "::warning::$msg" }
               'error'   { Write-Host "::error::$msg" }
             }
@@ -2847,19 +2852,19 @@ jobs:
           echo "RUN go test ./internal/... (headless)" >> ci-logs/gate-order.txt
           go test ./internal/... -tags headless -count=1 2>&1 | tee ci-logs/linux-go-test-headless.log
           echo "OK go test ./internal/... (headless)" >> ci-logs/gate-order.txt
-          echo "::notice::gate OK: go test ./internal/... (headless)"
+          echo "gate OK: go test ./internal/... (headless)"
 
           : > ci-logs/linux-go-test-full.log
           echo "RUN go test ./... (full)" >> ci-logs/gate-order.txt
           go test ./... -run Test -count=1 2>&1 | tee ci-logs/linux-go-test-full.log
           echo "OK go test ./... (full)" >> ci-logs/gate-order.txt
-          echo "::notice::gate OK: go test ./... (full)"
+          echo "gate OK: go test ./... (full)"
 
           : > ci-logs/linux-go-vet.log
           echo "RUN go vet ./..." >> ci-logs/gate-order.txt
           go vet ./... 2>&1 | tee ci-logs/linux-go-vet.log
           echo "OK go vet ./..." >> ci-logs/gate-order.txt
-          echo "::notice::gate OK: go vet ./..."
+          echo "gate OK: go vet ./..."
 
           # v1.10.7 Wails is REMOVED — the dependency graph must stay
           # free of it. The check asserts ABSENCE (a `go list -m` hit here
@@ -2886,7 +2891,7 @@ jobs:
             exit 1
           fi
           echo "OK gofmt -l ." >> ci-logs/gate-order.txt
-          echo "::notice::gate OK: gofmt -l ."
+          echo "gate OK: gofmt -l ."
           echo "gofmt: clean"
 
       # v1.10.15-fixed (R2/D17/I15-I17, run-#41): the run-#41 red — THIS
@@ -2901,8 +2906,8 @@ jobs:
       # errors-only, no tail dumps), names any dangling RUN marker as the
       # sub-gate that never finished, and classifies a missing log
       # STARTED-DIED-BEFORE-LOG only when the gate actually started — a
-      # stage that never started emits ONE ::notice, never an ::error
-      # (I17; the run-#41 false-positive class is retired here too).
+      # stage that never started emits ONE ::warning, never an ::error
+      # (I17/D29; the run-#41 false-positive class is retired here too).
       # Report-only: the gate's exit contract above is untouched.
       - name: Go verification failure summary (Linux)
         if: failure()
@@ -2924,9 +2929,9 @@ jobs:
 
           # NEVER-STARTED: the gate's first-byte log does not exist — the
           # Go verification step never ran (the job died upstream). ONE
-          # notice; never an ::error (I17).
+          # ::warning; never an ::error (I17/D29).
           if [ ! -f "$headless_log" ]; then
-            echo "::notice::Go verification never started — the failure is upstream (the job died before the gate could run)"
+            echo "::warning::Go verification never started — the failure is upstream (the job died before the gate could run)"
             exit 0
           fi
 
@@ -2978,11 +2983,12 @@ jobs:
 
           # gofmt: the gate itself emits per-file ::error annotations when
           # it fails; this summary never duplicates them — a non-empty
-          # gofmt log whose OK marker is missing is surfaced as ONE notice
-          # pointing at the gate's own annotations.
+          # gofmt log whose OK marker is missing is surfaced as ONE plain
+          # line pointing at the gate's own annotations (D29: never an
+          # annotation).
           if [ -s "$gofmt_log" ] && [ -f "$gate_order" ] \
             && ! grep -q '^OK gofmt -l \.$' "$gate_order"; then
-            echo "::notice::gofmt violations were annotated by the gate itself (count: $(wc -l < "$gofmt_log")); full list in the all-logs artifact (all-logs.txt, D21)"
+            echo "gofmt violations were annotated by the gate itself (count: $(wc -l < "$gofmt_log")); full list in the all-logs artifact (all-logs.txt, D21)"
           fi
 
           # Dangling RUN marker = the sub-gate that never finished. The
@@ -3019,12 +3025,12 @@ jobs:
       - name: Playwright cache hit notice
         if: steps.pwcache.outputs.cache-hit == 'true'
         shell: bash
-        run: echo "::notice::Playwright browser cache HIT — chromium restore skipped"
+        run: echo "Playwright browser cache HIT — chromium restore skipped"
 
       - name: Playwright cache miss notice
         if: steps.pwcache.outputs.cache-hit != 'true'
         shell: bash
-        run: echo "::notice::Playwright browser cache MISS — chromium downloads this run (identical green path)"
+        run: echo "Playwright browser cache MISS — chromium downloads this run (identical green path)"
 
       # v1.5.0 (run 36083843376): the E2E fixture generator is a REAL
       # Python program (e2e/make-e2e-model.py → the canonical GGUF writer
@@ -3099,11 +3105,11 @@ jobs:
           mkdir -p ci-logs
           npm run build:e2e 2>&1 | tee ci-logs/e2e-build.log
           echo "OK build:e2e" >> ci-logs/gate-order.txt
-          echo "::notice::gate OK: build:e2e"
+          echo "gate OK: build:e2e"
           npx playwright install chromium --with-deps
           npm run test:e2e 2>&1 | tee ci-logs/e2e-playwright.log
           echo "OK playwright" >> ci-logs/gate-order.txt
-          echo "::notice::gate OK: Browser E2E (playwright)"
+          echo "gate OK: Browser E2E (playwright)"
 
       # v1.10.8 VISIBILITY 3.0 (V-B): the E2E failure summary — same
       # contract as the Windows Go verification summary. On failure it
@@ -3143,12 +3149,12 @@ jobs:
           # v1.10.15-fixed (R2/I17, run-#41 guard-class split): the step
           # creates BOTH logs at its first byte, so an ABSENT build log
           # means the Browser E2E step NEVER RAN — the job died upstream.
-          # That class emits ONE ::notice and exits; it must never fire an
+          # That class emits ONE ::warning and exits; it must never fire an
           # ::error (run-#41 fired four, including "the build:e2e stage is
           # the failing gate" for a stage that never began — the exact
           # false-lead class D17 bans).
           if [ ! -f "$build_log" ]; then
-            echo "::notice::Browser E2E never started — the failure is upstream of the E2E step (read the red step above)"
+            echo "::warning::Browser E2E never started — the failure is upstream of the E2E step (read the red step above)"
             exit 0
           fi
 
@@ -3244,7 +3250,7 @@ jobs:
           /tmp/sheytan-stress stress 2>&1 | tee ci-logs/stress-suite.log
 
           echo "OK stress suite" >> ci-logs/gate-order.txt
-          echo "::notice::gate OK: stress suite"
+          echo "gate OK: stress suite"
 
       # v1.10.14-fixed (R1/D17): the stress gate's failure summary — the
       # run-#40 red reached no annotation because nothing ever read the
@@ -3300,8 +3306,8 @@ jobs:
             # log at its first byte — an ABSENT log means the step NEVER
             # RAN (the job died upstream; the run-#41 class where this
             # summary fired a capture-defect ::error for a never-started
-            # stage). ONE notice; never an ::error (I17).
-            echo "::notice::Stress suite never started — the failure is upstream of the stress gate (read the red step above)"
+            # stage). ONE ::warning; never an ::error (I17/D29).
+            echo "::warning::Stress suite never started — the failure is upstream of the stress gate (read the red step above)"
             exit 0
           fi
 
@@ -3508,11 +3514,11 @@ jobs:
           # debug a smoke that never ran). Emit the distinct upstream
           # signal and skip the gate-marker logic entirely.
           if [ ! -d "$work" ]; then
-            # v1.10.15-fixed (R2/I17, run-#41): never-started is the NOTICE
+            # v1.10.15-fixed (R2/I17, run-#41): never-started is the WARNING
             # class — the run-#41 red shipped this line as an ::error and
             # became one of the four false-positive reds on a job whose
             # real gate was Go verification. Same signal, right severity.
-            echo "::notice::The Qt smoke never started — the failure is upstream of the smoke"
+            echo "::warning::The Qt smoke never started — the failure is upstream of the smoke"
             {
               echo ""
               echo "The smoke work directory \`$work\` does not exist: the smoke never started."
@@ -3695,14 +3701,16 @@ jobs:
           #               failure-level annotations as QWARN warnings —
           #               V10) and toolchain warnings; a warning is never
           #               masked into an error and never demotes one.
-          #   ::notice  — diagnostic context: the goal/chat-persist dump
+          #   'notice'  — diagnostic context: the goal/chat-persist dump
           #               lines, QDEBUG/QINFO/QSKIP, and the
           #               "captures were empty" line — C1 CONFIRMED (Qt
           #               Test docs, "-o filename,format" routes ALL
           #               QtTest output into the report file; stdout only
           #               when no -o is given), so empty native captures
           #               beside a non-empty report are documented routing,
-          #               not an instrumentation failure.
+          #               not an instrumentation failure. The 'notice'
+          #               class is PLAIN step output (D29) — never an
+          #               annotation.
           # The failing gate itself is never masked (the acceptance step's
           # own ::error names it before this step runs); a green gate never
           # executes this step, so a green run emits no failure
@@ -3830,8 +3838,8 @@ jobs:
               echo ""
               echo "No acceptance log and no RUN marker in gate-order.txt — the failure is upstream of the acceptance gate."
             } >> "$GITHUB_STEP_SUMMARY" || true
-            printf '::notice::%s\n' "$(esc "linux-qt-acceptance: The live-answer acceptance never started — the failure is upstream (read the red step above)")"
-            printf '::notice::ci-summary step=%s errors=0/0 | warnings=0/0 | notices=1/1 | duplicates_removed=0 redacted=%d | full_list=%s\n' "$(esc "$STEP_NAME")" "$REDACTED" "$FULL_LIST"
+            printf '::warning::%s\n' "$(esc "linux-qt-acceptance: The live-answer acceptance never started — the failure is upstream (read the red step above)")"
+            printf 'ci-summary step=%s errors=0/0 | warnings=0/0 | notices=1/1 | duplicates_removed=0 redacted=%d | full_list=%s\n' "$(esc "$STEP_NAME")" "$REDACTED" "$FULL_LIST"
             exit 0
           fi
 
@@ -3841,7 +3849,7 @@ jobs:
           # bucket C (compile/link errors).
           emit_line() {
             case "$1" in
-              notice)  printf '::notice::%s\n'  "$2" ;;
+              notice)  printf '%s\n' "$2" ;;
               warning) printf '::warning::%s\n' "$2" ;;
               error)   printf '::error::%s\n'   "$2" ;;
             esac
@@ -3878,7 +3886,7 @@ jobs:
           fi
 
           # §9 ONE accounting line per step.
-          printf '::notice::ci-summary step=%s errors=%d/%d | warnings=%d/%d | notices=%d/%d | duplicates_removed=%d redacted=%d | full_list=%s\n' \
+          printf 'ci-summary step=%s errors=%d/%d | warnings=%d/%d | notices=%d/%d | duplicates_removed=%d redacted=%d | full_list=%s\n' \
             "$(esc "$STEP_NAME")" "$ERR_EM" "$ERR_S" "$WARN_EM" "$WARN_S" "$NOTICE_EM" "$NOTICE_S" "$DUP" "$REDACTED" "$FULL_LIST"
 
       - name: Headless surface runtime smoke (embedded UI + API over HTTP)
@@ -4343,7 +4351,7 @@ jobs:
             fi
           done
           echo "part deletion accounting: deleted=${deleted} unresolved=${unresolved}"
-          echo "::notice::ci-summary step=part-deletion deleted=${deleted} unresolved=${unresolved} | final state: ONE log artifact (D21)"
+          echo "ci-summary step=part-deletion deleted=${deleted} unresolved=${unresolved} | final state: ONE log artifact (D21)"
 
   release:
     name: Publish and verify ${{ github.ref_name }}

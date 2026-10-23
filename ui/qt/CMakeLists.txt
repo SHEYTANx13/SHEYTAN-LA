@@ -21,6 +21,17 @@ qt_add_qml_module(sheytan-ui
     QML_FILES
         qml/Main.qml
         qml/EmptyState.qml
+        qml/SettingsView.qml
+        qml/AgentView.qml
+        qml/WorkspaceView.qml
+        qml/LabView.qml
+        qml/AutomationView.qml
+        qml/SystemView.qml
+        qml/HistoryDrawer.qml
+        qml/ModelPickerDrawer.qml
+        qml/MyToolsDrawer.qml
+        qml/LogViewerDrawer.qml
+        qml/PerfStrip.qml
     NO_RESOURCE_TARGET_PATH
 )
 

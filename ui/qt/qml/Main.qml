@@ -2,17 +2,18 @@
 //
 // IPC CLIENT of the ONE Go authority: sessions, runs, streaming and
 // persistence all come from the existing core API over the local channel.
-// Surfaces implemented here: session list (create/open/delete), chat
+// Surfaces implemented here: the v1.10.15-fixed NAVIGATION CHROME (R1,
+// D28/I21 — the seven-view Wails IA: chat, agent, workspace, lab,
+// automation, system, settings, each a native Qt Quick view backed by the
+// SAME core endpoints), the session list (create/open/delete), chat
 // transcript with per-message roles, live streaming bubble (cumulative
 // text), Stop while streaming, composer lock/unlock, settlement →
-// persistence reload, error/empty/loading states, model/backend settings,
-// the AI Systems panel (v1.10.2: list + activation over /api/systems
-// — the store's validation, persistence and reserved default stay
-// server-owned; this view holds no second authority), and the Goals
-// panel (v1.10.13: list + start/pause/resume/cancel + approve/reject
-// over /api/goals — the durable store, the bounded drive loop and the
-// approval semantics stay server-owned; progress shown is derived from
-// the actual plan state, never a decorative percentage).
+// persistence reload, error/empty/loading states, the AI Systems panel
+// (v1.10.2: list + activation over /api/systems — the store's validation,
+// persistence and reserved default stay server-owned; this view holds no
+// second authority), the Goals panel (v1.10.13: list + control actions
+// over /api/goals), and the parity overlays (History, Models, My Tools,
+// Log Viewer — each a pure IPC client of its existing handler).
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -31,6 +32,17 @@ ApplicationWindow {
     visible: true
     title: qsTr("SHEYTAN Local Agent") + (Core.connected && Core.coreVersion !== "" ? "  ·  v" + Core.coreVersion : "")
     color: "#121214"
+
+    // v1.10.15-fixed R1 (D28/I21): the navigation contract — the SAME
+    // seven views the Wails surface offers (src/workspace.ts), same ids.
+    property var navViews: ["chat", "agent", "workspace", "lab", "automation", "system", "settings"]
+    property string currentView: "chat"
+    property int currentViewIndex: {
+        var i = navViews.indexOf(currentView)
+        return i >= 0 ? i : 0
+    }
+
+    // Acceptance-surface facts (tst_acceptance::navChromeSevenViewsLoad).
 
     // AI Systems panel (v1.10.2): right-edge drawer, pure /api/systems client.
     Drawer {
@@ -322,14 +334,122 @@ ApplicationWindow {
     onIpcEndpointChanged: root.connect()
     onIpcKeyChanged: root.connect()
 
+    // Central refresh wiring: the ONE connection event fans out the
+    // parity surfaces' first reads — every view also re-reads on demand
+    // and on its own onCompleted/visibility.
+    Connections {
+        target: Core
+        function onConnectedChanged() {
+            if (Core.connected) {
+                Core.refreshConfig()
+                Core.refreshModels()
+            }
+        }
+    }
+
     RowLayout {
         anchors.fill: parent
         spacing: 0
 
-        // --- Sidebar: sessions ------------------------------------------
+        // --- Nav rail (v1.10.15-fixed R1/D28): the seven-view IA — the
+        // same ids, order and mode rules as src/workspace.ts. PerfStrip
+        // and the parity overlays dock at the rail's bottom, mirroring
+        // the Wails access points.
+        Rectangle {
+            Layout.fillHeight: true
+            Layout.preferredWidth: 84
+            color: "#141416"
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 6
+                spacing: 4
+
+                Repeater {
+                    model: [
+                        { id: "chat", label: qsTr("Chat"), icon: "\u25C7" },
+                        { id: "agent", label: qsTr("Agent"), icon: "\u25C8" },
+                        { id: "workspace", label: qsTr("Workspace"), icon: "\u2380" },
+                        { id: "lab", label: qsTr("Lab"), icon: "\u25C6" },
+                        { id: "automation", label: qsTr("Autom."), icon: "\u23F1" },
+                        { id: "system", label: qsTr("System"), icon: "\u25A4" },
+                        { id: "settings", label: qsTr("Settings"), icon: "\u2699" }
+                    ]
+
+                    delegate: Button {
+                        id: navButton
+                        required property var modelData
+                        required property int index
+                        objectName: "nav-" + modelData.id
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 60
+                        checkable: true
+                        checked: root.currentView === modelData.id
+                        onClicked: root.currentView = modelData.id
+                        contentItem: ColumnLayout {
+                            spacing: 1
+                            Label {
+                                text: navButton.modelData.icon
+                                color: navButton.checked ? "#b8a6e8" : "#8a8a92"
+                                font.pixelSize: 14
+                                Layout.alignment: Qt.AlignHCenter
+                            }
+                            Label {
+                                text: navButton.modelData.label
+                                color: navButton.checked ? "#e8e8ea" : "#8a8a92"
+                                font.pixelSize: 9
+                                Layout.alignment: Qt.AlignHCenter
+                            }
+                        }
+                        background: Rectangle {
+                            color: navButton.checked ? "#2c2c31" : (navButton.hovered ? "#1f1f23" : "transparent")
+                            radius: 6
+                        }
+                    }
+                }
+
+                Item { Layout.fillHeight: true }
+
+                Button {
+                    objectName: "nav-history"
+                    Layout.fillWidth: true
+                    text: qsTr("Hist.")
+                    enabled: Core.connected
+                    onClicked: historyDrawer.open()
+                }
+                Button {
+                    objectName: "nav-models"
+                    Layout.fillWidth: true
+                    text: qsTr("Models")
+                    enabled: Core.connected
+                    onClicked: modelPickerDrawer.open()
+                }
+                Button {
+                    objectName: "nav-mytools"
+                    Layout.fillWidth: true
+                    text: qsTr("Tools")
+                    enabled: Core.connected
+                    onClicked: myToolsDrawer.open()
+                }
+                Button {
+                    objectName: "nav-logs"
+                    Layout.fillWidth: true
+                    text: qsTr("Logs")
+                    enabled: Core.connected
+                    onClicked: logViewerDrawer.open()
+                }
+                PerfStrip {
+                    Layout.fillWidth: true
+                }
+            }
+        }
+
+        // --- Sidebar: sessions (chat + agent share the ONE session
+        // runtime; the other views own the full width) -------------------
         Rectangle {
             Layout.fillHeight: true
             Layout.preferredWidth: 280
+            visible: root.currentView === "chat" || root.currentView === "agent"
             color: "#1a1a1d"
 
             ColumnLayout {
@@ -427,7 +547,13 @@ ApplicationWindow {
             }
         }
 
-        Rectangle { Layout.fillHeight: true; Layout.preferredWidth: 1; color: "#2a2a2e" }
+        Rectangle { Layout.fillHeight: true; Layout.preferredWidth: 1; visible: root.currentView === "chat" || root.currentView === "agent"; color: "#2a2a2e" }
+
+        // --- View stack: seven views over the ONE core (D28) -------------
+        StackLayout {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            currentIndex: root.currentViewIndex
 
         // --- Main chat column -------------------------------------------
         ColumnLayout {
@@ -601,5 +727,37 @@ ApplicationWindow {
                 }
             }
         }
+
+        // v1.10.15-fixed R1 (D28/I21): the six parity views over the SAME
+        // core — each a pure IPC client; the shell forwards their overlay
+        // intents to the drawers it owns.
+        AgentView {
+            onOpenHistoryRequested: historyDrawer.open()
+            onOpenModelsRequested: modelPickerDrawer.open()
+            onOpenGoalsRequested: goalsDrawer.open()
+        }
+        WorkspaceView {
+            onOpenChatRequested: root.currentView = "chat"
+        }
+        LabView {}
+        AutomationView {}
+        SystemView {}
+        SettingsView {}
+        } // StackLayout
+    }
+
+    // Parity overlays (D28/I21) — each a pure IPC client of its existing
+    // handler; declared here so the whole surface loads with the shell.
+    HistoryDrawer {
+        id: historyDrawer
+    }
+    ModelPickerDrawer {
+        id: modelPickerDrawer
+    }
+    MyToolsDrawer {
+        id: myToolsDrawer
+    }
+    LogViewerDrawer {
+        id: logViewerDrawer
     }
 }
