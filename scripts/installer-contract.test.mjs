@@ -1155,3 +1155,169 @@ test("a consolidate-logs job merges the parts into the ONE all-logs artifact (D2
     "identity flows from the audit job (ONE naming map, I11)",
   );
 });
+
+// ---------------------------------------------------------------------------
+// 5. Run-#41 cycle contract (v1.10.15, Task ID 38) — RED-first R1/R2/R4.
+//
+// Run #41 (39895847864, head 246eaba) died in the LINUX "Go verification"
+// step (annotation anchor step:15:312, after the headless gate-OK notice at
+// step:15:149). Every later stage never ran, and the four if:failure()
+// summaries then mis-fired: three of them emitted ::error-class
+// "never started / capture defect" lines for stages that never began, and
+// the E2E summary's boilerplate claimed "the build:e2e stage is the failing
+// gate" for a stage that never ran — while the ACTUAL red (Go verification)
+// published zero content annotations because no failure summary exists for
+// it at all. The assertions below pin the repaired contract; each
+// defect-pinning assertion was RED against the 1.10.14 tree and must stay
+// green from 1.10.15 onward.
+// ---------------------------------------------------------------------------
+
+/** Extract one workflow step block by step name (6-space YAML indent). */
+function loadStep(stepName) {
+  const wf = loadWorkflow();
+  const lines = wf.split("\n");
+  const start = lines.findIndex((l) => l.trim() === `- name: ${stepName}`);
+  assert.ok(start !== -1, `workflow step not found: ${stepName}`);
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^ {6}- (name|uses):/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(start, end).join("\n");
+}
+
+function loadVersion() {
+  return JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version;
+}
+
+test("R2: the Linux Go verification gate has a failure summary that publishes its captured content", () => {
+  const wf = loadWorkflow();
+  const summary = loadStep("Go verification failure summary (Linux)");
+  assert.match(summary, /if: failure\(\)/, "the summary is an if:failure() step");
+  // The summary reads the Go verification first-byte logs (they already
+  // exist: linux-go-test-headless/full.log, linux-go-vet.log, linux-gofmt.log).
+  assert.match(summary, /ci-logs\/linux-go-test-full\.log/, "reads the full-suite log");
+  assert.match(summary, /ci-logs\/linux-go-test-headless\.log/, "reads the headless log");
+  assert.match(summary, /ci-logs\/linux-go-vet\.log/, "reads the vet log");
+  assert.match(summary, /::error::/, "publishes real error lines as annotations (I17)");
+  // Dangling-marker verdict: a RUN without its OK names the sub-gate that died.
+  assert.match(summary, /gate-order\.txt/, "uses the gate-order markers for the verdict");
+  // Ordering: the summary must sit between Go verification and the Playwright cache.
+  const goIdx = wf.indexOf("- name: Go verification");
+  const sumIdx = wf.indexOf("- name: Go verification failure summary (Linux)");
+  const cacheIdx = wf.indexOf("- name: Cache Playwright browsers");
+  assert.ok(sumIdx > goIdx && sumIdx < cacheIdx, "summary is wired directly after the gate");
+});
+
+test("R2/I17: no failure summary ever emits a never-started ::error (notice class only)", () => {
+  const wf = loadWorkflow();
+  const offenders = wf
+    .split("\n")
+    .filter((l) => /::error::/.test(l) && /never started/i.test(l));
+  assert.deepEqual(
+    offenders,
+    [],
+    `never-started must be ::notice, never ::error (offenders: ${offenders.length})`,
+  );
+});
+
+test("R2/I17: every Linux failure summary carries the NEVER-STARTED notice branch", () => {
+  for (const name of [
+    "E2E failure summary (Linux)",
+    "Stress failure summary (Linux)",
+    "Qt smoke failure summary (Linux)",
+    "Qt acceptance failure summary (Linux)",
+  ]) {
+    const step = loadStep(name);
+    assert.match(
+      step,
+      /::notice::[^\n]*never started/i,
+      `${name}: the never-started branch emits ONE notice`,
+    );
+  }
+});
+
+test("R2/I17: the E2E summary's failing-gate claim is evidence-gated on the build stage having started", () => {
+  const step = loadStep("E2E failure summary (Linux)");
+  // The "build:e2e is the failing gate" text may only fire after a
+  // started-detection (the build stage's first-byte log or its gate-order
+  // marker). At HEAD the claim fires unconditionally — the run-#41 false lead.
+  const claimIdx = step.indexOf("the build:e2e stage is the failing gate");
+  assert.ok(claimIdx !== -1, "the claim exists");
+  const before = step.slice(0, claimIdx);
+  assert.match(
+    before,
+    /(gate-order\.txt|RUN build:e2e|e2e-build\.log)/,
+    "a started-detection precedes the failing-gate claim",
+  );
+  // The never-started branch must run FIRST and exit before any ::error.
+  assert.match(
+    step,
+    /never started[\s\S]*exit 0[\s\S]*::error::/,
+    "never-started detection short-circuits the error path",
+  );
+});
+
+test("R2/I15: every Linux test-stage log is created before its command (first-byte capture)", () => {
+  const wf = loadWorkflow();
+  for (const log of [
+    "e2e-build.log",
+    "e2e-playwright.log",
+    "stress-suite.log",
+    "linux-go-test-headless.log",
+    "linux-go-test-full.log",
+    "linux-go-vet.log",
+    "linux-gofmt.log",
+  ]) {
+    const createIdx = wf.indexOf(`: > ci-logs/${log}`);
+    const teeIdx = wf.indexOf(`tee ci-logs/${log}`);
+    assert.ok(createIdx !== -1, `first-byte creation exists for ${log}`);
+    assert.ok(teeIdx !== -1, `tee capture exists for ${log}`);
+    assert.ok(createIdx < teeIdx, `${log} is created BEFORE its tee`);
+  }
+});
+
+test("R4/I12: the release identity is 1.10.15 on every version surface (D26)", () => {
+  assert.equal(loadVersion(), "1.10.15", "package.json (the one version source)");
+  const goCfg = readFileSync(join(repoRoot, "internal", "config", "config.go"), "utf8");
+  assert.match(goCfg, /AppVersion[ \t]*=[ \t]*"1\.10\.15"/, "internal/config/config.go");
+  const buildCfg = readFileSync(join(repoRoot, "build", "config.yml"), "utf8");
+  assert.match(buildCfg, /productVersion:[ \t]*"1\.10\.15"/, "build/config.yml");
+  const signature = readFileSync(join(repoRoot, "SIGNATURE"), "utf8");
+  assert.match(signature, /^SHEYTAN-Local-Agent v1\.10\.15/m, "SIGNATURE first line");
+  // v1.10.15-fixed (R3/I6): the Qt host carried a drifted hardcoded
+  // identity ("1.10.1" through ten releases) — the surface now moves with
+  // package.json, and this assertion keeps it from re-drifting silently.
+  const qtMain = readFileSync(join(repoRoot, "ui", "qt", "src", "main.cpp"), "utf8");
+  assert.match(
+    qtMain,
+    /setApplicationVersion\(QStringLiteral\("1\.10\.15"\)\)/,
+    "ui/qt/src/main.cpp applicationVersion",
+  );
+  assert.ok(!/1\.10\.1"/.test(qtMain.split("setApplicationVersion")[1] || ""), "no stale drift literal");
+  // No drift in either direction: the retired version must not survive on
+  // any surface (workflow comments narrating run history are not surfaces).
+  for (const [file, text] of [
+    ["package.json", JSON.stringify(JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")))],
+    ["internal/config/config.go", goCfg],
+    ["build/config.yml", buildCfg],
+  ]) {
+    assert.ok(
+      !/"?1\.10\.14"?/.test(text.replace(/1\.10\.15/g, "")),
+      `${file} carries no stale 1.10.14 identity`,
+    );
+  }
+});
+
+test("R4/I19: action majors and toolchain pins hold at the verified versions", () => {
+  const wf = loadWorkflow();
+  assert.match(wf, /uses: actions\/checkout@v7/, "checkout at or above v7");
+  assert.match(wf, /uses: actions\/setup-node@v7/, "setup-node at or above v7");
+  assert.match(wf, /uses: actions\/setup-go@v7/, "setup-go at or above v7");
+  assert.match(wf, /uses: actions\/upload-artifact@v7/, "upload-artifact at or above v7");
+  assert.match(wf, /uses: actions\/download-artifact@v8/, "download-artifact at or above v8");
+  assert.match(wf, /GO_VERSION: "1\.27"/, "Go toolchain pin 1.27");
+  assert.match(wf, /NODE_VERSION: "24"/, "Node toolchain pin 24");
+});

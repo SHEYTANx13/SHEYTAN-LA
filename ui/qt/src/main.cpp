@@ -15,7 +15,12 @@
 int main(int argc, char *argv[]) {
     QGuiApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("SHEYTAN Local Agent"));
-    QGuiApplication::setApplicationVersion(QStringLiteral("1.10.1"));
+    // v1.10.15-fixed (R3/I6, run-#41 cycle): this literal had drifted at
+    // "1.10.1" for ten releases while package.json moved on — the ONE
+    // release identity rule (I6/I12) holds for the Qt host too. The value
+    // is pinned to package.json's version by the installer-contract suite
+    // (R4/I12), so the next bump cannot re-drift it silently.
+    QGuiApplication::setApplicationVersion(QStringLiteral("1.10.15"));
     QGuiApplication::setOrganizationName(QStringLiteral("Parsaetak"));
 
     QQuickStyle::setStyle(QStringLiteral("Basic"));

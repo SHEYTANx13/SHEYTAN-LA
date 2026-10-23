@@ -536,11 +536,22 @@ ApplicationWindow {
                             onClicked: Core.stop()
                         }
                     }
-                    Label {
-                        text: Core.liveText === "" ? qsTr("…") : Core.liveText
-                        color: "#e8e8ea"
-                        wrapMode: Text.Wrap
+                    // v1.10.15-fixed (R3/D25): the live text is bounded and
+                    // scrollable — the unbounded Label let a long generation
+                    // push the composer (and the Stop row with it) off
+                    // screen. The cap mirrors the composer's own ScrollView
+                    // pattern below; the settled message still lands in the
+                    // transcript in full.
+                    ScrollView {
                         Layout.fillWidth: true
+                        Layout.maximumHeight: 160
+                        TextArea {
+                            readOnly: true
+                            text: Core.liveText === "" ? qsTr("…") : Core.liveText
+                            wrapMode: TextArea.Wrap
+                            color: "#e8e8ea"
+                            background: null
+                        }
                     }
                 }
             }

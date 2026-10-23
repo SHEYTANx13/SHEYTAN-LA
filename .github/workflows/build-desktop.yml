@@ -2889,6 +2889,118 @@ jobs:
           echo "::notice::gate OK: gofmt -l ."
           echo "gofmt: clean"
 
+      # v1.10.15-fixed (R2/D17/I15-I17, run-#41): the run-#41 red — THIS
+      # gate died with exit 1 (the step-15 "Process completed with exit
+      # code 1" annotation, after the headless gate-OK notice) and its
+      # output reached NO annotation and no failure summary: a content-free
+      # red, the exact class D17 bans. The gate already carries first-byte
+      # logs (linux-go-test-headless/full.log, linux-go-vet.log,
+      # linux-gofmt.log) and gate-order RUN/OK markers; the summary below
+      # finally READS them: on failure it publishes the suite's real
+      # FAIL/compile/vet/panic lines as capped ::error annotations (D1:
+      # errors-only, no tail dumps), names any dangling RUN marker as the
+      # sub-gate that never finished, and classifies a missing log
+      # STARTED-DIED-BEFORE-LOG only when the gate actually started — a
+      # stage that never started emits ONE ::notice, never an ::error
+      # (I17; the run-#41 false-positive class is retired here too).
+      # Report-only: the gate's exit contract above is untouched.
+      - name: Go verification failure summary (Linux)
+        if: failure()
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          headless_log="ci-logs/linux-go-test-headless.log"
+          full_log="ci-logs/linux-go-test-full.log"
+          vet_log="ci-logs/linux-go-vet.log"
+          gofmt_log="ci-logs/linux-gofmt.log"
+          gate_order="ci-logs/gate-order.txt"
+
+          {
+            echo "## Go verification FAILED"
+            echo ""
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY" || true
+
+          # NEVER-STARTED: the gate's first-byte log does not exist — the
+          # Go verification step never ran (the job died upstream). ONE
+          # notice; never an ::error (I17).
+          if [ ! -f "$headless_log" ]; then
+            echo "::notice::Go verification never started — the failure is upstream (the job died before the gate could run)"
+            exit 0
+          fi
+
+          emitted=0
+          emit() {
+            if [ "$emitted" -lt 10 ]; then
+              msg="$1"
+              if [ "${#msg}" -gt 250 ]; then msg="${msg:0:247}"; fi
+              printf '::error::%s\n' "$msg"
+              emitted=$((emitted + 1))
+            fi
+          }
+
+          redact() {
+            printf '%s' "$1" | sed -E \
+              -e 's/(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}/<REDACTED>/g' \
+              -e 's/github_pat_[A-Za-z0-9_]{82,}/<REDACTED>/g' \
+              -e 's/(AKIA|ASIA)[0-9A-Z]{16}/<REDACTED>/g' \
+              -e 's/sk-proj-[A-Za-z0-9_-]{80,}/<REDACTED>/g' \
+              -e 's/sk-[A-Za-z0-9]{48}/<REDACTED>/g' \
+              -e 's/[Bb]earer [A-Za-z0-9._~-]+/bearer <REDACTED>/g' \
+              -e 's/((password|passwd|pwd|token|secret|api[_-]?key)[:=])[^[:space:]]+/\1<REDACTED>/Ig' \
+              -e "s#${HOME}#<HOME>#g" \
+              -e 's#/tmp/#<TMP>/#g'
+          }
+
+          # Publish a log's real error content: failing test names, package
+          # compile headers, compile/vet diagnostics, panics — capped,
+          # redacted, D1-compliant (errors-only; no tail dumps).
+          publish_log() {
+            log="$1"
+            label="$2"
+            [ -f "$log" ] || return 0
+            {
+              echo ""
+              echo "### $label — error lines"
+              echo '```'
+              grep -aE '^(--- FAIL|FAIL[[:space:]]|FAIL$|panic:|fatal error:|# |\.go:[0-9]+:[0-9]+:)' "$log" 2>/dev/null | head -40 || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY" || true
+            while IFS= read -r line; do
+              emit "$label| $(redact "$(printf '%s' "$line" | cut -c1-200)")"
+            done < <(grep -aE '^(--- FAIL|FAIL[[:space:]]|FAIL$|panic:|fatal error:|\.go:[0-9]+:[0-9]+:|# )' "$log" 2>/dev/null | head -6)
+          }
+
+          publish_log "$full_log" "go test ./... (full)"
+          publish_log "$headless_log" "go test ./internal/... (headless)"
+          publish_log "$vet_log" "go vet ./..."
+
+          # gofmt: the gate itself emits per-file ::error annotations when
+          # it fails; this summary never duplicates them — a non-empty
+          # gofmt log whose OK marker is missing is surfaced as ONE notice
+          # pointing at the gate's own annotations.
+          if [ -s "$gofmt_log" ] && [ -f "$gate_order" ] \
+            && ! grep -q '^OK gofmt -l \.$' "$gate_order"; then
+            echo "::notice::gofmt violations were annotated by the gate itself (count: $(wc -l < "$gofmt_log")); full list in the all-logs artifact (all-logs.txt, D21)"
+          fi
+
+          # Dangling RUN marker = the sub-gate that never finished. The
+          # marker scan runs in a process substitution so `emitted` stays
+          # in THIS shell (the house pattern).
+          if [ -f "$gate_order" ]; then
+            while IFS= read -r marker; do
+              [ -n "$marker" ] || continue
+              emit "dangling gate marker: sub-gate '$marker' never reached OK — it died before completing (its log is in the all-logs artifact, all-logs.txt)"
+            done < <(sed -n 's/^RUN //p' "$gate_order" 2>/dev/null | while IFS= read -r g; do
+              grep -q "^OK ${g}\$" "$gate_order" || printf '%s\n' "$g"
+            done | head -4)
+          fi
+
+          if [ "$emitted" -eq 0 ]; then
+            emit "Go verification failed with no FAIL/compile/vet/panic lines captured — the sub-gate verdicts are in ci-logs/gate-order.txt; read the matching logs in the all-logs artifact (all-logs.txt, D21)"
+          fi
+
       # v1.10.14-fixed (R2/D16) PLAYWRIGHT BROWSER CACHE — best-effort:
       # on a hit the chromium download is skipped; on a miss the path is
       # byte-identical to the old green one, only slower (I16). The key
@@ -2955,6 +3067,14 @@ jobs:
           : > ci-logs/e2e-build.log
           : > ci-logs/e2e-playwright.log
 
+          # v1.10.15-fixed (R2/I15-I17): gate-order markers for BOTH stages
+          # of this gate. The failure summary below reads them to tell a
+          # stage that STARTED (marker written after the first-byte logs)
+          # from one that NEVER RAN — the run-#41 guard class is split on
+          # exactly this evidence. Green runs get ONE success notice each.
+          echo "RUN build:e2e" >> ci-logs/gate-order.txt
+          echo "RUN playwright" >> ci-logs/gate-order.txt
+
           # The fixture generator's dependency is provisioned explicitly
           # (numpy) and proven working before any test executes — the
           # Linux environment is fixed, the fixture is never disabled.
@@ -2978,8 +3098,12 @@ jobs:
           # the gates strict: a failing tee'd command still fails the step.
           mkdir -p ci-logs
           npm run build:e2e 2>&1 | tee ci-logs/e2e-build.log
+          echo "OK build:e2e" >> ci-logs/gate-order.txt
+          echo "::notice::gate OK: build:e2e"
           npx playwright install chromium --with-deps
           npm run test:e2e 2>&1 | tee ci-logs/e2e-playwright.log
+          echo "OK playwright" >> ci-logs/gate-order.txt
+          echo "::notice::gate OK: Browser E2E (playwright)"
 
       # v1.10.8 VISIBILITY 3.0 (V-B): the E2E failure summary — same
       # contract as the Windows Go verification summary. On failure it
@@ -3016,6 +3140,18 @@ jobs:
             fi
           }
 
+          # v1.10.15-fixed (R2/I17, run-#41 guard-class split): the step
+          # creates BOTH logs at its first byte, so an ABSENT build log
+          # means the Browser E2E step NEVER RAN — the job died upstream.
+          # That class emits ONE ::notice and exits; it must never fire an
+          # ::error (run-#41 fired four, including "the build:e2e stage is
+          # the failing gate" for a stage that never began — the exact
+          # false-lead class D17 bans).
+          if [ ! -f "$build_log" ]; then
+            echo "::notice::Browser E2E never started — the failure is upstream of the E2E step (read the red step above)"
+            exit 0
+          fi
+
           if [ -s "$build_log" ]; then
             # v1.10.13 D1: errors-only — the 200-line tail dump is gone;
             # the build log publishes its build-tool error lines instead.
@@ -3026,21 +3162,24 @@ jobs:
               grep -aE '(npm error|error TS[0-9]+|ERROR in |Build failed)' "$build_log" | head -60 || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY" || true
-          elif [ -f "$build_log" ]; then
-            # v1.10.14-fixed (R3/D15): the log EXISTS but carries not one
-            # byte — the gate died before its tee wrote anything. Name the
-            # capture defect; never silence (I15).
-            emit "gate produced no log — capture defect: ci-logs/e2e-build.log exists but is EMPTY (the gate died before its tee wrote a byte)"
           else
-            emit "gate produced no log — capture defect: ci-logs/e2e-build.log absent at failure time (the step died before the log was created)"
+            # STARTED-DIED-BEFORE-LOG: the step ran (first byte created
+            # this log) but its tee captured not one byte — a toolchain
+            # error before output. Named capture defect; never silence
+            # (I15/I17).
+            emit "gate produced no log — capture defect: ci-logs/e2e-build.log exists but is EMPTY (the build:e2e stage died before its tee wrote a byte)"
           fi
 
           if [ ! -s "$pw_log" ]; then
-            emit "Browser E2E failed BEFORE Playwright ran — the build:e2e stage is the failing gate (e2e-build.log errors are in the step summary)"
-            if [ -f "$pw_log" ]; then
-              emit "gate produced no log — capture defect: ci-logs/e2e-playwright.log exists but is EMPTY"
+            if [ -s "$build_log" ]; then
+              # EVIDENCE-GATED claim (I17): the build stage RAN and left
+              # content, and Playwright produced nothing — ONLY here is
+              # build:e2e the failing gate.
+              emit "Browser E2E failed BEFORE Playwright ran — the build:e2e stage is the failing gate (e2e-build.log errors are in the step summary)"
+            elif [ -f "$pw_log" ]; then
+              emit "gate produced no log — capture defect: ci-logs/e2e-playwright.log exists but is EMPTY (the playwright stage died before its tee wrote a byte)"
             else
-              emit "gate produced no log — capture defect: ci-logs/e2e-playwright.log absent at failure time"
+              emit "gate produced no log — capture defect: ci-logs/e2e-playwright.log absent at failure time (the playwright stage died before the log was created)"
             fi
           else
             {
@@ -3157,7 +3296,13 @@ jobs:
           elif [ -f "$log" ]; then
             emit "gate produced no log — capture defect: ci-logs/stress-suite.log exists but is EMPTY (the gate died before its tee wrote a byte; a go-build failure of ./scripts/stress-main is the likely class — its error lines are in the step log)"
           else
-            emit "gate produced no log — capture defect: ci-logs/stress-suite.log absent at failure time (the step died before the log was created)"
+            # v1.10.15-fixed (R2/I17, run-#41): the stress gate creates its
+            # log at its first byte — an ABSENT log means the step NEVER
+            # RAN (the job died upstream; the run-#41 class where this
+            # summary fired a capture-defect ::error for a never-started
+            # stage). ONE notice; never an ::error (I17).
+            echo "::notice::Stress suite never started — the failure is upstream of the stress gate (read the red step above)"
+            exit 0
           fi
 
       - name: Build Linux executable
@@ -3363,7 +3508,11 @@ jobs:
           # debug a smoke that never ran). Emit the distinct upstream
           # signal and skip the gate-marker logic entirely.
           if [ ! -d "$work" ]; then
-            echo "::error::The Qt smoke never started — the failure is upstream of the smoke"
+            # v1.10.15-fixed (R2/I17, run-#41): never-started is the NOTICE
+            # class — the run-#41 red shipped this line as an ::error and
+            # became one of the four false-positive reds on a job whose
+            # real gate was Go verification. Same signal, right severity.
+            echo "::notice::The Qt smoke never started — the failure is upstream of the smoke"
             {
               echo ""
               echo "The smoke work directory \`$work\` does not exist: the smoke never started."
