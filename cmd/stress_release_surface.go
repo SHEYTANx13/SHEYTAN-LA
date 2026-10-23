@@ -221,15 +221,21 @@ func stressReleaseSurface() error {
 	if strings.Contains(w, "go-version: 'stable'") ||
 		strings.Contains(w, `go-version: stable`) {
 		return fmt.Errorf(
-			"CI toolchain floats on 'stable' — pin it to 1.26",
+			"CI toolchain floats on 'stable' — pin it to 1.27",
 		)
 	}
 
 	// Both jobs consume the shared GO_VERSION env, so the pin itself
 	// lives in the workflow-level env block.
-	if !strings.Contains(w, `GO_VERSION: "1.26"`) {
+	// v1.10.14-fixed (R1, run-#41): this check kept demanding the 1.26
+	// pin after the workflow had correctly moved to the verified 1.27
+	// line — run #40's stress gate died on exactly this stale literal
+	// (46 pass / 1 fail, exit 1). The gate must follow the workflow
+	// forward, never pin it to a superseded toolchain (the same rule
+	// 3d's comment pins for the action set).
+	if !strings.Contains(w, `GO_VERSION: "1.27"`) {
 		return fmt.Errorf(
-			"CI toolchain not pinned to 1.26 (expected GO_VERSION: \"1.26\" in the workflow env block)",
+			"CI toolchain not pinned to 1.27 (expected GO_VERSION: \"1.27\" in the workflow env block)",
 		)
 	}
 
@@ -277,12 +283,16 @@ func stressReleaseSurface() error {
 	// v1.1.1 era runs carried the "Node.js 20 is deprecated" warning on
 	// checkout@v4 / setup-go@v5 / setup-node@v4. The stress gate must
 	// follow the workflow forward, not pin it to the deprecated set.
+	// v1.10.14-fixed (R3/D19, re-derived 2026-10-23): upload-artifact
+	// v7.0.2 and download-artifact v8.0.2 (2026-10-07) are the verified
+	// latest majors; the stale @v6/@v7 floors here would fail the gate
+	// on a correct workflow (the run-#40 red's twin defect).
 	for _, action := range []string{
 		"actions/checkout@v7",
 		"actions/setup-go@v7",
 		"actions/setup-node@v7",
-		"actions/upload-artifact@v6",
-		"actions/download-artifact@v7",
+		"actions/upload-artifact@v7",
+		"actions/download-artifact@v8",
 		"softprops/action-gh-release@v3",
 	} {
 		if !strings.Contains(w, action) {

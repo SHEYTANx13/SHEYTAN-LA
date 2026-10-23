@@ -136,27 +136,50 @@ jobs:
 
           echo "OK go build (preflight)" >> ci-logs/gate-order.txt
 
-      - name: Upload preflight logs
+      # v1.10.14-fixed (D21/I18, run-#41 R2): the per-class log-artifact
+      # sprawl ends here. The job's ci-logs writes are UNCHANGED (the gate
+      # keeps its first-byte log); the ONE upload surface is a single
+      # plain-text part — every ci-logs file with per-file headers plus a
+      # ci-summary accounting line — built under log-parts/ so the part
+      # never self-includes its own inputs. The consolidate-logs job
+      # merges all four parts into SHEYTAN-LA-v1.10.14-all-logs (the ONE
+      # log artifact, I18) and deletes the parts in-run; retention-days: 1
+      # bounds a part's exposure even if that deletion ever fails.
+      - name: Build preflight log part (all outcomes)
         if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: preflight-verification-logs-attempt${{ github.run_attempt }}
-          path: ci-logs/
-          if-no-files-found: error
+        shell: bash
+        env:
+          JOB_OUTCOME: ${{ job.status }}
+        run: |
+          set -uo pipefail
+          mkdir -p log-parts
+          part="log-parts/preflight-logs-part-${GITHUB_RUN_ATTEMPT}.txt"
+          {
+            echo "job: preflight"
+            echo "attempt: ${GITHUB_RUN_ATTEMPT}"
+            echo "outcome: ${JOB_OUTCOME}"
+            echo "run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > "$part"
+          for f in ci-logs/*; do
+            [ -f "$f" ] || continue
+            {
+              echo "----- 8< ----- $(basename "$f") -----"
+              cat "$f"
+              echo ""
+            } >> "$part"
+          done
+          files="$(find ci-logs -maxdepth 1 -type f 2>/dev/null | wc -l)"
+          echo "ci-summary job=preflight outcome=${JOB_OUTCOME} log-files=${files} part=$(basename "$part")" >> "$part"
+          echo "preflight log part built: $part ($(wc -c < "$part") bytes)"
 
-      # v1.10.14-fixed (D18/I18): the preflight job's complete ci-logs set
-      # (build log + gate order) rides in its own artifact on EVERY
-      # outcome — the run-#39 all-logs gap, closed per job.
-      - name: Upload preflight ci-logs (all outcomes)
+      - name: Upload preflight log part (all outcomes)
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: preflight-ci-logs-attempt${{ github.run_attempt }}
-          path: |
-            ci-logs/*.log
-            ci-logs/gate-order.txt
+          name: preflight-logs-part-attempt${{ github.run_attempt }}
+          path: log-parts/preflight-logs-part-*.txt
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 1
 
   audit:
     name: Source & frontend audit
@@ -464,31 +487,48 @@ jobs:
             done
           fi
           if [ "$emitted" -eq 0 ]; then
-            echo "::error::Audit job failed with no FAIL-prefixed lines captured — read the step summary and the audit-verification-logs artifact"
+            echo "::error::Audit job failed with no FAIL-prefixed lines captured — read the step summary and the all-logs artifact (all-logs.txt, D21)"
           fi
 
-      - name: Upload verification logs (audit job)
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: audit-verification-logs-attempt${{ github.run_attempt }}
-          path: ci-logs/*.log
-          if-no-files-found: ignore
-          retention-days: 14
+      # v1.10.14-fixed (D21/I18, run-#41 R2): ONE log part per job — the
+      # two per-class audit uploads (failure-gated verification logs +
+      # all-outcomes ci-logs) fold into a single part built on EVERY
+      # outcome; see the preflight part builder for the full contract.
+      - name: Build audit log part (all outcomes)
+        if: always()
+        shell: bash
+        env:
+          JOB_OUTCOME: ${{ job.status }}
+        run: |
+          set -uo pipefail
+          mkdir -p log-parts
+          part="log-parts/audit-logs-part-${GITHUB_RUN_ATTEMPT}.txt"
+          {
+            echo "job: audit"
+            echo "attempt: ${GITHUB_RUN_ATTEMPT}"
+            echo "outcome: ${JOB_OUTCOME}"
+            echo "run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > "$part"
+          for f in ci-logs/*; do
+            [ -f "$f" ] || continue
+            {
+              echo "----- 8< ----- $(basename "$f") -----"
+              cat "$f"
+              echo ""
+            } >> "$part"
+          done
+          files="$(find ci-logs -maxdepth 1 -type f 2>/dev/null | wc -l)"
+          echo "ci-summary job=audit outcome=${JOB_OUTCOME} log-files=${files} part=$(basename "$part")" >> "$part"
+          echo "audit log part built: $part ($(wc -c < "$part") bytes)"
 
-      # v1.10.14-fixed (D18/I18): the audit job's complete ci-logs set on
-      # EVERY outcome — the gate logs now exist from their commands' first
-      # bytes (typecheck/lint/units/release/build).
-      - name: Upload audit ci-logs (all outcomes)
+      - name: Upload audit log part (all outcomes)
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: audit-ci-logs-attempt${{ github.run_attempt }}
-          path: |
-            ci-logs/*.log
-            ci-logs/gate-order.txt
-          if-no-files-found: ignore
-          retention-days: 14
+          name: audit-logs-part-attempt${{ github.run_attempt }}
+          path: log-parts/audit-logs-part-*.txt
+          if-no-files-found: error
+          retention-days: 1
 
   build-windows:
     name: Windows x64
@@ -1394,20 +1434,11 @@ jobs:
           Write-Host "Windows live-answer acceptance PASSED: real Qt UI + real core over the local IPC channel."
 
       # v1.10.13 WINDOWS-REPORT (I5): the QtTest -o report is the record
-      # of record — uploaded ALWAYS (green or red), independent of the
-      # failure-gated *.log artifact, so an anonymous reader can download
-      # the named slots, assertions and line numbers on any exit.
-      - name: Upload Qt acceptance report (Windows)
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: windows-qt-acceptance-report-attempt${{ github.run_attempt }}
-          path: |
-            ci-logs/win-qt-acceptance-report.txt
-            ci-logs/win-qt-acceptance.log
-            ci-logs/gate-order.txt
-          if-no-files-found: ignore
-          retention-days: 14
+      # of record — it is still written on EVERY attempt (green or red).
+      # v1.10.14-fixed (D21/I18, run-#41 R2): its dedicated upload folded
+      # into the job's ONE log part below — the report rides inside
+      # all-logs.txt, so an anonymous reader still gets the named slots,
+      # assertions and line numbers on any exit.
 
       - name: Prepare Windows portable package
         shell: pwsh
@@ -2197,7 +2228,9 @@ jobs:
           # in the artifacts.
 
           $stepName = "Failure summary (Windows)"
-          $fullList = "windows-go-verification-logs-attempt${{ github.run_attempt }}"
+          # v1.10.14-fixed (D21): the full list of captured lines lives in
+          # the ONE all-logs artifact — the per-class artifacts are gone.
+          $fullList = "${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-all-logs (all-logs.txt)"
           $errCap = 10; $warnCap = 10; $noticeCap = 10
           $global:Redacted = 0
 
@@ -2277,7 +2310,7 @@ jobs:
           $lines += ""
           $lines += "Run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
           $lines += ""
-          $lines += "Full evidence artifacts: windows-go-verification-logs-attempt${{ github.run_attempt }} (all ci-logs/*.log + gate order) and windows-qt-acceptance-report-attempt${{ github.run_attempt }} (the QtTest -o report)."
+          $lines += "Full evidence artifact: ${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-all-logs (all-logs.txt — every gate log, the gate chain and the QtTest -o report; D21)."
 
           # v1.10.13 W-VIS: name the failing gate from the tracked markers
           # (RUN without OK/FAIL = the gate that started and never
@@ -2472,7 +2505,7 @@ jobs:
               Emit-Line error (Esc-WF "Windows Go verification failed at the gofmt gate — $($first.Count)+ file(s) listed in win-gofmt.log")
               $errEm += $first.Count + 1
             } else {
-              Emit-Line error (Esc-WF "Windows Go verification failed with no FAIL-prefixed lines captured — read the step summary and the windows-go-verification-logs artifact")
+              Emit-Line error (Esc-WF "Windows Go verification failed with no FAIL-prefixed lines captured — read the step summary and the all-logs artifact (all-logs.txt, D21)")
               $errEm++
             }
           }
@@ -2480,36 +2513,11 @@ jobs:
           # §9 ONE accounting line per step.
           Emit-Line notice (Esc-WF "ci-summary step=$stepName errors=$errEm/$errSel | warnings=$warnEm/$warnSel | notices=$noticeEm/$noticeSel | duplicates_removed=$dup redacted=$($global:Redacted) | full_list=$fullList")
 
-      - name: Upload Go verification logs (Windows)
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: windows-go-verification-logs-attempt${{ github.run_attempt }}
-          # v1.10.13 W-VIS-2 (run 39038248810): gate-order.txt is the full
-          # RUN/OK/FAIL gate sequence the failure summary names gates from
-          # — the anonymous reader gets it with the logs, not just the
-          # annotations.
-          path: |
-            ci-logs/*.log
-            ci-logs/gate-order.txt
-          if-no-files-found: ignore
-          retention-days: 14
-
-      # v1.10.14-fixed (D18/I18, run #39): the Windows job's COMPLETE
-      # ci-logs set on EVERY outcome — including win-nsis.log (which rode
-      # in no artifact at all in run #39) and the first-byte gofmt/vet
-      # logs that the failure-class uploads miss on green runs.
-      - name: Upload Windows ci-logs (all outcomes)
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: build-windows-ci-logs-attempt${{ github.run_attempt }}
-          path: |
-            ci-logs/*.log
-            ci-logs/*.txt
-            ci-logs/gate-order.txt
-          if-no-files-found: error
-          retention-days: 14
+      # v1.10.14-fixed (D21/I18, run-#41 R2): the Windows job's three
+      # per-class log uploads (failure-gated go-verification logs, the
+      # all-outcomes ci-logs set, and the Qt acceptance report) fold into
+      # the ONE part built by this job's LAST step below (after Run
+      # summary, so the part carries the complete gate chain).
 
       # v1.10.14-fixed (D7, D1-compliant): ONE run-summary per job — the
       # publicly visible $GITHUB_STEP_SUMMARY table: version, the packaged
@@ -2555,6 +2563,49 @@ jobs:
           }
           Add-Content $env:GITHUB_STEP_SUMMARY ($lines -join "`n")
           Add-Content "ci-logs/gate-order.txt" "OK run summary (Windows)"
+
+      # v1.10.14-fixed (D21/I18, run-#41 R2): the Windows job's ONE log
+      # part — built on EVERY outcome as the job's LAST step, after Run
+      # summary, so the part carries the complete gate chain. The three
+      # per-class log uploads this replaces (failure-gated go-verification
+      # logs, all-outcomes ci-logs, Qt acceptance report) are strictly
+      # subsumed: every ci-logs file rides with per-file headers.
+      # win-nsis.log — the file that rode in no artifact at all in run
+      # #39 — rides the part too.
+      - name: Build Windows log part (all outcomes)
+        if: always()
+        shell: pwsh
+        env:
+          JOB_OUTCOME: ${{ job.status }}
+        run: |
+          $ErrorActionPreference = "Continue"
+          New-Item -ItemType Directory -Force -Path "log-parts" | Out-Null
+          $part = "log-parts/build-windows-logs-part-$env:GITHUB_RUN_ATTEMPT.txt"
+          @(
+            "job: build-windows"
+            "attempt: $env:GITHUB_RUN_ATTEMPT"
+            "outcome: $env:JOB_OUTCOME"
+            "run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          ) | Set-Content -Path $part
+          if (Test-Path "ci-logs") {
+            Get-ChildItem "ci-logs" -File | Sort-Object Name | ForEach-Object {
+              Add-Content -Path $part -Value "----- 8< ----- $($_.Name) -----"
+              Add-Content -Path $part -Value (Get-Content -Raw -Path $_.FullName)
+            }
+          }
+          $files = 0
+          if (Test-Path "ci-logs") { $files = (Get-ChildItem "ci-logs" -File).Count }
+          Add-Content -Path $part -Value "ci-summary job=build-windows outcome=$env:JOB_OUTCOME log-files=$files part=$(Split-Path -Leaf $part)"
+          Write-Host "Windows log part built: $part ($((Get-Item $part).Length) bytes)"
+
+      - name: Upload Windows log part (all outcomes)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-windows-logs-part-attempt${{ github.run_attempt }}
+          path: log-parts/build-windows-logs-part-*.txt
+          if-no-files-found: error
+          retention-days: 1
 
   build-linux:
     name: Linux x64
@@ -3017,16 +3068,31 @@ jobs:
               emit "playwright| $summary_line"
             fi
             if [ "$emitted" -eq 0 ]; then
-              emit "Browser E2E failed with no spec/error lines captured — read the e2e-playwright.log tail in the step summary and the linux-verification-logs artifact"
+              emit "Browser E2E failed with no spec/error lines captured — read the e2e-playwright.log tail in the step summary and the all-logs artifact (all-logs.txt, D21)"
             fi
           fi
 
+      # v1.10.14-fixed (R1/D17/I15-I17, run-#41): the run-#40 red — this
+      # gate died with exit 1 (46 pass / 1 fail: a stale toolchain pin in
+      # the Go release-surface check) and its output reached NO annotation
+      # and no failure summary: a content-free red, the exact class D17
+      # bans. The gate now plays the FULL capture contract its sibling
+      # gates already carry: first-byte log (`: >` before any command),
+      # gate-order RUN/OK markers, tee capture, ONE green success notice,
+      # and the if:failure() summary step below that publishes the suite's
+      # real FAIL/panic lines as ::error annotations. The exit contract is
+      # byte-identical: pipefail keeps a failing stress run fatal through
+      # the tee pipeline; no assertion weakened, no bound inflated.
       - name: Stress suite
         shell: bash
         env:
           CGO_ENABLED: "1"
         run: |
           set -euo pipefail
+
+          mkdir -p ci-logs
+          : > ci-logs/stress-suite.log
+          echo "RUN stress suite" >> ci-logs/gate-order.txt
 
           go build \
             -trimpath \
@@ -3036,7 +3102,63 @@ jobs:
 
           test -x /tmp/sheytan-stress
 
-          /tmp/sheytan-stress stress
+          /tmp/sheytan-stress stress 2>&1 | tee ci-logs/stress-suite.log
+
+          echo "OK stress suite" >> ci-logs/gate-order.txt
+          echo "::notice::gate OK: stress suite"
+
+      # v1.10.14-fixed (R1/D17): the stress gate's failure summary — the
+      # run-#40 red reached no annotation because nothing ever read the
+      # gate's output. On failure this step publishes the suite's REAL
+      # error lines (the FAIL scenario lines, any panic/crash lines, and
+      # the STRESS-RESULT verdict) as capped ::error annotations (D1:
+      # errors-only, no tail dumps) and mirrors them to
+      # $GITHUB_STEP_SUMMARY. A missing or empty log is the named capture
+      # defect it would be (I15/I17) — never silence.
+      - name: Stress failure summary (Linux)
+        if: failure()
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          log="ci-logs/stress-suite.log"
+
+          {
+            echo "## Stress suite FAILED"
+            echo ""
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY" || true
+
+          emitted=0
+          emit() {
+            if [ "$emitted" -lt 10 ]; then
+              msg="$1"
+              if [ "${#msg}" -gt 250 ]; then msg="${msg:0:247}"; fi
+              printf '::error::%s\n' "$msg"
+              emitted=$((emitted + 1))
+            fi
+          }
+
+          if [ -s "$log" ]; then
+            # The suite's own verdict lines ARE the error content: each
+            # FAIL line names the failing scenario and its error.
+            while IFS= read -r line; do
+              emit "stress| $(printf '%s' "$line" | cut -c1-200)"
+            done < <(grep -aE 'FAIL' "$log" | head -5)
+            while IFS= read -r line; do
+              emit "stress| $(printf '%s' "$line" | cut -c1-200)"
+            done < <(grep -aE 'panic:|runtime error' "$log" | head -2)
+            while IFS= read -r line; do
+              emit "stress| $(printf '%s' "$line" | cut -c1-200)"
+            done < <(grep -aE 'STRESS-RESULT' "$log" | head -2)
+            if [ "$emitted" -eq 0 ]; then
+              emit "stress suite failed with no FAIL/panic/STRESS-RESULT lines captured — the failure is before or between verdict lines; read ci-logs/stress-suite.log in the all-logs artifact"
+            fi
+          elif [ -f "$log" ]; then
+            emit "gate produced no log — capture defect: ci-logs/stress-suite.log exists but is EMPTY (the gate died before its tee wrote a byte; a go-build failure of ./scripts/stress-main is the likely class — its error lines are in the step log)"
+          else
+            emit "gate produced no log — capture defect: ci-logs/stress-suite.log absent at failure time (the step died before the log was created)"
+          fi
 
       - name: Build Linux executable
         shell: bash
@@ -3287,7 +3409,7 @@ jobs:
           if [ -n "$gate" ]; then
             echo "::error::$gate"
           else
-            echo "::error::Qt desktop acceptance smoke failed before a gate marker was written — read the step summary and the linux-verification-logs artifact"
+            echo "::error::Qt desktop acceptance smoke failed before a gate marker was written — read the step summary and the all-logs artifact (all-logs.txt, D21)"
           fi
           if [ -f "$work/ui.log" ]; then
             tail -n 4 "$work/ui.log" 2>/dev/null | tr -d '\r' | cut -c1-200 | sed 's/^/::error::ui.log| /'
@@ -3379,35 +3501,19 @@ jobs:
           echo "OK Qt live-answer acceptance" >> ci-logs/gate-order.txt
 
       # v1.10.13 LINUX-REPORT (I5): the QtTest -o report is the record
-      # of record — uploaded ALWAYS (green or red), so an anonymous
-      # reader can download the named slots, assertions and line numbers
-      # on any exit.
-      - name: Upload Qt acceptance report (Linux)
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: linux-qt-acceptance-report-attempt${{ github.run_attempt }}
-          path: |
-            ci-logs/linux-qt-acceptance-report.txt
-            ci-logs/linux-qt-acceptance.log
-            ci-logs/gate-order.txt
-          if-no-files-found: ignore
-          retention-days: 14
+      # of record — it is still written on EVERY attempt (green or red).
+      # v1.10.14-fixed (D21/I18, run-#41 R2): its dedicated upload folded
+      # into the job's ONE log part below — the report rides inside
+      # all-logs.txt, so an anonymous reader still gets the named slots,
+      # assertions and line numbers on any exit.
 
-      # v1.10.14-fixed (D18/I18): the Linux job's COMPLETE ci-logs set on
-      # EVERY outcome — the E2E logs, the gofmt/vet first-byte logs and
-      # the full gate chain, green or red.
-      - name: Upload Linux ci-logs (all outcomes)
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: build-linux-ci-logs-attempt${{ github.run_attempt }}
-          path: |
-            ci-logs/*.log
-            ci-logs/*.txt
-            ci-logs/gate-order.txt
-          if-no-files-found: error
-          retention-days: 14
+      # v1.10.14-fixed (D21/I18, run-#41 R2): the Linux job's three
+      # per-class log uploads (the all-outcomes ci-logs set, the
+      # failure-gated verification logs and the Qt acceptance report)
+      # fold into the ONE part built by this job's LAST step below (after
+      # Run summary, so the part carries the complete gate chain). The
+      # E2E logs, the gofmt/vet/stress first-byte logs and the full gate
+      # chain all ride this one part, green or red.
 
       - name: Qt acceptance failure summary (Linux)
         if: failure()
@@ -3426,7 +3532,7 @@ jobs:
             echo ""
             echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             echo ""
-            echo "Full evidence artifacts: linux-qt-acceptance-report-attempt${{ github.run_attempt }} (the QtTest -o report + native log + gate order) and linux-verification-logs-attempt${{ github.run_attempt }} (all ci-logs/*.log, including the stderr capture)."
+            echo "Full evidence artifact: ${LINUX_PKG_ROOT}-v${APP_VERSION}-all-logs (all-logs.txt — the QtTest -o report, the native log, the stderr capture, all ci-logs and the gate chain; D21)."
           } >> "$GITHUB_STEP_SUMMARY" || true
 
           # v1.10.13 §9 CI SEVERITY CONTRACT (Task ID 28, R5): classify →
@@ -3459,7 +3565,9 @@ jobs:
           accErr="ci-logs/linux-qt-acceptance.err.log"
           gateOrder="ci-logs/gate-order.txt"
           STEP_NAME="Qt acceptance failure summary (Linux)"
-          FULL_LIST="linux-qt-acceptance-report-attempt${{ github.run_attempt }}"
+          # v1.10.14-fixed (D21): the full list of captured lines lives in
+          # the ONE all-logs artifact — the per-class artifacts are gone.
+          FULL_LIST="${LINUX_PKG_ROOT}-v${APP_VERSION}-all-logs (all-logs.txt)"
           ERR_CAP=10; WARN_CAP=10; NOTICE_CAP=10
 
           # §9 redaction — every emitted and summary line. The COUNTER is
@@ -3902,14 +4010,10 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload verification logs (Linux)
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: linux-verification-logs-attempt${{ github.run_attempt }}
-          path: ci-logs/*.log
-          if-no-files-found: ignore
-          retention-days: 14
+      # v1.10.14-fixed (D21/I18, run-#41 R2): the failure-gated
+      # linux-verification-logs upload folded into the job's ONE log part
+      # above (built on EVERY outcome, so the failure-gated class is
+      # strictly subsumed).
 
       # v1.10.14-fixed (D7, D1-compliant): ONE run-summary per job — the
       # publicly visible $GITHUB_STEP_SUMMARY table: version, the packaged
@@ -3950,6 +4054,148 @@ jobs:
           } >> "${GITHUB_STEP_SUMMARY}"
           echo "OK run summary (Linux)" >> ci-logs/gate-order.txt
 
+      # v1.10.14-fixed (D21/I18, run-#41 R2): the Linux job's ONE log
+      # part — built on EVERY outcome as the job's LAST step, after Run
+      # summary, so the part carries the complete gate chain. The three
+      # per-class log uploads this replaces (all-outcomes ci-logs,
+      # failure-gated verification logs, Qt acceptance report) are
+      # strictly subsumed: every ci-logs file rides with per-file headers.
+      - name: Build Linux log part (all outcomes)
+        if: always()
+        shell: bash
+        env:
+          JOB_OUTCOME: ${{ job.status }}
+        run: |
+          set -uo pipefail
+          mkdir -p log-parts
+          part="log-parts/build-linux-logs-part-${GITHUB_RUN_ATTEMPT}.txt"
+          {
+            echo "job: build-linux"
+            echo "attempt: ${GITHUB_RUN_ATTEMPT}"
+            echo "outcome: ${JOB_OUTCOME}"
+            echo "run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > "$part"
+          for f in ci-logs/*; do
+            [ -f "$f" ] || continue
+            {
+              echo "----- 8< ----- $(basename "$f") -----"
+              cat "$f"
+              echo ""
+            } >> "$part"
+          done
+          files="$(find ci-logs -maxdepth 1 -type f 2>/dev/null | wc -l)"
+          echo "ci-summary job=build-linux outcome=${JOB_OUTCOME} log-files=${files} part=$(basename "$part")" >> "$part"
+          echo "Linux log part built: $part ($(wc -c < "$part") bytes)"
+
+      - name: Upload Linux log part (all outcomes)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-linux-logs-part-attempt${{ github.run_attempt }}
+          path: log-parts/build-linux-logs-part-*.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  # v1.10.14-fixed (D21/I18, run-#41 R2) CONSOLIDATE-LOGS — the ONE log
+  # artifact. Downloads every job's <job>-logs-part-attempt<N> part,
+  # merges them deterministically (fixed job order, per-section job /
+  # outcome headers) via scripts/consolidate-logs.mjs, uploads the single
+  # SHEYTAN-LA-v1.10.14-all-logs artifact containing exactly one file
+  # (all-logs.txt), then deletes the intermediate parts via the Artifacts
+  # API. Runs on EVERY outcome: a red run needs its one log the most. A
+  # missing part is a named instrumentation failure (the merge names the
+  # section and fails the job) — never silence (I15/I17/I18).
+  consolidate-logs:
+    name: Consolidate logs (one artifact)
+    needs: [preflight, audit, build-windows, build-linux]
+    if: always()
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+
+    # actions: write is required to delete the intermediate part
+    # artifacts; contents: read covers the checkout. Job-level grant —
+    # the top-level block keeps contents: read only.
+    permissions:
+      contents: read
+      actions: write
+
+    # Identity flows from the audit job's runtime resolution of
+    # package.json — the all-logs artifact name is part of the ONE
+    # naming map (I11): ${WIN_PKG_ROOT}-v${APP_VERSION}-all-logs.
+    env:
+      APP_VERSION: ${{ needs.audit.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Download all log parts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: "*-logs-part-attempt*"
+          merge-multiple: true
+          path: parts/
+
+      - name: Consolidate into all-logs.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p all-logs
+          # The deterministic merge: fixed job order, per-section headers
+          # (job, outcome, attempt, source), one accounting line per
+          # input, and a named MISSING PART section for any absent part
+          # (exit 1 — a named instrumentation failure, I18).
+          node scripts/consolidate-logs.mjs \
+            --parts parts \
+            --out all-logs/all-logs.txt
+
+      - name: Upload the ONE log artifact (all outcomes)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-all-logs
+          path: all-logs/all-logs.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      # v1.10.14-fixed (D21): the intermediate parts are deleted in-run —
+      # the run's FINAL artifact state is exactly ONE log artifact (plus
+      # the product artifacts). If the API/permission path fails, the
+      # deviation is recorded as a warning (never silenced, never a job
+      # failure — the parts already carry retention-days: 1, which bounds
+      # their exposure to a single day).
+      - name: Delete intermediate log parts (D21)
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          deleted=0
+          unresolved=0
+          for part in preflight audit build-windows build-linux; do
+            name="${part}-logs-part-attempt${GITHUB_RUN_ATTEMPT}"
+            id="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${name}" --jq '.artifacts[0].id // empty' 2>/dev/null || true)"
+            if [ -n "$id" ]; then
+              if gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" 2>/dev/null; then
+                deleted=$((deleted + 1))
+              else
+                unresolved=$((unresolved + 1))
+                echo "::warning::part deletion failed for ${name} (API/permission) — retention-days: 1 bounds its exposure (D21 fallback recorded)"
+              fi
+            else
+              unresolved=$((unresolved + 1))
+              echo "::warning::part artifact ${name} not found for deletion (already absent or never uploaded — recorded, not silenced)"
+            fi
+          done
+          echo "part deletion accounting: deleted=${deleted} unresolved=${unresolved}"
+          echo "::notice::ci-summary step=part-deletion deleted=${deleted} unresolved=${unresolved} | final state: ONE log artifact (D21)"
+
   release:
     name: Publish and verify ${{ github.ref_name }}
     needs:
@@ -3985,19 +4231,19 @@ jobs:
           echo "Release tag verified: ${GITHUB_REF_NAME}"
 
       - name: Download Windows package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64
           path: dist/windows
 
       - name: Download Windows installer
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer
           path: dist/installer
 
       - name: Download Linux package
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: ${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64
           path: dist/linux

@@ -31,7 +31,9 @@
  * proof; this file makes the payload regression IMPOSSIBLE TO COMMIT.
  */
 
-import { readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
@@ -788,23 +790,28 @@ test("makensis compiles at -V4 so the include marker reaches the captured log (R
   );
 });
 
-test("every build job uploads its complete ci-logs set with if: always() (D18, I18)", () => {
+test("every job uploads exactly ONE consolidated log part with if: always() (D21/I18, run-#41 R2)", () => {
+  // Supersedes the run-#40 <job>-ci-logs-attempt contract: the eight
+  // per-class log artifacts became ONE <job>-logs-part-attempt<N>.txt
+  // per job, merged by the consolidate-logs job into the single
+  // SHEYTAN-LA-v<version>-all-logs artifact (D21). The job's ci-logs
+  // writes are untouched — only the upload surface is consolidated.
   const jobs = jobBlocks();
   for (const name of ["preflight", "audit", "build-windows", "build-linux"]) {
     const job = jobs.find((j) => j.name === name);
     assert.ok(job, `job ${name} exists`);
     const steps = jobStepBodies(job);
-    const allLogs = steps.find((s) =>
-      new RegExp(`uses: actions/upload-artifact@`).test(s.body.join("\n")) &&
-      new RegExp(`name: ${name}-ci-logs-attempt`).test(s.body.join("\n")),
+    const part = steps.find((s) =>
+      /uses: actions\/upload-artifact@/.test(s.body.join("\n")) &&
+      new RegExp(`name: ${name}-logs-part-attempt`).test(s.body.join("\n")),
     );
     assert.ok(
-      allLogs,
-      `${name} uploads a ${name}-ci-logs-attempt$\{{ github.run_attempt }} artifact`,
+      part,
+      `${name} uploads its ${name}-logs-part-attempt artifact (the D21 part)`,
     );
-    const body = allLogs.body.join("\n");
-    assert.match(body, /if: always\(\)/, `${name}'s all-logs upload runs on EVERY outcome`);
-    assert.match(body, /ci-logs/, `${name}'s all-logs upload covers the ci-logs directory`);
+    const body = part.body.join("\n");
+    assert.match(body, /if: always\(\)/, `${name}'s part upload runs on EVERY outcome`);
+    assert.match(body, /log-parts\//, `${name}'s part is built under log-parts/ (never self-includes ci-logs)`);
   }
 });
 
@@ -814,7 +821,8 @@ test("every actions pin is at or above its verified latest major (R4/D19, re-der
   //   actions/upload-artifact v7.0.2 (2026-10-07),
   //   actions/checkout v7.0.1, actions/setup-node v7.1.0,
   //   actions/setup-go v7.0.0, actions/setup-python v7,
-  //   actions/download-artifact v7.
+  //   actions/download-artifact v8.0.2 (2026-10-07) — re-verified live
+  //   from the releases page at P1 of the run-#41 cycle (2026-10-23).
   // install-qt-action stays frozen (charter: no Qt/aqtinstall changes).
   const floors = {
     "actions/cache": 6,
@@ -823,7 +831,7 @@ test("every actions pin is at or above its verified latest major (R4/D19, re-der
     "actions/setup-node": 7,
     "actions/setup-go": 7,
     "actions/setup-python": 7,
-    "actions/download-artifact": 7,
+    "actions/download-artifact": 8,
   };
   const wf = loadWorkflow();
   const pins = [...wf.matchAll(/uses: ([\w-]+\/[\w-]+)@(v\d+)/g)];
@@ -899,5 +907,251 @@ test("the Windows no-log guard names its gate commands, never a bare path (D17)"
     guard,
     /"win-gofmt\.log"\s+=\s+"gofmt -l \."/,
     "the guard maps win-gofmt.log to its command",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// v1.10.14-fixed run-#41 cycle (R1/R2/R3 — D17/D21/D22, Task ID 37).
+//
+// RED-FIRST: every assertion below FAILED against the run-#40 tree
+// (e1db00c). Run #40's last red was a CONTENT-FREE red: the Linux
+// "Stress suite" gate died with exit 1 (46 pass / 1 fail — the stale
+// GO_VERSION pin inside cmd/stress_release_surface.go) and its output
+// reached NO annotation — the exact class D17 bans; the stress step was
+// the only gate left outside the capture contract. The run's evidence
+// also sprawled across EIGHT log artifacts with no single .txt (D21).
+// ---------------------------------------------------------------------------
+
+test("the Linux stress gate captures its log from the first byte (I15, R1)", () => {
+  const body = findJobStep("build-linux", "Stress suite");
+  const firstCommand = body.search(/go build/);
+  assert.ok(firstCommand > 0, "the stress step body was located");
+  const eager = eagerCreationIndex(body, "ci-logs/stress-suite.log");
+  assert.ok(
+    eager >= 0,
+    "ci-logs/stress-suite.log is created eagerly (`: >`) at the step's first byte — run-#40's stress output reached no annotation because no log existed to carry it",
+  );
+  assert.ok(
+    eager < firstCommand,
+    "the stress log exists BEFORE the first command runs",
+  );
+  const teeAt = body.search(/tee ci-logs\/stress-suite\.log/);
+  assert.ok(teeAt > eager, "the stress run tees into ci-logs/stress-suite.log");
+  assert.match(
+    body,
+    /\/tmp\/sheytan-stress stress/,
+    "the stress command itself is unchanged (no weakening, no sleeps, no bound inflation)",
+  );
+  assert.match(body, /RUN stress suite/, "gate-order.txt carries the RUN marker");
+  assert.match(body, /OK stress suite/, "gate-order.txt carries the OK marker");
+  assert.match(
+    body,
+    /::notice::gate OK: stress suite/,
+    "a green stress gate emits its ONE success notice (I17: content or success, never silence)",
+  );
+  assert.match(
+    body,
+    /set -euo pipefail/,
+    "the step keeps its strict pipefail contract — a failing stress run still fails the step through the tee pipeline",
+  );
+});
+
+test("the stress failure summary publishes real error lines as annotations (D17, R1)", () => {
+  const wf = loadWorkflow();
+  const step = wf.match(
+    /- name: Stress failure summary \(Linux\)\n([\s\S]*?)(?=\n      - name: )/,
+  );
+  assert.ok(
+    step,
+    "an if:failure() stress summary step exists below the Stress suite step — run-#40's red had zero error annotations",
+  );
+  const body = step[1];
+  assert.match(body, /if: failure\(\)/, "the summary only runs on failure");
+  assert.match(body, /::error::/, "the summary emits ::error annotations");
+  assert.match(body, /FAIL/, "the summary extracts the suite's FAIL lines");
+  assert.match(
+    body,
+    /STRESS-RESULT/,
+    "the summary carries the pass/fail verdict line",
+  );
+  assert.match(
+    body,
+    /gate produced no log — capture defect/,
+    "the no-log guard is the named last resort (I15/I17), never silence",
+  );
+});
+
+test("the stress release-surface check follows the verified toolchain forward (R1/R3)", () => {
+  const src = readFileSync(
+    join(repoRoot, "cmd", "stress_release_surface.go"),
+    "utf8",
+  );
+  assert.ok(
+    !src.includes('GO_VERSION: "1.26"'),
+    "the stale 1.26 pin — run-#40's actual red — is gone (the workflow correctly moved to the 1.27 line in the run-#40 cycle; the check kept demanding 1.26)",
+  );
+  assert.match(src, /GO_VERSION: "1\.27"/, "the check pins the verified 1.27 line");
+  assert.ok(
+    !src.includes("actions/upload-artifact@v6"),
+    "the stale upload-artifact@v6 floor is gone (the workflow has been v7 since run #40)",
+  );
+  assert.match(src, /actions\/upload-artifact@v7/, "the check requires upload-artifact@v7");
+  assert.match(
+    src,
+    /actions\/download-artifact@v8/,
+    "the check requires download-artifact@v8 (the verified latest major, v8.0.2)",
+  );
+});
+
+test("the per-class log-artifact sprawl is gone (D21: exactly ONE log artifact remains)", () => {
+  const wf = loadWorkflow();
+  for (const stale of [
+    "name: preflight-verification-logs-attempt",
+    "name: preflight-ci-logs-attempt",
+    "name: audit-verification-logs-attempt",
+    "name: audit-ci-logs-attempt",
+    "name: windows-go-verification-logs-attempt",
+    "name: build-windows-ci-logs-attempt",
+    "name: windows-qt-acceptance-report-attempt",
+    "name: linux-verification-logs-attempt",
+    "name: build-linux-ci-logs-attempt",
+    "name: linux-qt-acceptance-report-attempt",
+  ]) {
+    assert.ok(
+      !wf.includes(stale),
+      `the intermediate artifact "${stale}" is folded into its job's part (D21)`,
+    );
+  }
+});
+
+test("scripts/consolidate-logs.mjs merges parts into ONE all-logs.txt deterministically (D21)", () => {
+  // Executable local proof: four fixture parts in, one all-logs.txt out,
+  // sections in the FIXED job order with per-section job/outcome
+  // headers; a missing part is a NAMED instrumentation failure (I18).
+  const tmp = mkdtempSync(join(tmpdir(), "shtn-consolidate-test-"));
+  try {
+    const parts = join(tmp, "parts");
+    mkdirSync(parts, { recursive: true });
+    const jobs = [
+      ["preflight", "success"],
+      ["audit", "success"],
+      ["build-windows", "success"],
+      ["build-linux", "failure"],
+    ];
+    for (const [job, outcome] of jobs) {
+      writeFileSync(
+        join(parts, `${job}-logs-part-1.txt`),
+        `job: ${job}\nattempt: 1\noutcome: ${outcome}\nrun: https://run.example/41\n----- ci-logs/gate-order.txt -----\nRUN go build\nOK go build\n----- ci-summary -----\nci-summary job=${job} outcome=${outcome}\n`,
+      );
+    }
+    const out = join(tmp, "all-logs.txt");
+    const r = spawnSync(
+      process.execPath,
+      [join(repoRoot, "scripts", "consolidate-logs.mjs"), "--parts", parts, "--out", out],
+      { encoding: "utf8" },
+    );
+    assert.equal(
+      r.status,
+      0,
+      `the merge exits 0 on complete parts (stderr: ${r.stderr.slice(0, 400)})`,
+    );
+    const merged = readFileSync(out, "utf8");
+    const at = {};
+    for (const [job, outcome] of jobs) {
+      const idx = merged.indexOf(`== JOB: ${job}`);
+      assert.ok(idx >= 0, `a section for ${job} exists`);
+      assert.ok(
+        merged.slice(idx, idx + 300).includes(`outcome: ${outcome}`),
+        `${job}'s section header carries its outcome`,
+      );
+      at[job] = idx;
+    }
+    assert.ok(
+      at.preflight < at.audit &&
+        at.audit < at["build-windows"] &&
+        at["build-windows"] < at["build-linux"],
+      "sections land in the FIXED job order (deterministic merge)",
+    );
+    assert.equal(
+      merged.split("== JOB:").length - 1,
+      4,
+      "every part contributes exactly one section",
+    );
+    rmSync(join(parts, "audit-logs-part-1.txt"));
+    const r2 = spawnSync(
+      process.execPath,
+      [join(repoRoot, "scripts", "consolidate-logs.mjs"), "--parts", parts, "--out", out],
+      { encoding: "utf8" },
+    );
+    assert.equal(
+      r2.status,
+      1,
+      "a missing part is a named instrumentation failure: the merge exits 1 (I18)",
+    );
+    assert.match(
+      readFileSync(out, "utf8"),
+      /MISSING PART.*audit/s,
+      "the missing audit section is NAMED in the merged output",
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("a consolidate-logs job merges the parts into the ONE all-logs artifact (D21, I18)", () => {
+  const jobs = jobBlocks();
+  const c = jobs.find((j) => j.name === "consolidate-logs");
+  assert.ok(c, "a consolidate-logs job exists");
+  const body = c.body.join("\n");
+  const needs = jobNeeds(c);
+  for (const n of ["preflight", "audit", "build-windows", "build-linux"]) {
+    assert.ok(needs.includes(n), `consolidate-logs needs ${n}`);
+  }
+  assert.match(
+    body,
+    /if: always\(\)/,
+    "consolidation runs on EVERY outcome — a red run still gets its one log",
+  );
+  assert.match(body, /timeout-minutes: \d+/, "consolidate-logs is time-bounded");
+  assert.match(
+    body,
+    /uses: actions\/download-artifact@v8/,
+    "parts download uses download-artifact@v8 (the verified latest major, R3)",
+  );
+  assert.match(body, /pattern:/, "the download selects all parts by pattern");
+  assert.match(
+    body,
+    /merge-multiple: true/,
+    "merge-multiple flattens the parts into one directory",
+  );
+  assert.match(
+    body,
+    /node scripts\/consolidate-logs\.mjs/,
+    "the deterministic merge script runs",
+  );
+  assert.match(
+    body,
+    /name: \$\{\{ env\.WIN_PKG_ROOT \}\}-v\$\{\{ env\.APP_VERSION \}\}-all-logs/,
+    "the ONE artifact name follows the naming map (renders SHEYTAN-LA-v1.10.14-all-logs; I11)",
+  );
+  assert.match(
+    body,
+    /all-logs\.txt/,
+    "the artifact contains exactly one file: all-logs.txt",
+  );
+  assert.match(
+    body,
+    /actions: write/,
+    "the job declares actions: write so it may delete the intermediate parts",
+  );
+  assert.match(
+    body,
+    /gh api -X DELETE/,
+    "intermediate parts are deleted in-run via the Artifacts API",
+  );
+  assert.match(
+    body,
+    /APP_VERSION: \$\{\{ needs\.audit\.outputs\.version \}\}/,
+    "identity flows from the audit job (ONE naming map, I11)",
   );
 });
