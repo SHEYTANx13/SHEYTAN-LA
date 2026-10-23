@@ -365,46 +365,210 @@ ApplicationWindow {
                 anchors.margins: 6
                 spacing: 4
 
-                Repeater {
-                    model: [
-                        { id: "chat", label: qsTr("Chat"), icon: "\u25C7" },
-                        { id: "agent", label: qsTr("Agent"), icon: "\u25C8" },
-                        { id: "workspace", label: qsTr("Workspace"), icon: "\u2380" },
-                        { id: "lab", label: qsTr("Lab"), icon: "\u25C6" },
-                        { id: "automation", label: qsTr("Autom."), icon: "\u23F1" },
-                        { id: "system", label: qsTr("System"), icon: "\u25A4" },
-                        { id: "settings", label: qsTr("Settings"), icon: "\u2699" }
-                    ]
-
-                    delegate: Button {
-                        id: navButton
-                        required property var modelData
-                        required property int index
-                        objectName: "nav-" + modelData.id
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 60
-                        checkable: true
-                        checked: root.currentView === modelData.id
-                        onClicked: root.currentView = modelData.id
-                        contentItem: ColumnLayout {
-                            spacing: 1
-                            Label {
-                                text: navButton.modelData.icon
-                                color: navButton.checked ? "#b8a6e8" : "#8a8a92"
-                                font.pixelSize: 14
-                                Layout.alignment: Qt.AlignHCenter
-                            }
-                            Label {
-                                text: navButton.modelData.label
-                                color: navButton.checked ? "#e8e8ea" : "#8a8a92"
-                                font.pixelSize: 9
-                                Layout.alignment: Qt.AlignHCenter
-                            }
+                // v1.10.15-fixed (R1/#43, Task ID 40): the nav buttons are
+                // SEVEN EXPLICIT objects with STATIC objectNames. The
+                // former Repeater delegate declared `required property int
+                // index` on a JS-array model — Qt 6.8.2 QQuickRepeater
+                // never initializes required index, so every delegate
+                // aborted creation and no "nav-<id>" object ever existed
+                // (run #43: "nav button missing for view: chat", both OSes,
+                // deterministic). Static buttons kill the whole class and
+                // keep the findChild contract (tst_acceptance.cpp:1060),
+                // the seven ids, the order and the visuals byte-equal.
+                Button {
+                    id: navChat
+                    objectName: "nav-chat"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 60
+                    checkable: true
+                    checked: root.currentView === "chat"
+                    onClicked: root.currentView = "chat"
+                    contentItem: ColumnLayout {
+                        spacing: 1
+                        Label {
+                            text: qsTr("\u25C7")
+                            color: navChat.checked ? "#b8a6e8" : "#8a8a92"
+                            font.pixelSize: 14
+                            Layout.alignment: Qt.AlignHCenter
                         }
-                        background: Rectangle {
-                            color: navButton.checked ? "#2c2c31" : (navButton.hovered ? "#1f1f23" : "transparent")
-                            radius: 6
+                        Label {
+                            text: qsTr("Chat")
+                            color: navChat.checked ? "#e8e8ea" : "#8a8a92"
+                            font.pixelSize: 9
+                            Layout.alignment: Qt.AlignHCenter
                         }
+                    }
+                    background: Rectangle {
+                        color: navChat.checked ? "#2c2c31" : (navChat.hovered ? "#1f1f23" : "transparent")
+                        radius: 6
+                    }
+                }
+                Button {
+                    id: navAgent
+                    objectName: "nav-agent"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 60
+                    checkable: true
+                    checked: root.currentView === "agent"
+                    onClicked: root.currentView = "agent"
+                    contentItem: ColumnLayout {
+                        spacing: 1
+                        Label {
+                            text: qsTr("\u25C8")
+                            color: navAgent.checked ? "#b8a6e8" : "#8a8a92"
+                            font.pixelSize: 14
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                        Label {
+                            text: qsTr("Agent")
+                            color: navAgent.checked ? "#e8e8ea" : "#8a8a92"
+                            font.pixelSize: 9
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                    }
+                    background: Rectangle {
+                        color: navAgent.checked ? "#2c2c31" : (navAgent.hovered ? "#1f1f23" : "transparent")
+                        radius: 6
+                    }
+                }
+                Button {
+                    id: navWorkspace
+                    objectName: "nav-workspace"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 60
+                    checkable: true
+                    checked: root.currentView === "workspace"
+                    onClicked: root.currentView = "workspace"
+                    contentItem: ColumnLayout {
+                        spacing: 1
+                        Label {
+                            text: qsTr("\u2380")
+                            color: navWorkspace.checked ? "#b8a6e8" : "#8a8a92"
+                            font.pixelSize: 14
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                        Label {
+                            text: qsTr("Workspace")
+                            color: navWorkspace.checked ? "#e8e8ea" : "#8a8a92"
+                            font.pixelSize: 9
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                    }
+                    background: Rectangle {
+                        color: navWorkspace.checked ? "#2c2c31" : (navWorkspace.hovered ? "#1f1f23" : "transparent")
+                        radius: 6
+                    }
+                }
+                Button {
+                    id: navLab
+                    objectName: "nav-lab"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 60
+                    checkable: true
+                    checked: root.currentView === "lab"
+                    onClicked: root.currentView = "lab"
+                    contentItem: ColumnLayout {
+                        spacing: 1
+                        Label {
+                            text: qsTr("\u25C6")
+                            color: navLab.checked ? "#b8a6e8" : "#8a8a92"
+                            font.pixelSize: 14
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                        Label {
+                            text: qsTr("Lab")
+                            color: navLab.checked ? "#e8e8ea" : "#8a8a92"
+                            font.pixelSize: 9
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                    }
+                    background: Rectangle {
+                        color: navLab.checked ? "#2c2c31" : (navLab.hovered ? "#1f1f23" : "transparent")
+                        radius: 6
+                    }
+                }
+                Button {
+                    id: navAutomation
+                    objectName: "nav-automation"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 60
+                    checkable: true
+                    checked: root.currentView === "automation"
+                    onClicked: root.currentView = "automation"
+                    contentItem: ColumnLayout {
+                        spacing: 1
+                        Label {
+                            text: qsTr("\u23F1")
+                            color: navAutomation.checked ? "#b8a6e8" : "#8a8a92"
+                            font.pixelSize: 14
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                        Label {
+                            text: qsTr("Autom.")
+                            color: navAutomation.checked ? "#e8e8ea" : "#8a8a92"
+                            font.pixelSize: 9
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                    }
+                    background: Rectangle {
+                        color: navAutomation.checked ? "#2c2c31" : (navAutomation.hovered ? "#1f1f23" : "transparent")
+                        radius: 6
+                    }
+                }
+                Button {
+                    id: navSystem
+                    objectName: "nav-system"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 60
+                    checkable: true
+                    checked: root.currentView === "system"
+                    onClicked: root.currentView = "system"
+                    contentItem: ColumnLayout {
+                        spacing: 1
+                        Label {
+                            text: qsTr("\u25A4")
+                            color: navSystem.checked ? "#b8a6e8" : "#8a8a92"
+                            font.pixelSize: 14
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                        Label {
+                            text: qsTr("System")
+                            color: navSystem.checked ? "#e8e8ea" : "#8a8a92"
+                            font.pixelSize: 9
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                    }
+                    background: Rectangle {
+                        color: navSystem.checked ? "#2c2c31" : (navSystem.hovered ? "#1f1f23" : "transparent")
+                        radius: 6
+                    }
+                }
+                Button {
+                    id: navSettings
+                    objectName: "nav-settings"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 60
+                    checkable: true
+                    checked: root.currentView === "settings"
+                    onClicked: root.currentView = "settings"
+                    contentItem: ColumnLayout {
+                        spacing: 1
+                        Label {
+                            text: qsTr("\u2699")
+                            color: navSettings.checked ? "#b8a6e8" : "#8a8a92"
+                            font.pixelSize: 14
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                        Label {
+                            text: qsTr("Settings")
+                            color: navSettings.checked ? "#e8e8ea" : "#8a8a92"
+                            font.pixelSize: 9
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                    }
+                    background: Rectangle {
+                        color: navSettings.checked ? "#2c2c31" : (navSettings.hovered ? "#1f1f23" : "transparent")
+                        radius: 6
                     }
                 }
 
@@ -709,7 +873,12 @@ ApplicationWindow {
                                 border.color: "#33333a"
                             }
                             Keys.onReturnPressed: (event) => {
-                                if (!(event.modifiers & Qt.ShiftModifier)) { sendButton.action(); event.accepted = true }
+                                // v1.10.15-fixed (R5/#43): submit() — a Button-
+                                // declared action() shadowed the FINAL
+                                // AbstractButton.action member (hosted QWARN
+                                // "Final member action is overridden ... The
+                                // override won't be used").
+                                if (!(event.modifiers & Qt.ShiftModifier)) { sendButton.submit(); event.accepted = true }
                             }
                         }
                     }
@@ -718,11 +887,11 @@ ApplicationWindow {
                         id: sendButton
                         text: qsTr("Send")
                         enabled: !Core.busy && input.text.trim() !== "" && Core.currentSession.id !== ""
-                        function action() {
+                        function submit() {
                             Core.send(input.text, false)
                             input.clear()
                         }
-                        onClicked: action()
+                        onClicked: submit()
                     }
                 }
             }

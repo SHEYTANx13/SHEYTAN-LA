@@ -156,7 +156,18 @@ Rectangle {
                         Layout.fillWidth: true
                         visible: Core.governor.governor !== undefined
                                  && Core.governor.governor.envelope !== undefined
-                        text: qsTr("envelope: ") + String(JSON.stringify(Core.governor.governor.envelope))
+                        // v1.10.15-fixed (R2/#43, Task ID 40): the text
+                        // binding itself now guards the nested read. A
+                        // `visible:` guard NEVER stops the eager text
+                        // evaluation — with a fresh CoreClient (m_governor
+                        // = {}), Core.governor.governor is undefined and
+                        // the old unguarded expression threw "Cannot read
+                        // property 'envelope' of undefined" at load time
+                        // (hosted TypeError, qmlLoadsCleanly, run #43).
+                        text: (Core.governor.governor !== undefined
+                               && Core.governor.governor.envelope !== undefined)
+                              ? qsTr("envelope: ") + String(JSON.stringify(Core.governor.governor.envelope))
+                              : qsTr("envelope: not loaded")
                         color: "#8a8a92"
                         font.pixelSize: 11
                         wrapMode: Text.Wrap

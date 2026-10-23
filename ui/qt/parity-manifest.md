@@ -79,4 +79,10 @@ and acceptance NOT RUN), `NOT RUN` (unported — honest gap, never faked).
   hosted QtTest acceptance run are the ONLY compile-proof — NOT RUN at
   doc time; the next hosted run on the exact changed commit is
   authoritative (I20/I21).
-- Pre-existing dirty state: none. Baseline bf6cf2d, version 1.10.15 held.
+- Pre-existing dirty state: none. Baseline f5a31cf (run-#44 cycle,
+  Task ID 40), version 1.10.15 held. Run-#44 fixes landed under the
+  same rows: R1 nav chrome (seven static nav buttons — the Repeater
+  required-index delegate class never created them), R2 per-engine
+  Core singleton + SystemView envelope guard, R3 WorkspaceView recents
+  delegates restored, R5 submit() rename + Basic style in the harness.
+  The React reference tree under src/ is untouched.

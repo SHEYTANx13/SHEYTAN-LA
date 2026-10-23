@@ -137,7 +137,13 @@ Rectangle {
                         model: Core.workspace.recentFiles !== undefined ? Core.workspace.recentFiles : []
                         delegate: Label {
                             required property var modelData
-                            required property int index
+                            // v1.10.15-fixed (R3/#43): `required property int
+                            // index` dropped — Qt 6.8.2 QQuickRepeater never
+                            // initializes required index on JS-array models,
+                            // so every delegate aborted creation and the
+                            // recents list silently rendered EMPTY (the same
+                            // class as the nav-chat red gate; index is unused
+                            // in this delegate).
                             Layout.fillWidth: true
                             text: (modelData.path !== undefined ? modelData.path : String(modelData))
                             color: "#8a8a92"

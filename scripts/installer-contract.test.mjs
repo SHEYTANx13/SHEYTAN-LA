@@ -31,7 +31,7 @@
  * proof; this file makes the payload regression IMPOSSIBLE TO COMMIT.
  */
 
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1522,4 +1522,138 @@ test("R1/D28: coreclient reads the config (the refreshConfig stub is gone)", () 
     /Q_PROPERTY\(QVariantMap config/,
     "the config state is a Q_PROPERTY the QML views bind",
   );
+});
+
+// Recursively enumerate the tracked QML production files.
+function qmlFiles(dir) {
+  const out = {};
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) Object.assign(out, qmlFiles(p));
+    else if (e.name.endsWith(".qml")) out[p] = true;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// 12. Run-#44 cycle (Task ID 40) — RED-first regression pins for the #43
+// RED class. Every assertion in this section FAILS at f5a31cf by design
+// (P2 gate): each names a §0-hosted defect and locks the exact fix class.
+// Hosted evidence: run 40010996300 (Linux + Windows, deterministic).
+// ---------------------------------------------------------------------------
+
+const NAV_VIEWS = ["chat", "agent", "workspace", "lab", "automation", "system", "settings"];
+
+test("R1/#43: Main.qml nav chrome exposes SEVEN STATIC nav buttons (findChild contract)", () => {
+  const main = readFileSync(join(repoRoot, "ui", "qt", "qml", "Main.qml"), "utf8");
+  for (const id of NAV_VIEWS) {
+    assert.ok(
+      main.includes(`objectName: "nav-${id}"`),
+      `Main.qml must carry the static nav button objectName: "nav-${id}" (the tst_acceptance.cpp:1060 findChild contract; the dynamic "nav-" + modelData.id binding never materialized on the hosted engine)`,
+    );
+  }
+  // The dynamic objectName binding class is retired with the static buttons.
+  assert.doesNotMatch(
+    main,
+    /objectName:\s*"nav-"\s*\+/,
+    "the dynamic nav objectName binding is replaced by the seven static buttons",
+  );
+});
+
+test("R1-R3/#43: no Repeater-owned delegate declares required property int index (Qt 6.8 Repeater drops them)", () => {
+  // Hosted mechanism (run #43, both OSes): QQuickRepeater does not
+  // initialize `required property int index` on JS-array delegates — the
+  // delegate aborts creation, the object never exists (nav-chat) and the
+  // surface silently renders empty (WorkspaceView recents). ListView
+  // delegates KEEP full required-index support (the canonical pattern).
+  const qmlDir = join(repoRoot, "ui", "qt", "qml");
+  const offenders = [];
+  for (const f of Object.keys(qmlFiles(qmlDir))) {
+    const lines = readFileSync(f, "utf8").split("\n");
+    let owner = null;
+    lines.forEach((line, i) => {
+      if (/^\s*(Repeater|ListView|GridView|TableView) \{/.test(line)) owner = { kind: line.trim().split(" ")[0], at: i };
+      if (/delegate:/.test(line) && owner && owner.kind === "Repeater") {
+        const body = lines.slice(i, i + 8).join("\n");
+        if (/required property int index/.test(body)) {
+          offenders.push(`${f.replace(repoRoot + "/", "")}:${i + 1}`);
+        }
+      }
+    });
+  }
+  assert.deepStrictEqual(offenders, [],
+    `Repeater delegates must not require index (delegates silently dropped on Qt 6.8.2): ${offenders.join(", ")}`);
+});
+
+test("R4/#43: the Windows Go-verification summary implements the three-class clean-silent guard", () => {
+  const wf = loadWorkflow();
+  const at = wf.indexOf("gate produced no log");
+  assert.ok(at >= 0, "the capture-defect guard exists");
+  const block = wf.slice(wf.lastIndexOf("$gateOrderPath = Join-Path", at), at + 600);
+  // clean-silent: empty + OK marker is valid, NEVER annotated (I15/I17).
+  assert.ok(
+    /clean-silent|cleanSilent/i.test(block) && /gate-order/.test(block),
+    "the empty-log branch must consult gate-order markers and classify empty+OK as clean-silent (go vet/gofmt emit no stdout on success)",
+  );
+  assert.ok(
+    /::warning::.*(never started|NEVER-STARTED)/i.test(block),
+    "NEVER-STARTED (no RUN marker, no log) emits one ::warning, never an ::error (I17)",
+  );
+  assert.doesNotMatch(
+    block,
+    /-eq 0\)\s*\{\s*\r?\n\s*Write-Host "::error::gate produced no log[^"]*EMPTY/,
+    "the unconditional empty=>::error branch (the run-#43 false-positive class) is retired",
+  );
+});
+
+test("R2/#43: Core registers per-engine (qmlRegisterSingletonType) in the suite AND the host", () => {
+  const acc = readFileSync(join(repoRoot, "ui", "qt", "tests", "tst_acceptance.cpp"), "utf8");
+  const host = readFileSync(join(repoRoot, "ui", "qt", "src", "main.cpp"), "utf8");
+  // Comment-stripped: the docs may NAME the retired API; no CALL may remain.
+  const codeOf = (s) => s.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  for (const [name, src] of [["tst_acceptance.cpp", acc], ["main.cpp", host]]) {
+    const code = codeOf(src);
+    assert.match(code, /qmlRegisterSingletonType/, `${name}: per-engine singleton provider`);
+    assert.doesNotMatch(code, /qmlRegisterSingletonInstance/,
+      `${name}: the one-engine registration is retired (hosted warning: "Singleton registered by registerSingletonInstance must only be accessed from one engine")`);
+  }
+});
+
+test("R2/#43: SystemView envelope binding guards the nested read (zero TypeErrors at load)", () => {
+  const sys = readFileSync(join(repoRoot, "ui", "qt", "qml", "SystemView.qml"), "utf8");
+  const at = sys.indexOf("envelope: ");
+  assert.ok(at >= 0, "the envelope label exists");
+  const binding = sys.slice(sys.lastIndexOf("text:", at), at + 120);
+  assert.match(
+    binding,
+    /text:\s*\(?\s*Core\.governor\.governor\s*!==\s*undefined/,
+    "the envelope text binding itself must guard the nested read (a visible: guard never stops the eager text evaluation — hosted TypeError in qmlLoadsCleanly with a FRESH CoreClient)",
+  );
+});
+
+test("R5/#43: no QML Button declares function action() (final-member override class)", () => {
+  const qmlDir = join(repoRoot, "ui", "qt", "qml");
+  const offenders = Object.keys(qmlFiles(qmlDir))
+    .filter((f) => /function action\s*\(/.test(readFileSync(f, "utf8")))
+    .map((f) => f.replace(repoRoot + "/", ""));
+  assert.deepStrictEqual(offenders, [],
+    `Button-declared action() shadows the final AbstractButton.action member: ${offenders.join(", ")}`);
+});
+
+test("R5/#43: the acceptance harness mirrors the production Basic style", () => {
+  const acc = readFileSync(join(repoRoot, "ui", "qt", "tests", "tst_acceptance.cpp"), "utf8");
+  assert.match(
+    acc,
+    /QQuickStyle::setStyle|QT_QUICK_CONTROLS_STYLE/,
+    "the suite must pin the same style main.cpp pins (Basic) BEFORE any engine loads — the Windows run otherwise exercises windowsvista and fires the background-customization warning class",
+  );
+});
+
+test("R1/I21: the manifest chat-nav row is asserted by the static-buttons contract", () => {
+  const manifest = readFileSync(join(repoRoot, "ui", "qt", "parity-manifest.md"), "utf8");
+  assert.match(manifest, /nav-chrome[^\n]*navChromeSevenViewsLoad/,
+    "the manifest keeps the chat-nav row wired to its gate");
+  const main = readFileSync(join(repoRoot, "ui", "qt", "qml", "Main.qml"), "utf8");
+  assert.match(main, /property var navViews: \["chat", "agent", "workspace", "lab", "automation", "system", "settings"\]/,
+    "the seven-view navViews contract stays byte-identical");
 });

@@ -2333,17 +2333,47 @@ jobs:
             "win-go-vet.log"           = "go vet ./..."
           }
 
-          # v1.10.14-fixed (R3/D15): a gate log that is absent or EMPTY at
-          # failure time is a NAMED instrumentation failure — never silence
-          # (I15). The tee'd logs must exist from their gate's first byte;
-          # a missing one means the gate never started or the capture
-          # wiring is broken, and either way the operator reads it here.
+          # v1.10.15-fixed (R4/#43, Task ID 40): THREE guard classes. The
+          # run-#43 false-positive class — "win-go-vet.log exists but is
+          # EMPTY" fired ::error for gates that had PASSED clean-silently
+          # (go vet / gofmt emit NO stdout on success) — is retired.
+          # Classification reads gate-order.txt, which every gate marks
+          # BEFORE its command (first-byte protocol, I15):
+          #   NEVER-STARTED           — no log AND no RUN marker: the job
+          #                             died upstream. ONE ::warning (I17).
+          #   STARTED-DIED-BEFORE-LOG — no log but a RUN marker: capture
+          #                             wiring broke. ::error (real defect).
+          #   STARTED-EMPTY-EXIT-0    — empty log with an OK marker:
+          #                             clean-silent, valid, never annotated.
+          #   empty + no OK           — named instrumentation failure (::error).
+          $gateOrderPath = Join-Path "ci-logs" "gate-order.txt"
+          $gateOrderLines = @()
+          if (Test-Path $gateOrderPath) {
+            $gateOrderLines = @(Get-Content $gateOrderPath -ErrorAction SilentlyContinue)
+          }
           foreach ($name in $goLogs) {
             $p = Join-Path "ci-logs" $name
-            if (-not (Test-Path $p)) {
-              Write-Host "::error::gate produced no log — capture defect: $p absent at failure time (gate: $($goLogCommands[$name]) — it died before its first log byte)"
+            $cmd = $goLogCommands[$name]
+            $logAbsent = -not (Test-Path $p)
+            $started = $false; $ok = $false
+            foreach ($m in $gateOrderLines) {
+              if ($m -like "RUN $cmd") { $started = $true }
+              if ($m -like "OK $cmd")  { $ok = $true }
+            }
+            if ($logAbsent -and -not $started) {
+              # NEVER-STARTED: the failure is upstream of this gate.
+              Write-Host "::warning::gate never started — no log and no RUN marker for '$cmd' (the job died upstream; NEVER-STARTED is one ::warning, never an ::error — I17/D29)"
+            } elseif ($logAbsent) {
+              # STARTED-DIED-BEFORE-LOG: the gate began but its first-byte
+              # log never materialized — a capture wiring defect.
+              Write-Host "::error::gate produced no log — capture defect: $p absent at failure time (gate: $cmd — it died before its first log byte)"
+            } elseif (((Get-Item $p).Length -eq 0) -and $ok) {
+              # clean-silent: empty + exit 0 is the GREEN signature for
+              # stdout-silent gates — valid, never a capture defect.
+              Write-Host "gate log clean-silent (valid): $p is empty with an OK marker (gate: $cmd)"
             } elseif ((Get-Item $p).Length -eq 0) {
-              Write-Host "::error::gate produced no log — capture defect: $p exists but is EMPTY (gate: $($goLogCommands[$name]))"
+              # empty + nonzero exit: named instrumentation failure.
+              Write-Host "::error::gate log EMPTY without an OK marker — instrumentation failure (gate: $cmd — empty + nonzero exit is never silent)"
             }
           }
           $gateLogMap = @{

@@ -29,6 +29,9 @@
 #include <QQmlContext>
 #include <QQuickWindow>
 #include <QQuickItem>
+#include <QQuickStyle>
+#include <QQmlEngine>
+#include <QJSEngine>
 #include <QProcess>
 #include <QTemporaryDir>
 #include <QDir>
@@ -153,6 +156,15 @@ bool Acceptance::waitForGoalState(CoreClient *core, const std::function<bool()> 
 }
 
 void Acceptance::initTestCase() {
+    // v1.10.15-fixed (R5/#43): mirror the host's style contract BEFORE any
+    // engine exists. main.cpp pins QQuickStyle "Basic"; the suite never
+    // did, so the Windows acceptance engines exercised windowsvista and
+    // fired the "current style does not support customization of this
+    // control (property: background)" warning class (run #43 report) —
+    // against the SAME QML the host renders under Basic. Same style, same
+    // surfaces, one honest report.
+    QQuickStyle::setStyle(QStringLiteral("Basic"));
+
     // Deterministic fixture engine.
     const QString repo = qEnvironmentVariable("SHEYTAN_REPO");
     QVERIFY2(!repo.isEmpty(), "SHEYTAN_REPO must point at the checkout");
@@ -962,13 +974,17 @@ void Acceptance::qmlLoadsCleanly() {
 
     QQmlApplicationEngine engine;
     // The host registers the CoreClient singleton under the sheytan.ui URI
-    // BEFORE the engine loads Main.qml (main.cpp: qmlRegisterSingletonInstance
+    // BEFORE the engine loads Main.qml (main.cpp: qmlRegisterSingletonType
     // + Main.qml "import sheytan.ui" + Core.* bindings). Mirror that wiring
     // exactly, or creation would fail for an environment artifact instead of
-    // a product defect. The instance is unconnected — identical to the
+    // a product defect. v1.10.15-fixed (R2/#43): the per-engine provider —
+    // the former direct qmlRegisterSingletonInstance call here created a
+    // SECOND one-engine instance and poisoned every later engine in the
+    // suite (the SettingsView:308/316/342 TypeError class). The instance
+    // handed to THIS engine is fresh and unconnected — identical to the
     // host's own pre-connect state at creation time (Main.qml's
     // Component.onCompleted connect is endpoint-guarded and stays off).
-    qmlRegisterSingletonInstance("sheytan.ui", 1, 0, "Core", new CoreClient());
+    registerCoreSingleton();
     bool creationFailed = false;
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
                      [&creationFailed]() { creationFailed = true; });
@@ -1011,14 +1027,31 @@ static QString findParityQml(const QString &name) {
     return QString();
 }
 
-// registerCoreSingleton registers the CoreClient singleton ONCE for the
-// whole process (the same wiring qmlLoadsCleanly mirrors from main.cpp).
-// Repeated registration with identical arguments would also work, but the
-// guard keeps the fixture deterministic.
+// coreProvider — v1.10.15-fixed (R2/#43, Task ID 40): the per-engine Core
+// source. The former qmlRegisterSingletonInstance call binds ONE instance
+// to ONE engine; every LATER engine in this suite resolved the singleton
+// into undefined property reads and the hosted warning "Singleton
+// registered by registerSingletonInstance must only be accessed from one
+// engine" (run #43: SettingsView.qml:308/316/342 TypeErrors —
+// "Cannot read property 'showPerfHud' of undefined" — Core.config was
+// undefined there). The provider hands EVERY engine its own fresh
+// CoreClient with safe defaults (empty maps/lists — every FIELD_PLACEMENT
+// read is defined); no state is shared and no engine touches another's
+// instance. The engine owns the returned object.
+static QObject *coreProvider(QQmlEngine *qml, QJSEngine *js) {
+    Q_UNUSED(qml);
+    Q_UNUSED(js);
+    return new CoreClient();
+}
+
+// registerCoreSingleton registers the per-engine Core singleton type ONCE
+// for the whole process (the same wiring qmlLoadsCleanly and main.cpp
+// mirror). Repeated registration with identical arguments would also
+// work, but the guard keeps the fixture deterministic.
 static void registerCoreSingleton() {
     static bool done = false;
     if (!done) {
-        qmlRegisterSingletonInstance("sheytan.ui", 1, 0, "Core", new CoreClient());
+        qmlRegisterSingletonType<CoreClient>("sheytan.ui", 1, 0, "Core", coreProvider);
         done = true;
     }
 }

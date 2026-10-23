@@ -6,11 +6,26 @@
 // SHEYTAN_IPC_KEY on the command line) exists for local runs only.
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
+#include <QQmlEngine>
+#include <QJSEngine>
 #include <QQuickStyle>
 #include <QCommandLineParser>
 #include <QUrl>
 
 #include "coreclient.h"
+
+// v1.10.15-fixed (R2/#43, Task ID 40): the per-engine Core provider — the
+// same wiring the acceptance suite mirrors. The former
+// qmlRegisterSingletonInstance binds the instance to ONE engine; any
+// second engine (the acceptance suite's pattern) hit the hosted warning
+// "Singleton registered by registerSingletonInstance must only be accessed
+// from one engine" and read Core.config as undefined. The provider hands
+// every engine its own instance; the engine owns it.
+static QObject *coreProvider(QQmlEngine *qml, QJSEngine *js) {
+    Q_UNUSED(qml);
+    Q_UNUSED(js);
+    return new CoreClient();
+}
 
 int main(int argc, char *argv[]) {
     QGuiApplication app(argc, argv);
@@ -42,7 +57,7 @@ int main(int argc, char *argv[]) {
                             ? qEnvironmentVariable("SHEYTAN_IPC_KEY")
                             : parser.value("key");
 
-    qmlRegisterSingletonInstance("sheytan.ui", 1, 0, "Core", new CoreClient());
+    qmlRegisterSingletonType<CoreClient>("sheytan.ui", 1, 0, "Core", coreProvider);
 
     QQmlApplicationEngine engine;
     const QUrl url(QStringLiteral("qrc:/qml/Main.qml"));

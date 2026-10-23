@@ -281,7 +281,10 @@ Rectangle {
                                 enabled: !Core.busy && Core.currentSession.id !== undefined && Core.currentSession.id !== ""
                                 background: Rectangle { color: "#222226"; radius: 6; border.color: "#33333a" }
                                 Keys.onReturnPressed: (event) => {
-                                    if (!(event.modifiers & Qt.ShiftModifier)) { agentSend.action(); event.accepted = true }
+                                    // v1.10.15-fixed (R5/#43): submit() — the
+                                    // final-member action() override class is
+                                    // retired (hosted QWARN evidence).
+                                    if (!(event.modifiers & Qt.ShiftModifier)) { agentSend.submit(); event.accepted = true }
                                 }
                             }
                         }
@@ -290,11 +293,11 @@ Rectangle {
                             id: agentSend
                             text: qsTr("Send")
                             enabled: !Core.busy && agentInput.text.trim() !== "" && Core.currentSession.id !== ""
-                            function action() {
+                            function submit() {
                                 Core.send(agentInput.text, netSearchToggle.checked)
                                 agentInput.clear()
                             }
-                            onClicked: action()
+                            onClicked: submit()
                         }
 
                         Button {
