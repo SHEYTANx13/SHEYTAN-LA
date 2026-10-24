@@ -367,6 +367,11 @@ void CoreClient::connectToCore(const QString &endpoint, const QString &key) {
                     // v1.10.15-fixed R4 (D32): the motion tier default is
                     // probed once, right after the channel is up.
                     probeDeviceTier();
+                    // v1.11.0-fixed R3 (run-#48): the hardware snapshot
+                    // lands with the first connect, so the SystemView
+                    // panel is populated from the start (not probe-once
+                    // silently discarded — the snapshot persists on Core).
+                    refreshSysinfo();
                 } else if (status == 200 && ok) {
                     setError(QStringLiteral("protocol mismatch: core speaks %1/%2, UI requires sheytan-ipc/1")
                                  .arg(hs.value("protocol").toString())
@@ -901,6 +906,31 @@ void CoreClient::refreshModels() {
     });
 }
 
+// v1.11.0-fixed R2 (run-#48, Task ID 43): the shipped selection path —
+// ONE 1:1 POST to the EXISTING /api/models/select handler. The selection
+// state machine owns persist + verify + engine boot; this client only
+// re-reads the authoritative sources after the core answers. A failed
+// select is a typed visible error (the v1.10.3 rule — never a silent
+// stale drawer).
+void CoreClient::selectModel(const QString &id) {
+    QJsonObject payload;
+    payload.insert("model", id);
+    request("POST", "/api/models/select",
+            QJsonDocument(payload).toJson(QJsonDocument::Compact),
+            [this](int status, const QByteArray &body) {
+                if (status != 200) {
+                    setError(QStringLiteral("model select failed (%1)")
+                                 .arg(transportReason(status, body)));
+                    return;
+                }
+                // The core persisted and applied the selection. Re-read the
+                // authoritative config (the selection may normalize the
+                // model id) and the model list (serving state changed).
+                refreshConfig();
+                refreshModels();
+            });
+}
+
 void CoreClient::refreshPreflight() {
     request("GET", "/api/preflight", QByteArray(), [this](int status, const QByteArray &body) {
         if (status != 200) {
@@ -966,6 +996,28 @@ void CoreClient::refreshTools() {
         }
         m_tools = l;
         emit toolsChanged();
+    });
+}
+
+// v1.11.0-fixed R3 (run-#48, Task ID 43): the AVAILABLE-tool catalog —
+// GET /api/tools, the immutable registry snapshot (name, description,
+// detail, source) the Wails settings render the enabledTools checkbox
+// list from. A failed read is a typed visible error; the registry stays
+// server-owned.
+void CoreClient::refreshToolCatalog() {
+    request("GET", "/api/tools", QByteArray(), [this](int status, const QByteArray &body) {
+        if (status != 200) {
+            setError(QStringLiteral("tool catalog refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        bool ok = false;
+        const QVariantList l = toListRoot(body, &ok);
+        if (!ok) {
+            setError(QStringLiteral("tool catalog refresh failed (malformed payload)"));
+            return;
+        }
+        m_toolCatalog = l;
+        emit toolCatalogChanged();
     });
 }
 
@@ -1269,4 +1321,28 @@ void CoreClient::cancelEngineDownload() {
                 // The engine store is the authority: re-read the snapshot.
                 refreshEngine();
             }, 15000);
+}
+
+// v1.11.0-fixed R3 (run-#48, Task ID 43): the hardware snapshot — ONE
+// bounded GET of the EXISTING /api/sysinfo handler, exposed verbatim to
+// QML (SystemView hardware panel, Settings diagnostics). The same
+// snapshot probeDeviceTier reads for the motion tier default; the
+// difference is retention: the panel re-reads on demand, the core stays
+// the hardware authority, and a failed read is a typed visible error
+// (never a silently stale panel).
+void CoreClient::refreshSysinfo() {
+    request("GET", "/api/sysinfo", QByteArray(), [this](int status, const QByteArray &body) {
+        if (status != 200) {
+            setError(QStringLiteral("sysinfo refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        bool ok = false;
+        const QVariantMap m = toMap(body, &ok);
+        if (!ok) {
+            setError(QStringLiteral("sysinfo refresh failed (malformed payload)"));
+            return;
+        }
+        m_sysinfo = m;
+        emit sysinfoChanged();
+    });
 }

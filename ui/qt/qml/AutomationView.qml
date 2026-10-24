@@ -14,7 +14,7 @@ import sheytan.ui
 Rectangle {
     id: root
     objectName: "automationView"
-    color: "#121214"
+    color: Theme.background
 
     Component.onCompleted: {
         if (Core.connected) { Core.refreshAutomation(); Core.refreshAutomationArtifacts() }
@@ -28,37 +28,37 @@ Rectangle {
 
     RowLayout {
         anchors.fill: parent
-        anchors.margins: 16
-        spacing: 16
+        anchors.margins: Theme.spaceL
+        spacing: Theme.spaceL
 
         // --- Tasks ----------------------------------------------------------
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            radius: 8
-            color: "#1a1a1d"
+            radius: Theme.radiusM
+            color: Theme.surfaceElevated
             Behavior on color {
                 enabled: Core.animationsEnabled
-                ColorAnimation { duration: 120 }
+                ColorAnimation { duration: Theme.motionFast }
             }
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 12
-                spacing: 8
+                anchors.margins: Theme.spaceM
+                spacing: Theme.spaceS
 
                 RowLayout {
                     Layout.fillWidth: true
                     Label {
                         text: qsTr("AUTOMATION")
-                        color: "#b8a6e8"
-                        font.pixelSize: 11
+                        color: Theme.accent
+                        font.pixelSize: Theme.fontXS
                         font.bold: true
                     }
                     Label {
                         text: qsTr("Schedules, runs, tools, artifacts")
-                        color: "#e8e8ea"
-                        font.pixelSize: 15
+                        color: Theme.text
+                        font.pixelSize: Theme.fontL
                         font.bold: true
                         Layout.fillWidth: true
                     }
@@ -73,7 +73,7 @@ Rectangle {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     clip: true
-                    spacing: 8
+                    spacing: Theme.spaceS
                     model: Core.automationTasks
                     ScrollBar.vertical: ScrollBar {}
 
@@ -83,11 +83,11 @@ Rectangle {
                         required property int index
                         width: taskList.width
                         height: taskCol.implicitHeight + 20
-                        radius: 8
-                        color: "#222226"
+                        radius: Theme.radiusM
+                        color: Theme.elevatedAlt
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 120 }
+                            ColorAnimation { duration: Theme.motionFast }
                         }
 
                         function taskId() {
@@ -101,21 +101,21 @@ Rectangle {
                             id: taskCol
                             anchors.fill: parent
                             anchors.margins: 10
-                            spacing: 4
+                            spacing: Theme.spaceXS
 
                             RowLayout {
                                 Layout.fillWidth: true
                                 Label {
                                     text: taskCard.modelData.name !== undefined
                                           ? taskCard.modelData.name : taskCard.taskId()
-                                    color: "#e8e8ea"
+                                    color: Theme.text
                                     font.bold: true
                                     elide: Text.ElideRight
                                     Layout.fillWidth: true
                                 }
                                 Label {
                                     text: taskCard.running() ? qsTr("RUNNING") : qsTr("idle")
-                                    color: taskCard.running() ? "#7dd3a0" : "#8a8a92"
+                                    color: taskCard.running() ? Theme.success : Theme.muted
                                     font.pixelSize: 10
                                     font.bold: true
                                 }
@@ -125,8 +125,8 @@ Rectangle {
                                 text: taskCard.taskId() + "  ·  "
                                       + (taskCard.modelData.schedule !== undefined
                                          ? String(JSON.stringify(taskCard.modelData.schedule)) : qsTr("manual"))
-                                color: "#8a8a92"
-                                font.pixelSize: 11
+                                color: Theme.muted
+                                font.pixelSize: Theme.fontXS
                                 elide: Text.ElideRight
                             }
                             RowLayout {
@@ -172,17 +172,17 @@ Rectangle {
         Rectangle {
             Layout.preferredWidth: 360
             Layout.fillHeight: true
-            radius: 8
-            color: "#17171a"
+            radius: Theme.radiusM
+            color: Theme.surface
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 12
-                spacing: 8
+                anchors.margins: Theme.spaceM
+                spacing: Theme.spaceS
 
                 Label {
                     text: qsTr("Artifacts")
-                    color: "#e8e8ea"
+                    color: Theme.text
                     font.bold: true
                 }
 
@@ -199,30 +199,30 @@ Rectangle {
                         required property var modelData
                         width: artifactList.width
                         height: artCol.implicitHeight + 16
-                        radius: 6
-                        color: "#222226"
+                        radius: Theme.radiusM
+                        color: Theme.elevatedAlt
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 120 }
+                            ColorAnimation { duration: Theme.motionFast }
                         }
 
                         ColumnLayout {
                             id: artCol
                             anchors.fill: parent
-                            anchors.margins: 8
+                            anchors.margins: Theme.spaceS
                             spacing: 2
                             Label {
                                 Layout.fillWidth: true
                                 text: modelData.name !== undefined ? modelData.name
                                       : (modelData.id !== undefined ? modelData.id : qsTr("artifact"))
-                                color: "#e8e8ea"
-                                font.pixelSize: 12
+                                color: Theme.text
+                                font.pixelSize: Theme.fontS
                                 elide: Text.ElideRight
                             }
                             Label {
                                 Layout.fillWidth: true
                                 text: String(JSON.stringify(modelData))
-                                color: "#8a8a92"
+                                color: Theme.muted
                                 font.pixelSize: 10
                                 elide: Text.ElideRight
                             }

@@ -15,7 +15,7 @@ import sheytan.ui
 Rectangle {
     id: root
     objectName: "agentView"
-    color: "#121214"
+    color: Theme.background
 
     property string selectedGoalId: ""
     // The History/Models/Goals overlays are owned by the shell (Main.qml);
@@ -40,7 +40,7 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 48
-            color: "#1a1a1d"
+            color: Theme.surfaceElevated
 
             RowLayout {
                 anchors.fill: parent
@@ -49,13 +49,13 @@ Rectangle {
 
                 Label {
                     text: qsTr("AGENT")
-                    color: "#b8a6e8"
-                    font.pixelSize: 11
+                    color: Theme.accent
+                    font.pixelSize: Theme.fontXS
                     font.bold: true
                 }
                 Label {
                     text: qsTr("Interactive local intelligence")
-                    color: "#e8e8ea"
+                    color: Theme.text
                     font.pixelSize: 14
                     font.bold: true
                     Layout.fillWidth: true
@@ -64,8 +64,8 @@ Rectangle {
                     text: Core.currentSession.id !== undefined && Core.currentSession.id !== ""
                           ? qsTr("session: ") + (Core.currentSession.title !== undefined && Core.currentSession.title !== "" ? Core.currentSession.title : Core.currentSession.id)
                           : qsTr("no session")
-                    color: "#8a8a92"
-                    font.pixelSize: 11
+                    color: Theme.muted
+                    font.pixelSize: Theme.fontXS
                     elide: Text.ElideRight
                     Layout.maximumWidth: 320
                 }
@@ -82,7 +82,7 @@ Rectangle {
             }
         }
 
-        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: "#2a2a2e" }
+        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Theme.border }
 
         // --- Body: goals sidebar | transcript | task panel -----------------
         RowLayout {
@@ -95,16 +95,16 @@ Rectangle {
             Rectangle {
                 Layout.fillHeight: true
                 Layout.preferredWidth: 240
-                color: "#17171a"
+                color: Theme.surface
 
                 ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 10
-                    spacing: 8
+                    spacing: Theme.spaceS
 
                     Label {
                         text: qsTr("Goals")
-                        color: "#e8e8ea"
+                        color: Theme.text
                         font.bold: true
                     }
 
@@ -127,24 +127,24 @@ Rectangle {
                                 spacing: 2
                                 Label {
                                     text: modelData.originalGoal
-                                    color: parent.parent.active ? "#b8a6e8" : "#e8e8ea"
-                                    font.pixelSize: 12
+                                    color: parent.parent.active ? Theme.accent : Theme.text
+                                    font.pixelSize: Theme.fontS
                                     elide: Text.ElideRight
                                     Layout.fillWidth: true
                                 }
                                 Label {
                                     text: modelData.status + " · " + modelData.phase
-                                    color: "#8a8a92"
+                                    color: Theme.muted
                                     font.pixelSize: 10
                                     elide: Text.ElideRight
                                 }
                             }
                             background: Rectangle {
-                                color: parent.active ? "#2c2c31" : (parent.hovered ? "#222226" : "transparent")
-                                radius: 6
+                                color: parent.active ? Theme.control : (parent.hovered ? Theme.elevatedAlt : "transparent")
+                                radius: Theme.radiusM
                                 Behavior on color {
                                     enabled: Core.animationsEnabled
-                                    ColorAnimation { duration: 120 }
+                                    ColorAnimation { duration: Theme.motionFast }
                                 }
                             }
                         }
@@ -160,7 +160,7 @@ Rectangle {
                 }
             }
 
-            Rectangle { Layout.fillHeight: true; Layout.preferredWidth: 1; color: "#2a2a2e" }
+            Rectangle { Layout.fillHeight: true; Layout.preferredWidth: 1; color: Theme.border }
 
             // Transcript (AgentBody parity — same authoritative session).
             ColumnLayout {
@@ -185,17 +185,17 @@ Rectangle {
                         width: agentTranscript.width - 48
                         x: 24
                         height: agentText.implicitHeight + 28
-                        radius: 8
-                        color: modelData.role === "user" ? "#26415a" : "#222226"
+                        radius: Theme.radiusM
+                        color: modelData.role === "user" ? Theme.infoDim : Theme.elevatedAlt
 
                         ColumnLayout {
                             anchors.fill: parent
-                            anchors.margins: 12
-                            spacing: 4
+                            anchors.margins: Theme.spaceM
+                            spacing: Theme.spaceXS
                             Label {
                                 text: modelData.role === "user" ? qsTr("You") : qsTr("SHEYTAN")
-                                color: modelData.role === "user" ? "#8fb8dd" : "#b8a6e8"
-                                font.pixelSize: 11
+                                color: modelData.role === "user" ? Theme.info : Theme.accent
+                                font.pixelSize: Theme.fontXS
                                 font.bold: true
                             }
                             TextEdit {
@@ -203,7 +203,7 @@ Rectangle {
                                 text: modelData.content
                                 readOnly: true
                                 wrapMode: TextEdit.Wrap
-                                color: "#e8e8ea"
+                                color: Theme.text
                                 Layout.fillWidth: true
                                 textFormat: TextEdit.PlainText
                                 selectByMouse: true
@@ -222,14 +222,14 @@ Rectangle {
 
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.margins: 12
+                    Layout.margins: Theme.spaceM
                     // v1.10.15-fixed R3/R4 (D32/I22): the live panel appears
                     // and settles under the ONE motion gate.
                     visible: Core.liveActive || opacity > 0
                     opacity: Core.liveActive ? 1 : 0
                     implicitHeight: agentLive.implicitHeight + 24
-                    radius: 8
-                    color: "#2a2440"
+                    radius: Theme.radiusM
+                    color: Theme.accentDim
                     Behavior on opacity {
                         enabled: Core.animationsEnabled
                         NumberAnimation { duration: 160 }
@@ -238,14 +238,14 @@ Rectangle {
                     ColumnLayout {
                         id: agentLive
                         anchors.fill: parent
-                        anchors.margins: 12
-                        spacing: 4
+                        anchors.margins: Theme.spaceM
+                        spacing: Theme.spaceXS
                         RowLayout {
                             Layout.fillWidth: true
                             Label {
                                 text: qsTr("SHEYTAN (live)")
-                                color: "#b8a6e8"
-                                font.pixelSize: 11
+                                color: Theme.accent
+                                font.pixelSize: Theme.fontXS
                                 font.bold: true
                                 Layout.fillWidth: true
                             }
@@ -262,7 +262,7 @@ Rectangle {
                                 readOnly: true
                                 text: Core.liveText === "" ? qsTr("…") : Core.liveText
                                 wrapMode: TextArea.Wrap
-                                color: "#e8e8ea"
+                                color: Theme.text
                                 background: null
                             }
                         }
@@ -280,13 +280,13 @@ Rectangle {
                 Rectangle {
                     objectName: "agent-maintenance-banner"
                     Layout.fillWidth: true
-                    Layout.margins: 12
+                    Layout.margins: Theme.spaceM
                     visible: Core.connected
                              && Core.maintenance.phase !== undefined
                              && Core.maintenance.phase !== ""
                     implicitHeight: maintLabel.implicitHeight + 20
-                    radius: 8
-                    color: "#3a3324"
+                    radius: Theme.radiusM
+                    color: Theme.warnDim
                     Label {
                         id: maintLabel
                         anchors.fill: parent
@@ -295,8 +295,8 @@ Rectangle {
                               + (Core.maintenance.phase !== undefined ? Core.maintenance.phase : "")
                               + (Core.maintenance.message !== undefined && Core.maintenance.message !== ""
                                  ? " — " + Core.maintenance.message : "")
-                        color: "#e8c268"
-                        font.pixelSize: 12
+                        color: Theme.warn
+                        font.pixelSize: Theme.fontS
                         wrapMode: Text.Wrap
                     }
                 }
@@ -313,13 +313,13 @@ Rectangle {
                 Rectangle {
                     objectName: "agent-download-panel"
                     Layout.fillWidth: true
-                    Layout.margins: 12
+                    Layout.margins: Theme.spaceM
                     visible: Core.connected
                              && Core.engine.download !== undefined
                              && Core.engine.download.phase !== undefined
                     implicitHeight: downloadCol.implicitHeight + 20
-                    radius: 8
-                    color: "#1f2a3a"
+                    radius: Theme.radiusM
+                    color: Theme.infoDimAlt
 
                     ColumnLayout {
                         id: downloadCol
@@ -333,8 +333,8 @@ Rectangle {
                                 text: qsTr("Downloading engine asset — ")
                                       + (Core.engine.download !== undefined && Core.engine.download.phase !== undefined
                                          ? Core.engine.download.phase : "")
-                                color: "#8fb8dd"
-                                font.pixelSize: 12
+                                color: Theme.info
+                                font.pixelSize: Theme.fontS
                                 font.bold: true
                                 Layout.fillWidth: true
                             }
@@ -366,7 +366,7 @@ Rectangle {
                             text: visible
                                   ? (Core.engine.download.bytesPerSec / 1048576).toFixed(2) + qsTr(" MB/s")
                                   : ""
-                            color: "#8a8a92"
+                            color: Theme.muted
                             font.pixelSize: 10
                         }
                     }
@@ -374,8 +374,8 @@ Rectangle {
 
                 RowLayout {
                     Layout.fillWidth: true
-                    Layout.leftMargin: 12
-                    Layout.rightMargin: 12
+                    Layout.leftMargin: Theme.spaceM
+                    Layout.rightMargin: Theme.spaceM
                     // v1.10.15-fixed R3 (D37/I21): ActivityStream parity —
                     // the live activity feed toggle (src/AgentBody.tsx:
                     // "Show activity"/"Hide activity"). Events come from the
@@ -394,19 +394,19 @@ Rectangle {
                 Rectangle {
                     objectName: "agent-activity-stream"
                     Layout.fillWidth: true
-                    Layout.leftMargin: 12
-                    Layout.rightMargin: 12
+                    Layout.leftMargin: Theme.spaceM
+                    Layout.rightMargin: Theme.spaceM
                     Layout.preferredHeight: agentActivityToggle.checked ? 160 : 0
                     visible: agentActivityToggle.checked
                     clip: true
-                    radius: 8
-                    color: "#17171a"
+                    radius: Theme.radiusM
+                    color: Theme.surface
 
                     ListView {
                         anchors.fill: parent
-                        anchors.margins: 8
+                        anchors.margins: Theme.spaceS
                         clip: true
-                        spacing: 4
+                        spacing: Theme.spaceXS
                         model: Core.activityEvents
                         ScrollBar.vertical: ScrollBar {}
 
@@ -422,8 +422,8 @@ Rectangle {
                                 if (modelData.error !== undefined) return modelData.error
                                 return modelData.type
                             }
-                            color: modelData.type === "error" ? "#e8a0a0" : "#b8b8c0"
-                            font.pixelSize: 11
+                            color: modelData.type === "error" ? Theme.error : Theme.textSoft
+                            font.pixelSize: Theme.fontXS
                             elide: Text.ElideRight
                         }
                     }
@@ -432,13 +432,13 @@ Rectangle {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: agentComposer.implicitHeight + 24
-                    color: "#1a1a1d"
+                    color: Theme.surfaceElevated
 
                     RowLayout {
                         id: agentComposer
                         anchors.fill: parent
-                        anchors.margins: 12
-                        spacing: 8
+                        anchors.margins: Theme.spaceM
+                        spacing: Theme.spaceS
 
                         ScrollView {
                             Layout.fillWidth: true
@@ -448,9 +448,9 @@ Rectangle {
                                 placeholderText: Core.currentSession.id
                                                  ? qsTr("Task the agent…") : qsTr("Create or open a session first")
                                 wrapMode: TextArea.Wrap
-                                color: "#e8e8ea"
+                                color: Theme.text
                                 enabled: !Core.busy && Core.currentSession.id !== undefined && Core.currentSession.id !== ""
-                                background: Rectangle { color: "#222226"; radius: 6; border.color: "#33333a" }
+                                background: Rectangle { color: Theme.elevatedAlt; radius: Theme.radiusM; border.color: Theme.controlHover }
                                 Keys.onReturnPressed: (event) => {
                                     // v1.10.15-fixed (R5/#43): submit() — the
                                     // final-member action() override class is
@@ -480,23 +480,23 @@ Rectangle {
                 }
             }
 
-            Rectangle { Layout.fillHeight: true; Layout.preferredWidth: 1; color: "#2a2a2e" }
+            Rectangle { Layout.fillHeight: true; Layout.preferredWidth: 1; color: Theme.border }
 
             // Task panel (AgentTaskPanel parity — the selected goal's
             // ACTUAL plan state; progress derives from PlanStep.status).
             Rectangle {
                 Layout.fillHeight: true
                 Layout.preferredWidth: 300
-                color: "#17171a"
+                color: Theme.surface
 
                 ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 10
-                    spacing: 8
+                    spacing: Theme.spaceS
 
                     Label {
                         text: qsTr("Task panel")
-                        color: "#e8e8ea"
+                        color: Theme.text
                         font.bold: true
                     }
 
@@ -504,8 +504,8 @@ Rectangle {
                         Layout.fillWidth: true
                         visible: root.selectedGoalId === ""
                         text: qsTr("Select a goal to inspect its plan.")
-                        color: "#8a8a92"
-                        font.pixelSize: 11
+                        color: Theme.muted
+                        font.pixelSize: Theme.fontXS
                         wrapMode: Text.Wrap
                     }
 
@@ -516,29 +516,29 @@ Rectangle {
                             required property var modelData
                             Layout.fillWidth: true
                             implicitHeight: taskStepCol.implicitHeight + 16
-                            radius: 6
-                            color: modelData.status === "completed" ? "#243a2c" : "#222226"
+                            radius: Theme.radiusM
+                            color: modelData.status === "completed" ? Theme.successDim : Theme.elevatedAlt
 
                             ColumnLayout {
                                 id: taskStepCol
                                 anchors.fill: parent
-                                anchors.margins: 8
+                                anchors.margins: Theme.spaceS
                                 spacing: 2
                                 Label {
                                     text: qsTr("step") + " " + (index + 1)
-                                    color: "#8a8a92"
+                                    color: Theme.muted
                                     font.pixelSize: 10
                                 }
                                 Label {
                                     text: modelData.objective !== undefined ? modelData.objective : ""
-                                    color: "#e8e8ea"
-                                    font.pixelSize: 11
+                                    color: Theme.text
+                                    font.pixelSize: Theme.fontXS
                                     wrapMode: Text.Wrap
                                     Layout.fillWidth: true
                                 }
                                 Label {
                                     text: modelData.status !== undefined ? modelData.status : ""
-                                    color: modelData.status === "completed" ? "#7dd3a0" : "#e8c268"
+                                    color: modelData.status === "completed" ? Theme.success : Theme.warn
                                     font.pixelSize: 10
                                 }
                             }

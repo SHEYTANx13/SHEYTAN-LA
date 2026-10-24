@@ -35,10 +35,16 @@ int main(int argc, char *argv[]) {
     // release identity rule (I6/I12) holds for the Qt host too. The value
     // is pinned to package.json's version by the installer-contract suite
     // (R4/I12), so the next bump cannot re-drift it silently.
-    QGuiApplication::setApplicationVersion(QStringLiteral("1.10.15"));
+    QGuiApplication::setApplicationVersion(QStringLiteral("1.11.0"));
     QGuiApplication::setOrganizationName(QStringLiteral("Parsaetak"));
 
-    QQuickStyle::setStyle(QStringLiteral("Basic"));
+    // v1.11.0 (R1b, run-#48, Task ID 43): the custom QuickControls2 style
+    // replaces the Basic default — the operator's "old-fashioned UI"
+    // defect (90-degree-corner buttons, unthemed controls). The style is
+    // embedded at qrc:/sheytanstyle (ui/qt/style/, CMake qt_add_resources)
+    // and binds the ONE Theme singleton; every stock control renders themed
+    // by default. Set BEFORE any engine loads.
+    QQuickStyle::setStyle(QStringLiteral(":/sheytanstyle"));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral("SHEYTAN Local Agent — Qt desktop host"));

@@ -100,6 +100,13 @@ private slots:
     void systemViewLoads();
     void extrasSurfacesLoad();
     void animationsToggleGatesEveryMotion();
+    // v1.11.0-fixed (run-#48, Task ID 43): the I24 live-path slots — the
+    // model-selection round-trip (list → select through POST
+    // /api/models/select → config reflects → persists across a REAL core
+    // restart) and the hardware-panel surface. Both drive CoreClient on
+    // the SHIPPED transport against the live core.
+    void modelSelectRoundTripPersistsAcrossRestart();
+    void hardwarePanelSurfacesSysinfo();
     // v1.10.3 framing + contract suite (byte-level CoreClient rules against
     // a raw hand-written HTTP fake; the REAL-core slots above prove live
     // behavior, these prove the framing/handshake/encoding contract):
@@ -117,6 +124,10 @@ private slots:
 
 private:
     bool waitFor(const std::function<bool()> &cond, int timeoutMs = 30000);
+    // v1.11.0-fixed (run-#48): restart the fixture core on the SAME data
+    // dir — the spawn choreography initTestCase uses, minus the fixture
+    // engine (already running). Returns false on any failure.
+    bool restartCore();
     // v1.10.13 Goals observability: the client owns NO goal state beyond
     // its last read (the coreclient.cpp contract), and the drive mutates
     // the durable store ASYNCHRONOUSLY — an async transition is observable
@@ -169,14 +180,13 @@ bool Acceptance::waitForGoalState(CoreClient *core, const std::function<bool()> 
 }
 
 void Acceptance::initTestCase() {
-    // v1.10.15-fixed (R5/#43): mirror the host's style contract BEFORE any
-    // engine exists. main.cpp pins QQuickStyle "Basic"; the suite never
-    // did, so the Windows acceptance engines exercised windowsvista and
-    // fired the "current style does not support customization of this
-    // control (property: background)" warning class (run #43 report) —
-    // against the SAME QML the host renders under Basic. Same style, same
+    // v1.11.0-fixed (R1/I24, run-#48, Task ID 43): mirror the host's style
+    // contract BEFORE any engine exists. main.cpp pins the custom
+    // QuickControls2 style (":/sheytanstyle") — the suite must exercise the
+    // SAME style the shipped host renders, or this is the run-#47 class one
+    // layer up (green harness, different product). Same style, same
     // surfaces, one honest report.
-    QQuickStyle::setStyle(QStringLiteral("Basic"));
+    QQuickStyle::setStyle(QStringLiteral(":/sheytanstyle"));
 
     // Deterministic fixture engine.
     const QString repo = qEnvironmentVariable("SHEYTAN_REPO");
@@ -357,6 +367,139 @@ void Acceptance::chatStreamPersistRepeatAndClose() {
         dumpChatPersistDiagnostics(core, m_endpoint, QStringLiteral("repeat-assistant-count==2"));
     }
     QVERIFY(repeatPersisted);
+}
+
+// v1.11.0-fixed (run-#48, Task ID 43): restart the fixture core on the
+// SAME data dir. Same choreography as initTestCase (spawn, env, endpoint
+// read from the core's own log line) — the fixture engine keeps running.
+bool Acceptance::restartCore() {
+    if (m_core) {
+        m_core->terminate();
+        if (!m_core->waitForFinished(10000)) m_core->kill();
+        m_core->waitForFinished(5000);
+        m_core->deleteLater();
+        m_core = nullptr;
+    }
+    m_endpoint.clear();
+
+    const QString coreBin = qEnvironmentVariable("SHEYTAN_CORE_BIN");
+    if (!QFileInfo::exists(coreBin)) return false;
+
+    m_core = new QProcess(this);
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("SHEYTAN_DATA_DIR"), m_data.path() + QStringLiteral("/data"));
+    env.insert(QStringLiteral("SHEYTAN_UI_EXECUTABLE"), QStringLiteral("none"));
+    env.insert(QStringLiteral("SHEYTAN_IPC_KEY"), QStringLiteral("acceptance"));
+    m_core->setProcessEnvironment(env);
+    m_core->setProgram(coreBin);
+    m_core->start();
+    if (!m_core->waitForStarted(5000)) return false;
+
+    const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + 15000;
+    while (QDateTime::currentMSecsSinceEpoch() < deadline) {
+        const QString out = QString::fromUtf8(m_core->readAllStandardOutput());
+        QRegularExpression re("core endpoint: (\\S+)");
+        auto m = re.match(out);
+        if (m.hasMatch()) { m_endpoint = m.captured(1); break; }
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    }
+    return !m_endpoint.isEmpty();
+}
+
+// v1.11.0-fixed (run-#48, I24): the model-selection round-trip on the
+// SHIPPED path. The run-#47 lesson made concrete: the harness previously
+// only LISTED models (extrasSurfacesLoad) while the shipped app selected
+// through POST /api/models/select — a path the Qt client never called.
+// This slot drives CoreClient.selectModel end-to-end against the live
+// core: list → select → config reflects → REAL core restart on the same
+// data dir → the selection persists.
+void Acceptance::modelSelectRoundTripPersistsAcrossRestart() {
+    CoreClient core;
+    bool handshake = false;
+    connect(&core, &CoreClient::handshakeDone, [&]() { handshake = true; });
+
+    core.connectToCore(m_endpoint, QStringLiteral("acceptance"));
+    QVERIFY(waitFor([&]() { return handshake; }));
+    QVERIFY2(core.error().isEmpty(), qPrintable(core.error()));
+    QVERIFY(waitFor([&]() { return core.connected(); }));
+
+    // The selection state machine is a LOCAL-engine concept (a remote
+    // provider refuses /api/models/select with a 400). Flip the provider
+    // through the shipped config patch and stage a resolvable fixture
+    // GGUF — llm.ResolveModelPath's contract is existence.
+    QDir(m_data.path() + QStringLiteral("/data")).mkpath(QStringLiteral("models"));
+    QFile modelFile(m_data.path() + QStringLiteral("/data/models/fixture-model.gguf"));
+    QVERIFY(modelFile.open(QIODevice::WriteOnly));
+    modelFile.write("GGUF fixture — file existence is the resolution contract\n");
+    modelFile.close();
+
+    core.refreshConfig();
+    QVERIFY(waitFor([&]() { return core.config().contains(QStringLiteral("provider")); }, 10000));
+    core.patchConfig(QVariantMap{{QStringLiteral("provider"), QStringLiteral("local")}});
+    QVERIFY(waitFor([&]() {
+        return core.config().value(QStringLiteral("provider")).toString() == QStringLiteral("local");
+    }, 10000));
+
+    // LIST on the live path (the picker's source).
+    core.refreshModels();
+    QVERIFY(waitFor([&]() {
+        const auto models = core.models();
+        for (const auto &m : models)
+            if (m.toMap().value("id").toString() == QStringLiteral("fixture-model.gguf")) return true;
+        return false;
+    }, 10000));
+
+    // SELECT through the SHIPPED invokable — POST /api/models/select.
+    core.selectModel(QStringLiteral("fixture-model.gguf"));
+    QVERIFY2(waitFor([&]() {
+        return core.config().value(QStringLiteral("model")).toString() == QStringLiteral("fixture-model.gguf");
+    }, 15000), qPrintable(QStringLiteral("selection never reflected in config: %1").arg(core.error())));
+
+    // RESTART the core on the SAME data dir and reconnect — the selection
+    // must survive through the durable config store.
+    QVERIFY2(restartCore(), "the fixture core restart failed");
+
+    CoreClient core2;
+    bool handshake2 = false;
+    connect(&core2, &CoreClient::handshakeDone, [&]() { handshake2 = true; });
+    core2.connectToCore(m_endpoint, QStringLiteral("acceptance"));
+    QVERIFY(waitFor([&]() { return handshake2; }));
+    QVERIFY2(core2.error().isEmpty(), qPrintable(core2.error()));
+    QVERIFY(waitFor([&]() { return core2.connected(); }));
+    core2.refreshConfig();
+    QVERIFY(waitFor([&]() { return core2.config().contains(QStringLiteral("model")); }, 10000));
+    QCOMPARE(core2.config().value(QStringLiteral("model")).toString(), QStringLiteral("fixture-model.gguf"));
+}
+
+// v1.11.0-fixed (run-#48, R3c): the hardware panel's data surface — ONE
+// live read of the EXISTING /api/sysinfo through the shipped client, the
+// snapshot the SystemView hardware panel (and Settings diagnostics) bind
+// verbatim. The core stays the hardware authority; the assertion pins
+// the fields the panel renders (os/arch/cpu/ram/gpus + cpu.name).
+void Acceptance::hardwarePanelSurfacesSysinfo() {
+    CoreClient core;
+    bool handshake = false;
+    connect(&core, &CoreClient::handshakeDone, [&]() { handshake = true; });
+
+    core.connectToCore(m_endpoint, QStringLiteral("acceptance"));
+    QVERIFY(waitFor([&]() { return handshake; }));
+    QVERIFY2(core.error().isEmpty(), qPrintable(core.error()));
+    QVERIFY(waitFor([&]() { return core.connected(); }));
+
+    core.refreshSysinfo();
+    QVERIFY2(waitFor([&]() { return !core.sysinfo().isEmpty(); }, 15000),
+             "the /api/sysinfo snapshot never landed on Core.sysinfo");
+
+    const QVariantMap sys = core.sysinfo();
+    QVERIFY2(sys.contains(QStringLiteral("os")), "sysinfo must carry os (the panel's OS/arch chip)");
+    QVERIFY2(sys.contains(QStringLiteral("arch")), "sysinfo must carry arch");
+    QVERIFY2(sys.contains(QStringLiteral("cpu")), "sysinfo must carry cpu (the panel's CPU row)");
+    QVERIFY2(sys.contains(QStringLiteral("ram")), "sysinfo must carry ram (the panel's RAM row)");
+    QVERIFY2(sys.contains(QStringLiteral("gpus")), "sysinfo must carry the gpus list (the panel's GPU rows)");
+
+    const QVariantMap cpu = sys.value(QStringLiteral("cpu")).toMap();
+    QVERIFY2(cpu.contains(QStringLiteral("name")), "sysinfo.cpu must carry the device name the panel renders");
+    QVERIFY2(!cpu.value(QStringLiteral("name")).toString().isEmpty(), "sysinfo.cpu.name must be non-empty");
 }
 
 void Acceptance::cleanupTestCase() {
@@ -1153,9 +1296,11 @@ void Acceptance::settingsEightSectionsAllFields() {
     QCOMPARE(rootObj->property("sectionCount").toInt(), 8);
 
     // Every FIELD_PLACEMENT field must be present in the view's
-    // declarative registry — the full 72-field census.
+    // declarative registry — the full census (71 fields since run-#48:
+    // the browserSlowMoMsAlias ghost key is gone — no Go config field
+    // exists for it and the Wails reference renders no control either).
     const QVariantList keys = rootObj->property("allFieldKeys").toList();
-    QVERIFY2(keys.size() >= 72,
+    QVERIFY2(keys.size() >= 71,
              qPrintable(QStringLiteral("the settings registry must carry the full FIELD_PLACEMENT census (found %1)")
                             .arg(keys.size())));
     QList<QVariant> got;
@@ -1178,7 +1323,7 @@ void Acceptance::settingsEightSectionsAllFields() {
         "labCommandTimeoutSec", "labMaxIterations", "runTimeoutMinutes",
         "attachmentsBudgetKb", "multiAgentDepth", "researchTimeoutSec",
         "researchCacheTtlMin", "researchUserAgent", "browserExecutablePath",
-        "browserSlowMoMs", "browserHeadless", "browserSlowMoMsAlias",
+        "browserSlowMoMs", "browserHeadless",
         "temperature", "topP", "topK", "minP", "maxTokens", "repeatPenalty", "seed",
     };
     for (const char *key : census) {

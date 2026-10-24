@@ -1306,24 +1306,27 @@ test("R2/I15: every Linux test-stage log is created before its command (first-by
   }
 });
 
-test("R4/I12: the release identity is 1.10.15 on every version surface (D26)", () => {
-  assert.equal(loadVersion(), "1.10.15", "package.json (the one version source)");
+test("R4/I12: the release identity agrees on every version surface (D26, package.json is the ONE source)", () => {
+  // v1.11.0 (run-#48 R5): the pin is version-agnostic — the surfaces must
+  // spell the package.json version, wherever it moves. The absolute-value
+  // pin lives in the run-#48 R5/I12 test below (re-version C15).
+  const version = loadVersion();
+  assert.match(version, /^\d+\.\d+\.\d+$/, "package.json (the one version source)");
   const goCfg = readFileSync(join(repoRoot, "internal", "config", "config.go"), "utf8");
-  assert.match(goCfg, /AppVersion[ \t]*=[ \t]*"1\.10\.15"/, "internal/config/config.go");
+  assert.match(goCfg, new RegExp(`AppVersion[ \\t]*=[ \\t]*"${version.replace(/\\./g, "\\.")}"`), "internal/config/config.go");
   const buildCfg = readFileSync(join(repoRoot, "build", "config.yml"), "utf8");
-  assert.match(buildCfg, /productVersion:[ \t]*"1\.10\.15"/, "build/config.yml");
+  assert.match(buildCfg, new RegExp(`productVersion:[ \\t]*"${version.replace(/\\./g, "\\.")}"`), "build/config.yml");
   const signature = readFileSync(join(repoRoot, "SIGNATURE"), "utf8");
-  assert.match(signature, /^SHEYTAN-Local-Agent v1\.10\.15/m, "SIGNATURE first line");
+  assert.match(signature, new RegExp(`^SHEYTAN-Local-Agent v${version.replace(/\\./g, "\\.")}$`, "m"), "SIGNATURE first line");
   // v1.10.15-fixed (R3/I6): the Qt host carried a drifted hardcoded
   // identity ("1.10.1" through ten releases) — the surface now moves with
   // package.json, and this assertion keeps it from re-drifting silently.
   const qtMain = readFileSync(join(repoRoot, "ui", "qt", "src", "main.cpp"), "utf8");
   assert.match(
     qtMain,
-    /setApplicationVersion\(QStringLiteral\("1\.10\.15"\)\)/,
+    new RegExp(`setApplicationVersion\\(QStringLiteral\\("${version.replace(/\\./g, "\\.")}"\\)\\)`),
     "ui/qt/src/main.cpp applicationVersion",
   );
-  assert.ok(!/1\.10\.1"/.test(qtMain.split("setApplicationVersion")[1] || ""), "no stale drift literal");
   // No drift in either direction: the retired version must not survive on
   // any surface (workflow comments narrating run history are not surfaces).
   for (const [file, text] of [
@@ -1332,7 +1335,7 @@ test("R4/I12: the release identity is 1.10.15 on every version surface (D26)", (
     ["build/config.yml", buildCfg],
   ]) {
     assert.ok(
-      !/"?1\.10\.14"?/.test(text.replace(/1\.10\.15/g, "")),
+      !/"?1\.10\.14"?/.test(text.replace(new RegExp(version.replace(/\./g, "\\."), "g"), "")),
       `${file} carries no stale 1.10.14 identity`,
     );
   }
@@ -2107,4 +2110,234 @@ test("R2/I23: every Qt header the Qt targets include maps to a linked Qt6 module
     [],
     `every Qt include must map to a declared AND linked module on BOTH targets (I23/D36): ${problems.join(" | ")}`,
   );
+});
+
+// ---------------------------------------------------------------------------
+// 13. Run-#48 cycle (Task ID 43) — RED-first coverage for the operator's
+// four defects at v1.10.15 (R1 theme, R2 runtime path, R3 options +
+// hardware, R4 Linux package) plus the R5 identity bump. Every test in
+// this section FAILS at 4703621 by design (P2 gate): each names a §0
+// defect and locks the exact fix class. Hosted evidence: run 40100279630
+// (green) + the operator's physical log (the harness-green/runtime-broken
+// gap that I24 closes).
+// ---------------------------------------------------------------------------
+
+function loadQmlView(name) {
+  return readFileSync(join(repoRoot, "ui", "qt", "qml", name), "utf8");
+}
+
+const QML_VIEWS = [
+  "Main.qml", "AgentView.qml", "SettingsView.qml", "SystemView.qml",
+  "WorkspaceView.qml", "LabView.qml", "AutomationView.qml",
+  "HistoryDrawer.qml", "ModelPickerDrawer.qml", "MyToolsDrawer.qml",
+  "LogViewerDrawer.qml", "PerfStrip.qml", "EmptyState.qml",
+];
+
+// R1(a)+(b): ONE theme system — a Theme singleton plus a QuickControls2
+// custom style so every stock control renders themed by default. The
+// shipped app pinned QQuickStyle "Basic" (main.cpp:41): 90-degree grey
+// rectangles everywhere, the operator's "old-fashioned UI" defect.
+test("run-#48 R1: a Theme singleton + QuickControls2 custom style exists and BOTH hosts select it", () => {
+  const styleDir = join(repoRoot, "ui", "qt", "style");
+  assert.ok(existsSync(styleDir), "ui/qt/style must exist (the ONE theme system lives here)");
+  const required = [
+    "qmldir", "Button.qml", "ToolButton.qml", "TextField.qml",
+    "TextArea.qml", "ComboBox.qml", "CheckBox.qml", "Switch.qml",
+    "Slider.qml", "ProgressBar.qml", "ScrollBar.qml", "Menu.qml",
+    "MenuItem.qml", "ItemDelegate.qml",
+  ];
+  for (const f of required)
+    assert.ok(existsSync(join(styleDir, f)), `ui/qt/style/${f} missing — stock controls fall back to Basic (90-degree corners)`);
+
+  const mainCpp = readFileSync(join(repoRoot, "ui", "qt", "src", "main.cpp"), "utf8");
+  assert.ok(
+    !mainCpp.includes('setStyle(QStringLiteral("Basic"))'),
+    "main.cpp must never ship the Basic style again (the unthemed-UI defect)",
+  );
+  assert.match(
+    mainCpp,
+    /QQuickStyle::setStyle\(\s*QStringLiteral\(":\/sheytanstyle"\)\s*\)/,
+    "main.cpp must select the resource-embedded custom style :/sheytanstyle",
+  );
+  const cmake = readFileSync(join(repoRoot, "ui", "qt", "CMakeLists.txt"), "utf8");
+  assert.match(cmake, /qt_add_resources\(sheytan-ui sheytan_style/, "CMakeLists must embed the style directory as a raw resource (qt_add_resources)");
+  assert.match(cmake, /PREFIX "\/sheytanstyle"/, "the style resource must land at /sheytanstyle so QQuickStyle can resolve it");
+  assert.match(cmake, /qt_add_resources\(sheytan-ui-acceptance sheytan_style/, "the acceptance target must embed the SAME style (I24)");
+  // The Theme singleton is a sheytan.ui module singleton: every view sees
+  // it through the implicit module import (zero per-file import churn).
+  assert.match(cmake, /Theme\.qml/, "CMakeLists must register Theme.qml in the sheytan.ui QML module");
+});
+
+// R1(c): every view binds the Theme tokens — no hardcoded colors. Theme.qml
+// is the ONE token source (a sheytan.ui module singleton) and is the only
+// qml/ file allowed to carry raw palette literals.
+test("run-#48 R1: every view resolves Theme tokens — ZERO hardcoded color literals in qml/", () => {
+  const offenders = [];
+  for (const f of QML_VIEWS) {
+    assert.ok(existsSync(join(repoRoot, "ui", "qt", "qml", f)), `view ${f} vanished`);
+    const code = qmlCodeOf(loadQmlView(f));
+    if (/#[0-9a-fA-F]{3,8}\b/.test(code)) offenders.push(f);
+    assert.ok(
+      code.includes("Theme."),
+      `${f} must bind colors/spacing/radii through the Theme singleton (R1c)`,
+    );
+  }
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    `hardcoded color literals must become Theme tokens in: ${offenders.join(", ")}`,
+  );
+  const theme = loadQmlView("Theme.qml");
+  assert.match(theme, /^pragma Singleton/m, "Theme.qml is the sheytan.ui module singleton");
+  assert.match(theme, /readonly property int radiusS/, "Theme carries the corner-radius scale (no 90-degree corner anywhere)");
+  assert.match(theme, /readonly property int motionNormal/, "Theme carries the motion durations");
+});
+
+// R2: model selection must go through the shipped select authority. The
+// Qt client only ever called patchConfig({model}) — POST /api/models/select
+// (persist + verify + engine boot through the selection state machine) was
+// NEVER wired, while the manifest row claimed it. The harness only listed
+// models (extrasSurfacesLoad), so the break was invisible — I24.
+test("run-#48 R2: Core.selectModel drives the live POST /api/models/select path end-to-end", () => {
+  const h = readFileSync(join(repoRoot, "ui", "qt", "src", "coreclient.h"), "utf8");
+  const cpp = readFileSync(join(repoRoot, "ui", "qt", "src", "coreclient.cpp"), "utf8");
+  assert.match(h, /Q_INVOKABLE void selectModel\(/, "CoreClient must expose selectModel(id) — the Wails selection path");
+  assert.match(cpp, /\/api\/models\/select/, "coreclient.cpp must POST /api/models/select (the shipped selection authority)");
+  const drawer = loadQmlView("ModelPickerDrawer.qml");
+  assert.match(drawer, /Core\.selectModel\(/, "ModelPickerDrawer Select must call Core.selectModel — patchConfig({model}) bypasses the selection state machine");
+  assert.ok(!drawer.includes("Core.patchConfig({ model:"), "the config-patch selection shortcut must be gone");
+  const acc = readFileSync(join(repoRoot, "ui", "qt", "tests", "tst_acceptance.cpp"), "utf8");
+  assert.match(acc, /modelSelectRoundTripPersistsAcrossRestart/, "the live-path selection round-trip (list → select → config reflects → persists across restart) must be asserted against the real core transport");
+  // I24: the same assertion drives the SHIPPED transport (CoreClient over
+  // the local channel), never a test-only shortcut.
+  assert.match(acc, /selectModel\(/, "the selection assertion must drive CoreClient.selectModel on the live transport");
+});
+
+// R3(a): the dead/400 settings classes. Go keeps sampling and context
+// under llm.* (internal/config LLMOptions) — flat keys render but never
+// persist; four fields 400 on type mismatch; option sets drifted.
+test("run-#48 R3: settings bind the nested llm schema with type-correct controls and honest option sets", () => {
+  const sv = loadQmlView("SettingsView.qml");
+  for (const key of ["llm.numCtx", "llm.temperature", "llm.topP", "llm.topK", "llm.minP", "llm.maxTokens", "llm.repeatPenalty", "llm.seed"])
+    assert.ok(sv.includes(key), `${key} must bind the nested llm schema (the flat key is dropped by the typed config merge — renders but never persists)`);
+  // Type-correct controls: the Go schema is bool/bool/bool/enum — the
+  // registry's type:"bool" renders the themed Switch delegate.
+  assert.match(sv, /"thinkingMode",[\s\S]{0,120}?type:\s*"bool"/, "thinkingMode is a Go bool — the enum control 400s every patch");
+  assert.match(sv, /"parallelTools",[\s\S]{0,120}?type:\s*"bool"/, "parallelTools is a Go bool — the spinner control 400s every patch");
+  assert.match(sv, /"labKeepWorkspaces",[\s\S]{0,120}?type:\s*"bool"/, "labKeepWorkspaces is a Go bool — the spinner control 400s every patch");
+  assert.match(sv, /"visionMmprojOffload",[\s\S]{0,120}?options:[\s\S]{0,80}?"auto"/, "visionMmprojOffload is a Go auto|on|off enum — the boolean switch 400s every patch");
+  // Honest option sets (Wails reference).
+  assert.ok(sv.includes('"monthly"'), "updateSchedule is missing the monthly option the Wails version offers");
+  assert.match(sv, /"researchBackend",[\s\S]{0,160}?"auto"/, "researchBackend must offer the Wails option set (auto first)");
+  assert.ok(!sv.includes('key: "browserSlowMoMsAlias"'), "browserSlowMoMsAlias is a ghost key — no such Go config field exists (the patch is silently dropped; the registry must not render it)");
+  // enabledTools is a per-tool checkbox list fed by /api/tools in Wails.
+  assert.match(sv, /type:\s*"tools"/, "enabledTools must be the tools row type (the per-tool checkbox delegate), not a textfield");
+  assert.match(sv, /Core\.toolCatalog/, "the tools row must render from Core.toolCatalog (GET /api/tools), not a comma-textfield");
+  assert.ok(!sv.includes("(comma-separated)"), "the dead comma-textfield label must be gone");
+});
+
+// R3(c): the hardware panel. SystemView showed preflight/governor/
+// maintenance only — zero hardware state — while the core already serves
+// /api/sysinfo. The operator saw "hardware unmatched (Intel Arc, offload
+// off)" with no surface to understand or steer it.
+test("run-#48 R3: SystemView surfaces hardware + engine state through Core.sysinfo", () => {
+  const h = readFileSync(join(repoRoot, "ui", "qt", "src", "coreclient.h"), "utf8");
+  assert.match(h, /Q_PROPERTY\(QVariantMap sysinfo/, "CoreClient must expose the /api/sysinfo snapshot to QML");
+  assert.match(h, /Q_INVOKABLE void refreshSysinfo\(/, "CoreClient must expose refreshSysinfo()");
+  const sv = loadQmlView("SystemView.qml");
+  assert.match(sv, /Core\.sysinfo/, "SystemView must render the hardware panel from Core.sysinfo");
+  assert.match(sv, /Core\.engine/, "SystemView must surface engine backend/variant state (the GPU-offload story) from Core.engine");
+  const acc = readFileSync(join(repoRoot, "ui", "qt", "tests", "tst_acceptance.cpp"), "utf8");
+  assert.match(acc, /hardwarePanelSurfacesSysinfo/, "the hardware-panel assertion must run against the real core transport");
+});
+
+// R4: the Linux package shipped a bare sheytan-ui with NO Qt runtime —
+// the smoke only worked via the RUNNER's Qt (LD_LIBRARY_PATH at the aqt
+// layout), so the zip could not launch on a clean machine. Windows gets
+// windeployqt; Linux must get the official CMake deploy path + a closure
+// gate + a smoke that launches the PACKAGED binary.
+test("run-#48 R4: the Linux package carries the launchable Qt closure (deploy + ldd gate + packaged smoke)", () => {
+  const wf = loadWorkflow();
+  assert.match(wf, /QT_DEPLOY_AND_INSTALL=ON/, "the Linux Qt build must configure the official deploy+install path (CMakeLists' QT_DEPLOY_AND_INSTALL option)");
+  assert.match(wf, /cmake --install/, "the QML-aware deploy script must execute via cmake --install so the Qt libs/plugins/QML modules land INSIDE the package");
+  assert.match(wf, /ldd[\s\S]{0,400}not found/, "an ldd closure gate must fail the build when any linked library does not resolve inside the package");
+  assert.match(
+    wf,
+    /UI_BIN="dist\/linux\/app\/\$\{LINUX_PKG_ROOT\}\/sheytan-ui"/,
+    "the Xvfb smoke must launch the PACKAGED UI binary (the closure the zip actually carries) — not a repo-tree copy",
+  );
+  const cmake = readFileSync(join(repoRoot, "ui", "qt", "CMakeLists.txt"), "utf8");
+  assert.match(cmake, /qt_generate_deploy_qml_app_script/, "the deploy entry point must exist in CMakeLists (it does at HEAD — pinned)");
+});
+
+// R5/I12: ONE release identity — every surface spells the package.json
+// version. This section REPLACES the run-#47-cycle 1.10.15 pin with the
+// re-versioned identity and adds the two Qt surfaces that sat OUTSIDE the
+// release-version.mjs repair set (main.cpp applicationVersion is already
+// pinned above; CMakeLists project VERSION drifted to 1.10.13 unnoticed).
+test("run-#48 R5/I12: the release identity is 1.11.0 on every version surface", () => {
+  const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+  assert.equal(pkg.version, "1.11.0", "package.json (the one version source, operator re-version C15)");
+  const goCfg = readFileSync(join(repoRoot, "internal", "config", "config.go"), "utf8");
+  assert.match(goCfg, /AppVersion[ \t]*=[ \t]*"1\.11\.0"/, "internal/config/config.go (release-version.mjs surface)");
+  const buildCfg = readFileSync(join(repoRoot, "build", "config.yml"), "utf8");
+  assert.match(buildCfg, /productVersion:[ \t]*"1\.11\.0"/, "build/config.yml (release-version.mjs surface)");
+  const signature = readFileSync(join(repoRoot, "SIGNATURE"), "utf8");
+  assert.match(signature, /^SHEYTAN-Local-Agent v1\.11\.0/m, "SIGNATURE first line (release-version.mjs surface)");
+  const qtMain = readFileSync(join(repoRoot, "ui", "qt", "src", "main.cpp"), "utf8");
+  assert.match(qtMain, /setApplicationVersion\(QStringLiteral\("1\.11\.0"\)\)/, "ui/qt/src/main.cpp applicationVersion");
+  const qtCmake = readFileSync(join(repoRoot, "ui", "qt", "CMakeLists.txt"), "utf8");
+  assert.match(qtCmake, /project\(SHEYTAN-UI VERSION 1\.11\.0 /, "ui/qt/CMakeLists.txt project VERSION (the 1.10.13 drift surface)");
+  // No drift in either direction: the retired version must not survive on
+  // any identity surface (docs and code comments narrating run history are
+  // NOT surfaces — only the three comment-free identity files are scanned).
+  for (const [file, text] of [
+    ["package.json", JSON.stringify(pkg)],
+    ["internal/config/config.go", goCfg],
+    ["build/config.yml", buildCfg],
+  ]) {
+    assert.ok(
+      !text.includes("1.10.15"),
+      `${file} carries no stale 1.10.15 identity`,
+    );
+  }
+});
+
+// I24 companion: the harness must select the SAME style the shipped host
+// selects — a style divergence between harness and shipped app is the
+// run-#47 class one layer up (green harness, broken-looking product).
+test("run-#48 I24: the acceptance harness mirrors the production custom style exactly", () => {
+  const mainCpp = readFileSync(join(repoRoot, "ui", "qt", "src", "main.cpp"), "utf8");
+  const m = mainCpp.match(/QQuickStyle::setStyle\(\s*QStringLiteral\("([^"]+)"\)\s*\)/);
+  assert.ok(m, "main.cpp must pin its style through QQuickStyle::setStyle");
+  const acc = readFileSync(join(repoRoot, "ui", "qt", "tests", "tst_acceptance.cpp"), "utf8");
+  assert.ok(
+    acc.includes(`QQuickStyle::setStyle(QStringLiteral("${m[1]}"))`),
+    `tst_acceptance.cpp must setStyle("${m[1]}") — the exact production style (found no such call)`,
+  );
+});
+
+// Heritage: the §11 P2(8) set stays pinned (each names an existing test in
+// this file). Green at HEAD — protective, catches a future suite rewrite
+// that drops a class.
+test("run-#48 heritage: the suite still carries every standing pin class", () => {
+  const src = readFileSync(new URL(import.meta.url), "utf8");
+  const classes = {
+    "one-log artifact": "ONE consolidated log part",
+    "uninstall symmetry": "generated payload uninstall list",
+    "naming map": "ONE naming map",
+    concurrency: "cancel-in-progress",
+    preflight: "preflight compile gate",
+    timeouts: "timeout-minutes",
+    "RMDir-r ban": "recursive-delete instruction",
+    "four-part identity": "four-part identity contract",
+    "first-byte logs": "first-byte capture",
+    catchers: "NAMED instrumentation failure",
+    "errors-only annotations": "ZERO annotations",
+    "declaration coverage": "VISIBLE at the call site",
+  };
+  const missing = Object.entries(classes)
+    .filter(([, frag]) => !src.toLowerCase().includes(frag.toLowerCase()))
+    .map(([name]) => name);
+  assert.deepStrictEqual(missing, [], `heritage pin classes dropped from the suite: ${missing.join(", ")}`);
 });

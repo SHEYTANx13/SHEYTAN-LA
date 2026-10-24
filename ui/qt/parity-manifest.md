@@ -1,4 +1,4 @@
-# SHEYTAN Qt parity manifest — v1.10.15-fixed (Task ID 39, D28/I21)
+# SHEYTAN Qt parity manifest — v1.11.0-fixed (Task ID 43, D28/I21)
 
 ONE tracked inventory of the Wails (React) surface vs the Qt Quick surface.
 The React tree under `src/` is the REFERENCE, never edited. Every row names
@@ -80,6 +80,41 @@ and acceptance NOT RUN), `NOT RUN` (unported — honest gap, never faked).
 | download-progress | src/DownloadProgress.tsx (DownloadProgressPanel, v1.2.3 Download Manager) | ui/qt/qml/AgentView.qml (download panel) | GET /api/engine + POST /api/llama {"action":"cancel-download"} (both pre-existing handlers) | agentViewLoads | LANDED-LOCAL |
 | maintenance-banner | src/MaintenanceBanner.tsx (v1.6.0 P0/P4 honest lifecycle) | ui/qt/qml/AgentView.qml (maintenance banner, envelope-guarded) | GET /api/maintenance (pre-existing) | agentViewLoads | LANDED-LOCAL |
 | keyboard-shortcuts | src/shortcuts.ts (v1.2.4 global shortcuts + "?" help overlay) | ui/qt/qml/Main.qml (Shortcut elements Ctrl+1..7 + Ctrl+/ help toggle + Escape-gated overlay) | none (pure navigation) | navChromeSevenViewsLoad | LANDED-LOCAL |
+
+## Run-#48 cycle (priority 10 — Task ID 43, the operator's four defects)
+
+| surface | wails source | qt target | core api | acceptance assertion | status |
+|---|---|---|---|---|---|
+| model-select-live-path | src/ModelPicker.tsx ("Use model" → /api/models/select) | ui/qt/src/coreclient.cpp selectModel + ui/qt/qml/ModelPickerDrawer.qml | POST /api/models/select (the shipped selection state machine: persist + verify + engine boot) | modelSelectRoundTripPersistsAcrossRestart | LANDED-LOCAL |
+| hardware-panel | src/SystemPanel.tsx DeviceCard + RuntimeCard | ui/qt/qml/SystemView.qml (Hardware + Engine panels) + ui/qt/src/coreclient.cpp (sysinfo property) | GET /api/sysinfo, GET /api/engine (both pre-existing) | hardwarePanelSurfacesSysinfo | LANDED-LOCAL |
+| settings-nested-schema | src/settings-sections.ts + SettingsPanel.tsx ({llm: …} patches, bool/enum controls) | ui/qt/qml/SettingsView.qml (path-aware fieldValue/setField, llm.* bindings, type-correct controls) | GET/POST /api/config | settingsEightSectionsAllFields | LANDED-LOCAL |
+| tool-catalog-enabledTools | src/settings-sections.ts enabledTools (per-tool checkboxes fed by /api/tools) | ui/qt/qml/SettingsView.qml (tools row) + ui/qt/src/coreclient.cpp (toolCatalog) | GET /api/tools (pre-existing) | settingsEightSectionsAllFields | LANDED-LOCAL |
+| theme-system (ONE Theme singleton + QuickControls2 custom style; every stock control themed; zero 90-degree corners; zero hardcoded colors in qml/) | src/styles.css design tokens | ui/qt/qml/Theme.qml (sheytan.ui singleton) + ui/qt/style/* (qmldir + 13 styled controls) + ui/qt/src/main.cpp (setStyle ":/sheytanstyle") | none (pure presentation) | qmlLoadsCleanly, animationsToggleGatesEveryMotion, navChromeSevenViewsLoad | LANDED-LOCAL |
+| engine-download-progress (pre-existing row, surfaced in the Engine panel) | src/DownloadProgress.tsx | ui/qt/qml/SystemView.qml (Engine panel reuses Core.engine) | GET /api/engine | hardwarePanelSurfacesSysinfo | LANDED-LOCAL |
+
+### v1.11.0-fixed run-#48 root-cause notes (Task ID 43)
+
+- R2: the shipped desktop's model selection never called POST
+  /api/models/select — patchConfig({model}) rendered the choice while the
+  selection state machine (persist + verify + engine boot) was bypassed;
+  the harness only listed models, so the break was invisible (I24).
+  selectModel lands the real path; the round-trip asserts it through the
+  live transport and a REAL core restart.
+- R3 (the stall): updateEngineVariantTx held switchMu across the
+  minutes-long candidate download — Start()/Restart() (model-select boot,
+  first-send boot) serialize on the same mutex, so the shipped app sat
+  with dead selection/chat while gpuAssetResolved never completed. The
+  download window now holds NOTHING (the v1.9.6 contract finished); the
+  destructive boundary re-validates.
+- R4: the Linux package shipped a bare sheytan-ui and leaned on the
+  RUNNER's Qt (LD_LIBRARY_PATH outside the zip). The official CMake deploy
+  path (QT_DEPLOY_AND_INSTALL) + rpath $ORIGIN/lib now close the runtime
+  INSIDE the package; an ldd closure gate and a packaged-binary smoke
+  prove it.
+- The tool catalog is bounded to the per-tool checkbox list the Wails
+  settings render; the wider card-level surfaces (tools builder editor,
+  model import, performance recommendation machinery, automation/lab
+  forms, clone card) remain NOT RUN — honest gaps, never faked (I21).
 
 ## Honest boundary
 

@@ -8,25 +8,25 @@ Column {
     property string title: ""
     property string detail: ""
 
-    spacing: 8
+    spacing: Theme.spaceS
 
     Label {
         text: icon
-        color: "#4a4a52"
+        color: Theme.borderStrong
         font.pixelSize: 42
         anchors.horizontalCenter: parent.horizontalCenter
     }
     Label {
         text: title
-        color: "#8a8a92"
-        font.pixelSize: 15
+        color: Theme.muted
+        font.pixelSize: Theme.fontL
         font.bold: true
         anchors.horizontalCenter: parent.horizontalCenter
     }
     Label {
         text: detail
-        color: "#5a5a62"
-        font.pixelSize: 12
+        color: Theme.mutedStrong
+        font.pixelSize: Theme.fontS
         wrapMode: Text.Wrap
         width: 320
         horizontalAlignment: Text.AlignHCenter

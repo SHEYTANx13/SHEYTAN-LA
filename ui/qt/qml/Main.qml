@@ -31,7 +31,7 @@ ApplicationWindow {
     minimumHeight: 680
     visible: true
     title: qsTr("SHEYTAN Local Agent") + (Core.connected && Core.coreVersion !== "" ? "  ·  v" + Core.coreVersion : "")
-    color: "#121214"
+    color: Theme.background
 
     // v1.10.15-fixed R1 (D28/I21): the navigation contract — the SAME
     // seven views the Wails surface offers (src/workspace.ts), same ids.
@@ -107,33 +107,33 @@ ApplicationWindow {
         objectName: "shortcut-help-overlay"
         anchors.fill: parent
         visible: root.shortcutHelpVisible
-        color: "#cc000000"
+        color: Theme.overlay
         z: 1000
 
         Rectangle {
             width: 460
             height: helpCol.implicitHeight + 48
             anchors.centerIn: parent
-            radius: 10
-            color: "#1a1a1d"
-            border.color: "#33333a"
+            radius: Theme.radiusL
+            color: Theme.surfaceElevated
+            border.color: Theme.controlHover
 
             ColumnLayout {
                 id: helpCol
                 anchors.fill: parent
-                anchors.margins: 24
-                spacing: 8
+                anchors.margins: Theme.spaceXL
+                spacing: Theme.spaceS
 
                 Label {
                     text: qsTr("Keyboard shortcuts")
-                    color: "#b8a6e8"
+                    color: Theme.accent
                     font.bold: true
                     font.pixelSize: 14
                 }
                 Label {
                     text: qsTr("Ctrl+1…7 — switch view (chat, agent, workspace, lab, automation, system, settings)\nCtrl+/ — toggle this help\nEsc — close this help")
-                    color: "#e8e8ea"
-                    font.pixelSize: 12
+                    color: Theme.text
+                    font.pixelSize: Theme.fontS
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
                 }
@@ -156,6 +156,18 @@ ApplicationWindow {
         height: root.height
         onOpened: Core.refreshSystems()
 
+        // v1.10.15-fixed R3/R4 (D32/I22): the drawer's slide is EXPLICIT and
+        // gated — off means the panel appears instantly in its final
+        // position (same gate as the four parity overlay drawers).
+        enter: Transition {
+            enabled: Core.animationsEnabled
+            NumberAnimation { property: "position"; to: 1.0; duration: Theme.motionNormal; easing.type: Easing.OutCubic }
+        }
+        exit: Transition {
+            enabled: Core.animationsEnabled
+            NumberAnimation { property: "position"; to: 0.0; duration: Theme.motionFast; easing.type: Easing.InCubic }
+        }
+
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 14
@@ -165,7 +177,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Label {
                     text: qsTr("AI Systems")
-                    color: "#e8e8ea"
+                    color: Theme.text
                     font.pixelSize: 16
                     font.bold: true
                     Layout.fillWidth: true
@@ -182,8 +194,8 @@ ApplicationWindow {
                 text: Core.activeSystemId !== ""
                       ? qsTr("Active: ") + Core.activeSystemId
                       : qsTr("No active system")
-                color: "#8fb8dd"
-                font.pixelSize: 12
+                color: Theme.info
+                font.pixelSize: Theme.fontS
                 elide: Text.ElideRight
             }
 
@@ -192,7 +204,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
-                spacing: 8
+                spacing: Theme.spaceS
                 model: Core.systems
                 ScrollBar.vertical: ScrollBar {}
 
@@ -200,20 +212,20 @@ ApplicationWindow {
                     required property var modelData
                     width: systemsList.width
                     height: sysCol.implicitHeight + 20
-                    radius: 8
-                    color: Core.activeSystemId === modelData.systemId ? "#243a2c" : "#222226"
+                    radius: Theme.radiusM
+                    color: Core.activeSystemId === modelData.systemId ? Theme.successDim : Theme.elevatedAlt
 
                     ColumnLayout {
                         id: sysCol
                         anchors.fill: parent
                         anchors.margins: 10
-                        spacing: 4
+                        spacing: Theme.spaceXS
 
                         RowLayout {
                             Layout.fillWidth: true
                             Label {
                                 text: modelData.name !== undefined ? modelData.name : modelData.systemId
-                                color: "#e8e8ea"
+                                color: Theme.text
                                 font.bold: true
                                 elide: Text.ElideRight
                                 Layout.fillWidth: true
@@ -224,7 +236,7 @@ ApplicationWindow {
                                 // in the v1.10.2 row, shifting the title.
                                 text: Core.activeSystemId === modelData.systemId ? qsTr("ACTIVE") : ""
                                 visible: text !== ""
-                                color: "#7dd3a0"
+                                color: Theme.success
                                 font.pixelSize: 10
                                 font.bold: true
                             }
@@ -232,8 +244,8 @@ ApplicationWindow {
                         Label {
                             Layout.fillWidth: true
                             text: modelData.systemId + "  ·  r" + (modelData.revision !== undefined ? modelData.revision : 0)
-                            color: "#8a8a92"
-                            font.pixelSize: 11
+                            color: Theme.muted
+                            font.pixelSize: Theme.fontXS
                             elide: Text.ElideRight
                         }
                         Button {
@@ -265,6 +277,18 @@ ApplicationWindow {
         height: root.height
         onOpened: Core.refreshGoals()
 
+        // v1.10.15-fixed R3/R4 (D32/I22): the drawer's slide is EXPLICIT and
+        // gated — off means the panel appears instantly in its final
+        // position (same gate as the four parity overlay drawers).
+        enter: Transition {
+            enabled: Core.animationsEnabled
+            NumberAnimation { property: "position"; to: 1.0; duration: Theme.motionNormal; easing.type: Easing.OutCubic }
+        }
+        exit: Transition {
+            enabled: Core.animationsEnabled
+            NumberAnimation { property: "position"; to: 0.0; duration: Theme.motionFast; easing.type: Easing.InCubic }
+        }
+
         ColumnLayout {
             anchors.fill: parent
             anchors.margins: 14
@@ -274,7 +298,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Label {
                     text: qsTr("Goals")
-                    color: "#e8e8ea"
+                    color: Theme.text
                     font.pixelSize: 16
                     font.bold: true
                     Layout.fillWidth: true
@@ -291,7 +315,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
-                spacing: 8
+                spacing: Theme.spaceS
                 model: Core.goals
                 ScrollBar.vertical: ScrollBar {}
 
@@ -299,8 +323,8 @@ ApplicationWindow {
                     required property var modelData
                     width: goalsList.width
                     height: goalCol.implicitHeight + 20
-                    radius: 8
-                    color: "#222226"
+                    radius: Theme.radiusM
+                    color: Theme.elevatedAlt
 
                     // Derived from the ACTUAL plan state served by the core
                     // (PlanStep.status) — never a decorative percentage.
@@ -329,13 +353,13 @@ ApplicationWindow {
                         id: goalCol
                         anchors.fill: parent
                         anchors.margins: 10
-                        spacing: 4
+                        spacing: Theme.spaceXS
 
                         RowLayout {
                             Layout.fillWidth: true
                             Label {
                                 text: modelData.originalGoal
-                                color: "#e8e8ea"
+                                color: Theme.text
                                 font.bold: true
                                 elide: Text.ElideRight
                                 Layout.fillWidth: true
@@ -344,8 +368,8 @@ ApplicationWindow {
                         Label {
                             Layout.fillWidth: true
                             text: modelData.goalId + "  ·  " + modelData.status + "  ·  " + modelData.phase
-                            color: modelData.status === "waiting_for_approval" ? "#e8c268" : "#8a8a92"
-                            font.pixelSize: 11
+                            color: modelData.status === "waiting_for_approval" ? Theme.warn : Theme.muted
+                            font.pixelSize: Theme.fontXS
                             elide: Text.ElideRight
                         }
                         Label {
@@ -353,16 +377,16 @@ ApplicationWindow {
                             text: planSteps().length > 0
                                   ? qsTr("plan: ") + completedSteps() + qsTr(" of ") + planSteps().length + qsTr(" steps completed")
                                   : qsTr("no plan yet")
-                            color: "#8fb8dd"
-                            font.pixelSize: 11
+                            color: Theme.info
+                            font.pixelSize: Theme.fontXS
                             elide: Text.ElideRight
                         }
                         Label {
                             Layout.fillWidth: true
                             visible: currentObjective() !== ""
                             text: qsTr("current step: ") + currentObjective()
-                            color: "#8a8a92"
-                            font.pixelSize: 11
+                            color: Theme.muted
+                            font.pixelSize: Theme.fontXS
                             elide: Text.ElideRight
                         }
                         Label {
@@ -373,8 +397,8 @@ ApplicationWindow {
                                      && modelData.pendingApproval.reason !== undefined
                                      && modelData.pendingApproval.reason !== ""
                             text: qsTr("awaiting approval: ") + modelData.pendingApproval.reason
-                            color: "#e8c268"
-                            font.pixelSize: 11
+                            color: Theme.warn
+                            font.pixelSize: Theme.fontXS
                             wrapMode: Text.Wrap
                         }
                         RowLayout {
@@ -462,12 +486,12 @@ ApplicationWindow {
         Rectangle {
             Layout.fillHeight: true
             Layout.preferredWidth: 84
-            color: "#141416"
+            color: Theme.backgroundAlt
 
             ColumnLayout {
                 anchors.fill: parent
                 anchors.margins: 6
-                spacing: 4
+                spacing: Theme.spaceXS
 
                 // v1.10.15-fixed (R1/#43, Task ID 40): the nav buttons are
                 // SEVEN EXPLICIT objects with STATIC objectNames. The
@@ -491,25 +515,25 @@ ApplicationWindow {
                         spacing: 1
                         Label {
                             text: qsTr("\u25C7")
-                            color: navChat.checked ? "#b8a6e8" : "#8a8a92"
+                            color: navChat.checked ? Theme.accent : Theme.muted
                             font.pixelSize: 14
                             Layout.alignment: Qt.AlignHCenter
                         }
                         Label {
                             text: qsTr("Chat")
-                            color: navChat.checked ? "#e8e8ea" : "#8a8a92"
+                            color: navChat.checked ? Theme.text : Theme.muted
                             font.pixelSize: 9
                             Layout.alignment: Qt.AlignHCenter
                         }
                     }
                     background: Rectangle {
-                        color: navChat.checked ? "#2c2c31" : (navChat.hovered ? "#1f1f23" : "transparent")
-                        radius: 6
+                        color: navChat.checked ? Theme.control : (navChat.hovered ? Theme.elevated : "transparent")
+                        radius: Theme.radiusM
                         // v1.10.15-fixed R3/R4 (D32/I22, Task ID 41): rail
                         // state changes read the ONE motion gate.
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 120 }
+                            ColorAnimation { duration: Theme.motionFast }
                         }
                     }
                 }
@@ -525,23 +549,23 @@ ApplicationWindow {
                         spacing: 1
                         Label {
                             text: qsTr("\u25C8")
-                            color: navAgent.checked ? "#b8a6e8" : "#8a8a92"
+                            color: navAgent.checked ? Theme.accent : Theme.muted
                             font.pixelSize: 14
                             Layout.alignment: Qt.AlignHCenter
                         }
                         Label {
                             text: qsTr("Agent")
-                            color: navAgent.checked ? "#e8e8ea" : "#8a8a92"
+                            color: navAgent.checked ? Theme.text : Theme.muted
                             font.pixelSize: 9
                             Layout.alignment: Qt.AlignHCenter
                         }
                     }
                     background: Rectangle {
-                        color: navAgent.checked ? "#2c2c31" : (navAgent.hovered ? "#1f1f23" : "transparent")
-                        radius: 6
+                        color: navAgent.checked ? Theme.control : (navAgent.hovered ? Theme.elevated : "transparent")
+                        radius: Theme.radiusM
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 120 }
+                            ColorAnimation { duration: Theme.motionFast }
                         }
                     }
                 }
@@ -557,23 +581,23 @@ ApplicationWindow {
                         spacing: 1
                         Label {
                             text: qsTr("\u2380")
-                            color: navWorkspace.checked ? "#b8a6e8" : "#8a8a92"
+                            color: navWorkspace.checked ? Theme.accent : Theme.muted
                             font.pixelSize: 14
                             Layout.alignment: Qt.AlignHCenter
                         }
                         Label {
                             text: qsTr("Workspace")
-                            color: navWorkspace.checked ? "#e8e8ea" : "#8a8a92"
+                            color: navWorkspace.checked ? Theme.text : Theme.muted
                             font.pixelSize: 9
                             Layout.alignment: Qt.AlignHCenter
                         }
                     }
                     background: Rectangle {
-                        color: navWorkspace.checked ? "#2c2c31" : (navWorkspace.hovered ? "#1f1f23" : "transparent")
-                        radius: 6
+                        color: navWorkspace.checked ? Theme.control : (navWorkspace.hovered ? Theme.elevated : "transparent")
+                        radius: Theme.radiusM
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 120 }
+                            ColorAnimation { duration: Theme.motionFast }
                         }
                     }
                 }
@@ -589,23 +613,23 @@ ApplicationWindow {
                         spacing: 1
                         Label {
                             text: qsTr("\u25C6")
-                            color: navLab.checked ? "#b8a6e8" : "#8a8a92"
+                            color: navLab.checked ? Theme.accent : Theme.muted
                             font.pixelSize: 14
                             Layout.alignment: Qt.AlignHCenter
                         }
                         Label {
                             text: qsTr("Lab")
-                            color: navLab.checked ? "#e8e8ea" : "#8a8a92"
+                            color: navLab.checked ? Theme.text : Theme.muted
                             font.pixelSize: 9
                             Layout.alignment: Qt.AlignHCenter
                         }
                     }
                     background: Rectangle {
-                        color: navLab.checked ? "#2c2c31" : (navLab.hovered ? "#1f1f23" : "transparent")
-                        radius: 6
+                        color: navLab.checked ? Theme.control : (navLab.hovered ? Theme.elevated : "transparent")
+                        radius: Theme.radiusM
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 120 }
+                            ColorAnimation { duration: Theme.motionFast }
                         }
                     }
                 }
@@ -621,23 +645,23 @@ ApplicationWindow {
                         spacing: 1
                         Label {
                             text: qsTr("\u23F1")
-                            color: navAutomation.checked ? "#b8a6e8" : "#8a8a92"
+                            color: navAutomation.checked ? Theme.accent : Theme.muted
                             font.pixelSize: 14
                             Layout.alignment: Qt.AlignHCenter
                         }
                         Label {
                             text: qsTr("Autom.")
-                            color: navAutomation.checked ? "#e8e8ea" : "#8a8a92"
+                            color: navAutomation.checked ? Theme.text : Theme.muted
                             font.pixelSize: 9
                             Layout.alignment: Qt.AlignHCenter
                         }
                     }
                     background: Rectangle {
-                        color: navAutomation.checked ? "#2c2c31" : (navAutomation.hovered ? "#1f1f23" : "transparent")
-                        radius: 6
+                        color: navAutomation.checked ? Theme.control : (navAutomation.hovered ? Theme.elevated : "transparent")
+                        radius: Theme.radiusM
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 120 }
+                            ColorAnimation { duration: Theme.motionFast }
                         }
                     }
                 }
@@ -653,23 +677,23 @@ ApplicationWindow {
                         spacing: 1
                         Label {
                             text: qsTr("\u25A4")
-                            color: navSystem.checked ? "#b8a6e8" : "#8a8a92"
+                            color: navSystem.checked ? Theme.accent : Theme.muted
                             font.pixelSize: 14
                             Layout.alignment: Qt.AlignHCenter
                         }
                         Label {
                             text: qsTr("System")
-                            color: navSystem.checked ? "#e8e8ea" : "#8a8a92"
+                            color: navSystem.checked ? Theme.text : Theme.muted
                             font.pixelSize: 9
                             Layout.alignment: Qt.AlignHCenter
                         }
                     }
                     background: Rectangle {
-                        color: navSystem.checked ? "#2c2c31" : (navSystem.hovered ? "#1f1f23" : "transparent")
-                        radius: 6
+                        color: navSystem.checked ? Theme.control : (navSystem.hovered ? Theme.elevated : "transparent")
+                        radius: Theme.radiusM
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 120 }
+                            ColorAnimation { duration: Theme.motionFast }
                         }
                     }
                 }
@@ -685,23 +709,23 @@ ApplicationWindow {
                         spacing: 1
                         Label {
                             text: qsTr("\u2699")
-                            color: navSettings.checked ? "#b8a6e8" : "#8a8a92"
+                            color: navSettings.checked ? Theme.accent : Theme.muted
                             font.pixelSize: 14
                             Layout.alignment: Qt.AlignHCenter
                         }
                         Label {
                             text: qsTr("Settings")
-                            color: navSettings.checked ? "#e8e8ea" : "#8a8a92"
+                            color: navSettings.checked ? Theme.text : Theme.muted
                             font.pixelSize: 9
                             Layout.alignment: Qt.AlignHCenter
                         }
                     }
                     background: Rectangle {
-                        color: navSettings.checked ? "#2c2c31" : (navSettings.hovered ? "#1f1f23" : "transparent")
-                        radius: 6
+                        color: navSettings.checked ? Theme.control : (navSettings.hovered ? Theme.elevated : "transparent")
+                        radius: Theme.radiusM
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 120 }
+                            ColorAnimation { duration: Theme.motionFast }
                         }
                     }
                 }
@@ -748,18 +772,18 @@ ApplicationWindow {
             Layout.fillHeight: true
             Layout.preferredWidth: 280
             visible: root.currentView === "chat" || root.currentView === "agent"
-            color: "#1a1a1d"
+            color: Theme.surfaceElevated
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 12
+                anchors.margins: Theme.spaceM
                 spacing: 10
 
                 RowLayout {
                     Layout.fillWidth: true
                     Label {
                         text: qsTr("Sessions")
-                        color: "#e8e8ea"
+                        color: Theme.text
                         font.pixelSize: 16
                         font.bold: true
                         Layout.fillWidth: true
@@ -789,7 +813,7 @@ ApplicationWindow {
                             spacing: 2
                             Label {
                                 text: modelData.title !== undefined && modelData.title !== "" ? modelData.title : qsTr("Untitled")
-                                color: "#e8e8ea"
+                                color: Theme.text
                                 elide: Text.ElideRight
                                 Layout.fillWidth: true
                             }
@@ -799,18 +823,18 @@ ApplicationWindow {
                                 // tag) — the v1.10.2 messageCount read was
                                 // always undefined, rendering "0 messages".
                                 text: (modelData.msgCount !== undefined ? modelData.msgCount : 0) + qsTr(" messages")
-                                color: "#8a8a92"
-                                font.pixelSize: 11
+                                color: Theme.muted
+                                font.pixelSize: Theme.fontXS
                             }
                         }
 
                         background: Rectangle {
                             color: Core.currentSession.id === modelData.id
-                                   ? "#2c2c31" : (parent.hovered ? "#222226" : "transparent")
-                            radius: 6
+                                   ? Theme.control : (parent.hovered ? Theme.elevatedAlt : "transparent")
+                            radius: Theme.radiusM
                             Behavior on color {
                                 enabled: Core.animationsEnabled
-                                ColorAnimation { duration: 120 }
+                                ColorAnimation { duration: Theme.motionFast }
                             }
                         }
 
@@ -849,7 +873,7 @@ ApplicationWindow {
             }
         }
 
-        Rectangle { Layout.fillHeight: true; Layout.preferredWidth: 1; visible: root.currentView === "chat" || root.currentView === "agent"; color: "#2a2a2e" }
+        Rectangle { Layout.fillHeight: true; Layout.preferredWidth: 1; visible: root.currentView === "chat" || root.currentView === "agent"; color: Theme.border }
 
         // --- View stack: seven views over the ONE core (D28) -------------
         StackLayout {
@@ -871,7 +895,7 @@ ApplicationWindow {
                 // fading so the exit is visible; off = instant show/hide.
                 visible: Core.error !== "" || opacity > 0
                 opacity: Core.error !== "" ? 1 : 0
-                color: "#5a1f22"
+                color: Theme.errorDim
                 Layout.preferredHeight: 34
                 Behavior on opacity {
                     enabled: Core.animationsEnabled
@@ -880,7 +904,7 @@ ApplicationWindow {
                 Label {
                     anchors.centerIn: parent
                     text: Core.error
-                    color: "#ffd9da"
+                    color: Theme.errorBg
                 }
             }
 
@@ -904,18 +928,18 @@ ApplicationWindow {
                     width: transcript.width - 48
                     x: 24
                     height: bubbleText.implicitHeight + 28
-                    radius: 8
-                    color: modelData.role === "user" ? "#26415a" : "#222226"
+                    radius: Theme.radiusM
+                    color: modelData.role === "user" ? Theme.infoDimAlt : Theme.elevatedAlt
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 12
-                        spacing: 4
+                        anchors.margins: Theme.spaceM
+                        spacing: Theme.spaceXS
 
                         Label {
                             text: modelData.role === "user" ? qsTr("You") : qsTr("SHEYTAN")
-                            color: modelData.role === "user" ? "#8fb8dd" : "#b8a6e8"
-                            font.pixelSize: 11
+                            color: modelData.role === "user" ? Theme.info : Theme.accent
+                            font.pixelSize: Theme.fontXS
                             font.bold: true
                         }
                         TextEdit {
@@ -923,7 +947,7 @@ ApplicationWindow {
                             text: modelData.content
                             readOnly: true
                             wrapMode: TextEdit.Wrap
-                            color: "#e8e8ea"
+                            color: Theme.text
                             Layout.fillWidth: true
                             textFormat: TextEdit.PlainText
                             selectByMouse: true
@@ -945,14 +969,14 @@ ApplicationWindow {
             // Live streaming bubble (cumulative text; Stop stays visible)
             Rectangle {
                 Layout.fillWidth: true
-                Layout.margins: 12
+                Layout.margins: Theme.spaceM
                 // v1.10.15-fixed R3/R4 (D32/I22): the bubble appears and
                 // settles under the ONE motion gate (off = instant).
                 visible: Core.liveActive || opacity > 0
                 opacity: Core.liveActive ? 1 : 0
                 implicitHeight: liveColumn.implicitHeight + 24
-                radius: 8
-                color: "#2a2440"
+                radius: Theme.radiusM
+                color: Theme.accentDim
                 Behavior on opacity {
                     enabled: Core.animationsEnabled
                     NumberAnimation { duration: 160 }
@@ -961,15 +985,15 @@ ApplicationWindow {
                 ColumnLayout {
                     id: liveColumn
                     anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 4
+                    anchors.margins: Theme.spaceM
+                    spacing: Theme.spaceXS
 
                     RowLayout {
                         Layout.fillWidth: true
                         Label {
                             text: qsTr("SHEYTAN (live)")
-                            color: "#b8a6e8"
-                            font.pixelSize: 11
+                            color: Theme.accent
+                            font.pixelSize: Theme.fontXS
                             font.bold: true
                             Layout.fillWidth: true
                         }
@@ -992,7 +1016,7 @@ ApplicationWindow {
                             readOnly: true
                             text: Core.liveText === "" ? qsTr("…") : Core.liveText
                             wrapMode: TextArea.Wrap
-                            color: "#e8e8ea"
+                            color: Theme.text
                             background: null
                         }
                     }
@@ -1003,13 +1027,13 @@ ApplicationWindow {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: composer.implicitHeight + 24
-                color: "#1a1a1d"
+                color: Theme.surfaceElevated
 
                 RowLayout {
                     id: composer
                     anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 8
+                    anchors.margins: Theme.spaceM
+                    spacing: Theme.spaceS
 
                     ScrollView {
                         Layout.fillWidth: true
@@ -1018,12 +1042,12 @@ ApplicationWindow {
                             id: input
                             placeholderText: Core.currentSession.id ? qsTr("Message…") : qsTr("Create or open a session first")
                             wrapMode: TextArea.Wrap
-                            color: "#e8e8ea"
+                            color: Theme.text
                             enabled: !Core.busy && Core.currentSession.id !== undefined && Core.currentSession.id !== ""
                             background: Rectangle {
-                                color: "#222226"
-                                radius: 6
-                                border.color: "#33333a"
+                                color: Theme.elevatedAlt
+                                radius: Theme.radiusM
+                                border.color: Theme.controlHover
                             }
                             Keys.onReturnPressed: (event) => {
                                 // v1.10.15-fixed (R5/#43): submit() — a Button-
@@ -1045,7 +1069,7 @@ ApplicationWindow {
                         opacity: enabled ? 1 : 0.55
                         Behavior on opacity {
                             enabled: Core.animationsEnabled
-                            NumberAnimation { duration: 120 }
+                            NumberAnimation { duration: Theme.motionFast }
                         }
                         function submit() {
                             Core.send(input.text, false)

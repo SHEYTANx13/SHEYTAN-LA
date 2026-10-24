@@ -35,7 +35,7 @@ Drawer {
             Layout.fillWidth: true
             Label {
                 text: qsTr("History")
-                color: "#e8e8ea"
+                color: Theme.text
                 font.pixelSize: 16
                 font.bold: true
                 Layout.fillWidth: true
@@ -48,15 +48,15 @@ Drawer {
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 8
+            spacing: Theme.spaceS
             TextField {
                 id: searchField
                 Layout.fillWidth: true
                 placeholderText: qsTr("Search past sessions…")
-                color: "#e8e8ea"
+                color: Theme.text
                 selectByMouse: true
                 onAccepted: Core.searchHistory(text, modeBox.currentText)
-                background: Rectangle { color: "#222226"; radius: 6; border.color: "#33333a" }
+                background: Rectangle { color: Theme.elevatedAlt; radius: Theme.radiusM; border.color: Theme.controlHover }
             }
             ComboBox {
                 id: modeBox
@@ -87,24 +87,24 @@ Drawer {
                         Layout.fillWidth: true
                         text: modelData.title !== undefined ? modelData.title
                               : (modelData.sessionId !== undefined ? modelData.sessionId : qsTr("hit"))
-                        color: "#e8e8ea"
-                        font.pixelSize: 12
+                        color: Theme.text
+                        font.pixelSize: Theme.fontS
                         elide: Text.ElideRight
                     }
                     Label {
                         Layout.fillWidth: true
                         text: String(JSON.stringify(modelData))
-                        color: "#8a8a92"
+                        color: Theme.muted
                         font.pixelSize: 10
                         elide: Text.ElideRight
                     }
                 }
                 background: Rectangle {
-                    color: parent.hovered ? "#222226" : "#1a1a1d"
-                    radius: 6
+                    color: parent.hovered ? Theme.elevatedAlt : Theme.surfaceElevated
+                    radius: Theme.radiusM
                     Behavior on color {
                         enabled: Core.animationsEnabled
-                        ColorAnimation { duration: 120 }
+                        ColorAnimation { duration: Theme.motionFast }
                     }
                 }
             }

@@ -1,7 +1,11 @@
-// ModelPickerDrawer.qml — v1.10.15-fixed R1 (D28/I21): the ModelPicker
-// surface, parity with the Wails ModelPicker. Models are GET /api/models;
-// selection patches config.model through POST /api/config — the ONE
-// selection path the settings surface already uses.
+// ModelPickerDrawer.qml — v1.11.0-fixed R2 (run-#48, Task ID 43): the
+// ModelPicker surface, parity with the Wails ModelPicker. Models are GET
+// /api/models; selection goes through the SHIPPED selection authority —
+// POST /api/models/select via Core.selectModel (persist + verify + engine
+// boot through the selection state machine). The former
+// patchConfig({model}) shortcut rendered the choice in config while the
+// engine never followed it — the operator's "model selection broken"
+// defect on the shipped runtime path (I24).
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -35,7 +39,7 @@ Drawer {
             Layout.fillWidth: true
             Label {
                 text: qsTr("Models")
-                color: "#e8e8ea"
+                color: Theme.text
                 font.pixelSize: 16
                 font.bold: true
                 Layout.fillWidth: true
@@ -51,7 +55,7 @@ Drawer {
             text: Core.config.model !== undefined && Core.config.model !== ""
                   ? qsTr("active: ") + Core.config.model
                   : qsTr("no model selected")
-            color: "#8fb8dd"
+            color: Theme.info
             font.pixelSize: 12
             elide: Text.ElideRight
         }
@@ -70,8 +74,8 @@ Drawer {
                 required property var modelData
                 width: modelList.width
                 height: modCol.implicitHeight + 20
-                radius: 8
-                color: Core.config.model === modelData.id ? "#243a2c" : "#222226"
+                radius: Theme.radiusM
+                color: Core.config.model === modelData.id ? Theme.successDim : Theme.elevatedAlt
                 Behavior on color {
                     enabled: Core.animationsEnabled
                     ColorAnimation { duration: 150 }
@@ -88,14 +92,14 @@ Drawer {
                         Label {
                             Layout.fillWidth: true
                             text: modelData.name !== undefined ? modelData.name : modelData.id
-                            color: "#e8e8ea"
+                            color: Theme.text
                             font.bold: true
                             elide: Text.ElideRight
                         }
                         Label {
                             visible: Core.config.model === modelCard.modelData.id
                             text: qsTr("ACTIVE")
-                            color: "#7dd3a0"
+                            color: Theme.success
                             font.pixelSize: 10
                             font.bold: true
                         }
@@ -105,14 +109,17 @@ Drawer {
                         text: (modelData.id !== undefined ? modelData.id : "")
                               + (modelData.quantization !== undefined ? "  \u00b7  " + modelData.quantization : "")
                               + (modelData.sizeBytes !== undefined ? "  \u00b7  " + Math.round(modelData.sizeBytes / (1024 * 1024)) + " MB" : "")
-                        color: "#8a8a92"
+                        color: Theme.muted
                         font.pixelSize: 11
                         elide: Text.ElideRight
                     }
+                    // v1.11.0-fixed R2: the SHIPPED selection path — the
+                    // selection state machine persists + applies + boots
+                    // the engine; errors surface through Core.error.
                     Button {
                         visible: Core.config.model !== modelCard.modelData.id
                         text: qsTr("Select")
-                        onClicked: Core.patchConfig({ model: modelCard.modelData.id })
+                        onClicked: Core.selectModel(modelCard.modelData.id)
                     }
                 }
             }

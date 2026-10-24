@@ -34,7 +34,7 @@ Drawer {
             Layout.fillWidth: true
             Label {
                 text: qsTr("My Tools")
-                color: "#e8e8ea"
+                color: Theme.text
                 font.pixelSize: 16
                 font.bold: true
                 Layout.fillWidth: true
@@ -58,11 +58,11 @@ Drawer {
                 required property var modelData
                 width: toolList.width
                 height: toolCol.implicitHeight + 20
-                radius: 8
-                color: "#222226"
+                radius: Theme.radiusM
+                color: Theme.elevatedAlt
                 Behavior on color {
                     enabled: Core.animationsEnabled
-                    ColorAnimation { duration: 120 }
+                    ColorAnimation { duration: Theme.motionFast }
                 }
 
                 ColumnLayout {
@@ -75,21 +75,21 @@ Drawer {
                         Label {
                             Layout.fillWidth: true
                             text: modelData.name !== undefined ? modelData.name : qsTr("tool")
-                            color: "#e8e8ea"
+                            color: Theme.text
                             font.bold: true
                             elide: Text.ElideRight
                         }
                         Label {
                             text: modelData.registered === true ? qsTr("registered") : qsTr("unregistered")
-                            color: modelData.registered === true ? "#7dd3a0" : "#8a8a92"
+                            color: modelData.registered === true ? Theme.success : Theme.muted
                             font.pixelSize: 10
                         }
                     }
                     Label {
                         Layout.fillWidth: true
                         text: modelData.description !== undefined ? String(modelData.description) : ""
-                        color: "#8a8a92"
-                        font.pixelSize: 11
+                        color: Theme.muted
+                        font.pixelSize: Theme.fontXS
                         wrapMode: Text.Wrap
                     }
                 }

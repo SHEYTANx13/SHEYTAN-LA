@@ -3440,8 +3440,18 @@ jobs:
         run: |
           set -euo pipefail
 
+          # v1.11.0 (R4, run-#48, Task ID 43): the OFFICIAL Qt deployment —
+          # QT_DEPLOY_AND_INSTALL turns on the QML-aware deploy script
+          # (CMakeLists' qt_generate_deploy_qml_app_script), and
+          # `cmake --install` executes it INTO the package root: sheytan-ui
+          # PLUS its full Qt runtime closure (libs, plugins, QML imports).
+          # The former bare binary copy shipped NO Qt runtime and the smoke
+          # only worked via the RUNNER's aqt layout — the Linux zip could
+          # not launch on a clean machine (the operator's "Linux package
+          # incomplete" defect; Windows already shipped windeployqt).
           cmake -S ui/qt -B ui/qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$Qt6_DIR"
+            -DCMAKE_PREFIX_PATH="$Qt6_DIR" \
+            -DQT_DEPLOY_AND_INSTALL=ON
           cmake --build ui/qt/build
 
           test -x ui/qt/build/sheytan-ui
@@ -3457,14 +3467,48 @@ jobs:
           # the empty masked call is removed rather than registered
           # twice.
 
-          cp ui/qt/build/sheytan-ui "dist/linux/app/${LINUX_PKG_ROOT}/sheytan-ui"
           cp ui/qt/build/sheytan-ui-acceptance "$RUNNER_TEMP/sheytan-ui-acceptance"
-          # v1.10.3 (R4): stage the UI at the exact path the smoke step
-          # passes as UI_BIN — the v1.10.2 workflow passed
-          # $RUNNER_TEMP/sheytan-ui without ever copying it there, so the
-          # run only survived via the smoke's silent repo-tree fallback.
-          cp ui/qt/build/sheytan-ui "$RUNNER_TEMP/sheytan-ui"
-          test -x "$RUNNER_TEMP/sheytan-ui"
+
+          # v1.11.0 (R4, run-#48): deploy the runtime closure INTO the
+          # package root, then make the binary self-locating — its Qt
+          # runtime resolves from $ORIGIN/lib, never from the runner.
+          cmake --install ui/qt/build --prefix "dist/linux/app/${LINUX_PKG_ROOT}"
+          test -x "dist/linux/app/${LINUX_PKG_ROOT}/sheytan-ui"
+          test -d "dist/linux/app/${LINUX_PKG_ROOT}/lib"
+          command -v patchelf >/dev/null 2>&1 || sudo apt-get install -y patchelf
+          patchelf --set-rpath '$ORIGIN/lib' "dist/linux/app/${LINUX_PKG_ROOT}/sheytan-ui"
+
+      # v1.11.0 (R4, run-#48, Task ID 43): the CLOSURE GATE — every library
+      # the packaged UI links must resolve INSIDE the package (base-system
+      # libs excepted). One "not found" line fails the build: that zip
+      # could not launch on a clean machine. A Qt library resolving OUTSIDE
+      # the package (the runner's aqt layout) fails the build too — the
+      # zip must be self-contained, not runner-bound.
+      - name: Verify Linux Qt runtime closure (ldd)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pkgroot="dist/linux/app/${LINUX_PKG_ROOT}"
+
+          test -x "$pkgroot/sheytan-ui"
+          test -d "$pkgroot/lib"
+
+          unresolved="$(LD_LIBRARY_PATH="$pkgroot/lib" ldd "$pkgroot/sheytan-ui" | grep "not found" || true)"
+          if [ -n "$unresolved" ]; then
+            printf '%s\n' "$unresolved"
+            echo "::error::Linux package closure broken: unresolved libraries (see the ldd output above)"
+            exit 1
+          fi
+
+          outside="$(LD_LIBRARY_PATH="$pkgroot/lib" ldd "$pkgroot/sheytan-ui" | grep "libQt6" | grep -v "$pkgroot/lib" || true)"
+          if [ -n "$outside" ]; then
+            printf '%s\n' "$outside"
+            echo "::error::a Qt library resolved OUTSIDE the package — the zip is not self-contained"
+            exit 1
+          fi
+
+          echo "Linux Qt runtime closure verified: every library resolves inside the package."
 
       # v1.10.1 RUNTIME SMOKE — the REAL launch flow under Xvfb: the core
       # executable (desktop.Run) binds the per-user IPC endpoint, spawns
@@ -3481,9 +3525,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The Qt host must find its own libraries in the aqt layout.
-          export LD_LIBRARY_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-          export QT_QPA_PLATFORM_PLUGIN_PATH="$RUNNER_TEMP/qt/6.8.2/gcc_64/plugins/platforms"
+          # v1.11.0 (R4, run-#48): the smoke launches the PACKAGED UI with
+          # the PACKAGED closure — every Qt env var points INSIDE the
+          # package, never at the runner's aqt layout (the run-#47 class:
+          # a green smoke that proved the runner, not the zip).
+          pkgroot="dist/linux/app/${LINUX_PKG_ROOT}"
+          export LD_LIBRARY_PATH="$pkgroot/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          export QT_QPA_PLATFORM_PLUGIN_PATH="$pkgroot/plugins/platforms"
+          export QT_PLUGIN_PATH="$pkgroot/plugins"
 
           # v1.10.6 (L1, run 38714950052 step 23): Qt Quick cannot create a
           # GL scene-graph context under Xvfb on a headless hosted runner —
@@ -3503,11 +3552,11 @@ jobs:
           # green run proved the fallbacks, not the wiring. The explicit
           # existence checks fail loudly BEFORE the smoke can fall back.
           test -x "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent"
-          test -x "$RUNNER_TEMP/sheytan-ui"
+          test -x "dist/linux/app/${LINUX_PKG_ROOT}/sheytan-ui"
           SMOKE_WORK="$RUNNER_TEMP/sheytan-qt-smoke" \
           SMOKE_DISPLAY="77" \
           CORE_BIN="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent" \
-          UI_BIN="$RUNNER_TEMP/sheytan-ui" \
+          UI_BIN="dist/linux/app/${LINUX_PKG_ROOT}/sheytan-ui" \
           XTOOLS="$(command -v xdotool >/dev/null && dirname "$(command -v xdotool)")" \
           XLIBS="" \
           bash scripts/qt-desktop-smoke.sh
@@ -4086,6 +4135,13 @@ jobs:
 
           test -f "$root/SHEYTAN-Local-Agent"
           test -x "$root/SHEYTAN-Local-Agent"
+          # v1.11.0 (R4, run-#48): the package carries the LAUNCHABLE UI —
+          # the binary plus the deployed Qt runtime closure.
+          test -f "$root/sheytan-ui"
+          test -x "$root/sheytan-ui"
+          test -d "$root/lib"
+          test -d "$root/plugins"
+          test -d "$root/qml"
           test -f "$root/README.txt"
           test -f "$root/BUILD-INFO.txt"
           test -f "$root/models/README.txt"
@@ -4155,6 +4211,11 @@ jobs:
             "${LINUX_PKG_ROOT}/SHEYTAN-Local-Agent" \
             <<< "$entries"
 
+          grep -Fxq \
+            "${LINUX_PKG_ROOT}/sheytan-ui" \
+            <<< "$entries"
+
+          # v1.11.0 (R4, run-#48): the deployed Qt closure rides in the zip.
           grep -Fxq \
             "${LINUX_PKG_ROOT}/README.txt" \
             <<< "$entries"

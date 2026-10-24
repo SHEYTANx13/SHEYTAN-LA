@@ -14,7 +14,7 @@ import sheytan.ui
 Rectangle {
     id: root
     objectName: "workspaceView"
-    color: "#121214"
+    color: Theme.background
 
     Component.onCompleted: {
         if (Core.connected) { Core.refreshWorkspace(); Core.refreshRepoIndex() }
@@ -33,19 +33,19 @@ Rectangle {
         ColumnLayout {
             width: root.width - 48
             x: 24
-            spacing: 12
+            spacing: Theme.spaceM
 
             Label {
                 text: qsTr("WORK ENVIRONMENT")
-                color: "#b8a6e8"
-                font.pixelSize: 11
+                color: Theme.accent
+                font.pixelSize: Theme.fontXS
                 font.bold: true
-                Layout.topMargin: 16
+                Layout.topMargin: Theme.spaceL
             }
             Label {
                 text: qsTr("Project, sessions, runtime state, quick actions")
-                color: "#e8e8ea"
-                font.pixelSize: 18
+                color: Theme.text
+                font.pixelSize: Theme.fontXL
                 font.bold: true
             }
 
@@ -53,25 +53,25 @@ Rectangle {
             Rectangle {
                 Layout.fillWidth: true
                 implicitHeight: projCol.implicitHeight + 24
-                radius: 8
-                color: projHover.hovered ? "#1e1e22" : "#1a1a1d"
+                radius: Theme.radiusM
+                color: projHover.hovered ? Theme.surfaceAlt : Theme.surfaceElevated
                 // v1.10.15-fixed R3/R4 (D32/I22): cards answer the pointer
                 // with a gated highlight step.
                 HoverHandler { id: projHover }
                 Behavior on color {
                     enabled: Core.animationsEnabled
-                    ColorAnimation { duration: 120 }
+                    ColorAnimation { duration: Theme.motionFast }
                 }
 
                 ColumnLayout {
                     id: projCol
                     anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 4
+                    anchors.margins: Theme.spaceM
+                    spacing: Theme.spaceXS
 
                     Label {
                         text: qsTr("Current project")
-                        color: "#e8e8ea"
+                        color: Theme.text
                         font.bold: true
                     }
                     Label {
@@ -79,7 +79,7 @@ Rectangle {
                         text: Core.workspace.root !== undefined
                               ? Core.workspace.root
                               : qsTr("not loaded yet")
-                        color: "#8fb8dd"
+                        color: Theme.info
                         elide: Text.ElideMiddle
                     }
                     Label {
@@ -89,19 +89,19 @@ Rectangle {
                         text: Core.workspace.projectCard !== undefined && Core.workspace.projectCard.summary !== undefined
                               ? String(Core.workspace.projectCard.summary)
                               : ""
-                        color: "#8a8a92"
-                        font.pixelSize: 11
+                        color: Theme.muted
+                        font.pixelSize: Theme.fontXS
                         wrapMode: Text.Wrap
                     }
                     RowLayout {
-                        spacing: 8
+                        spacing: Theme.spaceS
                         TextField {
                             id: switchPath
                             Layout.preferredWidth: 360
                             placeholderText: qsTr("Switch to directory…")
-                            color: "#e8e8ea"
+                            color: Theme.text
                             selectByMouse: true
-                            background: Rectangle { color: "#222226"; radius: 6; border.color: "#33333a" }
+                            background: Rectangle { color: Theme.elevatedAlt; radius: Theme.radiusM; border.color: Theme.controlHover }
                         }
                         Button {
                             text: qsTr("Switch")
@@ -125,24 +125,24 @@ Rectangle {
             Rectangle {
                 Layout.fillWidth: true
                 implicitHeight: Math.min(220, recentFilesCol.implicitHeight + 24)
-                radius: 8
-                color: recentHover.hovered ? "#1e1e22" : "#1a1a1d"
+                radius: Theme.radiusM
+                color: recentHover.hovered ? Theme.surfaceAlt : Theme.surfaceElevated
                 HoverHandler { id: recentHover }
                 Behavior on color {
                     enabled: Core.animationsEnabled
-                    ColorAnimation { duration: 120 }
+                    ColorAnimation { duration: Theme.motionFast }
                 }
                 clip: true
 
                 ColumnLayout {
                     id: recentFilesCol
                     anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 4
+                    anchors.margins: Theme.spaceM
+                    spacing: Theme.spaceXS
 
                     Label {
                         text: qsTr("Recent files")
-                        color: "#e8e8ea"
+                        color: Theme.text
                         font.bold: true
                     }
                     Repeater {
@@ -158,16 +158,16 @@ Rectangle {
                             // in this delegate).
                             Layout.fillWidth: true
                             text: (modelData.path !== undefined ? modelData.path : String(modelData))
-                            color: "#8a8a92"
-                            font.pixelSize: 11
+                            color: Theme.muted
+                            font.pixelSize: Theme.fontXS
                             elide: Text.ElideMiddle
                         }
                     }
                     Label {
                         visible: (Core.workspace.recentFiles !== undefined ? Core.workspace.recentFiles.length : 0) === 0
                         text: qsTr("No recent files recorded for this project.")
-                        color: "#8a8a92"
-                        font.pixelSize: 11
+                        color: Theme.muted
+                        font.pixelSize: Theme.fontXS
                     }
                 }
             }
@@ -175,22 +175,22 @@ Rectangle {
             // --- Active session + runtime ------------------------------------
             RowLayout {
                 Layout.fillWidth: true
-                spacing: 12
+                spacing: Theme.spaceM
 
                 Rectangle {
                     Layout.fillWidth: true
                     implicitHeight: sessCol.implicitHeight + 24
-                    radius: 8
-                    color: "#1a1a1d"
+                    radius: Theme.radiusM
+                    color: Theme.surfaceElevated
 
                     ColumnLayout {
                         id: sessCol
                         anchors.fill: parent
-                        anchors.margins: 12
-                        spacing: 4
+                        anchors.margins: Theme.spaceM
+                        spacing: Theme.spaceXS
                         Label {
                             text: qsTr("Active session")
-                            color: "#e8e8ea"
+                            color: Theme.text
                             font.bold: true
                         }
                         Label {
@@ -199,8 +199,8 @@ Rectangle {
                                   ? (Core.workspace.session.title !== undefined && Core.workspace.session.title !== ""
                                      ? Core.workspace.session.title : Core.workspace.session.id)
                                   : qsTr("no session yet")
-                            color: "#8fb8dd"
-                            font.pixelSize: 12
+                            color: Theme.info
+                            font.pixelSize: Theme.fontS
                             elide: Text.ElideRight
                         }
                         Button {
@@ -213,17 +213,17 @@ Rectangle {
                 Rectangle {
                     Layout.fillWidth: true
                     implicitHeight: runCol.implicitHeight + 24
-                    radius: 8
-                    color: "#1a1a1d"
+                    radius: Theme.radiusM
+                    color: Theme.surfaceElevated
 
                     ColumnLayout {
                         id: runCol
                         anchors.fill: parent
-                        anchors.margins: 12
-                        spacing: 4
+                        anchors.margins: Theme.spaceM
+                        spacing: Theme.spaceXS
                         Label {
                             text: qsTr("Runtime state")
-                            color: "#e8e8ea"
+                            color: Theme.text
                             font.bold: true
                         }
                         Label {
@@ -231,8 +231,8 @@ Rectangle {
                             text: Core.workspace.runtime !== undefined
                                   ? String(JSON.stringify(Core.workspace.runtime))
                                   : qsTr("engine snapshot not loaded")
-                            color: "#8a8a92"
-                            font.pixelSize: 11
+                            color: Theme.muted
+                            font.pixelSize: Theme.fontXS
                             wrapMode: Text.Wrap
                         }
                     }
@@ -243,23 +243,23 @@ Rectangle {
             Rectangle {
                 Layout.fillWidth: true
                 implicitHeight: repoCol.implicitHeight + 24
-                radius: 8
-                color: repoHover.hovered ? "#1e1e22" : "#1a1a1d"
+                radius: Theme.radiusM
+                color: repoHover.hovered ? Theme.surfaceAlt : Theme.surfaceElevated
                 HoverHandler { id: repoHover }
                 Behavior on color {
                     enabled: Core.animationsEnabled
-                    ColorAnimation { duration: 120 }
+                    ColorAnimation { duration: Theme.motionFast }
                 }
 
                 ColumnLayout {
                     id: repoCol
                     anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 4
+                    anchors.margins: Theme.spaceM
+                    spacing: Theme.spaceXS
 
                     Label {
                         text: qsTr("Repository index")
-                        color: "#e8e8ea"
+                        color: Theme.text
                         font.bold: true
                     }
                     Label {
@@ -267,12 +267,12 @@ Rectangle {
                         text: Core.repoIndex.files !== undefined || Core.repoIndex.status !== undefined
                               ? String(JSON.stringify(Core.repoIndex))
                               : qsTr("index status not loaded")
-                        color: "#8a8a92"
-                        font.pixelSize: 11
+                        color: Theme.muted
+                        font.pixelSize: Theme.fontXS
                         wrapMode: Text.Wrap
                     }
                     RowLayout {
-                        spacing: 8
+                        spacing: Theme.spaceS
                         Button {
                             text: qsTr("Re-index")
                             enabled: Core.connected

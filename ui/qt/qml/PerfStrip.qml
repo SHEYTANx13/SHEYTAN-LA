@@ -10,32 +10,32 @@ import sheytan.ui
 Rectangle {
     id: root
     objectName: "perfStrip"
-    color: "#17171a"
+    color: Theme.surface
     implicitWidth: 300
     implicitHeight: 28
 
     RowLayout {
         anchors.fill: parent
         anchors.margins: 6
-        spacing: 12
+        spacing: Theme.spaceM
 
         Rectangle {
-            width: 8; height: 8; radius: 4
-            color: Core.busy ? "#7dd3a0" : (Core.connected ? "#4a4a52" : "#5a1f22")
+            width: 8; height: 8; radius: Theme.radiusS
+            color: Core.busy ? Theme.success : (Core.connected ? Theme.borderStrong : Theme.errorDim)
         }
         Label {
             text: Core.liveActive ? qsTr("streaming") : (Core.busy ? qsTr("working") : qsTr("idle"))
-            color: "#8a8a92"
+            color: Theme.muted
             font.pixelSize: 10
         }
         Label {
             text: qsTr("live chars: ") + Core.liveText.length
-            color: "#8a8a92"
+            color: Theme.muted
             font.pixelSize: 10
         }
         Label {
             text: qsTr("messages: ") + Core.messages.length
-            color: "#8a8a92"
+            color: Theme.muted
             font.pixelSize: 10
         }
         Item { Layout.fillWidth: true }

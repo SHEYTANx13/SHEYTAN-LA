@@ -56,6 +56,13 @@ class CoreClient : public QObject {
     Q_PROPERTY(QVariantMap governor READ governor NOTIFY governorChanged)
     Q_PROPERTY(QVariantMap maintenance READ maintenance NOTIFY maintenanceChanged)
     Q_PROPERTY(QVariantList tools READ tools NOTIFY toolsChanged)
+    // v1.11.0-fixed R3 (run-#48, Task ID 43): the AVAILABLE-tool catalog
+    // (GET /api/tools — the immutable registry snapshot the Wails
+    // enabledTools checkbox list is fed by). Distinct from tools (the
+    // custom-tool store on /api/custom-tools); the settings surface uses
+    // THIS list to render per-tool checkboxes instead of a dead
+    // comma-textfield.
+    Q_PROPERTY(QVariantList toolCatalog READ toolCatalog NOTIFY toolCatalogChanged)
     // v1.10.15-fixed R3 (D37, run #47 cycle, Task ID 42): the Wails-parity
     // agent surfaces. activityEvents is a BOUNDED display ring (the last 50
     // frames — the Wails ActivityStream MAX_VISIBLE_EVENTS contract) of the
@@ -69,6 +76,13 @@ class CoreClient : public QObject {
     // panel).
     Q_PROPERTY(QVariantList activityEvents READ activityEvents NOTIFY activityEventsChanged)
     Q_PROPERTY(QVariantMap engine READ engine NOTIFY engineChanged)
+    // v1.11.0-fixed R3 (run-#48, Task ID 43): the hardware/capability
+    // surface. A pure IPC read of the EXISTING GET /api/sysinfo handler —
+    // the same snapshot probeDeviceTier reads — exposed to QML so the
+    // SystemView hardware panel (and Settings diagnostics) can show the
+    // CPU/RAM/GPU/NPU facts the Wails DeviceCard shows. The core stays the
+    // hardware authority; the client never derives a second truth.
+    Q_PROPERTY(QVariantMap sysinfo READ sysinfo NOTIFY sysinfoChanged)
     // v1.10.15-fixed R4 (D32/I22, Task ID 41): the ONE motion gate. Every
     // animation/transition in the QML tree reads this single persisted
     // setting — off means instant state, identical function. The device
@@ -123,10 +137,21 @@ public:
     Q_INVOKABLE void refreshLogs();
     Q_INVOKABLE void searchHistory(const QString &q, const QString &mode);
     Q_INVOKABLE void refreshModels();
+    // v1.11.0-fixed R2 (run-#48, Task ID 43): the SHIPPED selection path.
+    // POST /api/models/select {"model": id} — the Wails ModelPicker's
+    // authority (persist + verify + engine boot through the selection
+    // state machine). The former patchConfig({model}) shortcut bypassed
+    // the state machine entirely: config rendered the choice, the engine
+    // never followed it — the operator's "model selection broken" defect
+    // on the shipped app while the harness (which only listed models)
+    // stayed green (I24).
+    Q_INVOKABLE void selectModel(const QString &id);
     Q_INVOKABLE void refreshPreflight();
     Q_INVOKABLE void refreshGovernor();
     Q_INVOKABLE void refreshMaintenance();
     Q_INVOKABLE void refreshTools();
+    // v1.11.0-fixed R3 (run-#48): the /api/tools catalog read.
+    Q_INVOKABLE void refreshToolCatalog();
     // v1.10.15-fixed R3 (D37, Task ID 42): the agent-view parity invokables,
     // each 1:1 to an EXISTING /api handler — GET /api/engine (snapshot) and
     // POST /api/llama {action: "cancel-download"} (the Wails
@@ -134,6 +159,9 @@ public:
     // store and the download lifecycle stay server-owned.
     Q_INVOKABLE void refreshEngine();
     Q_INVOKABLE void cancelEngineDownload();
+    // v1.11.0-fixed R3 (run-#48, Task ID 43): the hardware surface
+    // invokable — one bounded GET /api/sysinfo read, exposed verbatim.
+    Q_INVOKABLE void refreshSysinfo();
 
     bool connected() const { return m_connected; }
     bool busy() const { return m_busy; }
@@ -161,9 +189,13 @@ public:
     QVariantMap governor() const { return m_governor; }
     QVariantMap maintenance() const { return m_maintenance; }
     QVariantList tools() const { return m_tools; }
+    // v1.11.0-fixed R3 (run-#48): the available-tool catalog getter.
+    QVariantList toolCatalog() const { return m_toolCatalog; }
     // v1.10.15-fixed R3 (D37): the agent-view parity getters.
     QVariantList activityEvents() const { return m_activityEvents; }
     QVariantMap engine() const { return m_engine; }
+    // v1.11.0-fixed R3 (run-#48): the hardware snapshot getter.
+    QVariantMap sysinfo() const { return m_sysinfo; }
     bool canStop() const { return m_busy; }
     bool animationsEnabled() const { return m_animationsEnabled; }
     void setAnimationsEnabled(bool on);
@@ -197,10 +229,14 @@ signals:
     void governorChanged();
     void maintenanceChanged();
     void toolsChanged();
+    // v1.11.0-fixed R3 (run-#48): the tool-catalog signal.
+    void toolCatalogChanged();
     void animationsEnabledChanged();
     // v1.10.15-fixed R3 (D37): the agent-view parity signals.
     void activityEventsChanged();
     void engineChanged();
+    // v1.11.0-fixed R3 (run-#48): the hardware snapshot signal.
+    void sysinfoChanged();
 
 private:
     // --- IPC plumbing ---
@@ -262,12 +298,16 @@ private:
     QVariantMap m_governor;
     QVariantMap m_maintenance;
     QVariantList m_tools;
+    // v1.11.0-fixed R3 (run-#48): the available-tool catalog state.
+    QVariantList m_toolCatalog;
     bool m_animationsEnabled = true;
     bool m_tierProbed = false;
     // v1.10.15-fixed R3 (D37): the agent-view parity state — the bounded
     // activity display ring and the last engine snapshot read.
     QVariantList m_activityEvents;
     QVariantMap m_engine;
+    // v1.11.0-fixed R3 (run-#48): the last /api/sysinfo snapshot.
+    QVariantMap m_sysinfo;
 
     // activity WS state
     QLocalSocket *m_wsSock = nullptr;

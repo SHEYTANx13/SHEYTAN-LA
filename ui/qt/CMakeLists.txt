@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(SHEYTAN-UI VERSION 1.10.13 LANGUAGES CXX)
+project(SHEYTAN-UI VERSION 1.11.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -38,7 +38,41 @@ qt_add_qml_module(sheytan-ui
         qml/MyToolsDrawer.qml
         qml/LogViewerDrawer.qml
         qml/PerfStrip.qml
+        # v1.11.0 (R1a, run-#48, Task ID 43): the ONE theme token source —
+        # a sheytan.ui module singleton every view (and every styled stock
+        # control, via import sheytan.ui) binds instead of raw literals.
+        qml/Theme.qml
     NO_RESOURCE_TARGET_PATH
+)
+
+# v1.11.0 (R1a, run-#48, Task ID 43): the theme token singleton must be
+# registered AS a singleton, not a plain type — qt_add_qml_module only
+# learns the marker through this source-file property.
+set_source_files_properties(qml/Theme.qml PROPERTIES
+    QT_QML_SINGLETON_TYPE TRUE
+)
+
+# v1.11.0 (R1b, run-#48, Task ID 43): the QuickControls2 custom style —
+# embedded raw (qt_add_resources, NOT a QML module) so QQuickStyle can
+# resolve it as a style directory at qrc:/sheytanstyle. main.cpp and the
+# acceptance harness both call QQuickStyle::setStyle(":/sheytanstyle")
+# BEFORE any engine loads. Every styled component imports sheytan.ui for
+# the Theme tokens — ONE theme system, no duplicated palette. Embedded
+# into BOTH targets: the acceptance harness loads the same views and must
+# resolve the same style (I24 — the harness/shipped divergence class).
+qt_add_resources(sheytan-ui sheytan_style
+    PREFIX "/sheytanstyle"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/style"
+    FILES qmldir Button.qml ToolButton.qml TextField.qml TextArea.qml
+          ComboBox.qml CheckBox.qml Switch.qml Slider.qml ProgressBar.qml
+          ScrollBar.qml Menu.qml MenuItem.qml ItemDelegate.qml
+)
+qt_add_resources(sheytan-ui-acceptance sheytan_style
+    PREFIX "/sheytanstyle"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/style"
+    FILES qmldir Button.qml ToolButton.qml TextField.qml TextArea.qml
+          ComboBox.qml CheckBox.qml Switch.qml Slider.qml ProgressBar.qml
+          ScrollBar.qml Menu.qml MenuItem.qml ItemDelegate.qml
 )
 
 target_link_libraries(sheytan-ui PRIVATE

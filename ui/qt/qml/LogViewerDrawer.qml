@@ -35,7 +35,7 @@ Drawer {
             Layout.fillWidth: true
             Label {
                 text: qsTr("Logs")
-                color: "#e8e8ea"
+                color: Theme.text
                 font.pixelSize: 16
                 font.bold: true
                 Layout.fillWidth: true
@@ -44,9 +44,9 @@ Drawer {
                 id: filterField
                 Layout.preferredWidth: 180
                 placeholderText: qsTr("filter…")
-                color: "#e8e8ea"
+                color: Theme.text
                 selectByMouse: true
-                background: Rectangle { color: "#222226"; radius: 6; border.color: "#33333a" }
+                background: Rectangle { color: Theme.elevatedAlt; radius: Theme.radiusM; border.color: Theme.controlHover }
             }
             Button {
                 text: qsTr("Refresh")
@@ -69,7 +69,7 @@ Drawer {
                 required property int index
                 width: logList.width
                 height: logText.implicitHeight + 12
-                color: logHover.hovered ? "#1a1a1d" : "transparent"
+                color: logHover.hovered ? Theme.surfaceElevated : "transparent"
                 // v1.10.15-fixed R3/R4 (D32/I22): a gated hover step for
                 // scanning long log runs.
                 HoverHandler { id: logHover }
@@ -93,7 +93,7 @@ Drawer {
                     textFormat: TextEdit.PlainText
                     color: logRow.modelData !== undefined && logRow.modelData.level !== undefined
                            && (logRow.modelData.level === "ERROR" || logRow.modelData.level === "WARN")
-                           ? "#e8c268" : "#8a8a92"
+                           ? Theme.warn : Theme.muted
                     font.pixelSize: 10
                     font.family: "monospace"
                     text: String(JSON.stringify(logRow.modelData))

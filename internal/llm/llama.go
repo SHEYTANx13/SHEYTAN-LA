@@ -3157,6 +3157,22 @@ type variantVerifyFunc func(cfg *config.Config, variant updater.AssetVariant, no
 // updateEngineVariantTx is the ONE transactional variant authority (the
 // body of the former UpdateEngineVariantNow, v1.7.2 parameterized with an
 // optional verification extension).
+//
+// v1.11.0 (R2/R3, run-#48, Task ID 43): THE DOWNLOAD-WINDOW RELEASE. The
+// transaction previously held switchMu across its ENTIRE body — including
+// the non-destructive network phases (release resolution + the archive
+// download, minutes on a real network). Every user-facing engine path
+// serializes on the SAME mutex — Start() (the first-send boot, the
+// model-select boot) and Restart() — so the operator's shipped app sat
+// with a broken model selection and dead chat for the whole probe
+// download while the log showed gpuAssetResolved and no completion line
+// (the run-#47 physical evidence). The v1.9.6 claim placement fixed the
+// run-ADMISSION outage but not the mutex one: this repair finishes that
+// contract — the lock now covers ONLY the validation and the destructive
+// boundary, the download window holds NOTHING, and the destructive
+// boundary re-validates what the window may have changed. The v1.9.6
+// admission-claim placement, the run-active refusals and the rollback
+// choreography are unchanged.
 func (s *LlamaServer) updateEngineVariantTx(
 	ctx context.Context,
 	variant updater.AssetVariant,
@@ -3164,12 +3180,12 @@ func (s *LlamaServer) updateEngineVariantTx(
 	extraVerify variantVerifyFunc,
 ) (string, error) {
 	s.switchMu.Lock()
-	defer s.switchMu.Unlock()
 
 	cfg := s.src.Load()
 
 	lease, leaseErr := englease.Acquire(engineLeaseDir(cfg), englease.OwnerLease, "engine-owner")
 	if leaseErr != nil {
+		s.switchMu.Unlock()
 		return "", fmt.Errorf("engine variant provisioning refused: %w", leaseErr)
 	}
 
@@ -3184,6 +3200,7 @@ func (s *LlamaServer) updateEngineVariantTx(
 	// claim. v1.9.6: evaluated unconditionally (a registered run whose
 	// engine has not finished booting is exactly the tearing hazard too).
 	if s.runActiveNow() {
+		s.switchMu.Unlock()
 		logging.Default().Warn("updater",
 			"engine variant transaction refused: a run is active — the serving engine is never stopped under a live generation")
 
@@ -3196,10 +3213,12 @@ func (s *LlamaServer) updateEngineVariantTx(
 	// itself is validated STRICTLY first — an unknown variant string
 	// that reached this layer is a caller bug, never a CPU request.
 	if err := updater.ValidateAssetVariant(variant); err != nil {
+		s.switchMu.Unlock()
 		return "", err
 	}
 
 	if !updater.VariantSupported(variant) {
+		s.switchMu.Unlock()
 		return "", fmt.Errorf(
 			"engine variant %q cannot be provisioned on %s — upstream llama.cpp publishes no prebuilt package for this platform; keep the CPU engine or point llamaBinPath at a self-built %s llama-server",
 			variant, runtimeOS(), variant,
@@ -3208,61 +3227,96 @@ func (s *LlamaServer) updateEngineVariantTx(
 
 	// Already there: report the no-op honestly.
 	if updater.InstalledEngineVariant(cfg) == variant {
+		s.switchMu.Unlock()
 		return fmt.Sprintf("engine already carries the %s backend variant", variant), nil
 	}
 
-	// Prefer the CURRENT engine tag (same release, different backend
-	// build) — the variant swap must not silently downgrade the
-	// release. Resolve a fresh tag only when the current one does not
-	// carry the variant asset.
-	tag := updater.InstalledEngineTag(cfg)
-	if tag == "" || !updater.VariantExists(ctx, tag, variant) {
-		_, resolved, rerr := updater.ResolveDownloadURLForVariant(ctx, variant)
-		if rerr != nil {
-			return "", fmt.Errorf("resolve %s engine release: %w", variant, rerr)
+	// v1.11.0 (R2/R3, run-#48): the NON-DESTRUCTIVE WINDOW — switchMu is
+	// RELEASED across the release resolution and the archive download.
+	// The engine keeps serving and every user-facing Start()/Restart()
+	// proceeds while the candidate downloads; the destructive boundary
+	// below re-validates under the re-acquired lock (another transaction
+	// may have committed the same variant — an honest no-op — and a run
+	// may have become active — the advisory refusal applies again).
+	s.switchMu.Unlock()
+
+	tag, stagedSwap, dlFail := func() (string, func() (*updater.StagedInstall, error), error) {
+		// Prefer the CURRENT engine tag (same release, different backend
+		// build) — the variant swap must not silently downgrade the
+		// release. Resolve a fresh tag only when the current one does not
+		// carry the variant asset.
+		tag := updater.InstalledEngineTag(cfg)
+		if tag == "" || !updater.VariantExists(ctx, tag, variant) {
+			_, resolved, rerr := updater.ResolveDownloadURLForVariant(ctx, variant)
+			if rerr != nil {
+				return "", nil, fmt.Errorf("resolve %s engine release: %w", variant, rerr)
+			}
+			tag = resolved
 		}
-		tag = resolved
+
+		// v1.9.6 NON-DESTRUCTIVE DOWNLOAD PHASE — claim-free by design. The
+		// archive transfer (which can run for minutes on a real network)
+		// never stops the engine and never touches the live bin tree, so it
+		// must never hold the run-admission claim either: a user chat typed
+		// during the download is ADMITTED and served by the current engine,
+		// and the transaction below refuses itself at its destructive
+		// boundary (the AUTO probe records that as a DEFERRAL, never a
+		// bounded failure) instead of holding the product hostage with
+		// "engine maintenance in progress". The v1.9.5 regression class —
+		// every local-chat E2E on windows/amd64 503-ing behind the
+		// background AUTO Vulkan probe's claim — was exactly this window.
+		// The archive seam (tests) skips the transfer entirely.
+		s.mu.Lock()
+		seamArchive := s.testStagedArchive
+		s.mu.Unlock()
+
+		var stagedSwap func() (*updater.StagedInstall, error)
+
+		if seamArchive == "" {
+			archivePath, dlErr := updater.DownloadEngineArchiveStaged(ctx, cfg, tag, variant, onProgress)
+			if dlErr != nil {
+				// Nothing was stopped and no live tree was touched —
+				// the engine keeps serving; no last-known-good restart
+				// is needed (the pre-v1.9.6 order bounced a running
+				// engine for a pure download failure).
+				return "", nil, fmt.Errorf("install %s engine: %w", variant, dlErr)
+			}
+
+			defer func() { _ = os.Remove(archivePath) }()
+
+			stagedSwap = func() (*updater.StagedInstall, error) {
+				return updater.InstallStagedFromArchiveDeferredWithVariant(cfg, tag, variant, archivePath)
+			}
+		} else {
+			stagedSwap = func() (*updater.StagedInstall, error) {
+				return updater.InstallStagedFromArchiveDeferredWithVariant(cfg, tag, variant, seamArchive)
+			}
+		}
+
+		return tag, stagedSwap, nil
+	}()
+	if dlFail != nil {
+		// switchMu is NOT held on this path (the release above) — the
+		// engine kept serving the whole window.
+		return "", dlFail
 	}
 
-	// v1.9.6 NON-DESTRUCTIVE DOWNLOAD PHASE — claim-free by design. The
-	// archive transfer (which can run for minutes on a real network)
-	// never stops the engine and never touches the live bin tree, so it
-	// must never hold the run-admission claim either: a user chat typed
-	// during the download is ADMITTED and served by the current engine,
-	// and the transaction below refuses itself at its destructive
-	// boundary (the AUTO probe records that as a DEFERRAL, never a
-	// bounded failure) instead of holding the product hostage with
-	// "engine maintenance in progress". The v1.9.5 regression class —
-	// every local-chat E2E on windows/amd64 503-ing behind the
-	// background AUTO Vulkan probe's claim — was exactly this window.
-	// The archive seam (tests) skips the transfer entirely.
-	s.mu.Lock()
-	seamArchive := s.testStagedArchive
-	s.mu.Unlock()
+	// RE-ACQUIRE for the destructive boundary (stop → swap → start →
+	// verify → rollback/commit). Everything below holds the SAME
+	// serialization contract the pre-v1.11.0 body had.
+	s.switchMu.Lock()
+	defer s.switchMu.Unlock()
 
-	var staged *updater.StagedInstall
+	// Re-validation after the download window (see the release comment):
+	// the committed-elsewhere no-op and the run-active advisory.
+	if updater.InstalledEngineVariant(s.src.Load()) == variant {
+		return fmt.Sprintf("engine already carries the %s backend variant (installed during the download window)", variant), nil
+	}
+	if s.runActiveNow() {
+		logging.Default().Warn("updater",
+			"engine variant transaction refused: a run is active — the serving engine is never stopped under a live generation")
 
-	var stagedSwap func() (*updater.StagedInstall, error)
-
-	if seamArchive == "" {
-		archivePath, dlErr := updater.DownloadEngineArchiveStaged(ctx, cfg, tag, variant, onProgress)
-		if dlErr != nil {
-			// Nothing was stopped and no live tree was touched —
-			// the engine keeps serving; no last-known-good restart
-			// is needed (the pre-v1.9.6 order bounced a running
-			// engine for a pure download failure).
-			return "", fmt.Errorf("install %s engine: %w", variant, dlErr)
-		}
-
-		defer func() { _ = os.Remove(archivePath) }()
-
-		stagedSwap = func() (*updater.StagedInstall, error) {
-			return updater.InstallStagedFromArchiveDeferredWithVariant(cfg, tag, variant, archivePath)
-		}
-	} else {
-		stagedSwap = func() (*updater.StagedInstall, error) {
-			return updater.InstallStagedFromArchiveDeferredWithVariant(cfg, tag, variant, seamArchive)
-		}
+		return "", ErrEngineBusyWithRun
 	}
 
 	// v1.9.5/v1.9.6 ADMISSION CLAIM — AT THE DESTRUCTIVE BOUNDARY. The
