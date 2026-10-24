@@ -42,6 +42,12 @@ ApplicationWindow {
         return i >= 0 ? i : 0
     }
 
+    // v1.10.15-fixed R4 (D32/I22, run #45): the view-switch motion counter
+    // — the acceptance-surface fact (tst_acceptance::animationsToggleContract).
+    // It moves ONLY while the persisted animationsEnabled is on; off =
+    // instant switch, identical function.
+    property int fadeAnimationRuns: 0
+
     // Acceptance-surface facts (tst_acceptance::navChromeSevenViewsLoad).
 
     // AI Systems panel (v1.10.2): right-edge drawer, pure /api/systems client.
@@ -345,6 +351,14 @@ ApplicationWindow {
                 Core.refreshModels()
             }
         }
+        // D32/I22: toggling motion OFF mid-fade settles instantly — no
+        // animation path keeps running after the user opts out.
+        function onAnimationsEnabledChanged() {
+            if (!Core.animationsEnabled) {
+                viewFade.stop()
+                viewStack.opacity = 1
+            }
+        }
     }
 
     RowLayout {
@@ -401,6 +415,10 @@ ApplicationWindow {
                     background: Rectangle {
                         color: navChat.checked ? "#2c2c31" : (navChat.hovered ? "#1f1f23" : "transparent")
                         radius: 6
+                        Behavior on color {
+                            enabled: Core.animationsEnabled
+                            ColorAnimation { duration: 140 }
+                        }
                     }
                 }
                 Button {
@@ -429,6 +447,10 @@ ApplicationWindow {
                     background: Rectangle {
                         color: navAgent.checked ? "#2c2c31" : (navAgent.hovered ? "#1f1f23" : "transparent")
                         radius: 6
+                        Behavior on color {
+                            enabled: Core.animationsEnabled
+                            ColorAnimation { duration: 140 }
+                        }
                     }
                 }
                 Button {
@@ -457,6 +479,10 @@ ApplicationWindow {
                     background: Rectangle {
                         color: navWorkspace.checked ? "#2c2c31" : (navWorkspace.hovered ? "#1f1f23" : "transparent")
                         radius: 6
+                        Behavior on color {
+                            enabled: Core.animationsEnabled
+                            ColorAnimation { duration: 140 }
+                        }
                     }
                 }
                 Button {
@@ -485,6 +511,10 @@ ApplicationWindow {
                     background: Rectangle {
                         color: navLab.checked ? "#2c2c31" : (navLab.hovered ? "#1f1f23" : "transparent")
                         radius: 6
+                        Behavior on color {
+                            enabled: Core.animationsEnabled
+                            ColorAnimation { duration: 140 }
+                        }
                     }
                 }
                 Button {
@@ -513,6 +543,10 @@ ApplicationWindow {
                     background: Rectangle {
                         color: navAutomation.checked ? "#2c2c31" : (navAutomation.hovered ? "#1f1f23" : "transparent")
                         radius: 6
+                        Behavior on color {
+                            enabled: Core.animationsEnabled
+                            ColorAnimation { duration: 140 }
+                        }
                     }
                 }
                 Button {
@@ -541,6 +575,10 @@ ApplicationWindow {
                     background: Rectangle {
                         color: navSystem.checked ? "#2c2c31" : (navSystem.hovered ? "#1f1f23" : "transparent")
                         radius: 6
+                        Behavior on color {
+                            enabled: Core.animationsEnabled
+                            ColorAnimation { duration: 140 }
+                        }
                     }
                 }
                 Button {
@@ -569,6 +607,10 @@ ApplicationWindow {
                     background: Rectangle {
                         color: navSettings.checked ? "#2c2c31" : (navSettings.hovered ? "#1f1f23" : "transparent")
                         radius: 6
+                        Behavior on color {
+                            enabled: Core.animationsEnabled
+                            ColorAnimation { duration: 140 }
+                        }
                     }
                 }
 
@@ -580,6 +622,17 @@ ApplicationWindow {
                     text: qsTr("Hist.")
                     enabled: Core.connected
                     onClicked: historyDrawer.open()
+                    // v1.10.15-fixed R3 (D32): hover feedback + gated
+                    // motion — the same rail affordance the seven view
+                    // buttons carry (D25 polish pass).
+                    background: Rectangle {
+                        color: parent.hovered && parent.enabled ? "#1f1f23" : "transparent"
+                        radius: 6
+                        Behavior on color {
+                            enabled: Core.animationsEnabled
+                            ColorAnimation { duration: 140 }
+                        }
+                    }
                 }
                 Button {
                     objectName: "nav-models"
@@ -587,6 +640,14 @@ ApplicationWindow {
                     text: qsTr("Models")
                     enabled: Core.connected
                     onClicked: modelPickerDrawer.open()
+                    background: Rectangle {
+                        color: parent.hovered && parent.enabled ? "#1f1f23" : "transparent"
+                        radius: 6
+                        Behavior on color {
+                            enabled: Core.animationsEnabled
+                            ColorAnimation { duration: 140 }
+                        }
+                    }
                 }
                 Button {
                     objectName: "nav-mytools"
@@ -594,6 +655,14 @@ ApplicationWindow {
                     text: qsTr("Tools")
                     enabled: Core.connected
                     onClicked: myToolsDrawer.open()
+                    background: Rectangle {
+                        color: parent.hovered && parent.enabled ? "#1f1f23" : "transparent"
+                        radius: 6
+                        Behavior on color {
+                            enabled: Core.animationsEnabled
+                            ColorAnimation { duration: 140 }
+                        }
+                    }
                 }
                 Button {
                     objectName: "nav-logs"
@@ -601,6 +670,14 @@ ApplicationWindow {
                     text: qsTr("Logs")
                     enabled: Core.connected
                     onClicked: logViewerDrawer.open()
+                    background: Rectangle {
+                        color: parent.hovered && parent.enabled ? "#1f1f23" : "transparent"
+                        radius: 6
+                        Behavior on color {
+                            enabled: Core.animationsEnabled
+                            ColorAnimation { duration: 140 }
+                        }
+                    }
                 }
                 PerfStrip {
                     Layout.fillWidth: true
@@ -674,6 +751,10 @@ ApplicationWindow {
                             color: Core.currentSession.id === modelData.id
                                    ? "#2c2c31" : (parent.hovered ? "#222226" : "transparent")
                             radius: 6
+                            Behavior on color {
+                                enabled: Core.animationsEnabled
+                                ColorAnimation { duration: 140 }
+                            }
                         }
 
                         onClicked: Core.openSession(modelData.id)
@@ -715,9 +796,28 @@ ApplicationWindow {
 
         // --- View stack: seven views over the ONE core (D28) -------------
         StackLayout {
+            id: viewStack
             Layout.fillWidth: true
             Layout.fillHeight: true
             currentIndex: root.currentViewIndex
+
+            // v1.10.15-fixed R4 (D32/I22): view-switch motion is OPT-IN.
+            // The fade runs ONLY while the persisted animationsEnabled is
+            // on (device-tier default, user override); off = instant
+            // switch. fadeAnimationRuns is the acceptance counter — it
+            // never moves on the off path.
+            onCurrentIndexChanged: {
+                if (Core.animationsEnabled) {
+                    root.fadeAnimationRuns++
+                    viewFade.restart()
+                }
+            }
+            SequentialAnimation {
+                id: viewFade
+                running: false
+                NumberAnimation { target: viewStack; property: "opacity"; to: 0.35; duration: 0 }
+                NumberAnimation { target: viewStack; property: "opacity"; to: 1.0; duration: 180; easing.type: Easing.OutCubic }
+            }
 
         // --- Main chat column -------------------------------------------
         ColumnLayout {

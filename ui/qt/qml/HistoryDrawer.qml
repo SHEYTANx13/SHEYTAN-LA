@@ -44,7 +44,17 @@ Drawer {
                 color: "#e8e8ea"
                 selectByMouse: true
                 onAccepted: Core.searchHistory(text, modeBox.currentText)
-                background: Rectangle { color: "#222226"; radius: 6; border.color: "#33333a" }
+                // v1.10.15-fixed R3 (D32): focus feedback + gated motion
+                // (run-#43 pin; Basic style).
+                background: Rectangle {
+                    color: "#222226"
+                    radius: 6
+                    border.color: parent.activeFocus ? "#b8a6e8" : "#33333a"
+                    Behavior on border.color {
+                        enabled: Core.animationsEnabled
+                        ColorAnimation { duration: 140 }
+                    }
+                }
             }
             ComboBox {
                 id: modeBox

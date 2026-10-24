@@ -27,6 +27,7 @@ and acceptance NOT RUN), `NOT RUN` (unported — honest gap, never faked).
 | settings-diagnostics | src/settings-sections.ts (read-only health) | ui/qt/qml/SettingsView.qml | /api/logs, /api/preflight | settingsEightSectionsAllFields | LANDED-LOCAL |
 | settings-advanced | src/settings-sections.ts (every advanced field in FIELD_PLACEMENT) | ui/qt/qml/SettingsView.qml | /api/config | settingsEightSectionsAllFields | LANDED-LOCAL |
 | config read glue | src/api.ts request("/api") via refreshConfig | ui/qt/src/coreclient.cpp (stub implemented) | GET /api/config → config property | settingsEightSectionsAllFields | LANDED-LOCAL |
+| animations-toggle | client-persisted D32 setting (no Wails twin — the Qt-native motion contract) | ui/qt/qml/SettingsView.qml (toggle row; gated motion in Main.qml, store in coreclient.cpp) | QSettings via CoreClient (device-tier default, user override; /api/config drops unknown keys — typed struct) | animationsToggleContract | LANDED-LOCAL |
 
 ## Agent (priority 3)
 
@@ -86,3 +87,10 @@ and acceptance NOT RUN), `NOT RUN` (unported — honest gap, never faked).
   Core singleton + SystemView envelope guard, R3 WorkspaceView recents
   delegates restored, R5 submit() rename + Basic style in the harness.
   The React reference tree under src/ is untouched.
+- Run #45 (Task ID 41) landed under the same rows: the acceptance
+  target's QuickControls2 link fix (run-#44 C1083 — the reason every
+  row above was hosted-UNVERIFIED), the D32 motion pass (every
+  animation gated by the persisted animationsEnabled — the
+  animations-toggle row above), and the D31 errors-only annotation
+  contract. Every LANDED-LOCAL row awaits the SAME hosted proof:
+  the next run on the exact changed commit.

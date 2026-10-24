@@ -12,9 +12,18 @@
 #include <QJsonObject>
 #include <QRandomGenerator>
 #include <QRegularExpression>
+#include <QSettings>
 #include <QUrl>
 
 #include <functional>
+
+#if defined(Q_OS_UNIX)
+#include <unistd.h>
+#endif
+#if defined(Q_OS_WIN)
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -28,6 +37,34 @@ constexpr int kMaxWsFrame = 512 * 1024;        // bounded activity frame
 // never be trusted on the wire. Encoded defensively, verified by test.
 QString encodeSegment(const QString &raw) {
     return QString::fromLatin1(QUrl::toPercentEncoding(raw));
+}
+
+// totalPhysicalBytes / defaultAnimationsEnabledForThisDevice — the D32
+// device-tier seed for the FIRST run only (the persisted user override
+// always wins): >= 8 GiB of physical RAM counts as high-end (animations
+// on); below it, low-end (off — instant states, identical function).
+// Probed through the OS, never configured; an unknown platform resolves
+// low-end (the conservative tier).
+quint64 totalPhysicalBytes() {
+#if defined(Q_OS_WIN)
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status))
+        return quint64(status.ullTotalPhys);
+    return 0;
+#elif defined(Q_OS_UNIX)
+    const long pages = sysconf(_SC_PHYS_PAGES);
+    const long pageSize = sysconf(_SC_PAGESIZE);
+    if (pages > 0 && pageSize > 0)
+        return quint64(pages) * quint64(pageSize);
+    return 0;
+#else
+    return 0;
+#endif
+}
+
+bool defaultAnimationsEnabledForThisDevice() {
+    return totalPhysicalBytes() >= quint64(8) * 1024 * 1024 * 1024;
 }
 
 QByteArray randomKey16() {
@@ -85,7 +122,15 @@ QLocalSocket *CoreClient::openSocket() {
     return sock;
 }
 
-CoreClient::CoreClient(QObject *parent) : QObject(parent) {}
+CoreClient::CoreClient(QObject *parent) : QObject(parent) {
+    // v1.10.15-fixed R4 (D32/I22): seed the ONE persisted motion setting.
+    // A stored value (the user override) always wins; only a fresh
+    // install falls back to the device tier.
+    QSettings settings;
+    const QVariant stored = settings.value(QStringLiteral("ui/animationsEnabled"));
+    m_animationsEnabled = stored.isValid() ? stored.toBool()
+                                           : defaultAnimationsEnabledForThisDevice();
+}
 
 CoreClient::~CoreClient() {
     closeWsStream();
@@ -482,6 +527,20 @@ void CoreClient::patchConfig(const QVariantMap &patch) {
                 // either way, so the UI never drifts from the store.
                 refreshConfig();
             });
+}
+
+// v1.10.15-fixed R4 (D32/I22): the persisted motion toggle. Written
+// through QSettings and SYNCED inside the call — a second CoreClient in
+// this process, and the next process, read the override; the change
+// signal fans out to every gated QML binding (off = instant state).
+void CoreClient::setAnimationsEnabled(bool enabled) {
+    if (enabled == m_animationsEnabled)
+        return;
+    m_animationsEnabled = enabled;
+    QSettings settings;
+    settings.setValue(QStringLiteral("ui/animationsEnabled"), enabled);
+    settings.sync();
+    emit animationsEnabledChanged();
 }
 
 // --- AI Systems (pure IPC client of the ONE Go store) ----------------------

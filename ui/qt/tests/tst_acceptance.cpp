@@ -87,6 +87,11 @@ private slots:
     void automationViewLoads();
     void systemViewLoads();
     void extrasSurfacesLoad();
+    // v1.10.15-fixed R4 (D32/I22, run #45): the ONE persisted motion
+    // toggle — property + persisted setter round-trip on the client class,
+    // and the production shell's view-change fade gated end-to-end (off:
+    // the motion path never runs; on: it does; navigation identical).
+    void animationsToggleContract();
     // v1.10.3 framing + contract suite (byte-level CoreClient rules against
     // a raw hand-written HTTP fake; the REAL-core slots above prove live
     // behavior, these prove the framing/handshake/encoding contract):
@@ -1255,6 +1260,68 @@ void Acceptance::extrasSurfacesLoad() {
         QVERIFY2(!engine.rootObjects().isEmpty(),
                  qPrintable(QStringLiteral("%1 must create its root object").arg(name)));
     }
+}
+
+// ============================================================================
+// v1.10.15-fixed R4 (D32/I22, run #45) — the persisted animations toggle.
+// ============================================================================
+
+void Acceptance::animationsToggleContract() {
+    // (1) The client-class contract: a bool property whose setter
+    //     PERSISTS — a second, fresh CoreClient reads the first one's
+    //     write (QSettings under this binary's org/app identity; the
+    //     store syncs inside the setter). The device tier only seeds a
+    //     fresh install; the override always wins.
+    CoreClient first;
+    const bool initial = first.animationsEnabled();
+    first.setAnimationsEnabled(!initial);
+    CoreClient second;
+    QCOMPARE(second.animationsEnabled(), !initial);
+    first.setAnimationsEnabled(initial);
+    CoreClient restored;
+    QCOMPARE(restored.animationsEnabled(), initial);
+
+    // (2) The production shell gates its motion end-to-end: with the flag
+    //     OFF, switching views runs NO animation path (the counter never
+    //     moves, navigation still happens — identical function); with it
+    //     ON, the fade runs.
+    const QString mainQml = findParityQml(QStringLiteral("Main.qml"));
+    if (mainQml.isEmpty())
+        QSKIP("production QML not reachable (no SHEYTAN_REPO, no build-tree layout) — NOT RUN");
+    QQmlApplicationEngine engine;
+    registerCoreSingleton();
+    bool creationFailed = false;
+    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
+                     [&creationFailed]() { creationFailed = true; });
+    engine.load(QUrl::fromLocalFile(mainQml));
+    QVERIFY2(!creationFailed,
+             qPrintable(QStringLiteral("the production Main.qml failed to create objects (animations toggle): %1")
+                            .arg(mainQml)));
+    QVERIFY2(!engine.rootObjects().isEmpty(), "the shell must create its root window");
+    QObject *win = engine.rootObjects().constFirst();
+
+    CoreClient *core = engine.singletonInstance<CoreClient *>(qmlTypeId("sheytan.ui", 1, 0, "Core"));
+    QVERIFY2(core != nullptr,
+             "the engine's Core singleton must resolve to the CoreClient the QML binds");
+
+    const int before = win->property("fadeAnimationRuns").toInt();
+
+    core->setAnimationsEnabled(false);
+    win->setProperty("currentView", QStringLiteral("agent"));
+    // Let any queued binding settle: the OFF path must run NO motion.
+    QTest::qWait(250);
+    QCOMPARE(win->property("fadeAnimationRuns").toInt(), before);
+    QCOMPARE(win->property("currentView").toString(), QStringLiteral("agent"));
+    QCOMPARE(win->property("currentViewIndex").toInt(), 1);
+
+    core->setAnimationsEnabled(true);
+    win->setProperty("currentView", QStringLiteral("workspace"));
+    QTRY_VERIFY_WITH_TIMEOUT(win->property("fadeAnimationRuns").toInt() > before, 5000);
+    QCOMPARE(win->property("currentView").toString(), QStringLiteral("workspace"));
+    QCOMPARE(win->property("currentViewIndex").toInt(), 2);
+
+    // The suite never leaves a toggled preference behind.
+    core->setAnimationsEnabled(initial);
 }
 
 // ============================================================================

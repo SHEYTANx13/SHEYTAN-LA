@@ -56,6 +56,15 @@ class CoreClient : public QObject {
     Q_PROPERTY(QVariantMap governor READ governor NOTIFY governorChanged)
     Q_PROPERTY(QVariantMap maintenance READ maintenance NOTIFY maintenanceChanged)
     Q_PROPERTY(QVariantList tools READ tools NOTIFY toolsChanged)
+    // v1.10.15-fixed R4 (D32/I22, run #45): the ONE persisted UI-motion
+    // setting. Every QML animation/transition reads this bool; off means
+    // instant state, identical function. Persisted client-side through
+    // QSettings under the org/app identity main.cpp pins — the /api/config
+    // store round-trips a TYPED server struct and silently drops unknown
+    // keys, and a Go edit is outside this cycle's allowlist. The device
+    // tier seeds the FIRST run only (high-end on, low-end off); the user
+    // override always wins.
+    Q_PROPERTY(bool animationsEnabled READ animationsEnabled NOTIFY animationsEnabledChanged)
 
 public:
     explicit CoreClient(QObject *parent = nullptr);
@@ -104,6 +113,9 @@ public:
     Q_INVOKABLE void refreshGovernor();
     Q_INVOKABLE void refreshMaintenance();
     Q_INVOKABLE void refreshTools();
+    // v1.10.15-fixed R4 (D32/I22): the persisted motion toggle (QML and
+    // the acceptance gate call this; the write syncs immediately).
+    Q_INVOKABLE void setAnimationsEnabled(bool enabled);
 
     bool connected() const { return m_connected; }
     bool busy() const { return m_busy; }
@@ -131,6 +143,7 @@ public:
     QVariantMap governor() const { return m_governor; }
     QVariantMap maintenance() const { return m_maintenance; }
     QVariantList tools() const { return m_tools; }
+    bool animationsEnabled() const { return m_animationsEnabled; }
     bool canStop() const { return m_busy; }
 
 signals:
@@ -162,6 +175,7 @@ signals:
     void governorChanged();
     void maintenanceChanged();
     void toolsChanged();
+    void animationsEnabledChanged();
 
 private:
     // --- IPC plumbing ---
@@ -218,6 +232,7 @@ private:
     QVariantMap m_governor;
     QVariantMap m_maintenance;
     QVariantList m_tools;
+    bool m_animationsEnabled = true;
 
     // activity WS state
     QLocalSocket *m_wsSock = nullptr;
