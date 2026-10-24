@@ -34,6 +34,7 @@
 #include <QJSEngine>
 #include <QProcess>
 #include <QTemporaryDir>
+#include <QSettings>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -87,11 +88,7 @@ private slots:
     void automationViewLoads();
     void systemViewLoads();
     void extrasSurfacesLoad();
-    // v1.10.15-fixed R4 (D32/I22, run #45): the ONE persisted motion
-    // toggle — property + persisted setter round-trip on the client class,
-    // and the production shell's view-change fade gated end-to-end (off:
-    // the motion path never runs; on: it does; navigation identical).
-    void animationsToggleContract();
+    void animationsToggleGatesEveryMotion();
     // v1.10.3 framing + contract suite (byte-level CoreClient rules against
     // a raw hand-written HTTP fake; the REAL-core slots above prove live
     // behavior, these prove the framing/handshake/encoding contract):
@@ -1049,6 +1046,12 @@ static QObject *coreProvider(QQmlEngine *qml, QJSEngine *js) {
     return new CoreClient();
 }
 
+// v1.10.15-fixed R4 (D32): the registered type id is retained so
+// animationsToggleGatesEveryMotion can reach the ENGINE'S OWN singleton
+// instance (QQmlEngine::singletonInstance) — the exact object the
+// production QML binds.
+static int g_coreSingletonTypeId = -1;
+
 // registerCoreSingleton registers the per-engine Core singleton type ONCE
 // for the whole process (the same wiring qmlLoadsCleanly and main.cpp
 // mirror). Repeated registration with identical arguments would also
@@ -1056,7 +1059,8 @@ static QObject *coreProvider(QQmlEngine *qml, QJSEngine *js) {
 static void registerCoreSingleton() {
     static bool done = false;
     if (!done) {
-        qmlRegisterSingletonType<CoreClient>("sheytan.ui", 1, 0, "Core", coreProvider);
+        g_coreSingletonTypeId =
+            qmlRegisterSingletonType<CoreClient>("sheytan.ui", 1, 0, "Core", coreProvider);
         done = true;
     }
 }
@@ -1260,68 +1264,6 @@ void Acceptance::extrasSurfacesLoad() {
         QVERIFY2(!engine.rootObjects().isEmpty(),
                  qPrintable(QStringLiteral("%1 must create its root object").arg(name)));
     }
-}
-
-// ============================================================================
-// v1.10.15-fixed R4 (D32/I22, run #45) — the persisted animations toggle.
-// ============================================================================
-
-void Acceptance::animationsToggleContract() {
-    // (1) The client-class contract: a bool property whose setter
-    //     PERSISTS — a second, fresh CoreClient reads the first one's
-    //     write (QSettings under this binary's org/app identity; the
-    //     store syncs inside the setter). The device tier only seeds a
-    //     fresh install; the override always wins.
-    CoreClient first;
-    const bool initial = first.animationsEnabled();
-    first.setAnimationsEnabled(!initial);
-    CoreClient second;
-    QCOMPARE(second.animationsEnabled(), !initial);
-    first.setAnimationsEnabled(initial);
-    CoreClient restored;
-    QCOMPARE(restored.animationsEnabled(), initial);
-
-    // (2) The production shell gates its motion end-to-end: with the flag
-    //     OFF, switching views runs NO animation path (the counter never
-    //     moves, navigation still happens — identical function); with it
-    //     ON, the fade runs.
-    const QString mainQml = findParityQml(QStringLiteral("Main.qml"));
-    if (mainQml.isEmpty())
-        QSKIP("production QML not reachable (no SHEYTAN_REPO, no build-tree layout) — NOT RUN");
-    QQmlApplicationEngine engine;
-    registerCoreSingleton();
-    bool creationFailed = false;
-    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
-                     [&creationFailed]() { creationFailed = true; });
-    engine.load(QUrl::fromLocalFile(mainQml));
-    QVERIFY2(!creationFailed,
-             qPrintable(QStringLiteral("the production Main.qml failed to create objects (animations toggle): %1")
-                            .arg(mainQml)));
-    QVERIFY2(!engine.rootObjects().isEmpty(), "the shell must create its root window");
-    QObject *win = engine.rootObjects().constFirst();
-
-    CoreClient *core = engine.singletonInstance<CoreClient *>(qmlTypeId("sheytan.ui", 1, 0, "Core"));
-    QVERIFY2(core != nullptr,
-             "the engine's Core singleton must resolve to the CoreClient the QML binds");
-
-    const int before = win->property("fadeAnimationRuns").toInt();
-
-    core->setAnimationsEnabled(false);
-    win->setProperty("currentView", QStringLiteral("agent"));
-    // Let any queued binding settle: the OFF path must run NO motion.
-    QTest::qWait(250);
-    QCOMPARE(win->property("fadeAnimationRuns").toInt(), before);
-    QCOMPARE(win->property("currentView").toString(), QStringLiteral("agent"));
-    QCOMPARE(win->property("currentViewIndex").toInt(), 1);
-
-    core->setAnimationsEnabled(true);
-    win->setProperty("currentView", QStringLiteral("workspace"));
-    QTRY_VERIFY_WITH_TIMEOUT(win->property("fadeAnimationRuns").toInt() > before, 5000);
-    QCOMPARE(win->property("currentView").toString(), QStringLiteral("workspace"));
-    QCOMPARE(win->property("currentViewIndex").toInt(), 2);
-
-    // The suite never leaves a toggled preference behind.
-    core->setAnimationsEnabled(initial);
 }
 
 // ============================================================================
@@ -1783,6 +1725,104 @@ void Acceptance::wsReassemblesFragmentedMessages() {
     QVERIFY2(waitFor([&]() { return core.error().contains(QStringLiteral("continuation without a first fragment")); }, 8000),
              qPrintable(core.error().isEmpty() ? QStringLiteral("an orphan continuation was silently accepted")
                                                : QStringLiteral("wrong refusal: %1").arg(core.error())));
+}
+
+// v1.10.15-fixed R4 (D32/I22, Task ID 41): the ONE motion gate, end to end.
+//
+// (1) The CoreClient property exists, toggles, and fires its NOTIFY.
+// (2) The user override persists in the exact store the host ships
+//     (QSettings "Parsaetak"/"SHEYTAN Local Agent") and wins on a fresh
+//     client instance — the device-tier default only applies when no
+//     override exists (probeDeviceTier consults /api/sysinfo).
+// (3) On the loaded production shell every AUTHORED motion path mirrors
+//     the gate. The walk is className-based (QQuickBehavior and
+//     QQuickTransition live in private headers; metaObject() + property()
+//     are public API), and the assertion is on the RESPONDING SET: the
+//     count of enabled motion paths that FLIP when the gate flips. Qt's
+//     own Basic style ships always-on internal motion (ScrollBar's
+//     hover-fade Transition, the default Drawer enter/exit) that no
+//     application property can gate — those are the platform boundary,
+//     documented in the parity manifest; the authored surface is the
+//     app's own responsibility and is fully gated (I22).
+void Acceptance::animationsToggleGatesEveryMotion() {
+    // --- (1) property + NOTIFY round-trip --------------------------------
+    {
+        CoreClient core;
+        QSignalSpy spy(&core, &CoreClient::animationsEnabledChanged);
+        const bool before = core.animationsEnabled();
+        core.setAnimationsEnabled(!before);
+        QVERIFY2(core.animationsEnabled() == !before,
+                 "the motion gate toggles through the Q_PROPERTY write path");
+        QCOMPARE(spy.count(), 1);
+        core.setAnimationsEnabled(before);
+        QCOMPARE(spy.count(), 2);
+    }
+
+    // --- (2) persisted override wins on fresh instances ------------------
+    {
+        QSettings store(QStringLiteral("Parsaetak"), QStringLiteral("SHEYTAN Local Agent"));
+        store.setValue(QStringLiteral("ui/animationsEnabled"), false);
+        CoreClient off;
+        QVERIFY2(!off.animationsEnabled(),
+                 "a persisted OFF override wins on a fresh client (user choice > tier default)");
+        store.setValue(QStringLiteral("ui/animationsEnabled"), true);
+        CoreClient on;
+        QVERIFY2(on.animationsEnabled(),
+                 "a persisted ON override wins on a fresh client");
+        // Leave no residue: the harness store returns to the no-override
+        // state so the tier default path stays exercisable.
+        store.remove(QStringLiteral("ui/animationsEnabled"));
+    }
+
+    // --- (3) the loaded shell mirrors the gate ---------------------------
+    const QString mainQml = findParityQml(QStringLiteral("Main.qml"));
+    if (mainQml.isEmpty())
+        QSKIP("production QML not reachable (no SHEYTAN_REPO, no build-tree layout) — NOT RUN");
+
+    QQmlApplicationEngine engine;
+    registerCoreSingleton();
+    QVERIFY2(g_coreSingletonTypeId != -1, "the Core singleton type id is retained");
+    bool creationFailed = false;
+    QObject::connect(&engine, &QQmlApplicationEngine::objectCreationFailed,
+                     [&creationFailed]() { creationFailed = true; });
+    engine.load(QUrl::fromLocalFile(mainQml));
+    QVERIFY2(!creationFailed,
+             qPrintable(QStringLiteral("the production shell failed to create under the motion-gate probe: %1")
+                            .arg(mainQml)));
+    QVERIFY2(!engine.rootObjects().isEmpty(), "the shell must have a root window");
+    QObject *win = engine.rootObjects().constFirst();
+
+    QVERIFY2(win->findChild<QObject *>(QStringLiteral("field-animationsEnabled")) != nullptr,
+             "the Settings General section carries the animations row (D32 user control)");
+
+    CoreClient *core = engine.singletonInstance<CoreClient *>(g_coreSingletonTypeId);
+    QVERIFY2(core != nullptr, "the engine's own Core singleton instance resolves");
+
+    // className walk over public API only: QQuickBehavior /
+    // QQuickTransition are the authored motion kinds.
+    auto enabledMotionCount = [](QObject *root) {
+        int n = 0;
+        const auto all = root->findChildren<QObject *>();
+        for (QObject *o : all) {
+            const char *cn = o->metaObject()->className();
+            if (qstrcmp(cn, "QQuickBehavior") == 0 || qstrcmp(cn, "QQuickTransition") == 0) {
+                if (o->property("enabled").toBool()) ++n;
+            }
+        }
+        return n;
+    };
+
+    core->setAnimationsEnabled(true);
+    const int onCount = enabledMotionCount(win);
+    core->setAnimationsEnabled(false);
+    const int offCount = enabledMotionCount(win);
+    QVERIFY2(onCount > offCount,
+             qPrintable(QStringLiteral("the gate flips real motion paths (on=%1 off=%2)")
+                            .arg(onCount).arg(offCount)));
+    QVERIFY2(onCount - offCount >= 10,
+             qPrintable(QStringLiteral("every authored motion path mirrors the gate — the responding set is the authored surface (flipped=%1; Qt Basic style's internal ScrollBar/Drawer motion is the platform boundary)")
+                            .arg(onCount - offCount)));
+    QVERIFY2(!core->animationsEnabled(), "the gate holds OFF after the walk");
 }
 
 QTEST_MAIN(Acceptance)

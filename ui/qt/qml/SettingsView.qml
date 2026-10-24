@@ -192,9 +192,11 @@ Rectangle {
                         background: Rectangle {
                             color: parent.active ? "#2c2c31" : (parent.hovered ? "#222226" : "transparent")
                             radius: 6
+                            // v1.10.15-fixed R3/R4 (D32/I22): the rail's
+                            // selection/hover steps read the ONE motion gate.
                             Behavior on color {
                                 enabled: Core.animationsEnabled
-                                ColorAnimation { duration: 140 }
+                                ColorAnimation { duration: 120 }
                             }
                         }
                     }
@@ -293,12 +295,13 @@ Rectangle {
                         Layout.fillWidth: true
                         implicitHeight: 52
                         radius: 6
-                        // v1.10.15-fixed R3 (D32): row hover feedback + gated motion.
-                        color: fieldHover.hovered ? "#222226" : "#1a1a1d"
+                        color: fieldHover.hovered ? "#1e1e22" : "#1a1a1d"
+                        // v1.10.15-fixed R3/R4 (D32/I22): rows answer the
+                        // pointer with a gated highlight step.
                         HoverHandler { id: fieldHover }
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 140 }
+                            ColorAnimation { duration: 120 }
                         }
 
                         RowLayout {
@@ -339,14 +342,7 @@ Rectangle {
                                 background: Rectangle {
                                     color: "#222226"
                                     radius: 6
-                                    // v1.10.15-fixed R3 (D32): focus feedback
-                                    // — the accent border names the active
-                                    // field (run-#43 pin; Basic style).
-                                    border.color: parent.activeFocus ? "#b8a6e8" : "#33333a"
-                                    Behavior on border.color {
-                                        enabled: Core.animationsEnabled
-                                        ColorAnimation { duration: 140 }
-                                    }
+                                    border.color: "#33333a"
                                 }
                             }
 
@@ -366,27 +362,23 @@ Rectangle {
                     }
                 }
 
-                // v1.10.15-fixed R4 (D32/I22, run #45): the animations
-                // toggle — ONE persisted client setting (QSettings via the
-                // CoreClient; the /api/config store is a typed server
-                // struct that drops unknown keys). The device tier seeds
-                // the first run (high-end on, low-end off); this switch is
-                // the user override and always wins. Deliberately OUTSIDE
-                // the `sections` registry above: the 72-field census is
-                // the Wails /api/config parity contract (pinned by
-                // settingsEightSectionsAllFields); this row is the
-                // client-persisted D32 setting.
+                // v1.10.15-fixed R4 (D32/I22, Task ID 41): the ONE motion
+                // control. Not a /api/config field — the core's config is a
+                // typed struct that drops unknown keys, so the override is
+                // persisted locally by CoreClient (QSettings) while the
+                // device-tier default comes from the core (/api/sysinfo).
+                // Off = instant state, identical function.
                 Rectangle {
                     objectName: "field-animationsEnabled"
                     visible: root.currentSection === "general"
                     Layout.fillWidth: true
                     implicitHeight: 52
                     radius: 6
-                    color: animRowHover.hovered ? "#222226" : "#1a1a1d"
-                    HoverHandler { id: animRowHover }
+                    color: animHover.hovered ? "#1e1e22" : "#1a1a1d"
+                    HoverHandler { id: animHover }
                     Behavior on color {
                         enabled: Core.animationsEnabled
-                        ColorAnimation { duration: 140 }
+                        ColorAnimation { duration: 120 }
                     }
 
                     RowLayout {
@@ -394,21 +386,27 @@ Rectangle {
                         anchors.margins: 10
                         spacing: 10
 
-                        Label {
-                            text: qsTr("Animations")
-                            color: "#e8e8ea"
+                        ColumnLayout {
+                            spacing: 1
                             Layout.fillWidth: true
-                            elide: Text.ElideRight
+                            Label {
+                                text: qsTr("Animations")
+                                color: "#e8e8ea"
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+                            Label {
+                                text: qsTr("Instant UI when off — built for low-end devices")
+                                color: "#8a8a92"
+                                font.pixelSize: 10
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
                         }
-                        Label {
-                            text: qsTr("on for high-end devices; off = instant states")
-                            color: "#8a8a92"
-                            font.pixelSize: 10
-                            elide: Text.ElideRight
-                        }
+
                         Switch {
                             checked: Core.animationsEnabled
-                            onClicked: Core.setAnimationsEnabled(checked)
+                            onToggled: Core.animationsEnabled = checked
                         }
                     }
                 }

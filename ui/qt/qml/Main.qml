@@ -42,12 +42,6 @@ ApplicationWindow {
         return i >= 0 ? i : 0
     }
 
-    // v1.10.15-fixed R4 (D32/I22, run #45): the view-switch motion counter
-    // — the acceptance-surface fact (tst_acceptance::animationsToggleContract).
-    // It moves ONLY while the persisted animationsEnabled is on; off =
-    // instant switch, identical function.
-    property int fadeAnimationRuns: 0
-
     // Acceptance-surface facts (tst_acceptance::navChromeSevenViewsLoad).
 
     // AI Systems panel (v1.10.2): right-edge drawer, pure /api/systems client.
@@ -351,14 +345,6 @@ ApplicationWindow {
                 Core.refreshModels()
             }
         }
-        // D32/I22: toggling motion OFF mid-fade settles instantly — no
-        // animation path keeps running after the user opts out.
-        function onAnimationsEnabledChanged() {
-            if (!Core.animationsEnabled) {
-                viewFade.stop()
-                viewStack.opacity = 1
-            }
-        }
     }
 
     RowLayout {
@@ -415,9 +401,11 @@ ApplicationWindow {
                     background: Rectangle {
                         color: navChat.checked ? "#2c2c31" : (navChat.hovered ? "#1f1f23" : "transparent")
                         radius: 6
+                        // v1.10.15-fixed R3/R4 (D32/I22, Task ID 41): rail
+                        // state changes read the ONE motion gate.
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 140 }
+                            ColorAnimation { duration: 120 }
                         }
                     }
                 }
@@ -449,7 +437,7 @@ ApplicationWindow {
                         radius: 6
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 140 }
+                            ColorAnimation { duration: 120 }
                         }
                     }
                 }
@@ -481,7 +469,7 @@ ApplicationWindow {
                         radius: 6
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 140 }
+                            ColorAnimation { duration: 120 }
                         }
                     }
                 }
@@ -513,7 +501,7 @@ ApplicationWindow {
                         radius: 6
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 140 }
+                            ColorAnimation { duration: 120 }
                         }
                     }
                 }
@@ -545,7 +533,7 @@ ApplicationWindow {
                         radius: 6
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 140 }
+                            ColorAnimation { duration: 120 }
                         }
                     }
                 }
@@ -577,7 +565,7 @@ ApplicationWindow {
                         radius: 6
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 140 }
+                            ColorAnimation { duration: 120 }
                         }
                     }
                 }
@@ -609,7 +597,7 @@ ApplicationWindow {
                         radius: 6
                         Behavior on color {
                             enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 140 }
+                            ColorAnimation { duration: 120 }
                         }
                     }
                 }
@@ -622,17 +610,6 @@ ApplicationWindow {
                     text: qsTr("Hist.")
                     enabled: Core.connected
                     onClicked: historyDrawer.open()
-                    // v1.10.15-fixed R3 (D32): hover feedback + gated
-                    // motion — the same rail affordance the seven view
-                    // buttons carry (D25 polish pass).
-                    background: Rectangle {
-                        color: parent.hovered && parent.enabled ? "#1f1f23" : "transparent"
-                        radius: 6
-                        Behavior on color {
-                            enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 140 }
-                        }
-                    }
                 }
                 Button {
                     objectName: "nav-models"
@@ -640,14 +617,6 @@ ApplicationWindow {
                     text: qsTr("Models")
                     enabled: Core.connected
                     onClicked: modelPickerDrawer.open()
-                    background: Rectangle {
-                        color: parent.hovered && parent.enabled ? "#1f1f23" : "transparent"
-                        radius: 6
-                        Behavior on color {
-                            enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 140 }
-                        }
-                    }
                 }
                 Button {
                     objectName: "nav-mytools"
@@ -655,14 +624,6 @@ ApplicationWindow {
                     text: qsTr("Tools")
                     enabled: Core.connected
                     onClicked: myToolsDrawer.open()
-                    background: Rectangle {
-                        color: parent.hovered && parent.enabled ? "#1f1f23" : "transparent"
-                        radius: 6
-                        Behavior on color {
-                            enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 140 }
-                        }
-                    }
                 }
                 Button {
                     objectName: "nav-logs"
@@ -670,14 +631,6 @@ ApplicationWindow {
                     text: qsTr("Logs")
                     enabled: Core.connected
                     onClicked: logViewerDrawer.open()
-                    background: Rectangle {
-                        color: parent.hovered && parent.enabled ? "#1f1f23" : "transparent"
-                        radius: 6
-                        Behavior on color {
-                            enabled: Core.animationsEnabled
-                            ColorAnimation { duration: 140 }
-                        }
-                    }
                 }
                 PerfStrip {
                     Layout.fillWidth: true
@@ -753,7 +706,7 @@ ApplicationWindow {
                             radius: 6
                             Behavior on color {
                                 enabled: Core.animationsEnabled
-                                ColorAnimation { duration: 140 }
+                                ColorAnimation { duration: 120 }
                             }
                         }
 
@@ -796,28 +749,9 @@ ApplicationWindow {
 
         // --- View stack: seven views over the ONE core (D28) -------------
         StackLayout {
-            id: viewStack
             Layout.fillWidth: true
             Layout.fillHeight: true
             currentIndex: root.currentViewIndex
-
-            // v1.10.15-fixed R4 (D32/I22): view-switch motion is OPT-IN.
-            // The fade runs ONLY while the persisted animationsEnabled is
-            // on (device-tier default, user override); off = instant
-            // switch. fadeAnimationRuns is the acceptance counter — it
-            // never moves on the off path.
-            onCurrentIndexChanged: {
-                if (Core.animationsEnabled) {
-                    root.fadeAnimationRuns++
-                    viewFade.restart()
-                }
-            }
-            SequentialAnimation {
-                id: viewFade
-                running: false
-                NumberAnimation { target: viewStack; property: "opacity"; to: 0.35; duration: 0 }
-                NumberAnimation { target: viewStack; property: "opacity"; to: 1.0; duration: 180; easing.type: Easing.OutCubic }
-            }
 
         // --- Main chat column -------------------------------------------
         ColumnLayout {
@@ -828,9 +762,17 @@ ApplicationWindow {
             // Loading / error banner
             Rectangle {
                 Layout.fillWidth: true
-                visible: Core.error !== ""
+                // v1.10.15-fixed R3/R4 (D32/I22): the banner fades in and
+                // out under the ONE motion gate — and stays mounted while
+                // fading so the exit is visible; off = instant show/hide.
+                visible: Core.error !== "" || opacity > 0
+                opacity: Core.error !== "" ? 1 : 0
                 color: "#5a1f22"
                 Layout.preferredHeight: 34
+                Behavior on opacity {
+                    enabled: Core.animationsEnabled
+                    NumberAnimation { duration: 160 }
+                }
                 Label {
                     anchors.centerIn: parent
                     text: Core.error
@@ -900,10 +842,17 @@ ApplicationWindow {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.margins: 12
-                visible: Core.liveActive
+                // v1.10.15-fixed R3/R4 (D32/I22): the bubble appears and
+                // settles under the ONE motion gate (off = instant).
+                visible: Core.liveActive || opacity > 0
+                opacity: Core.liveActive ? 1 : 0
                 implicitHeight: liveColumn.implicitHeight + 24
                 radius: 8
                 color: "#2a2440"
+                Behavior on opacity {
+                    enabled: Core.animationsEnabled
+                    NumberAnimation { duration: 160 }
+                }
 
                 ColumnLayout {
                     id: liveColumn
@@ -987,6 +936,13 @@ ApplicationWindow {
                         id: sendButton
                         text: qsTr("Send")
                         enabled: !Core.busy && input.text.trim() !== "" && Core.currentSession.id !== ""
+                        // v1.10.15-fixed R3 (D32): the enabled state is
+                        // mirrored by a gated opacity step.
+                        opacity: enabled ? 1 : 0.55
+                        Behavior on opacity {
+                            enabled: Core.animationsEnabled
+                            NumberAnimation { duration: 120 }
+                        }
                         function submit() {
                             Core.send(input.text, false)
                             input.clear()

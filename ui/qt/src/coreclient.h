@@ -56,15 +56,16 @@ class CoreClient : public QObject {
     Q_PROPERTY(QVariantMap governor READ governor NOTIFY governorChanged)
     Q_PROPERTY(QVariantMap maintenance READ maintenance NOTIFY maintenanceChanged)
     Q_PROPERTY(QVariantList tools READ tools NOTIFY toolsChanged)
-    // v1.10.15-fixed R4 (D32/I22, run #45): the ONE persisted UI-motion
-    // setting. Every QML animation/transition reads this bool; off means
-    // instant state, identical function. Persisted client-side through
-    // QSettings under the org/app identity main.cpp pins — the /api/config
-    // store round-trips a TYPED server struct and silently drops unknown
-    // keys, and a Go edit is outside this cycle's allowlist. The device
-    // tier seeds the FIRST run only (high-end on, low-end off); the user
-    // override always wins.
-    Q_PROPERTY(bool animationsEnabled READ animationsEnabled NOTIFY animationsEnabledChanged)
+    // v1.10.15-fixed R4 (D32/I22, Task ID 41): the ONE motion gate. Every
+    // animation/transition in the QML tree reads this single persisted
+    // setting — off means instant state, identical function. The device
+    // tier default is probed ONCE from the core's existing /api/sysinfo
+    // (high-end: animations on; low-end: off); an explicit user toggle is
+    // persisted locally via QSettings and always wins over the tier.
+    // (The core's /api/config is a typed struct that drops unknown keys
+    // server-side, so core-side persistence of this key needs a Go field
+    // — out of scope this cycle; recorded in the parity manifest.)
+    Q_PROPERTY(bool animationsEnabled READ animationsEnabled WRITE setAnimationsEnabled NOTIFY animationsEnabledChanged)
 
 public:
     explicit CoreClient(QObject *parent = nullptr);
@@ -113,9 +114,6 @@ public:
     Q_INVOKABLE void refreshGovernor();
     Q_INVOKABLE void refreshMaintenance();
     Q_INVOKABLE void refreshTools();
-    // v1.10.15-fixed R4 (D32/I22): the persisted motion toggle (QML and
-    // the acceptance gate call this; the write syncs immediately).
-    Q_INVOKABLE void setAnimationsEnabled(bool enabled);
 
     bool connected() const { return m_connected; }
     bool busy() const { return m_busy; }
@@ -143,8 +141,9 @@ public:
     QVariantMap governor() const { return m_governor; }
     QVariantMap maintenance() const { return m_maintenance; }
     QVariantList tools() const { return m_tools; }
-    bool animationsEnabled() const { return m_animationsEnabled; }
     bool canStop() const { return m_busy; }
+    bool animationsEnabled() const { return m_animationsEnabled; }
+    void setAnimationsEnabled(bool on);
 
 signals:
     void connectedChanged();
@@ -200,6 +199,11 @@ private:
     // list; the store is the only state owner.
     void goalAction(const QString &action, const QString &id);
     void goalDecision(const QString &action, const QString &id, const QString &approvalId);
+    // v1.10.15-fixed R4 (D32): the device-tier default probe — ONE
+    // read of the existing /api/sysinfo handler after the first
+    // successful handshake. The core stays the hardware authority.
+    void probeDeviceTier();
+    bool animationsOverrideFromStore(bool *hasOverride) const;
 
     QString m_endpoint;
     QString m_key;
@@ -233,6 +237,7 @@ private:
     QVariantMap m_maintenance;
     QVariantList m_tools;
     bool m_animationsEnabled = true;
+    bool m_tierProbed = false;
 
     // activity WS state
     QLocalSocket *m_wsSock = nullptr;

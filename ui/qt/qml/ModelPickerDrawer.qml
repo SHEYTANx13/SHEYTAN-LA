@@ -15,6 +15,17 @@ Drawer {
     height: parent ? parent.height : 0
     onOpened: if (Core.connected) Core.refreshModels()
 
+    // v1.10.15-fixed R3/R4 (D32/I22, Task ID 41): gated slide — off means
+    // instant open/close, identical function.
+    enter: Transition {
+        enabled: Core.animationsEnabled
+        NumberAnimation { property: "position"; to: 1.0; duration: 220; easing.type: Easing.OutCubic }
+    }
+    exit: Transition {
+        enabled: Core.animationsEnabled
+        NumberAnimation { property: "position"; to: 0.0; duration: 180; easing.type: Easing.InCubic }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 14
@@ -61,6 +72,10 @@ Drawer {
                 height: modCol.implicitHeight + 20
                 radius: 8
                 color: Core.config.model === modelData.id ? "#243a2c" : "#222226"
+                Behavior on color {
+                    enabled: Core.animationsEnabled
+                    ColorAnimation { duration: 150 }
+                }
 
                 ColumnLayout {
                     id: modCol

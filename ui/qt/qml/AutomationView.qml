@@ -37,6 +37,10 @@ Rectangle {
             Layout.fillHeight: true
             radius: 8
             color: "#1a1a1d"
+            Behavior on color {
+                enabled: Core.animationsEnabled
+                ColorAnimation { duration: 120 }
+            }
 
             ColumnLayout {
                 anchors.fill: parent
@@ -81,6 +85,10 @@ Rectangle {
                         height: taskCol.implicitHeight + 20
                         radius: 8
                         color: "#222226"
+                        Behavior on color {
+                            enabled: Core.animationsEnabled
+                            ColorAnimation { duration: 120 }
+                        }
 
                         function taskId() {
                             return taskCard.modelData.id !== undefined ? taskCard.modelData.id : ""
@@ -193,6 +201,10 @@ Rectangle {
                         height: artCol.implicitHeight + 16
                         radius: 6
                         color: "#222226"
+                        Behavior on color {
+                            enabled: Core.animationsEnabled
+                            ColorAnimation { duration: 120 }
+                        }
 
                         ColumnLayout {
                             id: artCol

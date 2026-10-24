@@ -14,6 +14,18 @@ Drawer {
     height: parent ? parent.height : 0
     onOpened: if (Core.connected) Core.searchHistory(searchField.text, modeBox.currentText)
 
+    // v1.10.15-fixed R3/R4 (D32/I22, Task ID 41): the drawer's slide is
+    // EXPLICIT and gated — off means the panel appears instantly in its
+    // final position (identical function, zero motion).
+    enter: Transition {
+        enabled: Core.animationsEnabled
+        NumberAnimation { property: "position"; to: 1.0; duration: 220; easing.type: Easing.OutCubic }
+    }
+    exit: Transition {
+        enabled: Core.animationsEnabled
+        NumberAnimation { property: "position"; to: 0.0; duration: 180; easing.type: Easing.InCubic }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 14
@@ -44,17 +56,7 @@ Drawer {
                 color: "#e8e8ea"
                 selectByMouse: true
                 onAccepted: Core.searchHistory(text, modeBox.currentText)
-                // v1.10.15-fixed R3 (D32): focus feedback + gated motion
-                // (run-#43 pin; Basic style).
-                background: Rectangle {
-                    color: "#222226"
-                    radius: 6
-                    border.color: parent.activeFocus ? "#b8a6e8" : "#33333a"
-                    Behavior on border.color {
-                        enabled: Core.animationsEnabled
-                        ColorAnimation { duration: 140 }
-                    }
-                }
+                background: Rectangle { color: "#222226"; radius: 6; border.color: "#33333a" }
             }
             ComboBox {
                 id: modeBox
@@ -100,6 +102,10 @@ Drawer {
                 background: Rectangle {
                     color: parent.hovered ? "#222226" : "#1a1a1d"
                     radius: 6
+                    Behavior on color {
+                        enabled: Core.animationsEnabled
+                        ColorAnimation { duration: 120 }
+                    }
                 }
             }
 

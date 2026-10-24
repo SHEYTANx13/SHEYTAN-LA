@@ -1427,7 +1427,7 @@ jobs:
           # named so the green is never trusted blindly.
           if (-not (Test-Path $repLog) -or (Get-Item $repLog -ErrorAction SilentlyContinue).Length -eq 0) {
             Add-Content $accLog "acceptance instrumentation failure: the QtTest -o report ($repLog) is missing or empty on a ZERO exit — named, non-fatal; read the native captures"
-            Write-Host "[warn] Qt acceptance report missing/empty on exit 0 (instrumentation failure named)"
+            Write-Host "Qt acceptance report missing/empty on exit 0 (instrumentation failure named — plain step output, D31)"
           }
           Add-Content "ci-logs/gate-order.txt" "OK Qt live-answer acceptance"
 
@@ -2203,20 +2203,20 @@ jobs:
           if ([string]::IsNullOrEmpty($summaryPath)) { exit 0 }
 
           # v1.10.13 §9 CI SEVERITY CONTRACT (Task ID 28, R5); amended
-          # v1.10.15-fixed R2 (D29); tightened run #45 (D31): classify →
+          # v1.10.15-fixed R2 (D29) then R2 (D31, Task ID 41): classify →
           # dedup → caps → escape → truncate → redact → emit plain-info →
-          # plain-warn → errors → ONE accounting line. A green run shows
-          # ZERO annotations; a red run shows ERRORS ONLY.
+          # plain-warnings → errors → ONE accounting line. A green run
+          # shows ZERO annotations; a red run shows ERRORS ONLY.
           #   ::error   — failed assertions, gate failures, crashes, real
           #               capture/report instrumentation failures, compile
           #               errors (priority: assertions/gates → capture →
-          #               compile; the failing gate is named first). The
-          #               ONLY annotation class (D31/I17).
-          #   [warn]    — QWARN log lines (run #28 measured 5 of the
+          #               compile; the failing gate is named first).
+          #   'warning' — QWARN log lines (run #28 measured 5 of the
           #               Windows job's failure-level annotations as
-          #               QWARN warnings — V10) and toolchain warnings:
-          #               plain prefixed step output recorded into
-          #               all-logs.txt — never an annotation (D31).
+          #               QWARN warnings — V10) and toolchain warnings.
+          #               D31: PLAIN step output (recorded in all-logs.txt),
+          #               never an annotation — warnings never outrank a
+          #               red gate in the operator's view.
           #   'notice'  — diagnostic context: the goal/chat-persist dump
           #               lines, QDEBUG/QINFO/QSKIP, and the
           #               "captures were empty" line — C1 CONFIRMED (Qt
@@ -2306,13 +2306,11 @@ jobs:
           }
           function Emit-Line([string]$sev, [string]$msg) {
             switch ($sev) {
-              # D31 (run #45): the Annotations pane carries ERRORS ONLY.
-              # The notice and warning classes are diagnostic CONTEXT —
-              # plain step output (warnings prefixed [warn]), recorded
-              # into all-logs.txt, never annotations. Only ::error
-              # annotates; a red gate without ::error is a defect (I17).
+              # D31: the notice AND warning classes are diagnostic
+              # CONTEXT — plain step output, never an annotation. Errors
+              # only.
               'notice'  { Write-Host $msg }
-              'warning' { Write-Host "[warn] $msg" }
+              'warning' { Write-Host $msg }
               'error'   { Write-Host "::error::$msg" }
             }
           }
@@ -2347,7 +2345,7 @@ jobs:
           # Classification reads gate-order.txt, which every gate marks
           # BEFORE its command (first-byte protocol, I15):
           #   NEVER-STARTED           — no log AND no RUN marker: the job
-          #                             died upstream. ONE plain [warn] log
+          #                             died upstream. ONE plain step log
           #                             line (I17/D31).
           #   STARTED-DIED-BEFORE-LOG — no log but a RUN marker: capture
           #                             wiring broke. ::error (real defect).
@@ -2370,7 +2368,7 @@ jobs:
             }
             if ($logAbsent -and -not $started) {
               # NEVER-STARTED: the failure is upstream of this gate.
-              Write-Host "[warn] gate never started — no log and no RUN marker for '$cmd' (the job died upstream; NEVER-STARTED is one plain [warn] line, never an annotation — I17/D31)"
+              Write-Host "gate never started — no log and no RUN marker for '$cmd' (the job died upstream; NEVER-STARTED is one plain step log line, never an annotation — I17/D31)"
             } elseif ($logAbsent) {
               # STARTED-DIED-BEFORE-LOG: the gate began but its first-byte
               # log never materialized — a capture wiring defect.
@@ -2944,9 +2942,8 @@ jobs:
       # errors-only, no tail dumps), names any dangling RUN marker as the
       # sub-gate that never finished, and classifies a missing log
       # STARTED-DIED-BEFORE-LOG only when the gate actually started — a
-      # stage that never started emits ONE plain [warn] log line, never an
-      # annotation (I17/D31; the run-#41 false-positive class is retired
-      # here too).
+      # stage that never started emits ONE plain step log line, never an
+      # ::error (I17/D31; the run-#41 false-positive class is retired here too).
       # Report-only: the gate's exit contract above is untouched.
       - name: Go verification failure summary (Linux)
         if: failure()
@@ -2968,9 +2965,9 @@ jobs:
 
           # NEVER-STARTED: the gate's first-byte log does not exist — the
           # Go verification step never ran (the job died upstream). ONE
-          # plain [warn] log line; never an annotation (I17/D31).
+          # plain step log line; never an annotation (I17/D31).
           if [ ! -f "$headless_log" ]; then
-            echo "[warn] Go verification never started — the failure is upstream (the job died before the gate could run)"
+            echo "Go verification never started — the failure is upstream (the job died before the gate could run; plain step output, D31)"
             exit 0
           fi
 
@@ -3188,12 +3185,13 @@ jobs:
           # v1.10.15-fixed (R2/I17, run-#41 guard-class split): the step
           # creates BOTH logs at its first byte, so an ABSENT build log
           # means the Browser E2E step NEVER RAN — the job died upstream.
-          # That class emits ONE plain [warn] log line and exits; it must
-          # never fire an ::error or any annotation (run-#41 fired four,
-          # including "the build:e2e stage is the failing gate" for a stage
-          # that never began — the exact false-lead class D17 bans; D31).
+          # That class emits ONE plain step log line (D31) and exits; it
+          # must never fire an
+          # ::error (run-#41 fired four, including "the build:e2e stage is
+          # the failing gate" for a stage that never began — the exact
+          # false-lead class D17 bans).
           if [ ! -f "$build_log" ]; then
-            echo "[warn] Browser E2E never started — the failure is upstream of the E2E step (read the red step above)"
+            echo "Browser E2E never started — the failure is upstream of the E2E step (read the red step above; plain step output, D31)"
             exit 0
           fi
 
@@ -3341,13 +3339,13 @@ jobs:
           elif [ -f "$log" ]; then
             emit "gate produced no log — capture defect: ci-logs/stress-suite.log exists but is EMPTY (the gate died before its tee wrote a byte; a go-build failure of ./scripts/stress-main is the likely class — its error lines are in the step log)"
           else
-            # v1.10.15-fixed (R2/I17, run-#41); tightened run #45 (D31):
-            # the stress gate creates its log at its first byte — an ABSENT
-            # log means the step NEVER RAN (the job died upstream; the
-            # run-#41 class where this summary fired a capture-defect
-            # ::error for a never-started stage). ONE plain [warn] log
-            # line; never an annotation (I17/D31).
-            echo "[warn] Stress suite never started — the failure is upstream of the stress gate (read the red step above)"
+            # v1.10.15-fixed (R2/I17, run-#41): the stress gate creates its
+            # log at its first byte — an ABSENT log means the step NEVER
+            # RAN (the job died upstream; the run-#41 class where this
+            # summary fired a capture-defect ::error for a never-started
+            # stage). ONE plain step log line; never an annotation
+            # (I17/D31).
+            echo "Stress suite never started — the failure is upstream of the stress gate (read the red step above; plain step output, D31)"
             exit 0
           fi
 
@@ -3554,12 +3552,12 @@ jobs:
           # debug a smoke that never ran). Emit the distinct upstream
           # signal and skip the gate-marker logic entirely.
           if [ ! -d "$work" ]; then
-            # v1.10.15-fixed (R2/I17, run-#41); tightened run #45 (D31):
-            # never-started is the PLAIN-LOG class — the run-#41 red
-            # shipped this line as an ::error and became one of the four
-            # false-positive reds on a job whose real gate was Go
-            # verification. Same signal, recorded, never annotated.
-            echo "[warn] The Qt smoke never started — the failure is upstream of the smoke"
+            # v1.10.15-fixed (R2/I17, run-#41; D31 Task ID 41): never-started
+            # is the PLAIN-OUTPUT class — the run-#41 red shipped this line
+            # as an ::error and became one of the four false-positive reds
+            # on a job whose real gate was Go verification. Same signal,
+            # right severity: step log, never an annotation.
+            echo "The Qt smoke never started — the failure is upstream of the smoke (plain step output, D31)"
             {
               echo ""
               echo "The smoke work directory \`$work\` does not exist: the smoke never started."
@@ -3692,7 +3690,7 @@ jobs:
           # exist (I5); a missing green report is named, non-fatal.
           if [ ! -s ci-logs/linux-qt-acceptance-report.txt ]; then
             echo "acceptance instrumentation failure: the QtTest -o report (ci-logs/linux-qt-acceptance-report.txt) is missing or empty on a ZERO exit — named, non-fatal" >> ci-logs/linux-qt-acceptance.log
-            echo "[warn] Qt acceptance report missing/empty on exit 0 (instrumentation failure named)"
+            echo "Qt acceptance report missing/empty on exit 0 (instrumentation failure named — plain step output, D31)"
           fi
           echo "OK Qt live-answer acceptance" >> ci-logs/gate-order.txt
 
@@ -3731,20 +3729,20 @@ jobs:
             echo "Full evidence artifact: ${LINUX_PKG_ROOT}-v${APP_VERSION}-all-logs (all-logs.txt — the QtTest -o report, the native log, the stderr capture, all ci-logs and the gate chain; D21)."
           } >> "$GITHUB_STEP_SUMMARY" || true
 
-          # v1.10.13 §9 CI SEVERITY CONTRACT (Task ID 28, R5); tightened
-          # run #45 (D31): classify → dedup → caps → escape → truncate →
-          # redact → emit notices → plain-warn lines → errors → ONE
-          # accounting line.
+          # v1.10.13 §9 CI SEVERITY CONTRACT (Task ID 28, R5): classify →
+          # dedup → caps → escape → truncate → redact → emit notices →
+          # warnings → errors → ONE accounting line (D31, Task ID 41:
+          # warnings are PLAIN step output).
           #   ::error   — failed assertions, gate failures, crashes, real
           #               capture/report instrumentation failures, compile
           #               errors (priority: assertions/gates → capture →
-          #               compile). The ONLY annotation class (D31/I17).
-          #   [warn]    — QWARN log lines (run #28 measured 6 of 19
+          #               compile).
+          #   'warning' — QWARN log lines (run #28 measured 6 of 19
           #               failure-level annotations as QWARN warnings —
-          #               V10) and toolchain warnings; plain prefixed step
-          #               output recorded into all-logs.txt — never an
-          #               annotation; never masked into an error and never
-          #               demotes one (D31).
+          #               V10) and toolchain warnings; a warning is never
+          #               masked into an error and never demotes one; D31:
+          #               PLAIN step output + all-logs.txt, never an
+          #               annotation.
           #   'notice'  — diagnostic context: the goal/chat-persist dump
           #               lines, QDEBUG/QINFO/QSKIP, and the
           #               "captures were empty" line — C1 CONFIRMED (Qt
@@ -3882,7 +3880,7 @@ jobs:
               echo ""
               echo "No acceptance log and no RUN marker in gate-order.txt — the failure is upstream of the acceptance gate."
             } >> "$GITHUB_STEP_SUMMARY" || true
-            printf '%s\n' "[warn] linux-qt-acceptance: The live-answer acceptance never started — the failure is upstream (read the red step above)"
+            printf '%s\n' "$(esc "linux-qt-acceptance: The live-answer acceptance never started — the failure is upstream (read the red step above; plain step output, D31)")"
             printf 'ci-summary step=%s errors=0/0 | warnings=0/0 | notices=1/1 | duplicates_removed=0 redacted=%d | full_list=%s\n' "$(esc "$STEP_NAME")" "$REDACTED" "$FULL_LIST"
             exit 0
           fi
@@ -3894,7 +3892,7 @@ jobs:
           emit_line() {
             case "$1" in
               notice)  printf '%s\n' "$2" ;;
-              warning) printf '[warn] %s\n' "$2" ;;
+              warning) printf '%s\n' "$2" ;;
               error)   printf '::error::%s\n'   "$2" ;;
             esac
           }
@@ -3906,9 +3904,7 @@ jobs:
           done
           for l in "${WARN_L[@]}"; do
             [ "$WARN_EM" -ge "$WARN_CAP" ] && break
-            # D31: plain output — no workflow-command escaping (the %25
-            # artifacts would corrupt a plain log line); truncation stays.
-            emit_line warning "$(trunc "linux-qt-acceptance: $l" 250)"
+            emit_line warning "$(esc "$(trunc "linux-qt-acceptance: $l" 250)")"
             WARN_EM=$((WARN_EM + 1))
           done
           for l in "${ERR_A[@]}"; do
@@ -4369,7 +4365,8 @@ jobs:
       # v1.10.14-fixed (D21): the intermediate parts are deleted in-run —
       # the run's FINAL artifact state is exactly ONE log artifact (plus
       # the product artifacts). If the API/permission path fails, the
-      # deviation is recorded as a warning (never silenced, never a job
+      # deviation is recorded as plain step output (D31: never annotated,
+      # never silenced, never a job
       # failure — the parts already carry retention-days: 1, which bounds
       # their exposure to a single day).
       - name: Delete intermediate log parts (D21)
@@ -4389,11 +4386,11 @@ jobs:
                 deleted=$((deleted + 1))
               else
                 unresolved=$((unresolved + 1))
-                echo "[warn] part deletion failed for ${name} (API/permission) — retention-days: 1 bounds its exposure (D21 fallback recorded)"
+                echo "part deletion failed for ${name} (API/permission) — retention-days: 1 bounds its exposure (D21 fallback recorded; plain step output, D31)"
               fi
             else
               unresolved=$((unresolved + 1))
-              echo "[warn] part artifact ${name} not found for deletion (already absent or never uploaded — recorded, not silenced)"
+              echo "part artifact ${name} not found for deletion (already absent or never uploaded — recorded, not silenced; plain step output, D31)"
             fi
           done
           echo "part deletion accounting: deleted=${deleted} unresolved=${unresolved}"

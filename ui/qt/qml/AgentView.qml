@@ -142,6 +142,10 @@ Rectangle {
                             background: Rectangle {
                                 color: parent.active ? "#2c2c31" : (parent.hovered ? "#222226" : "transparent")
                                 radius: 6
+                                Behavior on color {
+                                    enabled: Core.animationsEnabled
+                                    ColorAnimation { duration: 120 }
+                                }
                             }
                         }
 
@@ -219,10 +223,17 @@ Rectangle {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.margins: 12
-                    visible: Core.liveActive
+                    // v1.10.15-fixed R3/R4 (D32/I22): the live panel appears
+                    // and settles under the ONE motion gate.
+                    visible: Core.liveActive || opacity > 0
+                    opacity: Core.liveActive ? 1 : 0
                     implicitHeight: agentLive.implicitHeight + 24
                     radius: 8
                     color: "#2a2440"
+                    Behavior on opacity {
+                        enabled: Core.animationsEnabled
+                        NumberAnimation { duration: 160 }
+                    }
 
                     ColumnLayout {
                         id: agentLive

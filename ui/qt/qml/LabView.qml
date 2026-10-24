@@ -35,6 +35,10 @@ Rectangle {
             Layout.fillHeight: true
             radius: 8
             color: "#1a1a1d"
+            Behavior on color {
+                enabled: Core.animationsEnabled
+                ColorAnimation { duration: 120 }
+            }
 
             ColumnLayout {
                 anchors.fill: parent
@@ -77,6 +81,10 @@ Rectangle {
                         height: labCol.implicitHeight + 20
                         radius: 8
                         color: "#222226"
+                        Behavior on color {
+                            enabled: Core.animationsEnabled
+                            ColorAnimation { duration: 120 }
+                        }
 
                         ColumnLayout {
                             id: labCol

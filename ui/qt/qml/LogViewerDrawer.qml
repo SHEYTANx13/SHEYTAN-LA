@@ -15,6 +15,17 @@ Drawer {
     height: parent ? parent.height : 0
     onOpened: if (Core.connected) Core.refreshLogs()
 
+    // v1.10.15-fixed R3/R4 (D32/I22, Task ID 41): gated slide — off means
+    // instant open/close, identical function.
+    enter: Transition {
+        enabled: Core.animationsEnabled
+        NumberAnimation { property: "position"; to: 1.0; duration: 220; easing.type: Easing.OutCubic }
+    }
+    exit: Transition {
+        enabled: Core.animationsEnabled
+        NumberAnimation { property: "position"; to: 0.0; duration: 180; easing.type: Easing.InCubic }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: 14
@@ -35,17 +46,7 @@ Drawer {
                 placeholderText: qsTr("filter…")
                 color: "#e8e8ea"
                 selectByMouse: true
-                // v1.10.15-fixed R3 (D32): focus feedback + gated motion
-                // (run-#43 pin; Basic style).
-                background: Rectangle {
-                    color: "#222226"
-                    radius: 6
-                    border.color: parent.activeFocus ? "#b8a6e8" : "#33333a"
-                    Behavior on border.color {
-                        enabled: Core.animationsEnabled
-                        ColorAnimation { duration: 140 }
-                    }
-                }
+                background: Rectangle { color: "#222226"; radius: 6; border.color: "#33333a" }
             }
             Button {
                 text: qsTr("Refresh")
@@ -68,7 +69,14 @@ Drawer {
                 required property int index
                 width: logList.width
                 height: logText.implicitHeight + 12
-                color: "transparent"
+                color: logHover.hovered ? "#1a1a1d" : "transparent"
+                // v1.10.15-fixed R3/R4 (D32/I22): a gated hover step for
+                // scanning long log runs.
+                HoverHandler { id: logHover }
+                Behavior on color {
+                    enabled: Core.animationsEnabled
+                    ColorAnimation { duration: 100 }
+                }
                 visible: {
                     var f = filterField.text
                     if (f === "") return true

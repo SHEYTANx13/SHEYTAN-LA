@@ -54,7 +54,14 @@ Rectangle {
                 Layout.fillWidth: true
                 implicitHeight: projCol.implicitHeight + 24
                 radius: 8
-                color: "#1a1a1d"
+                color: projHover.hovered ? "#1e1e22" : "#1a1a1d"
+                // v1.10.15-fixed R3/R4 (D32/I22): cards answer the pointer
+                // with a gated highlight step.
+                HoverHandler { id: projHover }
+                Behavior on color {
+                    enabled: Core.animationsEnabled
+                    ColorAnimation { duration: 120 }
+                }
 
                 ColumnLayout {
                     id: projCol
@@ -94,17 +101,7 @@ Rectangle {
                             placeholderText: qsTr("Switch to directory…")
                             color: "#e8e8ea"
                             selectByMouse: true
-                            // v1.10.15-fixed R3 (D32): focus feedback + gated
-                            // motion (run-#43 pin; Basic style).
-                            background: Rectangle {
-                                color: "#222226"
-                                radius: 6
-                                border.color: parent.activeFocus ? "#b8a6e8" : "#33333a"
-                                Behavior on border.color {
-                                    enabled: Core.animationsEnabled
-                                    ColorAnimation { duration: 140 }
-                                }
-                            }
+                            background: Rectangle { color: "#222226"; radius: 6; border.color: "#33333a" }
                         }
                         Button {
                             text: qsTr("Switch")
@@ -129,7 +126,12 @@ Rectangle {
                 Layout.fillWidth: true
                 implicitHeight: Math.min(220, recentFilesCol.implicitHeight + 24)
                 radius: 8
-                color: "#1a1a1d"
+                color: recentHover.hovered ? "#1e1e22" : "#1a1a1d"
+                HoverHandler { id: recentHover }
+                Behavior on color {
+                    enabled: Core.animationsEnabled
+                    ColorAnimation { duration: 120 }
+                }
                 clip: true
 
                 ColumnLayout {
@@ -242,7 +244,12 @@ Rectangle {
                 Layout.fillWidth: true
                 implicitHeight: repoCol.implicitHeight + 24
                 radius: 8
-                color: "#1a1a1d"
+                color: repoHover.hovered ? "#1e1e22" : "#1a1a1d"
+                HoverHandler { id: repoHover }
+                Behavior on color {
+                    enabled: Core.animationsEnabled
+                    ColorAnimation { duration: 120 }
+                }
 
                 ColumnLayout {
                     id: repoCol

@@ -27,7 +27,6 @@ and acceptance NOT RUN), `NOT RUN` (unported — honest gap, never faked).
 | settings-diagnostics | src/settings-sections.ts (read-only health) | ui/qt/qml/SettingsView.qml | /api/logs, /api/preflight | settingsEightSectionsAllFields | LANDED-LOCAL |
 | settings-advanced | src/settings-sections.ts (every advanced field in FIELD_PLACEMENT) | ui/qt/qml/SettingsView.qml | /api/config | settingsEightSectionsAllFields | LANDED-LOCAL |
 | config read glue | src/api.ts request("/api") via refreshConfig | ui/qt/src/coreclient.cpp (stub implemented) | GET /api/config → config property | settingsEightSectionsAllFields | LANDED-LOCAL |
-| animations-toggle | client-persisted D32 setting (no Wails twin — the Qt-native motion contract) | ui/qt/qml/SettingsView.qml (toggle row; gated motion in Main.qml, store in coreclient.cpp) | QSettings via CoreClient (device-tier default, user override; /api/config drops unknown keys — typed struct) | animationsToggleContract | LANDED-LOCAL |
 
 ## Agent (priority 3)
 
@@ -68,6 +67,7 @@ and acceptance NOT RUN), `NOT RUN` (unported — honest gap, never faked).
 | model-picker | src/ModelPicker.tsx | ui/qt/qml/ModelPickerDrawer.qml | GET /api/models, POST /api/models/select | extrasSurfacesLoad | LANDED-LOCAL |
 | my-tools | src/MyToolsCard.tsx | ui/qt/qml/MyToolsDrawer.qml | GET /api/custom-tools | extrasSurfacesLoad | LANDED-LOCAL |
 | log-viewer | src/LogViewer.tsx | ui/qt/qml/LogViewerDrawer.qml | GET /api/logs?limit | extrasSurfacesLoad | LANDED-LOCAL |
+| animations (animationsEnabled — device-tier default, persisted user override) | src/settings-sections.ts (General row pattern) | ui/qt/qml/SettingsView.qml | GET /api/sysinfo (tier default) + local QSettings override (the core's /api/config is a typed struct that drops unknown keys — core-side persistence needs a Go field, out of scope this cycle) | animationsToggleGatesEveryMotion | LANDED-LOCAL |
 | perf-strip | src/PerfStrip.tsx | ui/qt/qml/PerfStrip.qml | activity WS metrics | extrasSurfacesLoad | LANDED-LOCAL |
 | ai-systems | src/AISystemsCard.tsx | ui/qt/qml/Main.qml systemsDrawer (pre-existing) | /api/systems | aiSystemsListActivate | LANDED-LOCAL (pre-existing at HEAD) |
 | goals | src/GoalsCard.tsx | ui/qt/qml/Main.qml goalsDrawer (pre-existing) | /api/goals | goalsListFieldContract, goalsStartPauseResumeCancelRoundTrip, goalsApproveRejectParkedGoal | LANDED-LOCAL (pre-existing at HEAD) |
@@ -80,17 +80,15 @@ and acceptance NOT RUN), `NOT RUN` (unported — honest gap, never faked).
   hosted QtTest acceptance run are the ONLY compile-proof — NOT RUN at
   doc time; the next hosted run on the exact changed commit is
   authoritative (I20/I21).
-- Pre-existing dirty state: none. Baseline f5a31cf (run-#44 cycle,
-  Task ID 40), version 1.10.15 held. Run-#44 fixes landed under the
-  same rows: R1 nav chrome (seven static nav buttons — the Repeater
-  required-index delegate class never created them), R2 per-engine
-  Core singleton + SystemView envelope guard, R3 WorkspaceView recents
-  delegates restored, R5 submit() rename + Basic style in the harness.
-  The React reference tree under src/ is untouched.
-- Run #45 (Task ID 41) landed under the same rows: the acceptance
-  target's QuickControls2 link fix (run-#44 C1083 — the reason every
-  row above was hosted-UNVERIFIED), the D32 motion pass (every
-  animation gated by the persisted animationsEnabled — the
-  animations-toggle row above), and the D31 errors-only annotation
-  contract. Every LANDED-LOCAL row awaits the SAME hosted proof:
-  the next run on the exact changed commit.
+- v1.10.15-fixed run-#45 cycle (Task ID 41): R1 links QuickControls2 into
+  sheytan-ui-acceptance (the run-#44 C1083 — the hosted build of this
+  suite is the verification of EVERY row above); R3 adds the gated-motion
+  polish pass; R4 adds the animationsEnabled row. Authored motion
+  (every Behavior/Transition in ui/qt/) is gated by the ONE setting —
+  Qt Basic style's internal motion (ScrollBar hover-fade, default Drawer
+  enter/exit before the explicit override) is the platform boundary no
+  application property can gate; the drawers override their enter/exit
+  with gated Transitions.
+- Pre-existing dirty state: none. Baseline 77ff79f (run-#44 RED, Task ID
+  41 cycle), version 1.10.15 held. The React reference tree under src/
+  is untouched.

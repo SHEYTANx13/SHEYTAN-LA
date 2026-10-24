@@ -1220,7 +1220,7 @@ test("R2: the Linux Go verification gate has a failure summary that publishes it
   assert.ok(sumIdx > goIdx && sumIdx < cacheIdx, "summary is wired directly after the gate");
 });
 
-test("R2/I17+D31: no failure summary ever emits a never-started ::error (plain-log class only)", () => {
+test("R2/I17: no failure summary ever emits a never-started ::error (D29: warning class only)", () => {
   const wf = loadWorkflow();
   const offenders = wf
     .split("\n")
@@ -1228,11 +1228,11 @@ test("R2/I17+D31: no failure summary ever emits a never-started ::error (plain-l
   assert.deepEqual(
     offenders,
     [],
-    `never-started must be a plain [warn] log line, never ::error, never any annotation (D31; offenders: ${offenders.length})`,
+    `never-started must be ::warning, never ::error (offenders: ${offenders.length})`,
   );
 });
 
-test("R2/#45 D31: every Linux failure summary carries the NEVER-STARTED plain [warn] branch (errors-only annotations)", () => {
+test("R2/I17: every Linux failure summary carries the NEVER-STARTED branch (D31: plain step output, never an annotation)", () => {
   for (const name of [
     "E2E failure summary (Linux)",
     "Stress failure summary (Linux)",
@@ -1242,22 +1242,27 @@ test("R2/#45 D31: every Linux failure summary carries the NEVER-STARTED plain [w
     const step = loadStep(name);
     assert.match(
       step,
-      /\[warn\][^\n]*never started/i,
-      `${name}: the never-started branch emits ONE plain [warn] log line (D31 — recorded in step log + all-logs.txt, never annotated)`,
+      /never started/i,
+      `${name}: the never-started branch exists (the upstream-failure class, D29)`,
     );
     assert.doesNotMatch(
       step,
       /::(warning|notice|error)::[^\n]*never started/i,
-      `${name}: never-started is never any annotation class (D31/I17)`,
+      `${name}: NEVER-STARTED never annotates (D31 errors-only — it is step-log context, recorded in all-logs.txt)`,
     );
   }
-  // The Go verification summary carries the same guard (one branch, one
-  // plain line) — never an annotation of any class.
+  // The Go verification summary carries the same guard — one branch,
+  // plain output, never an annotation of any class.
   const goSummary = loadStep("Go verification failure summary (Linux)");
   assert.match(
     goSummary,
-    /\[warn\][^\n]*never started/i,
-    "Go verification failure summary: the never-started branch emits ONE plain [warn] log line",
+    /never started/i,
+    "Go verification failure summary: the never-started branch exists",
+  );
+  assert.doesNotMatch(
+    goSummary,
+    /::(warning|notice|error)::[^\n]*never started/i,
+    "Go verification failure summary: NEVER-STARTED never annotates (D31)",
   );
 });
 
@@ -1407,14 +1412,19 @@ test("R2/D29: the failure emitters classify notice-severity lines as PLAIN outpu
   );
 });
 
-test("R2/#45 D31: NEVER-STARTED guards are plain [warn] log lines in every summary", () => {
-  const wf = loadWorkflow();
-  const plain = wf
+test("R2/D31: NEVER-STARTED guards are PLAIN step output in every summary (errors only)", () => {
+  // v1.10.15-fixed (Task ID 41): D31 supersedes the D29 warning class —
+  // annotations carry ERRORS ONLY. The five NEVER-STARTED guards (go,
+  // e2e, stress, qt-smoke, qt-acceptance) keep their signal as plain
+  // step output + all-logs.txt; no workflow-command prefix may remain.
+  const wf = loadNonCommentWorkflow();
+  const offenders = wf
     .split("\n")
-    .filter((l) => /\[warn\]/.test(l) && /never started/i.test(l));
-  assert.ok(
-    plain.length >= 5,
-    `all NEVER-STARTED guards (go, e2e, stress, qt-smoke, qt-acceptance) record a plain [warn] line (found: ${plain.length})`,
+    .filter((l) => /never started/i.test(l) && l.includes("::"));
+  assert.deepEqual(
+    offenders,
+    [],
+    `NEVER-STARTED is step-log context, never an annotation (D31): ${offenders[0] ?? ""}`,
   );
 });
 
@@ -1596,8 +1606,13 @@ test("R4/#43: the Windows Go-verification summary implements the three-class cle
     "the empty-log branch must consult gate-order markers and classify empty+OK as clean-silent (go vet/gofmt emit no stdout on success)",
   );
   assert.ok(
-    /\[warn\].*(never started|NEVER-STARTED)/i.test(block),
-    "NEVER-STARTED (no RUN marker, no log) emits one plain [warn] log line, never an ::error and never an annotation (I17/D31)",
+    /Write-Host "[^"]*never started/i.test(block),
+    "NEVER-STARTED (no RUN marker, no log) emits one PLAIN step line (D31: never an annotation of any class)",
+  );
+  assert.doesNotMatch(
+    block,
+    /::(warning|error|notice)::[^\n]*never started/i,
+    "NEVER-STARTED never annotates (D31 errors-only; I17)",
   );
   assert.doesNotMatch(
     block,
@@ -1659,137 +1674,200 @@ test("R1/I21: the manifest chat-nav row is asserted by the static-buttons contra
 });
 
 // ---------------------------------------------------------------------------
-// run #45 (v1.10.15-fixed, Task ID 41) — R1 build fix (C1083 'QQuickStyle'),
-// R2 errors-only annotations (D31/I17), R3/R4 UI/UX pass + the persisted
-// animationsEnabled motion toggle (D32/I22).
-//
-// RED class. Every assertion in this section FAILS at 77ff79f by design
-// (P2 gate): each names a run-#44 hosted defect or a D31/D32 contract.
-// Hosted evidence: run 40035405032 (both OSes, deterministic).
+// 13. Run-#45 cycle (Task ID 41, D26/D31/D32) — RED-first pins for the #44
+// red class. Every NEW assertion below FAILS at 77ff79f by design (the
+// P2 gate): run 40035405032 died in win-qt-build.log at "error C1083:
+// Cannot open include file: 'QQuickStyle'" (QuickControls2 missing from
+// the acceptance link line) with the Linux twin, and its Annotations pane
+// still carried 2 warnings (the D31 demotion targets). The retention
+// assertions keep every named ::error red-gate guard alive through the
+// demotion — a red gate without a named ::error is an automatic defect.
 // ---------------------------------------------------------------------------
 
-test("R1/#44: sheytan-ui-acceptance links Qt6::QuickControls2 (C1083 'QQuickStyle')", () => {
+test("R1/#44: the acceptance target links Qt6::QuickControls2 (the C1083 one-line build fix)", () => {
   const cmake = readFileSync(join(repoRoot, "ui", "qt", "CMakeLists.txt"), "utf8");
   const at = cmake.indexOf("target_link_libraries(sheytan-ui-acceptance");
-  assert.ok(at >= 0, "the acceptance target's link line exists");
-  const line = cmake.slice(at, cmake.indexOf("\n", at));
+  assert.ok(at !== -1, "the acceptance target_link_libraries line exists");
+  const end = cmake.indexOf("\n", at);
+  const line = cmake.slice(at, end === -1 ? undefined : end);
   assert.match(
     line,
     /Qt6::QuickControls2/,
-    "sheytan-ui-acceptance must link Qt6::QuickControls2: tst_acceptance.cpp includes <QQuickStyle> (:32) and calls QQuickStyle::setStyle (:169) — QuickControls2's header — while the target linked only Core/Gui/Qml/Quick/Test; run #44 died C1083 on Windows and exit 1 on Linux, so the ENTIRE parity suite never built (find_package already declared the component; ONE line closes it)",
+    "tst_acceptance.cpp includes <QQuickStyle> and calls QQuickStyle::setStyle (QuickControls2) — run #44 died at C1083 because the link line carries only Core/Gui/Qml/Quick/Test; find_package already declares QuickControls2",
   );
-  // The fix never weakens the test: the include and the style pin stay.
-  const acc = readFileSync(join(repoRoot, "ui", "qt", "tests", "tst_acceptance.cpp"), "utf8");
-  assert.match(acc, /#include <QQuickStyle>/, "the include stays (never remove it to make the build pass)");
-  assert.match(acc, /QQuickStyle::setStyle/, "the Basic style pin stays (the same style the host renders)");
 });
 
-test("R2/#45 (D31/I17): annotations carry ONLY errors — zero ::warning emission points remain", () => {
-  const wf = loadWorkflow();
-  const offenders = wf
-    .split("\n")
-    // Comment lines (YAML or in-script '#') may DISCUSS ::warning; only
-    // emitted workflow commands count as emission points.
-    .filter((l) => l.trim() !== "" && !l.trim().startsWith("#"))
-    .filter((l) => /::warning/.test(l));
+test("R2/D31: the workflow emits ZERO ::warning annotations outside comments (errors only)", () => {
+  const wf = loadNonCommentWorkflow();
+  const offenders = wf.split("\n").filter((l) => l.includes("::warning"));
   assert.deepEqual(
     offenders,
     [],
-    `every ::warning emission is demoted to a plain prefixed step log line recorded in all-logs.txt (D31: the Annotations pane shows errors only; offenders: ${offenders.join(" | ")})`,
+    `annotations carry ERRORS ONLY (D31): every ::warning emission point (QWARN relays, NEVER-STARTED, toolchain, part-deletion) must be plain step output + all-logs.txt (offenders: ${offenders.length}): ${offenders[0] ?? ""}`,
   );
-  // The ::error class is never demoted (a red gate without ::error is an
-  // automatic defect — I17). 37 emission points at 77ff79f; the floor
-  // tolerates none of them going missing in substance.
-  const errors = wf.split("\n").filter((l) => /::error::/.test(l));
-  assert.ok(errors.length >= 35, `the ::error emission set stays intact (found ${errors.length})`);
 });
 
-test("R2/#45 (D31): the demoted warning classes stay RECORDED as plain [warn] log lines", () => {
+test("R2/D31: the warning relay classes are demoted to plain output (recorded, never deleted)", () => {
+  const wf = loadNonCommentWorkflow();
+  // Windows Emit-Line: the warning branch must Write-Host the bare message.
+  assert.doesNotMatch(wf, /'warning'\s+\{ Write-Host "::warning::/);
+  assert.match(
+    wf,
+    /'warning'\s+\{ Write-Host \$msg \}/,
+    "Windows failure emitter: warning-class lines are plain output (the class still reaches all-logs.txt)",
+  );
+  // Linux emit_line: the warning branch must printf the bare message.
+  assert.doesNotMatch(wf, /warning\)\s+printf '::warning::/);
+  assert.match(
+    wf,
+    /warning\)\s+printf '%s\\n'\s+"?\$2/,
+    "Linux failure emitter: warning-class lines are plain output",
+  );
+  // The exit-0 report guards (instrumentation named, non-fatal) are plain.
+  assert.doesNotMatch(wf, /::warning::[^"\n]*report missing\/empty/);
+});
+
+test("R2/D31: named ::error guards survive the demotion (a red gate is never silenced)", () => {
+  // Retention half of the P2 (2) pair: the demotion moves classes, never
+  // catchers — every failed-gate ::error name stays (I17: a red gate with
+  // no ::error is an automatic defect).
   const wf = loadWorkflow();
-  assert.match(
-    wf,
-    /'warning'\s*\{\s*Write-Host "\[warn\] \$msg"\s*\}/,
-    "the Windows Emit-Line warning branch still prints the classified line — as plain [warn] output, never an annotation (recorded, never deleted)",
-  );
-  assert.match(
-    wf,
-    /warning\)\s+printf '\[warn\] %s\\n' "\$2"\s*;;/,
-    "the Linux emit_line warning branch still prints the classified line — as plain [warn] output",
-  );
-  const plain = wf
-    .split("\n")
-    .filter((l) => /\[warn\]/.test(l) && !l.trim().startsWith("#"));
-  assert.ok(plain.length >= 10, `the demoted classes (QWARN relays, NEVER-STARTED, toolchain, part-deletion fallbacks) remain recorded as plain lines (found ${plain.length})`);
+  for (const frag of [
+    "::error::Qt live-answer acceptance failed with exit code",
+    "::error::Qt acceptance report missing/empty on nonzero exit",
+    "::error::gate produced no log — capture defect",
+    "::error::gate log EMPTY without an OK marker",
+    "::error::Qt desktop acceptance smoke failed before a gate marker was written",
+  ]) {
+    assert.ok(
+      wf.includes(frag),
+      `the named ::error guard must survive the D31 demotion: ${frag}`,
+    );
+  }
 });
 
-test("R4/#45 (D32/I22): ONE persisted animationsEnabled setting lives on the CoreClient", () => {
+test("R4/D32: the manifest carries the animationsEnabled row (I21/I22)", () => {
+  const manifest = readFileSync(
+    join(repoRoot, "ui", "qt", "parity-manifest.md"),
+    "utf8",
+  );
+  assert.match(
+    manifest,
+    /\| animations[^\n]*ui\/qt\/qml\/SettingsView\.qml[^\n]*animationsToggleGatesEveryMotion[^\n]*LANDED-LOCAL \|/,
+    "the manifest enumerates the animations surface (animationsEnabled) with its Qt target and acceptance assertion",
+  );
+});
+
+test("R4/D32: CoreClient exposes the persisted animationsEnabled gate", () => {
   const header = readFileSync(join(repoRoot, "ui", "qt", "src", "coreclient.h"), "utf8");
   assert.match(
     header,
-    /Q_PROPERTY\(bool animationsEnabled READ animationsEnabled NOTIFY animationsEnabledChanged\)/,
-    "CoreClient exposes the bool Q_PROPERTY every QML motion gate reads",
-  );
-  assert.match(
-    header,
-    /Q_INVOKABLE void setAnimationsEnabled\(bool[^)]*\)/,
-    "the setter is Q_INVOKABLE (the Settings row and the acceptance gate call it)",
+    /Q_PROPERTY\(bool animationsEnabled/,
+    "the ONE motion gate is a Q_PROPERTY every QML view reads via the Core singleton",
   );
   const src = readFileSync(join(repoRoot, "ui", "qt", "src", "coreclient.cpp"), "utf8");
-  // Persisted transport: QSettings under the ONE org/app identity main.cpp
-  // sets. The /api/config store round-trips a TYPED struct (mergeConfigPatch
-  // decodes into config.Config, internal/api/server.go) and silently drops
-  // unknown keys — a Go edit is outside this cycle's allowlist, so the
-  // client-side store is the honest persisted vehicle (device-tier default,
-  // user override wins).
-  assert.match(src, /QSettings/, "the toggle persists through QSettings (coreclient-owned store)");
-  assert.match(src, /animationsEnabled/, "the implementation reads/writes the persisted key");
-});
-
-test("R4/#45 (D32/I22): every QML motion is gated by Core.animationsEnabled — off = instant state", () => {
-  const qmlDir = join(repoRoot, "ui", "qt", "qml");
-  const offenders = [];
-  for (const f of Object.keys(qmlFiles(qmlDir))) {
-    const text = readFileSync(f, "utf8");
-    const rel = f.replace(repoRoot + "/", "");
-    // Every per-property Behavior carries the gate.
-    for (const m of text.matchAll(/Behavior on \w+ \{[\s\S]*?\n\s*\}/g)) {
-      if (!/Core\.animationsEnabled/.test(m[0]))
-        offenders.push(`${rel}: Behavior without the animationsEnabled gate`);
-    }
-    // Files declaring standalone animation elements reference the gate in
-    // their restart/driver handler.
-    if (/\b(SequentialAnimation|ParallelAnimation|NumberAnimation|ColorAnimation|SmoothedAnimation|OpacityAnimator|ScaleAnimator|XAnimator|YAnimator|Transition) \{/.test(text)
-        && !/Core\.animationsEnabled/.test(text))
-      offenders.push(`${rel}: animation elements without any animationsEnabled gate`);
-  }
-  assert.deepEqual(
-    offenders,
-    [],
-    `I22: ungated motion is an automatic defect — every animation/transition reads the ONE persisted setting (offenders: ${offenders.join(", ")})`,
+  assert.match(
+    src,
+    /QSettings/,
+    "the user override is persisted locally (QSettings — the core's /api/config is a typed struct that drops unknown keys; core-side persistence needs a Go field, out of scope this cycle)",
   );
-  const main = readFileSync(join(qmlDir, "Main.qml"), "utf8");
-  assert.match(main, /property int fadeAnimationRuns/, "the shell exposes the fade-run counter the acceptance gate reads");
-  assert.match(main, /if \(Core\.animationsEnabled\)/, "the view-change fade restart is guarded (off = instant switch, identical function)");
+  assert.match(
+    src,
+    /\/api\/sysinfo/,
+    "the device-tier default reads the existing core endpoint (high-end on, low-end off; user override wins)",
+  );
 });
 
-test("R4/#45 (D32): SettingsView renders the animations toggle row (device-tier default, user override)", () => {
+test("R4/D32: the Settings surface carries the animationsEnabled user control", () => {
   const qml = readFileSync(join(repoRoot, "ui", "qt", "qml", "SettingsView.qml"), "utf8");
   assert.match(
     qml,
     /objectName: "field-animationsEnabled"/,
-    "the dedicated toggle row exists OUTSIDE the /api/config FIELD_PLACEMENT registry (the 72-field census is the Wails parity contract; the toggle is the client-persisted D32 setting)",
+    "the General section carries the animations row (findChild contract)",
   );
-  assert.match(qml, /Core\.animationsEnabled/, "the row binds the Core property");
-  assert.match(qml, /Core\.setAnimationsEnabled\(/, "the row writes through the setter (user override wins)");
+  assert.match(
+    qml,
+    /Core\.animationsEnabled/,
+    "the row binds the ONE gate (D32: low/high-end devices on/off)",
+  );
 });
 
-test("R4/#45 (I21/I22): the manifest enumerates the animations toggle; the acceptance gate asserts it", () => {
-  const manifest = readFileSync(join(repoRoot, "ui", "qt", "parity-manifest.md"), "utf8");
-  const row = manifest.split("\n").find((l) => l.includes("animations-toggle"));
-  assert.ok(row, "the manifest carries the animations-toggle row");
-  assert.match(row, /animationsToggleContract/, "the row cites its acceptance assertion");
-  assert.match(row, /SettingsView\.qml/, "the row names its Qt target");
+// Strip // comments line-wise (QML in this tree carries no URLs or regex
+// literals that would make this lossy for motion scanning).
+function qmlCodeOf(text) {
+  return text
+    .split("\n")
+    .map((l) => l.replace(/\/\/.*$/, ""))
+    .join("\n");
+}
+
+test("R4/I22: every QML motion is ONE gated form (Behavior/Transition reading Core.animationsEnabled)", () => {
+  const qmlDir = join(repoRoot, "ui", "qt", "qml");
+  let motions = 0;
+  const offenders = [];
+  const banned = [];
+  for (const f of Object.keys(qmlFiles(qmlDir))) {
+    const code = qmlCodeOf(readFileSync(f, "utf8"));
+    const rel = f.replace(repoRoot + "/", "");
+    const lineOf = (idx) => code.slice(0, idx).split("\n").length;
+    // I22 authoring rule, part 1: flat motion only — property-source
+    // animations and grouped wrappers can hide an ungated path.
+    const banRe = /\w+Animation\s+on\s|SequentialAnimation|ParallelAnimation/g;
+    let b;
+    while ((b = banRe.exec(code)) !== null) banned.push(`${rel}:${lineOf(b.index)}`);
+    // Part 2: every Behavior/Transition block (including popup
+    // enter:/exit: transitions) carries the ONE gate.
+    const re = /^\s*((enter|exit)\s*:\s*)?(Behavior\s+on\s+\w+|Transition)\s*\{/gm;
+    let m;
+    while ((m = re.exec(code)) !== null) {
+      motions++;
+      const open = code.indexOf("{", m.index);
+      let depth = 0;
+      let i = open;
+      for (; i < code.length; i++) {
+        if (code[i] === "{") depth++;
+        else if (code[i] === "}") {
+          depth--;
+          if (depth === 0) break;
+        }
+      }
+      const block = code.slice(open, i + 1);
+      if (!block.includes("animationsEnabled"))
+        offenders.push(`${rel}:${lineOf(m.index)}`);
+    }
+  }
+  assert.deepStrictEqual(
+    banned,
+    [],
+    `flat gated motion only — property-source/wrapper animations are banned (I22): ${banned.join(", ")}`,
+  );
+  assert.ok(
+    motions >= 10,
+    `the D32 polish pass adds real gated motion (found ${motions} Behavior/Transition elements)`,
+  );
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    `every Behavior/Transition must read Core.animationsEnabled (I22 — off = instant state, identical function): ${offenders.join(", ")}`,
+  );
+});
+
+test("R4/I22: tst_acceptance implements animationsToggleGatesEveryMotion (off → no animation paths run)", () => {
   const acc = readFileSync(join(repoRoot, "ui", "qt", "tests", "tst_acceptance.cpp"), "utf8");
-  assert.match(acc, /void animationsToggleContract\(\);/, "the acceptance suite declares the animationsToggleContract slot");
-  assert.match(acc, /setAnimationsEnabled/, "the gate drives the persisted setter");
+  const at = acc.indexOf("void Acceptance::animationsToggleGatesEveryMotion()");
+  assert.ok(
+    at !== -1,
+    "the acceptance slot exists (the manifest row's assertion)",
+  );
+  const body = acc.slice(at, at + 5000);
+  assert.match(
+    body,
+    /QQuickBehavior/,
+    "it walks the loaded window's Behavior gates (off ⇒ zero enabled motion paths)",
+  );
+  assert.match(
+    body,
+    /setAnimationsEnabled\(false\)/,
+    "it drives the OFF state end-to-end",
+  );
 });

@@ -71,6 +71,10 @@ Rectangle {
                 implicitHeight: preCol.implicitHeight + 24
                 radius: 8
                 color: "#1a1a1d"
+                Behavior on color {
+                    enabled: Core.animationsEnabled
+                    ColorAnimation { duration: 120 }
+                }
 
                 ColumnLayout {
                     id: preCol
@@ -129,6 +133,10 @@ Rectangle {
                 implicitHeight: govCol.implicitHeight + 24
                 radius: 8
                 color: "#1a1a1d"
+                Behavior on color {
+                    enabled: Core.animationsEnabled
+                    ColorAnimation { duration: 120 }
+                }
 
                 ColumnLayout {
                     id: govCol
@@ -181,6 +189,10 @@ Rectangle {
                 implicitHeight: maintCol.implicitHeight + 24
                 radius: 8
                 color: "#1a1a1d"
+                Behavior on color {
+                    enabled: Core.animationsEnabled
+                    ColorAnimation { duration: 120 }
+                }
 
                 ColumnLayout {
                     id: maintCol
