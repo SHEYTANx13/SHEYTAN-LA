@@ -63,14 +63,14 @@ set_source_files_properties(qml/Theme.qml PROPERTIES
 qt_add_resources(sheytan-ui sheytan_style
     PREFIX "/sheytanstyle"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/style"
-    FILES qmldir Button.qml ToolButton.qml TextField.qml TextArea.qml
+    FILES Button.qml ToolButton.qml TextField.qml TextArea.qml
           ComboBox.qml CheckBox.qml Switch.qml Slider.qml ProgressBar.qml
           ScrollBar.qml Menu.qml MenuItem.qml ItemDelegate.qml
 )
 qt_add_resources(sheytan-ui-acceptance sheytan_style
     PREFIX "/sheytanstyle"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/style"
-    FILES qmldir Button.qml ToolButton.qml TextField.qml TextArea.qml
+    FILES Button.qml ToolButton.qml TextField.qml TextArea.qml
           ComboBox.qml CheckBox.qml Switch.qml Slider.qml ProgressBar.qml
           ScrollBar.qml Menu.qml MenuItem.qml ItemDelegate.qml
 )
