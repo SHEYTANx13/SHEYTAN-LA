@@ -1458,6 +1458,13 @@ test("R1/I21: the parity manifest exists and enumerates every Wails surface", ()
     "perf-strip",
     "ai-systems",
     "goals",
+    // v1.10.15-fixed run-#47 cycle (Task ID 42, D37): the agent-view parity
+    // + shell-interaction rows — the src/ components the #45-cycle census
+    // left implicit (AgentBody sub-surfaces + the app-shell shortcut map).
+    "activity-stream",
+    "download-progress",
+    "maintenance-banner",
+    "keyboard-shortcuts",
   ];
   const missing = census.filter((s) => !manifest.includes(`| ${s} `));
   assert.deepEqual(
@@ -1869,5 +1876,235 @@ test("R4/I22: tst_acceptance implements animationsToggleGatesEveryMotion (off �
     body,
     /setAnimationsEnabled\(false\)/,
     "it drives the OFF state end-to-end",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 14. Run-#47 cycle (Task ID 42, D35/D36) — RED-first pins for the #45/#46
+// red class. Runs #45 AND #46 died at ONE compile defect, two pushes: MSVC
+// "error C3861: 'registerCoreSingleton': identifier not found" at
+// tst_acceptance.cpp:989 (#45: :992 — the line moved, not the defect), with
+// the Linux twin inferred. The TU DEFINES the static helper (at :1059) but
+// the motion-gating slot calls it ~70 lines EARLIER, and no gate anywhere
+// saw use-before-declaration — no local Qt compile exists and no
+// declaration-coverage check ran (I23 closes exactly that gap). The second
+// pin (include→module) closes the include half of the D36 class at the
+// CMake level: <QLocalSocket>/<QLocalServer> are Qt6::Network headers that
+// both targets compile, yet Network was absent from find_package and both
+// link lines — resolvable today only through Qml's transitive public dep,
+// i.e. an include OUTSIDE the target's visible contract (the C1083 class
+// run #44 already died of once for QuickControls2).
+//
+// RED-FIRST: both tests below FAIL against 864a864 by design (the P2
+// gate); each passes only after the exact R1/R2 fix.
+// ---------------------------------------------------------------------------
+
+// Strip // and /* */ comments while preserving offsets (the test TU's
+// literals carry no comment-like text; char literals like '{' are kept —
+// only comment text is blanked, and column-0 anchors survive).
+function cppCodeOf(text) {
+  let out = "";
+  let i = 0;
+  let inBlock = false;
+  let inLine = false;
+  while (i < text.length) {
+    const two = text.slice(i, i + 2);
+    if (!inBlock && !inLine && two === "/*") {
+      inBlock = true;
+      out += "  ";
+      i += 2;
+      continue;
+    }
+    if (inBlock && two === "*/") {
+      inBlock = false;
+      out += "  ";
+      i += 2;
+      continue;
+    }
+    if (!inBlock && !inLine && two === "//") {
+      inLine = true;
+      out += "  ";
+      i += 2;
+      continue;
+    }
+    if (inLine && text[i] === "\n") {
+      inLine = false;
+      out += "\n";
+      i += 1;
+      continue;
+    }
+    if (inLine) {
+      out += " ";
+      i += 1;
+      continue;
+    }
+    if (inBlock) {
+      out += text[i] === "\n" ? "\n" : " ";
+      i += 1;
+      continue;
+    }
+    out += text[i];
+    i += 1;
+  }
+  return out;
+}
+
+// Every file-scope (column-0) function-like occurrence in a TU — BOTH
+// prototypes and definitions count as declarations (the C++ visibility
+// rule this test enforces).
+function tuDeclarations(code) {
+  const decls = [];
+  const re = /^[A-Za-z_][\w:<>,\s*&]*?\b([A-Za-z_]\w*)\s*\(/gm;
+  let m;
+  while ((m = re.exec(code)) !== null) decls.push({ name: m[1], index: m.index });
+  return decls;
+}
+
+// Project-defined function names: column-0 declarations across the three
+// ui/qt TUs (static helpers + member definitions). Only symbols the
+// PROJECT itself defines are enforced — Qt/system symbols (macros,
+// inherited QObject members, template helpers) are out of static scope;
+// the hosted compile is their authority.
+function projectDefinedFunctions() {
+  const files = [
+    join(repoRoot, "ui", "qt", "tests", "tst_acceptance.cpp"),
+    join(repoRoot, "ui", "qt", "src", "coreclient.cpp"),
+    join(repoRoot, "ui", "qt", "src", "main.cpp"),
+  ];
+  const names = new Map(); // name -> [{file, index}]
+  for (const f of files) {
+    for (const d of tuDeclarations(cppCodeOf(readFileSync(f, "utf8")))) {
+      if (!names.has(d.name)) names.set(d.name, []);
+      names.get(d.name).push({ file: f, index: d.index });
+    }
+  }
+  return names;
+}
+
+test("R1/I23: every project symbol tst_acceptance.cpp calls is VISIBLE at the call site (the C3861 class — registerCoreSingleton was not)", () => {
+  const accPath = join(repoRoot, "ui", "qt", "tests", "tst_acceptance.cpp");
+  const code = cppCodeOf(readFileSync(accPath, "utf8"));
+  const tuDecls = tuDeclarations(code);
+
+  // Declarations visible through the TU's own quoted includes (coreclient.h):
+  // the header's function-like declarations (Q_PROPERTY accessors,
+  // Q_INVOKABLE methods, signals, privates) are visible to every call site.
+  const headerDecls = new Set();
+  const quoted = [...readFileSync(accPath, "utf8").matchAll(/#include\s+"([\w./-]+)"/g)]
+    .map((m) => m[1])
+    .filter((p) => p.endsWith(".h") && existsSync(join(repoRoot, "ui", "qt", "src", p)));
+  for (const p of quoted) {
+    const headerCode = readFileSync(join(repoRoot, "ui", "qt", "src", p), "utf8");
+    for (const m of headerCode.matchAll(/(?:^|\n)\s*(?:[\w:*&]+\s+)+([A-Za-z_]\w*)\s*\(/g))
+      headerDecls.add(m[1]);
+  }
+
+  // The TU class's own members are visible inside member bodies (unqualified
+  // calls resolve to them), inherited or declared.
+  const classMembers = new Set();
+  const classAt = code.indexOf("class Acceptance");
+  if (classAt !== -1) {
+    const end = code.indexOf("\n};", classAt);
+    for (const m of code.slice(classAt, end).matchAll(/(?:^|\n)\s*(?:[\w:*&]+\s+)+([A-Za-z_]\w*)\s*\(/g))
+      classMembers.add(m[1]);
+  }
+
+  const project = projectDefinedFunctions();
+  const violations = [];
+  const re = /([A-Za-z_]\w*)\s*\(/g;
+  let m;
+  while ((m = re.exec(code)) !== null) {
+    const name = m[1];
+    if (!project.has(name)) continue; // system/Qt/local symbols: out of static scope
+    // Member/scoped access is never the defect class.
+    let j = m.index - 1;
+    while (j >= 0 && /\s/.test(code[j])) j--;
+    if (j >= 0 && (code[j] === "." || code[j] === ">" || code[j] === ":")) continue;
+    const visible =
+      tuDecls.some((d) => d.name === name && d.index <= m.index) ||
+      headerDecls.has(name) ||
+      classMembers.has(name);
+    if (!visible)
+      violations.push(
+        `${name}() called at stripped-offset ${m.index} (raw line ~${code.slice(0, m.index).split("\n").length}) with NO visible declaration — MSVC C3861`,
+      );
+  }
+  assert.deepStrictEqual(
+    violations,
+    [],
+    `I23 declaration coverage: every project-defined symbol a target TU calls must be declared before use (in the TU, in an included project header, or as a class member): ${violations.join(" | ")}`,
+  );
+});
+
+test("R2/I23: every Qt header the Qt targets include maps to a linked Qt6 module (both targets — the C1083/C3861 include half)", () => {
+  const cmake = readFileSync(join(repoRoot, "ui", "qt", "CMakeLists.txt"), "utf8");
+  const findPkg = cmake.match(/find_package\(Qt6[^)]*REQUIRED COMPONENTS ([^)]*)\)/);
+  assert.ok(findPkg, "find_package(Qt6 ... COMPONENTS ...) exists");
+  const declared = new Set(findPkg[1].trim().split(/\s+/));
+
+  const linkOf = (target) => {
+    const at = cmake.indexOf(`target_link_libraries(${target}`);
+    assert.ok(at !== -1, `target_link_libraries(${target} ...) exists`);
+    const end = cmake.indexOf(")", at);
+    const mods = new Set(
+      cmake
+        .slice(at, end)
+        .matchAll(/Qt6::([A-Za-z0-9]+)/g)
+        .map((x) => x[1]),
+    );
+    return mods;
+  };
+
+  // Qt header → owning module (the D36 mapping). QLocal*/QNetwork* are
+  // Qt6::Network (doc.qt.io: qmake "QT += network"); QQuickStyle is
+  // QuickControls2; QQml*/QJS* are Qml; QQuick* is Quick; QtTest is Test;
+  // QGuiApplication is Gui; the remaining Q* are QtCore.
+  const moduleOf = (h) => {
+    if (h === "QtTest") return "Test";
+    if (h.startsWith("QLocal") || h.startsWith("QNetwork")) return "Network";
+    if (h === "QQuickStyle") return "QuickControls2";
+    if (h.startsWith("QQml") || h.startsWith("QJS")) return "Qml";
+    if (h.startsWith("QQuick")) return "Quick";
+    if (h === "QGuiApplication" || h.startsWith("QOpenGL")) return "Gui";
+    return "Core";
+  };
+
+  const targets = [
+    {
+      name: "sheytan-ui",
+      files: ["src/main.cpp", "src/coreclient.h", "src/coreclient.cpp"],
+    },
+    {
+      name: "sheytan-ui-acceptance",
+      files: ["tests/tst_acceptance.cpp", "src/coreclient.h", "src/coreclient.cpp"],
+    },
+  ];
+  const problems = [];
+  for (const t of targets) {
+    const linked = linkOf(t.name);
+    const needed = new Set();
+    for (const rel of t.files) {
+      const text = readFileSync(join(repoRoot, "ui", "qt", rel), "utf8");
+      for (const inc of text.matchAll(/^\s*#include\s+<([A-Za-z0-9_]+)>\s*$/gm)) {
+        const h = inc[1];
+        if (!h.startsWith("Q")) continue; // system headers (cstdio, functional)
+        needed.add(moduleOf(h));
+      }
+    }
+    for (const mod of needed) {
+      if (!declared.has(mod))
+        problems.push(
+          `${t.name}: include map needs Qt6::${mod} but find_package does not declare it (the run-#44 C1083 class)`,
+        );
+      if (!linked.has(mod))
+        problems.push(
+          `${t.name}: include map needs Qt6::${mod} but the target's link line omits it (an include OUTSIDE the target's visible contract)`,
+        );
+    }
+  }
+  assert.deepStrictEqual(
+    problems,
+    [],
+    `every Qt include must map to a declared AND linked module on BOTH targets (I23/D36): ${problems.join(" | ")}`,
   );
 });

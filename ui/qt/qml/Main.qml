@@ -42,6 +42,110 @@ ApplicationWindow {
         return i >= 0 ? i : 0
     }
 
+    // v1.10.15-fixed R3 (D37/I21, Task ID 42): keyboard shortcuts parity —
+    // every layer reachable from the keyboard (src/shortcuts.ts, v1.2.4),
+    // plus the "?" help overlay whose Escape always closes. Sequences map
+    // Ctrl+1..7 onto the QT nav order above (the Qt IA's own seven views;
+    // the Wails digit map numbered its five-layer order — same
+    // functionality, this surface's real order). The help toggle is
+    // Ctrl+/ (a plain "?" WindowShortcut would hijack the character in
+    // every composer — the shortcuts.ts "without touching the composer's
+    // own key handling" rule).
+    property bool shortcutHelpVisible: false
+
+    Shortcut {
+        objectName: "shortcut-view-chat"
+        sequence: "Ctrl+1"
+        onActivated: root.currentView = "chat"
+    }
+    Shortcut {
+        objectName: "shortcut-view-agent"
+        sequence: "Ctrl+2"
+        onActivated: root.currentView = "agent"
+    }
+    Shortcut {
+        objectName: "shortcut-view-workspace"
+        sequence: "Ctrl+3"
+        onActivated: root.currentView = "workspace"
+    }
+    Shortcut {
+        objectName: "shortcut-view-lab"
+        sequence: "Ctrl+4"
+        onActivated: root.currentView = "lab"
+    }
+    Shortcut {
+        objectName: "shortcut-view-automation"
+        sequence: "Ctrl+5"
+        onActivated: root.currentView = "automation"
+    }
+    Shortcut {
+        objectName: "shortcut-view-system"
+        sequence: "Ctrl+6"
+        onActivated: root.currentView = "system"
+    }
+    Shortcut {
+        objectName: "shortcut-view-settings"
+        sequence: "Ctrl+7"
+        onActivated: root.currentView = "settings"
+    }
+    Shortcut {
+        objectName: "shortcut-help"
+        sequence: "Ctrl+/"
+        onActivated: root.shortcutHelpVisible = !root.shortcutHelpVisible
+    }
+    Shortcut {
+        objectName: "shortcut-help-escape"
+        sequence: "Escape"
+        enabled: root.shortcutHelpVisible
+        onActivated: root.shortcutHelpVisible = false
+    }
+
+    // The help overlay (shortcuts.ts): a simple card, no animation, Escape
+    // closes. Non-modal dimmer so the operator can see the map without
+    // losing the window.
+    Rectangle {
+        objectName: "shortcut-help-overlay"
+        anchors.fill: parent
+        visible: root.shortcutHelpVisible
+        color: "#cc000000"
+        z: 1000
+
+        Rectangle {
+            width: 460
+            height: helpCol.implicitHeight + 48
+            anchors.centerIn: parent
+            radius: 10
+            color: "#1a1a1d"
+            border.color: "#33333a"
+
+            ColumnLayout {
+                id: helpCol
+                anchors.fill: parent
+                anchors.margins: 24
+                spacing: 8
+
+                Label {
+                    text: qsTr("Keyboard shortcuts")
+                    color: "#b8a6e8"
+                    font.bold: true
+                    font.pixelSize: 14
+                }
+                Label {
+                    text: qsTr("Ctrl+1…7 — switch view (chat, agent, workspace, lab, automation, system, settings)\nCtrl+/ — toggle this help\nEsc — close this help")
+                    color: "#e8e8ea"
+                    font.pixelSize: 12
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                }
+                Item { Layout.fillHeight: true }
+                Button {
+                    text: qsTr("Close")
+                    onClicked: root.shortcutHelpVisible = false
+                }
+            }
+        }
+    }
+
     // Acceptance-surface facts (tst_acceptance::navChromeSevenViewsLoad).
 
     // AI Systems panel (v1.10.2): right-edge drawer, pure /api/systems client.

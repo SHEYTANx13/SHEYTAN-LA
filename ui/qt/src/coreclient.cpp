@@ -1188,6 +1188,16 @@ void CoreClient::handleActivityFrame(const QByteArray &text) {
     const QVariantMap ev = toMap(text, &ok);
     if (!ok) return;
 
+    // v1.10.15-fixed R3 (D37, Task ID 42): the bounded display ring — the
+    // last 50 well-formed activity frames (the Wails ActivityStream
+    // MAX_VISIBLE_EVENTS bound) for the agent view's live stream. Display
+    // only: the authoritative routing below is byte-identical; the ring
+    // never delays, filters or replaces a routing decision.
+    m_activityEvents.append(ev);
+    while (m_activityEvents.size() > 50)
+        m_activityEvents.removeFirst();
+    emit activityEventsChanged();
+
     const QString type = ev.value("type").toString();
 
     // Response/reasoning events carry the FULL CUMULATIVE text in caption
@@ -1222,4 +1232,41 @@ void CoreClient::handleActivityFrame(const QByteArray &text) {
         // Idle sentinels re-anchor late attach; nothing to render live.
         return;
     }
+}
+
+// --- v1.10.15-fixed R3 (D37, Task ID 42): agent-view parity reads ---------
+// The engine snapshot is a pure IPC read of the EXISTING GET /api/engine
+// handler (the same poll target src/api.ts engine() uses); the download
+// cancel is the EXISTING POST /api/llama with {"action":"cancel-download"}
+// (the api.ts 15s bound). No new backend endpoint; the store stays
+// server-owned; a failed refresh is a typed, visible error.
+
+void CoreClient::refreshEngine() {
+    request("GET", "/api/engine", QByteArray(), [this](int status, const QByteArray &body) {
+        if (status != 200) {
+            setError(QStringLiteral("engine refresh failed (%1)").arg(transportReason(status, body)));
+            return;
+        }
+        bool ok = false;
+        const QVariantMap m = toMap(body, &ok);
+        if (!ok) {
+            setError(QStringLiteral("engine refresh failed (malformed payload)"));
+            return;
+        }
+        m_engine = m;
+        emit engineChanged();
+    });
+}
+
+void CoreClient::cancelEngineDownload() {
+    const QJsonObject payload{{"action", QStringLiteral("cancel-download")}};
+    request("POST", "/api/llama", QJsonDocument(payload).toJson(),
+            [this](int status, const QByteArray &) {
+                if (status != 200) {
+                    setError(QStringLiteral("download cancel failed (status %1)").arg(status));
+                    return;
+                }
+                // The engine store is the authority: re-read the snapshot.
+                refreshEngine();
+            }, 15000);
 }

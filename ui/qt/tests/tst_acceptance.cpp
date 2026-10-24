@@ -58,6 +58,17 @@
 static void dumpChatPersistDiagnostics(const CoreClient &, const QString &,
                                        const QString &);
 
+// v1.10.15-fixed R1 (D35, run #47 cycle, Task ID 42): forward declaration —
+// the motion-gating slot qmlLoadsCleanly calls this TU-local helper ~70
+// lines ABOVE its definition, so MSVC died at C3861 "'registerCoreSingleton':
+// identifier not found" (tst_acceptance.cpp:989; run #45 showed the same
+// defect at :992 — the line moved, not the defect) and the Linux twin
+// compiled nothing. Declared before first use; the guarded definition
+// below is unchanged, and the I23 coverage assertion in
+// scripts/installer-contract.test.mjs makes this class extinct by
+// construction.
+static void registerCoreSingleton();
+
 class Acceptance : public QObject {
     Q_OBJECT
 
@@ -1105,6 +1116,19 @@ void Acceptance::navChromeSevenViewsLoad() {
     }
     const QVariant stack = win->property("currentViewIndex");
     QVERIFY2(stack.isValid(), "the shell must expose the currentViewIndex binding");
+
+    // v1.10.15-fixed R3 (D37/I21, Task ID 42): the keyboard-shortcuts parity
+    // row — every view reachable from the keyboard (Ctrl+1..7), plus the
+    // help toggle (Ctrl+/) and the help overlay whose Escape closes.
+    for (const QString &id : expected) {
+        QObject *sc = win->findChild<QObject *>(QStringLiteral("shortcut-view-") + id);
+        QVERIFY2(sc != nullptr,
+                 qPrintable(QStringLiteral("view shortcut missing for: %1").arg(id)));
+    }
+    QVERIFY2(win->findChild<QObject *>(QStringLiteral("shortcut-help")) != nullptr,
+             "the help toggle shortcut must exist (D37 parity row)");
+    QVERIFY2(win->findChild<QObject *>(QStringLiteral("shortcut-help-overlay")) != nullptr,
+             "the help overlay must exist (D37 parity row)");
 }
 
 void Acceptance::settingsEightSectionsAllFields() {
@@ -1179,6 +1203,18 @@ void Acceptance::agentViewLoads() {
     QVERIFY2(!creationFailed, "AgentView.qml failed to create (agent parity row)");
     QVERIFY2(!engine.rootObjects().isEmpty(), "AgentView must create its root object");
     QCOMPARE(engine.rootObjects().constFirst()->objectName(), QStringLiteral("agentView"));
+
+    // v1.10.15-fixed R3 (D37/I21, Task ID 42): the agent-view parity rows —
+    // the maintenance banner (/api/maintenance), the engine download panel
+    // (GET /api/engine + POST /api/llama cancel) and the activity stream
+    // (the bounded display ring) create over the registered Core singleton.
+    QObject *agentRoot = engine.rootObjects().constFirst();
+    QVERIFY2(agentRoot->findChild<QObject *>(QStringLiteral("agent-maintenance-banner")) != nullptr,
+             "AgentView must carry the maintenance banner (D37 parity row)");
+    QVERIFY2(agentRoot->findChild<QObject *>(QStringLiteral("agent-download-panel")) != nullptr,
+             "AgentView must carry the engine download panel (D37 parity row)");
+    QVERIFY2(agentRoot->findChild<QObject *>(QStringLiteral("agent-activity-stream")) != nullptr,
+             "AgentView must carry the activity stream (D37 parity row)");
 }
 
 void Acceptance::workspaceViewLoads() {

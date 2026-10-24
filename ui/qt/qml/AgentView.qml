@@ -24,11 +24,11 @@ Rectangle {
     signal openModelsRequested()
     signal openGoalsRequested()
 
-    Component.onCompleted: if (Core.connected) Core.refreshGoals()
+    Component.onCompleted: if (Core.connected) { Core.refreshGoals(); Core.refreshEngine() }
     Connections {
         target: Core
         function onConnectedChanged() {
-            if (Core.connected) Core.refreshGoals()
+            if (Core.connected) { Core.refreshGoals(); Core.refreshEngine() }
         }
     }
 
@@ -265,6 +265,166 @@ Rectangle {
                                 color: "#e8e8ea"
                                 background: null
                             }
+                        }
+                    }
+                }
+
+                // v1.10.15-fixed R3 (D37/I21, Task ID 42): MaintenanceBanner
+                // parity — the honest maintenance lifecycle from the
+                // EXISTING /api/maintenance handler (Core.maintenance), the
+                // src/MaintenanceBanner.tsx contract (v1.6.0 P0/P4): the
+                // explicit phase renders, never a generic "Updating…".
+                // Envelope-guarded like SystemView (the run-#43 TypeError
+                // class): an empty map renders nothing; a terminal phase is
+                // the core's own report, not a local guess.
+                Rectangle {
+                    objectName: "agent-maintenance-banner"
+                    Layout.fillWidth: true
+                    Layout.margins: 12
+                    visible: Core.connected
+                             && Core.maintenance.phase !== undefined
+                             && Core.maintenance.phase !== ""
+                    implicitHeight: maintLabel.implicitHeight + 20
+                    radius: 8
+                    color: "#3a3324"
+                    Label {
+                        id: maintLabel
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        text: qsTr("engine maintenance: ")
+                              + (Core.maintenance.phase !== undefined ? Core.maintenance.phase : "")
+                              + (Core.maintenance.message !== undefined && Core.maintenance.message !== ""
+                                 ? " — " + Core.maintenance.message : "")
+                        color: "#e8c268"
+                        font.pixelSize: 12
+                        wrapMode: Text.Wrap
+                    }
+                }
+
+                // v1.10.15-fixed R3 (D37/I21): DownloadProgressPanel parity
+                // — the engine Download Manager surface (src/DownloadProgress.tsx,
+                // v1.2.3): determinate progress while bytesTotal > 0,
+                // honest indeterminate otherwise (bytesTotal/etaSeconds go
+                // negative when the server did not declare a size), phase
+                // label, measured speed/ETA, and the cancel invokable 1:1
+                // to POST /api/llama {"action":"cancel-download"}. The feed
+                // is the EXISTING GET /api/engine snapshot (Core.engine);
+                // the download lifecycle stays server-owned.
+                Rectangle {
+                    objectName: "agent-download-panel"
+                    Layout.fillWidth: true
+                    Layout.margins: 12
+                    visible: Core.connected
+                             && Core.engine.download !== undefined
+                             && Core.engine.download.phase !== undefined
+                    implicitHeight: downloadCol.implicitHeight + 20
+                    radius: 8
+                    color: "#1f2a3a"
+
+                    ColumnLayout {
+                        id: downloadCol
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 6
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label {
+                                text: qsTr("Downloading engine asset — ")
+                                      + (Core.engine.download !== undefined && Core.engine.download.phase !== undefined
+                                         ? Core.engine.download.phase : "")
+                                color: "#8fb8dd"
+                                font.pixelSize: 12
+                                font.bold: true
+                                Layout.fillWidth: true
+                            }
+                            Button {
+                                text: qsTr("Stop download")
+                                onClicked: Core.cancelEngineDownload()
+                            }
+                        }
+
+                        ProgressBar {
+                            Layout.fillWidth: true
+                            indeterminate: Core.engine.download === undefined
+                                           || Core.engine.download.bytesTotal === undefined
+                                           || Core.engine.download.bytesTotal <= 0
+                            from: 0
+                            to: Core.engine.download !== undefined
+                                && Core.engine.download.bytesTotal !== undefined
+                                && Core.engine.download.bytesTotal > 0
+                                ? Core.engine.download.bytesTotal : 1
+                            value: Core.engine.download !== undefined
+                                   && Core.engine.download.bytesDone !== undefined
+                                   && !indeterminate ? Core.engine.download.bytesDone : 0
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: Core.engine.download !== undefined
+                                     && Core.engine.download.bytesPerSec !== undefined
+                            text: visible
+                                  ? (Core.engine.download.bytesPerSec / 1048576).toFixed(2) + qsTr(" MB/s")
+                                  : ""
+                            color: "#8a8a92"
+                            font.pixelSize: 10
+                        }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 12
+                    Layout.rightMargin: 12
+                    // v1.10.15-fixed R3 (D37/I21): ActivityStream parity —
+                    // the live activity feed toggle (src/AgentBody.tsx:
+                    // "Show activity"/"Hide activity"). Events come from the
+                    // bounded display ring Core.activityEvents (the last 50
+                    // frames — the Wails MAX_VISIBLE_EVENTS bound); format
+                    // mirrors formatActivity: caption → message → error →
+                    // type.
+                    Item { Layout.fillWidth: true }
+                    Button {
+                        id: agentActivityToggle
+                        checkable: true
+                        text: checked ? qsTr("Hide activity") : qsTr("Show activity")
+                    }
+                }
+
+                Rectangle {
+                    objectName: "agent-activity-stream"
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 12
+                    Layout.rightMargin: 12
+                    Layout.preferredHeight: agentActivityToggle.checked ? 160 : 0
+                    visible: agentActivityToggle.checked
+                    clip: true
+                    radius: 8
+                    color: "#17171a"
+
+                    ListView {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        clip: true
+                        spacing: 4
+                        model: Core.activityEvents
+                        ScrollBar.vertical: ScrollBar {}
+
+                        onCountChanged: Qt.callLater(positionAtEnd)
+                        function positionAtEnd() { positionViewAtEnd() }
+
+                        delegate: Label {
+                            required property var modelData
+                            width: ListView.view.width
+                            text: {
+                                if (modelData.caption !== undefined && modelData.caption !== "") return modelData.caption
+                                if (modelData.message !== undefined) return modelData.message
+                                if (modelData.error !== undefined) return modelData.error
+                                return modelData.type
+                            }
+                            color: modelData.type === "error" ? "#e8a0a0" : "#b8b8c0"
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
                         }
                     }
                 }

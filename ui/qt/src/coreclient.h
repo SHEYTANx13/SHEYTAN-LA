@@ -56,6 +56,19 @@ class CoreClient : public QObject {
     Q_PROPERTY(QVariantMap governor READ governor NOTIFY governorChanged)
     Q_PROPERTY(QVariantMap maintenance READ maintenance NOTIFY maintenanceChanged)
     Q_PROPERTY(QVariantList tools READ tools NOTIFY toolsChanged)
+    // v1.10.15-fixed R3 (D37, run #47 cycle, Task ID 42): the Wails-parity
+    // agent surfaces. activityEvents is a BOUNDED display ring (the last 50
+    // frames — the Wails ActivityStream MAX_VISIBLE_EVENTS contract) of the
+    // frames the client ALREADY receives on the activity WS; the
+    // authoritative routing in handleActivityFrame is unchanged (display
+    // only, never a second authority). engine is a pure IPC read of the
+    // EXISTING GET /api/engine snapshot — the Download Manager feed the
+    // Wails AgentBody renders as DownloadProgressPanel; every refresh
+    // re-reads the authoritative source and surfaces a typed error on
+    // failure (the v1.10.3 rule: a failed refresh is never a silent stale
+    // panel).
+    Q_PROPERTY(QVariantList activityEvents READ activityEvents NOTIFY activityEventsChanged)
+    Q_PROPERTY(QVariantMap engine READ engine NOTIFY engineChanged)
     // v1.10.15-fixed R4 (D32/I22, Task ID 41): the ONE motion gate. Every
     // animation/transition in the QML tree reads this single persisted
     // setting — off means instant state, identical function. The device
@@ -114,6 +127,13 @@ public:
     Q_INVOKABLE void refreshGovernor();
     Q_INVOKABLE void refreshMaintenance();
     Q_INVOKABLE void refreshTools();
+    // v1.10.15-fixed R3 (D37, Task ID 42): the agent-view parity invokables,
+    // each 1:1 to an EXISTING /api handler — GET /api/engine (snapshot) and
+    // POST /api/llama {action: "cancel-download"} (the Wails
+    // DownloadProgressPanel cancel, 15s bound, matching api.ts). The engine
+    // store and the download lifecycle stay server-owned.
+    Q_INVOKABLE void refreshEngine();
+    Q_INVOKABLE void cancelEngineDownload();
 
     bool connected() const { return m_connected; }
     bool busy() const { return m_busy; }
@@ -141,6 +161,9 @@ public:
     QVariantMap governor() const { return m_governor; }
     QVariantMap maintenance() const { return m_maintenance; }
     QVariantList tools() const { return m_tools; }
+    // v1.10.15-fixed R3 (D37): the agent-view parity getters.
+    QVariantList activityEvents() const { return m_activityEvents; }
+    QVariantMap engine() const { return m_engine; }
     bool canStop() const { return m_busy; }
     bool animationsEnabled() const { return m_animationsEnabled; }
     void setAnimationsEnabled(bool on);
@@ -175,6 +198,9 @@ signals:
     void maintenanceChanged();
     void toolsChanged();
     void animationsEnabledChanged();
+    // v1.10.15-fixed R3 (D37): the agent-view parity signals.
+    void activityEventsChanged();
+    void engineChanged();
 
 private:
     // --- IPC plumbing ---
@@ -238,6 +264,10 @@ private:
     QVariantList m_tools;
     bool m_animationsEnabled = true;
     bool m_tierProbed = false;
+    // v1.10.15-fixed R3 (D37): the agent-view parity state — the bounded
+    // activity display ring and the last engine snapshot read.
+    QVariantList m_activityEvents;
+    QVariantMap m_engine;
 
     // activity WS state
     QLocalSocket *m_wsSock = nullptr;

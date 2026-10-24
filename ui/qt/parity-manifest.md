@@ -72,6 +72,15 @@ and acceptance NOT RUN), `NOT RUN` (unported — honest gap, never faked).
 | ai-systems | src/AISystemsCard.tsx | ui/qt/qml/Main.qml systemsDrawer (pre-existing) | /api/systems | aiSystemsListActivate | LANDED-LOCAL (pre-existing at HEAD) |
 | goals | src/GoalsCard.tsx | ui/qt/qml/Main.qml goalsDrawer (pre-existing) | /api/goals | goalsListFieldContract, goalsStartPauseResumeCancelRoundTrip, goalsApproveRejectParkedGoal | LANDED-LOCAL (pre-existing at HEAD) |
 
+## Agent-view parity + shell interactions (priority 9 — run #47 cycle, Task ID 42, D37)
+
+| surface | wails source | qt target | core api | acceptance assertion | status |
+|---|---|---|---|---|---|
+| activity-stream | src/ActivityStream.tsx (AgentBody "Show activity" toggle) | ui/qt/qml/AgentView.qml (activity stream panel) | activity WS (the bounded display ring — last 50 frames, the Wails MAX_VISIBLE_EVENTS contract — in ui/qt/src/coreclient.cpp; authoritative routing unchanged) | agentViewLoads | LANDED-LOCAL |
+| download-progress | src/DownloadProgress.tsx (DownloadProgressPanel, v1.2.3 Download Manager) | ui/qt/qml/AgentView.qml (download panel) | GET /api/engine + POST /api/llama {"action":"cancel-download"} (both pre-existing handlers) | agentViewLoads | LANDED-LOCAL |
+| maintenance-banner | src/MaintenanceBanner.tsx (v1.6.0 P0/P4 honest lifecycle) | ui/qt/qml/AgentView.qml (maintenance banner, envelope-guarded) | GET /api/maintenance (pre-existing) | agentViewLoads | LANDED-LOCAL |
+| keyboard-shortcuts | src/shortcuts.ts (v1.2.4 global shortcuts + "?" help overlay) | ui/qt/qml/Main.qml (Shortcut elements Ctrl+1..7 + Ctrl+/ help toggle + Escape-gated overlay) | none (pure navigation) | navChromeSevenViewsLoad | LANDED-LOCAL |
+
 ## Honest boundary
 
 - LANDED-LOCAL rows are static-verified (C++/QML balance scan, symbol
