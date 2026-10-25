@@ -85,14 +85,18 @@ the evidence says it is.
 * **Spike — CURRENT.** An isolated, compiling Fyne shell exists as code:
   `ui/fyne` (the product theme tokens mirrored from the ONE Qt token
   source; a size-driven shell window; navigation; one placeholder panel;
-  reflow on resize, no fixed pixel geometry) plus `cmd/fyne-spike` (the
-  isolated launch entry). The spike is build-tag isolated (`fyne`), never a
-  required hosted gate, and the shipped binary, the Qt host and the hosted
-  workflow are untouched by it. Status honestly recorded per the
-  verification matrix: the spike compiles and links locally for the native
-  OS; the cross-platform compile for the second desktop OS is UNVERIFIED in
-  the authoring environment (no cross C toolchain available) and is exactly
-  the kind of claim only a hosted or operator run may settle next.
+  reflow on resize, no fixed pixel geometry). The spike is build-tag
+  isolated (`fyne`) and launches through the ONE CLI — `sheytan spike`
+  (the //go:build fyne hook inside the shipped cmd tree; the standalone
+  cmd/fyne-spike main package is retired; the untagged binary's dispatch
+  is unchanged). The shipped surface and the Qt host stay untouched by the
+  spike; the hosted workflow carries ADDITIVE fyne-tag compile gates on
+  both platform jobs (spike claim only). Status honestly recorded per the
+  verification matrix: the spike compiles for the native OS in an
+  environment with the GL/Wayland/X11 dev headers; where those headers are
+  absent the compile is UNVERIFIED with the failing line recorded, and the
+  cross-platform verdict is exactly the kind of claim only a hosted or
+  operator run may settle next.
 * **Parity — NOT STARTED.** The Fyne surface reaches the Qt host's
   capability surface row by row, each row landing with its own acceptance
   assertion; the parity manifest grows a Fyne target column per row; the

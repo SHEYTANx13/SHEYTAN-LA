@@ -9,7 +9,14 @@ hazard by construction).
 
 ---
 ---
-Task ID: 44 (v1.11.0 held, run #50 cycle) — tree pinned at 8c3c74e (run #49 FAILURE at Qt host cmake configure on BOTH OSes before any compilation; eight errors-only annotations; the #48 tree hosted-UNVERIFIED).
+Task ID: 45 (v1.11.0 held, run #51 cycle) — tree pinned at 2eedc49 (run #50 FAILURE at Qt host cmake configure, Qt6CoreMacros.cmake:2212 target_sources, Windows verbatim; Linux exit 1 with NO verbatim annotation — I17).
+  R1: root cause pinned from the upstream source (qtbase v6.8.2 src/corelib/Qt6CoreMacros.cmake, fetched and read before any edit) — FILES entries resolve from CMAKE_CURRENT_SOURCE_DIR and BASE is alias-only; the bare-name FILES form fed non-existent absolute paths to the :2212 frame; fix = style/-qualified FILES in BOTH qt_add_resources blocks, resource URLs unchanged.
+  R2: scripts/qt-configure-probe.mjs — the REAL upstream macro chain executes on the real tree Qt-free (cmake 3.31.10 + 4.4.4): RED at HEAD, PROBE-OK after R1; the #50 subset-model probe hole (I25) closed; the I25 suite rows re-based on verified semantics.
+  R3: cmd/fyne-spike retired into the ONE CLI (cmd/fyne.go, //go:build fyne, untagged dispatch byte-identical); verify-all core-version parity stage; both platform jobs gain additive fyne-tag compile gates (apt GL/Wayland headers; cross-OS verdict settles hosted).
+  R1d: Linux Qt configure/build Tee to ci-logs/linux-qt-{configure,build}.log + "Failure summary (Linux Qt host)" catcher scoped to the Qt step's own failure — I17 parity on both OSes, catchers and gate order otherwise untouched.
+  Shipped boundary: local battery green (contract suite 91/91, go test 65 pkgs, lint/typecheck clean, probe PROBE-OK, 1.11.0 held); hosted NOT RUN (operator push pending); fyne-tagged local compile UNVERIFIED (no GL/Wayland headers; verbatim line recorded; hosted gates settle).
+  Future work: hosted green on the exact commit; parity phase rows (I21 manifest); physical retest (install/launch/model select/chat/hardware/theme/animations on/off, Linux clean-machine launch, `sheytan spike` shell, uninstall symmetry).
+ (v1.11.0 held, run #50 cycle) — tree pinned at 8c3c74e (run #49 FAILURE at Qt host cmake configure on BOTH OSes before any compilation; eight errors-only annotations; the #48 tree hosted-UNVERIFIED).
   R1: root cause = qt_add_resources(sheytan-ui-acceptance ...) preceding its add_executable — Qt 6.8.2's qt6_add_resources took the qrc-file branch and configure_file died on the style DIRECTORY (:317/:330, locally reproduced under cmake 3.31/4.4); fix = the block reordered below the target, byte-identical apart from position; a Qt-free configure-order probe PROBE-FAILs on the old tree and PROBE-OKs on the fixed one.
   R2: the I25 coverage gate landed RED-first in installer-contract.test.mjs (target-order, FILES-at-BASE, orphan/phantom) — the configure class now dies locally with no Qt toolchain.
   R3: ROADMAP.md surgery — version-free capabilities with honest status, release history stays in changelog.md alone, the ONE-Go-UI (Fyne) end state added with spike → parity → Qt retirement.

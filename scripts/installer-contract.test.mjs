@@ -34,7 +34,7 @@
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -2438,7 +2438,17 @@ test("run-#50 R2/I25-3: resource blocks reference only targets defined BEFORE th
   assert.ok(defined.has("sheytan-ui-acceptance"), "sheytan-ui-acceptance must be defined");
 });
 
-test("run-#50 R2/I25-1: every qt_add_resources FILES entry resolves to an existing FILE at its declared BASE", () => {
+test("run-#51 R2/I25-1 (amended from run-#50): every qt_add_resources FILES entry resolves from CMAKE_CURRENT_SOURCE_DIR and sits under its declared BASE (upstream semantics, not the #50 subset model)", () => {
+  // AMENDMENT REASON (R2, run #51): the run-#50 row resolved FILES against
+  // BASE — a hand-modeled subset of the upstream macro. The ACTUAL Qt 6.8.2
+  // _qt_internal_process_resource (qtbase v6.8.2, :2274-2284) resolves every
+  // FILES entry against CMAKE_CURRENT_SOURCE_DIR and uses BASE ONLY to
+  // compute the QT_RESOURCE_ALIAS. The #50 tree passed bare style/ names
+  // with BASE .../style: every entry materialized as a NON-EXISTENT
+  // ui/qt/<file>.qml — the exact argument list the hosted :2212
+  // target_sources frame consumed (run-#50 configure death). The probe
+  // reproduces this verbatim; this static row now encodes the verified
+  // upstream semantics so the two instruments can never diverge again.
   const cmake = loadQtCmakeLists();
   const blocks = extractQtCommandBlocks(cmake, ["qt_add_resources"]);
   assert.ok(blocks.length >= 2, "the sheytan style must be embedded into both targets");
@@ -2454,17 +2464,21 @@ test("run-#50 R2/I25-1: every qt_add_resources FILES entry resolves to an existi
     const base = resolveQtPath(args[baseIdx + 1]);
     for (const f of args.slice(filesIdx + 1)) {
       if (/^[A-Z][A-Z_]*$/.test(f)) break; // next keyword — FILES list ended
-      const p = join(base, f);
+      // Upstream: file resolves against the LISTING DIRECTORY (ui/qt),
+      // alias = relative path from BASE.
+      const p = resolveQtPath(f);
       if (!existsSync(p))
-        offenders.push(`${f}: referenced by ${b.name} under BASE ${args[baseIdx + 1]} but MISSING from the tree`);
+        offenders.push(`${f}: resolves from ui/qt/ (upstream CWD rule) to ${p} but MISSING from the tree — this is the argument the hosted :2212 frame consumed (run-#50 class)`);
       else if (!statSync(p).isFile())
         offenders.push(`${f}: referenced by ${b.name} but resolves to a DIRECTORY (the run-#49 class shape)`);
+      else if (!p.startsWith(base + sep))
+        offenders.push(`${f}: not under its declared BASE ${args[baseIdx + 1]} — the alias would escape the resource prefix`);
     }
   }
   assert.deepStrictEqual(
     offenders,
     [],
-    "I25: every FILES entry must exist at its BASE (a referenced-but-missing entry is an automatic defect): " +
+    "I25: every FILES entry must resolve (CWD rule) and sit under BASE (a referenced-but-missing entry is an automatic defect): " +
       offenders.join(" | "),
   );
 });
@@ -2488,11 +2502,12 @@ test("run-#50 R2/I25-2: every source file under ui/qt/{qml,src,style,tests} is c
     const baseIdx = args.indexOf("BASE");
     const filesIdx = args.indexOf("FILES");
     if (b.name === "qt_add_resources" && baseIdx !== -1 && filesIdx !== -1) {
-      // FILES entries are relative to the block's BASE, not to ui/qt/
-      const base = resolveQtPath(args[baseIdx + 1]);
+      // FILES entries resolve from the listing dir (ui/qt) — the upstream
+      // CWD rule (amended run-#51, same reason as I25-1 above); BASE is
+      // the alias base, never the file root.
       for (const f of args.slice(filesIdx + 1)) {
         if (/^[A-Z][A-Z_]*$/.test(f)) break;
-        claimed.add(join(base, f));
+        claimed.add(resolveQtPath(f));
       }
       continue;
     }
@@ -2527,7 +2542,7 @@ test("run-#50 R2/I25-2: every source file under ui/qt/{qml,src,style,tests} is c
   );
 });
 
-test("run-#50 R4: the fyne pin is declared in go.mod + go.sum and the isolated spike entry exists", () => {
+test("run-#50 R4 (amended run-#51): the fyne pin is declared in go.mod + go.sum and the spike entry is the ONE CLI surface", () => {
   const goMod = readFileSync(join(repoRoot, "go.mod"), "utf8");
   assert.match(
     goMod,
@@ -2544,13 +2559,160 @@ test("run-#50 R4: the fyne pin is declared in go.mod + go.sum and the isolated s
     existsSync(join(repoRoot, "ui", "fyne")),
     "ui/fyne/ must exist — the one-Go-UI migration's package",
   );
-  const spike = join(repoRoot, "cmd", "fyne-spike", "main.go");
-  assert.ok(existsSync(spike), "cmd/fyne-spike/main.go must exist — the isolated launch entry");
-  const mainGo = readFileSync(spike, "utf8");
+  // AMENDED run-#51 (R3a, Task ID 45): cmd/fyne-spike RETIRED into the
+  // shipped CLI — the spike launches through the ONE CLI surface
+  // (`sheytan spike`, //go:build fyne-tagged hook), never through a
+  // separate main package (C19: one codebase, one entry surface). The
+  // ui/fyne import contract now lives on the CLI hook file.
+  assert.ok(
+    !existsSync(join(repoRoot, "cmd", "fyne-spike")),
+    "cmd/fyne-spike must be retired — the spike launches through the ONE CLI surface (run-#51 R3a)",
+  );
+  const hook = join(repoRoot, "cmd", "fyne.go");
+  assert.ok(existsSync(hook), "cmd/fyne.go must exist — the fyne-tagged CLI launch hook");
+  const hookGo = readFileSync(hook, "utf8");
   assert.match(
-    mainGo,
+    hookGo,
     /"github\.com\/Parsaetak\/SHEYTAN-local-agent\/ui\/fyne"/,
-    "the spike entry must import the ui/fyne package",
+    "the CLI hook must import the ui/fyne package",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// run-#51 (Task ID 45) — R1/R2/R3 RED-first rows. RED at HEAD, green after
+// the run-#51 fixes land. The probe is the real-macro instrument: it
+// executes the ACTUAL upstream Qt 6.8.2 call chain on the real tree.
+// ---------------------------------------------------------------------------
+
+test("run-#51 R2: the real-macro configure probe exists, pins the upstream source, and is PROBE-CLEAN on the real tree", () => {
+  const probePath = join(repoRoot, "scripts", "qt-configure-probe.mjs");
+  assert.ok(existsSync(probePath), "scripts/qt-configure-probe.mjs must exist (R2)");
+  const probe = readFileSync(probePath, "utf8");
+  assert.match(probe, /v6\.8\.2/, "the probe pins the hosted Qt tag 6.8.2");
+  assert.match(
+    probe,
+    /src\/corelib\/Qt6CoreMacros\.cmake/,
+    "the probe extracts from the real upstream macro source (never a subset model)",
+  );
+  // The run-#50 class, verbatim: the argument list the :2212 frame consumed.
+  assert.match(
+    probe,
+    /_qt_deferred_files/,
+    "the probe must assert the deferred-file list the :2212 target_sources consumes",
+  );
+  const run = spawnSync(process.execPath, [probePath], {
+    encoding: "utf8",
+    timeout: 600000,
+  });
+  assert.equal(
+    run.status,
+    0,
+    `the probe must be PROBE-OK on the changed tree; exit ${run.status}\n${run.stdout ?? ""}\n${run.stderr ?? ""}`,
+  );
+  assert.match(run.stdout ?? "", /PROBE-OK/, "the probe's verdict line must read PROBE-OK");
+  // Every qt_add_* (and qt_standard_project_setup) call in the real tree is
+  // probe-EXECUTED — the probe report names each command it ran or stubbed.
+  const cmake = loadQtCmakeLists();
+  const names = new Set(
+    [...cmake.matchAll(/^\s*(qt\w+)\(/gm)].map((m) => m[1]).filter((n) => n.startsWith("qt")),
+  );
+  assert.ok(names.has("qt_add_resources"), "census: the tree calls qt_add_resources");
+  for (const n of names)
+    assert.match(
+      run.stdout,
+      new RegExp(n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+      `the probe report must name ${n} (every qt_* call is probe-executed, I25)`,
+    );
+});
+
+test("run-#51 R3a: the shipped CLI carries the fyne-tagged spike launch — ONE entry surface, untagged behavior untouched", () => {
+  const root = readFileSync(join(repoRoot, "cmd", "root.go"), "utf8");
+  assert.match(
+    root,
+    /var fyneLaunch func\(\) int/,
+    "root.go must declare the nil-default launch hook — the untagged binary's dispatch is unchanged",
+  );
+  assert.match(
+    root,
+    /case "spike", "fyne-ui":/,
+    'root.go must route the "spike"/"fyne-ui" subcommand through the hook',
+  );
+  assert.match(
+    root,
+    /if fyneLaunch == nil \{/, 
+    "the hook case must fall through to the unknown-command path when the fyne tag is absent",
+  );
+  const hook = readFileSync(join(repoRoot, "cmd", "fyne.go"), "utf8");
+  assert.match(hook, /^\/\/go:build fyne/m, "cmd/fyne.go must be fyne-tagged so the untagged binary never links fyne");
+  assert.match(hook, /func FyneLaunch\(\) int/, "the hook must expose the launch entry");
+  assert.match(
+    hook,
+    /fyneui\.NewShell/,
+    "the hook must launch the ui/fyne shell (the retired spike's behavior)",
+  );
+});
+
+test("run-#51 R3b: the script surface drives the ONE CLI — core version parity through the real binary", () => {
+  const va = readFileSync(join(repoRoot, "scripts", "verify-all.mjs"), "utf8");
+  assert.match(
+    va,
+    /core version parity/,
+    "verify-all must run the freshly built ONE binary's version subcommand against the release identity",
+  );
+  assert.match(va, /["']version["']/, "the parity stage must invoke the version subcommand");
+  assert.match(
+    va,
+    /package\.json/,
+    "the parity stage must compare against package.json — the ONE version source (I6)",
+  );
+});
+
+test("run-#51 R3d: an additive fyne-tag compile gate exists on BOTH platform jobs (C2-clean, gates untouched)", () => {
+  const wf = loadWorkflow();
+  assert.match(
+    wf,
+    /Build fyne-tagged spike \(Windows\)/,
+    "the Windows job must compile the fyne tag (spike claim only)",
+  );
+  assert.match(
+    wf,
+    /Build fyne-tagged spike \(Linux\)/,
+    "the Linux job must compile the fyne tag (spike claim only)",
+  );
+  const tagged = wf.match(/go build -tags fyne [^\n]+/g) ?? [];
+  assert.ok(
+    tagged.length >= 2,
+    "both jobs must run an additive `go build -tags fyne` compile of the spike surface",
+  );
+  for (const line of tagged)
+    assert.match(
+      line,
+      /go build -tags fyne \.\/cmd\/\.\.\. \.\/ui\/fyne/,
+      "the tagged build must cover the fyne packages (cmd hook + ui/fyne), nothing wider",
+    );
+});
+
+test("run-#51 R1d: BOTH platform jobs surface Qt configure errors verbatim (I17 annotation parity)", () => {
+  const wf = loadWorkflow();
+  assert.match(
+    wf,
+    /ci-logs\/linux-qt-configure\.log/,
+    "the Linux Qt configure must Tee into a named log (I15/I18) — the Windows twin already does",
+  );
+  assert.match(
+    wf,
+    /ci-logs\/linux-qt-build\.log/,
+    "the Linux Qt build must Tee into a named log",
+  );
+  assert.match(
+    wf,
+    /Failure summary \(Linux Qt host\)/,
+    "a Linux catcher must lift configure/build errors into ::error verbatim (I17) — the run-#50 Linux death posted exit 1 with NO annotation",
+  );
+  assert.match(
+    wf,
+    /CMake Error/,
+    "the catcher's error class must include CMake Error lines",
   );
 });
 

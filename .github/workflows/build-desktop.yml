@@ -1003,6 +1003,25 @@ jobs:
 
           Remove-Item $probe -Force
 
+      # v1.11.0 (R3d, run-#51, Task ID 45): ADDITIVE fyne-tag compile gate
+      # (spike claim only — C19). Proves the one-Go-UI surface compiles on
+      # Windows with the shipped toolchain; it never ships this cycle and
+      # no other step's order, gate or exit contract changes (I16).
+      # C2-clean: the ::error line fires ONLY on a red compile; a green
+      # compile emits plain step output only.
+      - name: Build fyne-tagged spike (Windows)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+          Set-Content -Path ci-logs/win-fyne-spike.log -Value $null
+          go build -tags fyne ./cmd/... ./ui/fyne 2>&1 | Tee-Object -FilePath "ci-logs/win-fyne-spike.log"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::fyne-tagged spike compile failed (windows/amd64) (log: ci-logs/win-fyne-spike.log)"
+            throw "[gate] fyne-tagged spike compile failed ($LASTEXITCODE)"
+          }
+          Write-Host "OK fyne-tagged spike compile (windows/amd64)"
+
       # v1.9.1 RUNTIME SMOKE — the REAL desktop executable launched as a
       # process. Build/version/package never prove runtime: this gate
       # starts SHEYTAN-LA.exe (the windowsgui Go-core launcher; it spawns the
@@ -2726,6 +2745,11 @@ jobs:
             libopengl-dev \
             libegl-dev \
             mesa-common-dev \
+            libwayland-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxi-dev \
             libxkbcommon-dev \
             libxkbcommon0 \
             libx11-dev \
@@ -3412,6 +3436,23 @@ jobs:
 
           echo "Linux executable version/platform smoke test passed."
 
+      # v1.11.0 (R3d, run-#51, Task ID 45): ADDITIVE fyne-tag compile gate
+      # (spike claim only — C19) — the cross-OS half of the verdict. The
+      # GL/Wayland/X11 dev headers join the apt layer above additively so
+      # this gate is REAL, not a skip; a compile break fails the job with
+      # a verbatim ::error (C2). Step order and exit contracts untouched.
+      - name: Build fyne-tagged spike (Linux)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          : > ci-logs/linux-fyne-spike.log
+          if ! go build -tags fyne ./cmd/... ./ui/fyne 2>&1 | tee ci-logs/linux-fyne-spike.log; then
+            echo "::error::fyne-tagged spike compile failed (linux/amd64) (log: ci-logs/linux-fyne-spike.log)"
+            exit 1
+          fi
+          echo "OK fyne-tagged spike compile (linux/amd64)"
+
       # v1.9.1 RUNTIME SMOKE — the REAL native desktop binary under a
       # virtual display. Build/version/package steps never prove GUI runtime:
       # this gate launches the desktop executable itself and asserts,
@@ -3436,11 +3477,18 @@ jobs:
           echo "Qt6_DIR=$RUNNER_TEMP/qt/6.8.2/gcc_64/lib/cmake/Qt6" >> "$GITHUB_ENV"
 
       - name: Build Qt host (Linux)
+        id: qt_host
         shell: bash
         run: |
           set -euo pipefail
 
-          # v1.11.0 (R4, run-#48, Task ID 43): the OFFICIAL Qt deployment —
+          # v1.11.0 (R1d/I17, run-#51, Task ID 45): FIRST-BYTE capture for
+          # the Qt configure/build gates (I15). Run #50's Linux death
+          # posted exit 1 with NO verbatim annotation because this job
+          # had neither a named log nor a catcher for the Qt host — the
+          # Windows twin carried the frame, Linux carried silence. The
+          # logs exist (empty) BEFORE the commands run and feed the
+          # "Failure summary (Linux Qt host)" catcher below.
           # QT_DEPLOY_AND_INSTALL turns on the QML-aware deploy script
           # (CMakeLists' qt_generate_deploy_qml_app_script), and
           # `cmake --install` executes it INTO the package root: sheytan-ui
@@ -3449,10 +3497,16 @@ jobs:
           # only worked via the RUNNER's aqt layout — the Linux zip could
           # not launch on a clean machine (the operator's "Linux package
           # incomplete" defect; Windows already shipped windeployqt).
+          # v1.11.0 (R1d/I17, run-#51, Task ID 45): the former bare
+          # `cmake ...` / `cmake --build` calls now Tee into their named
+          # logs (I15/I18) — same class as the Windows Tees; under
+          # pipefail a configure/build failure still fails the step.
           cmake -S ui/qt -B ui/qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$Qt6_DIR" \
-            -DQT_DEPLOY_AND_INSTALL=ON
-          cmake --build ui/qt/build
+            -DQT_DEPLOY_AND_INSTALL=ON 2>&1 | tee ci-logs/linux-qt-configure.log
+          echo "OK Qt host cmake configure (Linux)" >> ci-logs/gate-order.txt
+          cmake --build ui/qt/build 2>&1 | tee ci-logs/linux-qt-build.log
+          echo "OK Qt host build (Linux)" >> ci-logs/gate-order.txt
 
           test -x ui/qt/build/sheytan-ui
           test -x ui/qt/build/sheytan-ui-acceptance
@@ -3477,6 +3531,37 @@ jobs:
           test -d "dist/linux/app/${LINUX_PKG_ROOT}/lib"
           command -v patchelf >/dev/null 2>&1 || sudo apt-get install -y patchelf
           patchelf --set-rpath '$ORIGIN/lib' "dist/linux/app/${LINUX_PKG_ROOT}/sheytan-ui"
+
+      # v1.11.0 (R1d/I17, run-#51, Task ID 45): ANNOTATION PARITY — the
+      # Windows job's "Failure summary (Windows)" lifts its Qt configure
+      # death into ::error verbatim (run #50 proved the asymmetry: the
+      # Windows gate carried the :2212 frame, the Linux gate posted a bare
+      # exit 1 with no annotation). This catcher publishes the SAME class
+      # of verbatim lines from the Linux Qt host's own named logs, and
+      # fires ONLY when the Qt host step is the one that failed (a later
+      # gate's red must never borrow this catcher's voice). A green run
+      # never executes it; warnings stay plain log output (C2).
+      - name: Failure summary (Linux Qt host)
+        if: failure() && steps.qt_host.outcome == 'failure'
+        shell: bash
+        run: |
+          set -uo pipefail
+          published=0
+          for f in ci-logs/linux-qt-configure.log ci-logs/linux-qt-build.log; do
+            [ -f "$f" ] || continue
+            while IFS= read -r line; do
+              case "$line" in
+                *"CMake Error"*|*"ninja: build stopped"*|*"error:"*)
+                  printf '::error::%s\n' "$line"
+                  published=$((published + 1))
+                  [ "$published" -ge 10 ] && break 2
+                  ;;
+              esac
+            done < "$f"
+          done
+          if [ "$published" -eq 0 ]; then
+            echo "::error::Linux Qt host failed with no CMake/ninja error lines captured — read the all-logs artifact (all-logs.txt, D21) for the failing gate"
+          fi
 
       # v1.11.0 (R4, run-#48, Task ID 43): the CLOSURE GATE — every library
       # the packaged UI links must resolve INSIDE the package (base-system

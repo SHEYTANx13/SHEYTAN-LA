@@ -18,7 +18,7 @@
 //   node scripts/verify-all.mjs --release  # release gate: unavailable
 //                                          # toolchains FAIL the run
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -167,6 +167,31 @@ if (args.has("--qt") || (!goSelected && !args.has("--native"))) {
       ["build", "-o", coreBin, "./cmd/sheytan-local-agent"],
       { skip: have("go", ["version"]) ? undefined : "go toolchain unavailable" },
     );
+    // v1.11.0 (R3b, run-#51, Task ID 45): the script surface drives the
+    // ONE CLI — the freshly built core binary's own version subcommand
+    // must report the release identity package.json carries (I6: ONE
+    // version source; no duplicated pathway — the binary IS the surface).
+    if (existsSync(coreBin)) {
+      const parity = spawnSync(coreBin, ["version"], { encoding: "utf8" });
+      const want = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8")).version;
+      const got = (parity.stdout ?? "").match(/v([0-9][^\s]*)/)?.[1] ?? "";
+      const ok = parity.status === 0 && got === want;
+      results.push({
+        label: "core version parity (the ONE CLI)",
+        status: ok ? "PASS" : "FAIL",
+        reason: ok ? undefined : `binary reported "${got || "nothing"}"; package.json = ${want}`,
+      });
+      if (ok) {
+        console.log(`\n=== core version parity (the ONE CLI): PASS (v${want}) ===`);
+      } else {
+        failed = true;
+        console.log(`\n=== core version parity (the ONE CLI): FAIL (binary="${got}" package.json="${want}") ===`);
+        if (RELEASE) {
+          report();
+          process.exit(1);
+        }
+      }
+    }
     run(
       "Qt host acceptance (QtTest, real core)",
       path.join("ui", "qt", "build", process.platform === "win32" ? "Release/" : "", "sheytan-ui-acceptance"),

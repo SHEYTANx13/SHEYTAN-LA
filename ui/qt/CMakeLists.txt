@@ -60,12 +60,24 @@ set_source_files_properties(qml/Theme.qml PROPERTIES
 # the Theme tokens — ONE theme system, no duplicated palette. Embedded
 # into BOTH targets: the acceptance harness loads the same views and must
 # resolve the same style (I24 — the harness/shipped divergence class).
+# v1.11.0 (R1, run-#51, Task ID 45): FILES are style/-qualified. Qt 6.8.2's
+# _qt_internal_process_resource resolves every FILES entry against
+# CMAKE_CURRENT_SOURCE_DIR and uses BASE ONLY to compute the resource
+# alias (qtbase v6.8.2 src/corelib/Qt6CoreMacros.cmake). The run-#48/#50
+# bare-name form materialized NON-EXISTENT ui/qt/<file>.qml paths into the
+# generated qrc AND into the _qt_deferred_files list whose deferred flush
+# is the exact hosted :2212 target_sources frame (run-#50 configure death,
+# both OSes red). scripts/qt-configure-probe.mjs reproduces the class
+# verbatim and is PROBE-OK on this form. Resource URLs are UNCHANGED
+# (:/sheytanstyle/<Name>.qml) — zero functional regression; the pinned
+# #48 style capability stays whole (C9, I24).
 qt_add_resources(sheytan-ui sheytan_style
     PREFIX "/sheytanstyle"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/style"
-    FILES Button.qml ToolButton.qml TextField.qml TextArea.qml
-          ComboBox.qml CheckBox.qml Switch.qml Slider.qml ProgressBar.qml
-          ScrollBar.qml Menu.qml MenuItem.qml ItemDelegate.qml
+    FILES style/Button.qml style/ToolButton.qml style/TextField.qml style/TextArea.qml
+          style/ComboBox.qml style/CheckBox.qml style/Switch.qml style/Slider.qml
+          style/ProgressBar.qml style/ScrollBar.qml style/Menu.qml style/MenuItem.qml
+          style/ItemDelegate.qml
 )
 
 target_link_libraries(sheytan-ui PRIVATE
@@ -119,10 +131,17 @@ target_link_libraries(sheytan-ui-acceptance PRIVATE Qt6::Core Qt6::Gui Qt6::Netw
 # reference point, the FILES branch runs, and the same style is embedded
 # into both hosts (I24). Gate-verified by scripts/installer-contract.test.mjs
 # run-#50 R2/I25-3 (RED at HEAD, green after this reorder).
+#
+# v1.11.0 (R1, run-#51, Task ID 45): the reorder was real but killed the
+# wrong layer — the SAME bare-name FILES form as the sheytan-ui block above
+# fed non-existent absolute paths to the surviving :2212 frame. This twin
+# carries the identical style/-qualified repair; the two blocks stay
+# byte-identical modulo the target name (I24).
 qt_add_resources(sheytan-ui-acceptance sheytan_style
     PREFIX "/sheytanstyle"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/style"
-    FILES Button.qml ToolButton.qml TextField.qml TextArea.qml
-          ComboBox.qml CheckBox.qml Switch.qml Slider.qml ProgressBar.qml
-          ScrollBar.qml Menu.qml MenuItem.qml ItemDelegate.qml
+    FILES style/Button.qml style/ToolButton.qml style/TextField.qml style/TextArea.qml
+          style/ComboBox.qml style/CheckBox.qml style/Switch.qml style/Slider.qml
+          style/ProgressBar.qml style/ScrollBar.qml style/Menu.qml style/MenuItem.qml
+          style/ItemDelegate.qml
 )

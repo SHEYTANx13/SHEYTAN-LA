@@ -10,6 +10,12 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
 )
 
+// fyneLaunch is set by the //go:build fyne launch hook (cmd/fyne.go) and
+// stays nil in the untagged binary — the shipped CLI's dispatch is then
+// byte-identical to its pre-run-#51 behavior (R3a, run-#51, Task ID 45;
+// ONE entry surface for the one-Go-UI spike, C19).
+var fyneLaunch func() int
+
 // RunWithDefaultFn dispatches to the right subcommand. If no command is
 // given, runs `defaultFn()`.
 //
@@ -253,6 +259,21 @@ func dispatch(cfg *config.Config, defaultFn func() int) int {
 
 	case "context", "ai-context":
 		return AICtx(cfg, args[1:])
+
+	// v1.11.0 (R3a, run-#51, Task ID 45): the fyne-tagged spike launch —
+	// ONE entry surface for the one-Go-UI migration program (C19). In the
+	// untagged binary the hook is nil and this case reports the command as
+	// unknown EXACTLY as the default branch did (byte-identical output and
+	// exit code — the shipped CLI's behavior is unchanged, C9); with
+	// `-tags fyne` the hook launches the ui/fyne shell (the retired
+	// cmd/fyne-spike main package).
+	case "spike", "fyne-ui":
+		if fyneLaunch == nil {
+			fmt.Fprintf(os.Stderr, "unknown command: %s\n", args[0])
+			printHelp()
+			return 2
+		}
+		return fyneLaunch()
 
 	case "help", "-h", "--help":
 		printHelp()
