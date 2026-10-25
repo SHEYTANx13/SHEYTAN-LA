@@ -9,6 +9,13 @@ hazard by construction).
 
 ---
 ---
+Task ID: 44 (v1.11.0 held, run #50 cycle) — tree pinned at 8c3c74e (run #49 FAILURE at Qt host cmake configure on BOTH OSes before any compilation; eight errors-only annotations; the #48 tree hosted-UNVERIFIED).
+  R1: root cause = qt_add_resources(sheytan-ui-acceptance ...) preceding its add_executable — Qt 6.8.2's qt6_add_resources took the qrc-file branch and configure_file died on the style DIRECTORY (:317/:330, locally reproduced under cmake 3.31/4.4); fix = the block reordered below the target, byte-identical apart from position; a Qt-free configure-order probe PROBE-FAILs on the old tree and PROBE-OKs on the fixed one.
+  R2: the I25 coverage gate landed RED-first in installer-contract.test.mjs (target-order, FILES-at-BASE, orphan/phantom) — the configure class now dies locally with no Qt toolchain.
+  R3: ROADMAP.md surgery — version-free capabilities with honest status, release history stays in changelog.md alone, the ONE-Go-UI (Fyne) end state added with spike → parity → Qt retirement.
+  R4: fyne v2.8.2 pin (only dependency change) + ui/fyne (product tokens, size-driven shell, nav + placeholder) + cmd/fyne-spike (tag-isolated, never a hosted gate); native-OS compile+link PASS (recorded), cross-OS compile UNVERIFIED (no cross C toolchain, failing line recorded).
+  Shipped: battery 13/13 + E2E 40/40 + test:release 126/126 green on the exact tree committed (I14); hosted boundary = configure+build+acceptance green both OSes on the exact commit (operator push pending); physical retest = the operator's. Future work: parity rows one at a time, the cross-OS spike compile hosted, the style qmldir runtime verdict via theme adoption.
+---
 Task ID: 43 (v1.11.0, run #48 cycle) — tree pinned at 4703621 (run #47 SUCCESS while the operator's physical runtime was broken: selection/chat dead, unthemed UI, unmatched hardware, incomplete Linux package — harness-green ≠ runtime-usable, the I24 class).
   R1: qml/Theme.qml singleton (palette/spacing/typography/radii/motion) + 13-control QuickControls2 style at :/sheytanstyle selected by BOTH hosts; 211 color literals → tokens across 13 views; the 2 un-gated drawer transitions now read animationsEnabled.
   R2: CoreClient.selectModel → POST /api/models/select wired end-to-end (the shipped selection state machine the Qt client never called); modelSelectRoundTripPersistsAcrossRestart drives list → select → config → REAL core restart on the live transport; the harness style mirrors the host exactly.

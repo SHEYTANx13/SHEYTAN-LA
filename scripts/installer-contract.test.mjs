@@ -31,10 +31,10 @@
  * proof; this file makes the payload regression IMPOSSIBLE TO COMMIT.
  */
 
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -2340,4 +2340,233 @@ test("run-#48 heritage: the suite still carries every standing pin class", () =>
     .filter(([, frag]) => !src.toLowerCase().includes(frag.toLowerCase()))
     .map(([name]) => name);
   assert.deepStrictEqual(missing, [], `heritage pin classes dropped from the suite: ${missing.join(", ")}`);
+});
+
+// ---------------------------------------------------------------------------
+// v1.11.0 run-#50 cycle (Task ID 44) — R2: the CMake source-coverage gate
+// (I25), the fyne-pin contract, and the roadmap version-freeness contract.
+//
+// The run-#49 class: a CMake target/file relation that only the hosted
+// runner could observe (no local Qt toolchain exists), killing the Qt host
+// cmake configure on BOTH OSes before any compilation. Root cause (P1
+// audit, pinned before any edit): ui/qt/CMakeLists.txt called
+// qt_add_resources(sheytan-ui-acceptance ...) BEFORE add_executable
+// defined that target. Qt 6.8.2's qt6_add_resources branches on
+// if(TARGET ${outfiles}) and, when the target is absent, silently takes
+// its qrc-file branch instead — parsing every remaining argument,
+// including the BASE value ".../ui/qt/style" (an existing DIRECTORY), as
+// a .qrc path; configure died inside Qt6CoreMacros.cmake (:317 file READ /
+// :330 configure_file) exactly as the run-#49 annotations quote.
+// These assertions make the class die locally, statically, with no Qt
+// toolchain: target-reference order (I25-3), FILES resolution at their
+// declared BASE (I25-1), and orphan/phantom coverage for every file under
+// ui/qt (I25-2). "Exactly one target" is refined to "claimed by >= 1
+// target, zero orphans, zero phantoms" because the style resources are
+// intentionally embedded into BOTH sheytan-ui and sheytan-ui-acceptance
+// (I24 — the harness/shipped divergence class).
+// ---------------------------------------------------------------------------
+
+function loadQtCmakeLists() {
+  return readFileSync(join(repoRoot, "ui", "qt", "CMakeLists.txt"), "utf8");
+}
+
+// Extract each complete `name(...)` command block with balanced parens.
+function extractQtCommandBlocks(cmake, names) {
+  const blocks = [];
+  const re = new RegExp(`(^|\\n)\\s*(${names.join("|")})\\s*\\(`, "g");
+  let m;
+  while ((m = re.exec(cmake)) !== null) {
+    const open = m.index + m[0].length - 1;
+    let depth = 0;
+    let end = cmake.length - 1;
+    for (let i = open; i < cmake.length; i++) {
+      if (cmake[i] === "(") depth++;
+      else if (cmake[i] === ")") {
+        depth--;
+        if (depth === 0) { end = i; break; }
+      }
+    }
+    blocks.push({ name: m[2], body: cmake.slice(m.index, end + 1), start: m.index });
+    re.lastIndex = end;
+  }
+  return blocks;
+}
+
+// Tokenize a command body: quoted args stay whole, comments dropped.
+function cmakeArgs(body) {
+  const noComments = body
+    .split("\n")
+    .filter((l) => !/^\s*#/.test(l))
+    .join("\n");
+  return (noComments.match(/"[^"]*"|[^\s()]+/g) ?? []).map((t) =>
+    t.replace(/^"|"$/g, ""),
+  );
+}
+
+const QT_SOURCE_DIR = join(repoRoot, "ui", "qt");
+
+function resolveQtPath(p) {
+  const expanded = p.replace(/\$\{CMAKE_CURRENT_SOURCE_DIR\}/g, QT_SOURCE_DIR);
+  return isAbsolute(expanded) ? expanded : join(QT_SOURCE_DIR, expanded);
+}
+
+test("run-#50 R2/I25-3: resource blocks reference only targets defined BEFORE the reference (run-#49 configure class)", () => {
+  const cmake = loadQtCmakeLists();
+  const defined = new Set();
+  const offenders = [];
+  const re = /^\s*(qt_add_executable|add_executable|qt_add_library|add_library|qt_add_qml_module|qt_add_resources|qt_add_big_resources)\s*\(\s*([A-Za-z0-9_-]+)/gm;
+  let m;
+  while ((m = re.exec(cmake)) !== null) {
+    const [, cmd, first] = m;
+    if (cmd === "qt_add_executable" || cmd === "add_executable" || cmd === "qt_add_library" || cmd === "add_library") {
+      defined.add(first);
+    } else if (!defined.has(first)) {
+      offenders.push(`${cmd}(${first} ...) references an undefined target (offset ${m.index})`);
+    }
+  }
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    "I25: every qt_add_qml_module/qt_add_resources block must attach to an ALREADY-defined target " +
+      "(run #49 died hosted exactly here: the sheytan-ui-acceptance resources block preceded its " +
+      "add_executable, so Qt6CoreMacros.cmake took the qrc-file branch and configure_file died on " +
+      "the style DIRECTORY at Qt6CoreMacros.cmake:330/:317): " +
+      offenders.join(" | "),
+  );
+  // The two targets the style parity contract depends on must exist at all.
+  assert.ok(defined.has("sheytan-ui"), "sheytan-ui must be defined");
+  assert.ok(defined.has("sheytan-ui-acceptance"), "sheytan-ui-acceptance must be defined");
+});
+
+test("run-#50 R2/I25-1: every qt_add_resources FILES entry resolves to an existing FILE at its declared BASE", () => {
+  const cmake = loadQtCmakeLists();
+  const blocks = extractQtCommandBlocks(cmake, ["qt_add_resources"]);
+  assert.ok(blocks.length >= 2, "the sheytan style must be embedded into both targets");
+  const offenders = [];
+  for (const b of blocks) {
+    const args = cmakeArgs(b.body);
+    const baseIdx = args.indexOf("BASE");
+    const filesIdx = args.indexOf("FILES");
+    if (baseIdx === -1 || filesIdx === -1) {
+      offenders.push(`${b.body.split("(")[0].trim()}: missing BASE or FILES`);
+      continue;
+    }
+    const base = resolveQtPath(args[baseIdx + 1]);
+    for (const f of args.slice(filesIdx + 1)) {
+      if (/^[A-Z][A-Z_]*$/.test(f)) break; // next keyword — FILES list ended
+      const p = join(base, f);
+      if (!existsSync(p))
+        offenders.push(`${f}: referenced by ${b.name} under BASE ${args[baseIdx + 1]} but MISSING from the tree`);
+      else if (!statSync(p).isFile())
+        offenders.push(`${f}: referenced by ${b.name} but resolves to a DIRECTORY (the run-#49 class shape)`);
+    }
+  }
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    "I25: every FILES entry must exist at its BASE (a referenced-but-missing entry is an automatic defect): " +
+      offenders.join(" | "),
+  );
+});
+
+// The closed exception list: files that intentionally belong to no target.
+// style/qmldir is the ONLY member — the style descriptor 8c3c74e kept out of
+// the embedded FILES list; its runtime fate is decided by the hosted
+// acceptance theme-adoption gates, never by this static gate.
+const I25_ORPHAN_EXCEPTIONS = new Set(["style/qmldir"]);
+
+test("run-#50 R2/I25-2: every source file under ui/qt/{qml,src,style,tests} is claimed by a target — nothing orphaned, nothing phantom", () => {
+  const cmake = loadQtCmakeLists();
+  const claimed = new Set();
+  for (const b of extractQtCommandBlocks(cmake, [
+    "qt_add_qml_module",
+    "qt_add_executable",
+    "add_executable",
+    "qt_add_resources",
+  ])) {
+    const args = cmakeArgs(b.body);
+    const baseIdx = args.indexOf("BASE");
+    const filesIdx = args.indexOf("FILES");
+    if (b.name === "qt_add_resources" && baseIdx !== -1 && filesIdx !== -1) {
+      // FILES entries are relative to the block's BASE, not to ui/qt/
+      const base = resolveQtPath(args[baseIdx + 1]);
+      for (const f of args.slice(filesIdx + 1)) {
+        if (/^[A-Z][A-Z_]*$/.test(f)) break;
+        claimed.add(join(base, f));
+      }
+      continue;
+    }
+    for (const t of args) {
+      if (/\.(qml|cpp|h)$/i.test(t)) claimed.add(resolveQtPath(t));
+    }
+  }
+  const offenders = [];
+  // phantom: every claimed path must exist on disk
+  for (const p of claimed)
+    if (!existsSync(p)) offenders.push(`phantom: ${p} is referenced by CMake but absent from the tree`);
+  // orphan: every on-disk source file must be claimed (>= 1 target)
+  for (const dir of ["qml", "src", "style", "tests"]) {
+    const abs = join(QT_SOURCE_DIR, dir);
+    if (!existsSync(abs)) continue;
+    for (const f of readdirSync(abs)) {
+      if (!/\.(qml|cpp|h|qmldir)$/i.test(f)) continue;
+      const rel = `${dir}/${f}`;
+      const absP = join(QT_SOURCE_DIR, rel);
+      if (I25_ORPHAN_EXCEPTIONS.has(rel)) continue;
+      if (!claimed.has(absP) && /\.(qml|cpp|h)$/i.test(f))
+        offenders.push(`orphan: ui/qt/${rel} belongs to NO CMake target`);
+      else if (f === "qmldir" && !I25_ORPHAN_EXCEPTIONS.has(rel))
+        offenders.push(`orphan: ui/qt/${rel} is an unregistered qmldir`);
+    }
+  }
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    "I25: zero phantom and zero orphaned ui/qt sources allowed (style files live in BOTH targets by design, I24): " +
+      offenders.join(" | "),
+  );
+});
+
+test("run-#50 R4: the fyne pin is declared in go.mod + go.sum and the isolated spike entry exists", () => {
+  const goMod = readFileSync(join(repoRoot, "go.mod"), "utf8");
+  assert.match(
+    goMod,
+    /^[ \t]*fyne\.io\/fyne\/v2 v2\.8\.2$/m,
+    "go.mod must pin fyne v2.8.2 (latest verified stable — run-#50 P1 source: GitHub releases API, published 2026-10-12; the ONLY dependency change allowed this cycle)",
+  );
+  const goSum = readFileSync(join(repoRoot, "go.sum"), "utf8");
+  assert.match(
+    goSum,
+    /^fyne\.io\/fyne\/v2 v2\.8\.2 /m,
+    "go.sum must carry the fyne v2.8.2 module hash",
+  );
+  assert.ok(
+    existsSync(join(repoRoot, "ui", "fyne")),
+    "ui/fyne/ must exist — the one-Go-UI migration's package",
+  );
+  const spike = join(repoRoot, "cmd", "fyne-spike", "main.go");
+  assert.ok(existsSync(spike), "cmd/fyne-spike/main.go must exist — the isolated launch entry");
+  const mainGo = readFileSync(spike, "utf8");
+  assert.match(
+    mainGo,
+    /"github\.com\/Parsaetak\/SHEYTAN-local-agent\/ui\/fyne"/,
+    "the spike entry must import the ui/fyne package",
+  );
+});
+
+test("run-#50 R3: docs/ROADMAP.md is version-free and carries the Fyne end-state (C18/C19)", () => {
+  const roadmap = readFileSync(join(repoRoot, "docs", "ROADMAP.md"), "utf8");
+  const versionTokens = roadmap.match(/\b[0-9]+\.[0-9]+(?:\.[0-9]+)?\b/g) ?? [];
+  assert.deepStrictEqual(
+    versionTokens.slice(0, 8),
+    [],
+    `C18: the roadmap carries capabilities with honest status only — NO version numbers (version history lives in changelog.md alone); first offenders: ${versionTokens.slice(0, 8).join(", ")}`,
+  );
+  assert.match(roadmap, /Fyne/, "C19: the Fyne end-state must be present");
+  assert.match(roadmap, /ONE Go UI/, "C19: the end-state is ONE Go UI replacing every other UI language");
+  for (const phase of ["spike", "parity", "retirement"])
+    assert.ok(
+      roadmap.toLowerCase().includes(phase),
+      `C19: the migration program must carry the "${phase}" phase`,
+    );
 });

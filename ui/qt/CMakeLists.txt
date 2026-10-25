@@ -67,13 +67,6 @@ qt_add_resources(sheytan-ui sheytan_style
           ComboBox.qml CheckBox.qml Switch.qml Slider.qml ProgressBar.qml
           ScrollBar.qml Menu.qml MenuItem.qml ItemDelegate.qml
 )
-qt_add_resources(sheytan-ui-acceptance sheytan_style
-    PREFIX "/sheytanstyle"
-    BASE "${CMAKE_CURRENT_SOURCE_DIR}/style"
-    FILES Button.qml ToolButton.qml TextField.qml TextArea.qml
-          ComboBox.qml CheckBox.qml Switch.qml Slider.qml ProgressBar.qml
-          ScrollBar.qml Menu.qml MenuItem.qml ItemDelegate.qml
-)
 
 target_link_libraries(sheytan-ui PRIVATE
     Qt6::Core Qt6::Gui Qt6::Network Qt6::Quick Qt6::QuickControls2 Qt6::Qml
@@ -114,3 +107,22 @@ target_include_directories(sheytan-ui-acceptance PRIVATE src)
 # Network headers compiled into this target); the QuickControls2 line
 # below it is the run-#44 C1083 fix and stays.
 target_link_libraries(sheytan-ui-acceptance PRIVATE Qt6::Core Qt6::Gui Qt6::Network Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Test)
+
+# v1.11.0 run-#50 R1 (Task ID 44): the acceptance twin of the style block
+# MOVED BELOW add_executable(sheytan-ui-acceptance). The #48 tree called
+# qt_add_resources(sheytan-ui-acceptance ...) while the target was still
+# undefined — Qt 6.8.2's qt6_add_resources branches on if(TARGET ${t}) and
+# silently took its qrc-file branch instead, parsing the BASE value (an
+# existing directory) as a .qrc: configure died inside Qt6CoreMacros.cmake
+# (:317/:330) on BOTH OSes before any compilation (run #49). The block is
+# byte-identical apart from its position; the target now exists at the
+# reference point, the FILES branch runs, and the same style is embedded
+# into both hosts (I24). Gate-verified by scripts/installer-contract.test.mjs
+# run-#50 R2/I25-3 (RED at HEAD, green after this reorder).
+qt_add_resources(sheytan-ui-acceptance sheytan_style
+    PREFIX "/sheytanstyle"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/style"
+    FILES Button.qml ToolButton.qml TextField.qml TextArea.qml
+          ComboBox.qml CheckBox.qml Switch.qml Slider.qml ProgressBar.qml
+          ScrollBar.qml Menu.qml MenuItem.qml ItemDelegate.qml
+)

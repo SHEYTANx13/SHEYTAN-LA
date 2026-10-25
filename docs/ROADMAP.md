@@ -3,10 +3,14 @@
 ## Purpose
 
 This roadmap states the capability-driven direction of SHEYTAN-LA after the
-2026-09 R&D reset. One rule governs the whole document: **future phases are
-never marked complete because they are documented.** A capability is DONE
-only when deterministic tests, race gates, integration or E2E evidence prove
-it in this repository.
+R&D reset. One rule governs the whole document: **future phases are never
+marked complete because they are documented.** A capability is DONE only
+when deterministic tests, race gates, integration or E2E evidence prove it
+in this repository.
+
+This file carries NO version numbers. Capabilities and goals carry honest
+status only; the release history — which release delivered which capability,
+with which evidence — lives in exactly one place: `changelog.md`.
 
 Artifact truth (single authority per artifact):
 
@@ -17,71 +21,38 @@ Artifact truth (single authority per artifact):
 
 Motto: **"The model proposes. The tools execute. The laboratory verifies."**
 
-## Shipped baseline (compact)
+## Delivered capabilities (compact, status-only)
 
-**v1.10.12 is the shipped baseline; release evidence is in changelog.md.**
-(v1.10.12 is the documented busy-retry contract release: the hosted
-burst failure's 0.60 s arithmetic (run 39019535982) proved the client's
-fixed 3-attempt busy budget — not the server — was the defect, and
-dialEndpoint now implements the documented Microsoft Named Pipe Client
-pattern — retry CreateFile while WaitNamedPipe reports an instance
-becoming available — bounded by a 10 s busy-dial deadline; the same
-release completes THIS shipped-baseline section through v1.10.x and
-corrects the stale Phase 2 status sentence. v1.10.11 is the kernel32
-binding repair + non-panicking dial path
-release: the win-go-test-headless process panic root-caused to a wrong
-lazy-DLL module name ("winbase.dll" — a header, not a DLL) and fixed at
-the binding (kernel32.dll, the documented exporting module), with
-Find()-based resolution so a transport dial fails with an error instead
-of killing the host process, pinned by a Windows-gated
-proc-resolution regression test; v1.10.10 — the instance-invariant +
-client pipe-busy contract release, the Windows named-pipe instance race
-repaired on BOTH sides of the transport contract plus the operator's
-docs condensation order — is its parent release. v1.10.9 — the smoke
-path canonicalization + evidence-named Windows
-transport repair, whose run 38919925013 took Linux x64 FULLY GREEN
-end-to-end for the first time — is its grandparent. v1.10.5 — the
-live-stream + Qt-host-build release — closed the Linux Qt host build's
-missing OpenGL development dependency — the run 38584769607 step 22
-blocker — and fixed the activity-stream fragmentation defect that froze
-the desktop live bubble on real generations; v1.10.4 — the stress-gate
-retarget — is its parent release; the per-release evidence stays in
-changelog.md.)
+Status: **DELIVERED** — every row below is proven by current repository
+behaviour, code, tests or CI; per-release evidence for each row lives in
+`changelog.md` and is deliberately not duplicated here.
 
-v1.8 delivered, with per-release evidence in `changelog.md`: the adaptive
-runtime (task classification, tier system, context planning), the staged
-native-engine program with execution receipts, GPU transaction authority,
-the deterministic `dataAnalysis` authority, the zero-session send contract,
-the pause/edit/resume run lifecycle, sessions/recovery/continuum machinery,
-the Coding Lab, the scheduler, custom tools, the downloader/updater, the
-Governor, and the skill stores. This roadmap deliberately carries NO detailed
-v1.8.x release history — that history lives in exactly one place.
-
-v1.9 delivered, with per-release evidence in `changelog.md`: the AI System
-object with frozen execution binding; the durable Goal engine; approval
-authority with risk classification and the CallKey decision ledger; bounded
-sub-agents and delegation (`internal/multiagent/subtasks`); `repo_nav`
-deterministic repository navigation; progressive disclosure hardening; the
-loopback activity transport with capability token; engine/run admission
-coordination (EngineAdmission, UpdateEngineNow, the admission boundary); the
-zero-session send contract; the measured live-stream/TTFT engine repair
-(19.08 → 3.66 ms/token, prefill parity); the Governor race-gate repair; the
-performance baseline framework (`internal/perf`, `cmd/shtn-perf`). This
-roadmap deliberately carries NO detailed v1.9.x release history — that
-history lives in exactly one place.
-
-v1.10 delivered, with per-release evidence in `changelog.md`: the full
-Qt/QML host migration (Wails removed); the Go core + Qt host architecture
-over the secured localipc transport; the repository reshape; the Windows
-named-pipe transport repair chain (W1–W4, W-C, isVanishedPeer, the
-Close-timer stop, the W-INV structural instance invariant, the
-WaitNamedPipe client contract, the kernel32 binding, the non-panicking
-dial path); the CI visibility system (tee'd logs, failure summaries,
-anonymous annotations); the LF policy and gofmt gates; the green browser
-E2E suite; the stress gate; the fully-green Linux pipeline (three
-consecutive runs); the version-free docs order; Linux packaging and ZIP
-proven. This roadmap deliberately carries NO detailed v1.10.x release
-history — that history lives in exactly one place.
+* The adaptive runtime: task classification, tier system, context planning;
+  the staged native-engine program with execution receipts; GPU transaction
+  authority; the deterministic `dataAnalysis` authority; the zero-session
+  send contract; the pause/edit/resume run lifecycle; sessions, recovery and
+  continuum machinery; the Coding Lab; the scheduler; custom tools; the
+  downloader/updater; the Governor; the skill stores.
+* The AI System Builder layer: the AI System object (durable, user-owned,
+  CRUD + clone + export + import + activation, safe default system); the
+  frozen execution binding (a mid-run edit can never mutate a running
+  configuration); the durable Goal engine (phases, honest progress,
+  checkpoints, bounded replanning, terminal goals stay terminal); the
+  approval authority (deterministic risk classification, exact call
+  identity, bounded decision ledger, deny-by-default gate on goal runs);
+  bounded sub-agents and delegation; deterministic repository navigation
+  (`repo_nav`); progressive disclosure hardening.
+* The desktop migration: the Go core + Qt host architecture over the
+  secured local transport; the full Qt/QML host (Wails removed); the
+  Windows named-pipe transport repair chain; the CI visibility system
+  (tee'd logs, failure summaries, anonymous annotations); the LF policy and
+  gofmt gates; the green browser E2E suite; the stress gate; the fully
+  green Linux pipeline; Linux packaging and ZIP structural proof.
+* The theme system: ONE theme token source (a QML module singleton) shared
+  by every authored view and by the QuickControls2 custom style — one
+  palette, one spacing scale, one typography scale, one corner-radius
+  scale; every authored motion gated behind the persisted
+  animationsEnabled setting.
 
 ## Evidence labels used by the backlog
 
@@ -99,356 +70,101 @@ movement happens in this file together with the evidence pointer.
 
 ---
 
-## v1.9.6 — the FINAL 1.9.x maintenance release (2026-10-11) — the R&D direction adopted, NO premature scope movement
+## The ONE-UI migration program — **ACTIVE (spike phase)**
 
-v1.9.6 advances NO v1.9 scope: the automatic goal-to-subtask fan-out,
-the protected-evaluation anti-hack guard and the MCP runtime-registry
-wiring remain FUTURE WORK. v1.9.6 repairs the two authoritative
-v1.9.5 CI failures at their roots — the Windows admission-hostage 503
-regression (the engine-mutation claim now lives at the DESTRUCTIVE
-boundary of the variant transaction; network/download phases are
-claim-free; pinned by `internal/llm/admission_boundary_v196_test.go`)
-and the Linux native-window smoke (the documented bare-Xvfb
-software-renderer configuration, owned by the smoke step; the gate is
-unchanged) — and adopts the R&D architecture decision
-(`Parsaetak/Contents` → `Research-and-Development` →
-`SHEYTAN-LA-2026-10-11.md`) as the direction for the next major cycle:
-Go stays the single orchestration authority, C++ owns numerical
-inference (promotion gated on capability/parity evidence — the default
-is NOT flipped in v1.9.6), Qt (C++/QML) is the primary UI target for
-v1.10+ over a typed coarse-grained IPC boundary. The first vertical
-slice ships as code: `internal/perf` + `cmd/shtn-perf`, the R&D Phase 0
-measurement baseline framework with honest NOT-MEASURED semantics.
-Evidence: `changelog.md` v1.9.6, `worklog.md` (v1.9.6 session),
-`internal/{api,llm}/admission_v195_test.go`,
-`internal/llm/admission_boundary_v196_test.go`,
-`internal/updater/install.go` (`DownloadEngineArchiveStaged`),
-`internal/perf/`, `cmd/shtn-perf/`.
+**End state (the operator's standing goal):** ONE Go UI — built with Fyne —
+replacing every other UI language, launched and controlled from the one Go
+CLI, one codebase unified across screen sizes. The desktop product stops
+depending on a second UI language entirely when the migration completes;
+until then the Qt host stays the shipped desktop surface and is never
+stubbed, masked or weakened to make the migration look further along than
+the evidence says it is.
 
-## v1.10.0 — the R&D migration plan (phases, gates, dependencies, risks) — v1.10.0 DELIVERED the first slice
+**Phases (each gates the next; nothing is complete by documentation):**
 
-Authoritative source: `SHEYTAN-LA-2026-10-11.md` (§8 migration roadmap,
-§9 risks, §10 measurement framework). This section is the executable
-plan; NO phase below advances until its entry gate is met in this
-repository.
+* **Spike — CURRENT.** An isolated, compiling Fyne shell exists as code:
+  `ui/fyne` (the product theme tokens mirrored from the ONE Qt token
+  source; a size-driven shell window; navigation; one placeholder panel;
+  reflow on resize, no fixed pixel geometry) plus `cmd/fyne-spike` (the
+  isolated launch entry). The spike is build-tag isolated (`fyne`), never a
+  required hosted gate, and the shipped binary, the Qt host and the hosted
+  workflow are untouched by it. Status honestly recorded per the
+  verification matrix: the spike compiles and links locally for the native
+  OS; the cross-platform compile for the second desktop OS is UNVERIFIED in
+  the authoring environment (no cross C toolchain available) and is exactly
+  the kind of claim only a hosted or operator run may settle next.
+* **Parity — NOT STARTED.** The Fyne surface reaches the Qt host's
+  capability surface row by row, each row landing with its own acceptance
+  assertion; the parity manifest grows a Fyne target column per row; the
+  multi-screen-size unification (one codebase from small windows to full
+  desktop) is part of this phase's definition of done.
+* **Qt retirement — NOT STARTED.** The Qt host is removed only after the
+  parity phase is proven hosted AND the operator's physical retest passes
+  on every platform; retirement is a deletion with evidence, never a
+  degradation.
 
-**v1.10.0 delivery status (read literally):** the standing
-UpdateEngineNow admission-seam item is CLOSED (the same-tag/scheduled
-transaction now takes the same destructive-boundary claim; pins:
-`internal/llm/admission_updatenow_v1100_test.go`). Phase 0 recorded its
-first committed artifact (`baselines/perf-hosted-ci-v1.10.0.json`,
-hosted-CI labeled). Phase 1 collected evidence but did NOT flip the
-default (below). The Qt/IPC seam is DEFINED in ARCHITECTURE.md —
-documentation only, nothing ships.
-
-**Phase 0 — measurement baseline (IN PROGRESS).**
-Instrument: `internal/perf` + `cmd/shtn-perf` (shipped). Done: the
-hosted-CI posture captured (cold start, idle/peak memory measured;
-generation-path metrics honestly NOT MEASURED with per-metric reasons).
-v1.10.2: host classification is FAIL-CLOSED — `--host-class
-physical|hosted` is mandatory (no default), a physical claim over
-detected hosted-CI markers is refused, `hostedCI` is derived from the
-declared class, and artifacts now also record RAM, hostname and the
-evidence list (see `baselines/perf-hosted-v1.10.2.json`).
-Remaining: capture the physical Windows baseline on real consumer
-hardware (cold start to interactive, warm TTFT, streaming latency,
-idle/peak memory, tool round-trip, file output overhead) with the
-host/model/quantization metadata the envelope requires; hosted-CI
-numbers stay labeled hosted-CI. GATE: a committed physical baseline
-artifact; every subsequent change must beat or explain its delta
-against it. DEPENDENCY: a real Windows host + a serving engine binary +
-a real model. RISK: VM-vs-physical divergence — mitigated by the
-envelope's hosted-CI label and limitation fields.
-
-**Phase 1 — promote the native C++ engine to the preferred backend
-where evidence proves it.** The promotion MECHANISM exists today
-(`NativeBackendEnabled` selects native-first with managed llama.cpp as
-the automatic fallback — see `internal/api/selection.go`); v1.10.0 does
-NOT flip the default. Evidence collected in v1.10.0: native C++ CTest
-13/13 on the hosted Linux CI-class host including bit-for-bit
-prefill/KV parity; the browser E2E stack exercises the native engine
-end-to-end with the canonical fixture model. REMAINING GATE (all items
-required before the default flip, in this order):
-
-1. warm TTFT at or better than managed llama.cpp, measured on physical
-   Windows target hardware through the Phase 0 harness (the SAME host,
-   model, quantization and context for both backends, nearest-rank
-   P50/P95 recorded in the envelope);
-2. full supported-model/request/streaming/cancellation/sampling
-   coverage green through the runtime contract on that host;
-3. real generation with first-token visibility, cancellation and error
-   recovery proven on the packaged desktop path;
-4. the committed physical Phase 0 baseline artifact for reference.
-
-DEPENDENCY: Phase 0 numbers; the engine lease/manifest authority stays
-the ONE installer authority. RISK: numerical drift — mitigated by the
-mandatory parity gates; scope creep — mitigated by the phase gate (no
-new features until targets).
-
-**Phase 2 — Qt (C++/QML) shell over the unchanged Go core.**
-v1.10.1 STATUS: IMPLEMENTED at the chat/sessions surface — the Wails
-shell is removed and the shipped desktop pair is the Go core + the
-native Qt Quick/QML host (`ui/qt`) over `internal/localipc` (per-user
-Unix socket / named pipe, transport-level identity checks, versioned
-keyed handshake, bounded framing). Linux proof on the session host:
-real visible window + keyed handshake + real core interaction + clean
-WM_DELETE_WINDOW close (scripts/qt-desktop-smoke.sh G1-G5) and the
-QtTest live-answer acceptance (real QML + real core). Windows CI is
-wired to the same gates (Qt 6.8.2 MSVC build + windeployqt + Qt
-acceptance + windowed runtime smoke) and remains NOT VERIFIED until a
-green hosted run exists.
-v1.10.3 STATUS: Qt IPC HARDENED. (a) The CoreClient HTTP path completes
-under real framing — Content-Length completion (no hang when the server
-holds the socket open), close-delimited kept, oversized heads/bodies
-refused deterministically — and the handshake requires sheytan-ipc/1
-(name AND version) before connected. Ten QtTest framing/contract slots
-pin these byte-level rules; on the v1.10.2 client 9 of 10 FAIL. (b) The
-sessions wire contract is parsed as the core serves it (bare array,
-msgCount) and pinned by Go field-contract tests. (c) The smoke aborts
-correctly (fail-before-define fixed), refuses WM-less G3, and the Linux
-job now installs libx11-dev + openbox and passes the REAL staged paths
-(the v1.10.2 wiring survived only via silent fallbacks); the Windows
-acceptance staging resolves the MSVC Release/ layout and throws when
-absent. Windows CI remains NOT VERIFIED until a green hosted run exists
-(the v1.10.2 leftovers that would have failed the first run — R1, R3,
-R4, R16 — are repaired; nothing here flips that status without a run).
-v1.10.5 STATUS: the run 38584769607 step-22 blocker (`Build Qt host
-(Linux)`) was reproduced locally with the workflow's EXACT command
-against the pinned Qt 6.8.2 aqtinstall layout — `Could NOT find OpenGL`
-(WrapOpenGL/Qt6Gui NOT FOUND) — and root-caused to the workflow's
-missing GL development packages; the workflow now installs the glvnd
-dev stack + mesa-common-dev + libxkbcommon-dev, and the exact command
-configure+builds `sheytan-ui` and `sheytan-ui-acceptance` (exit 0) with
-the full Qt live-answer acceptance suite green against the real core
-(14/14), which ALSO exposed and fixed a REAL product defect: the Qt
-client's refusal of RFC6455 fragmented activity frames (the hub's
-1024-byte write buffer fragments every large event) froze `liveText()`
-on every real long-context run — reassembly is now implemented with
-the violation refusals kept loud. The Windows `Go verification`
-failure — UNIDENTIFIED when this sentence was written at v1.10.5 — has
-since been ROOT-CAUSED and repaired across v1.10.7–v1.10.12: the CI
-visibility system surfaced the real failing lines (v1.10.7), the
-vanished-peer classification and the Close-timer stop removed the false
-fatal accept failures (v1.10.8–v1.10.9), the W-INV structural instance
-invariant and the WaitNamedPipe client contract closed the
-ERROR_PIPE_BUSY race on both sides of the transport (v1.10.10), the
-kernel32 binding repair + non-panicking dial removed the process panic
-(v1.10.11), and the deadline-bounded busy dial replaced the fixed
-3-attempt budget that the hosted burst failure's 0.60 s arithmetic
-proved was the remaining client-side defect (v1.10.12 — compile-level
-local proof only; the hosted run is the runtime authority). Windows CI
-remains NOT VERIFIED until a green hosted run exists; the run's own
-step log is the arbiter.
-v1.10.13 STATUS: the hosted frontier MOVED and the evidence boundary is
-now structural. Run 39024607296 (v1.10.12, commit b8817d95) proved the
-Windows chain THROUGH STEP 21: step 14 "Go verification" green for the
-FIRST time ever (the deadline-bounded busy-retry dial budget held under
-the 8-worker burst pin in both suites — the v1.10.7–v1.10.12 transport
-repair chain is hostedly PROVEN), and steps 17–21 (engine variant
-assets, Windows resources, executable build + console smoke probe,
-executable verify, Qt 6.8.2 install) green on their FIRST execution.
-The chain is BLOCKED AT STEP 22 "Build Qt host (Windows)" — failed in
-41 s, exit 1, with NO readable evidence (one generic exit-code
-annotation at a nominal line; the step log admin-gated, 403); the exact
-failing command inside it is UNKNOWN and nothing claims otherwise,
-pending the visibility this release installs (the if:failure pair moved
-to the job's end, every post-verification command teed and asserted,
-the failing gate named in the summary and annotations — v1.10.13's
-W-VIS). The publish job executes ONLY on tag pushes
-(if: startsWith(github.ref, 'refs/tags/v')) — never in any run so far —
-so the first complete pipeline pass requires the TWO-RUN PROTOCOL: main
-green (run #1), then the v1.10.13 tag (run #2), whose publish job
-executes for the first time in the repository's history. Windows CI
-remains NOT VERIFIED until a green hosted run exists; the installed
-visibility is the arbiter of the next red.
-Remaining surfaces NOT yet migrated to Qt (honest): AI Systems
-editing/import, Goals,
-Coding Lab, Net Search page, repository index, tasks/automations,
-downloads/diagnostics panels — those remain on the documented
-headless/browser mode. The Go API remains the ONLY authority — the
-shell grows no second run registry, session store, tool registry,
-downloader, scheduler or policy authority. DEPENDENCY: Phase 1 (the
-inference path the shell renders must be settled first); Qt
-deployment/packaging evidence (Qt 6.8.2 pinned; QML-aware deployment
-via the official CMake deploy script / windeployqt). RISK: Qt
-learning/packaging cost — mitigated by the thin shell; IPC latency — to
-be measured with the Phase 0 harness (shared memory / zero-copy only
-where profiling demonstrates a payload-size gain).
-
-**Phase 3 — measured refinements + optional WinUI 3.** Only if
-Windows-specific measurements justify a second shell; C# never becomes
-the orchestrator. GATE: the Phase 0 harness shows a concrete,
-reproduced win the Qt path cannot reach.
-
-**Phase 4 — multi-OS polish.** Linux and macOS stay first-class under
-the Qt shell; the same performance discipline applies everywhere.
-GATE: per-OS baselines recorded with the same envelope.
-
-## v1.9.5 — hardening release (2026-10-11) — NO scope movement
-
-v1.9.5 advances NO v1.9 scope: the automatic goal-to-subtask fan-out,
-the protected-evaluation anti-hack guard and the MCP runtime-registry
-wiring remain FUTURE WORK. v1.9.5 repairs the failed v1.9.4 release
-attempt (the CI lint blocker and the acceptance harness's false-proof
-paths), closes the v1.9.4 loopback transport's least-privilege and
-authentication gaps (single-route listener + per-server capability
-token + strict origin/host validation + visible desktop degradation),
-makes the engine/run admission coordination atomic (the EngineAdmission
-seam), and enforces the identifier-free ordinary-log contract tree-wide.
-Every change ships with a focused regression test; the Windows desktop
-UI acceptance gate is wired into CI as a required step and its first
-hosted execution is explicitly UNVERIFIED from the authoring
-environment. Evidence: `changelog.md` v1.9.5, `worklog.md` (v1.9.5
-session), `internal/api/loopback_v195_test.go`,
-`internal/{api,llm}/admission_v195_test.go`, `src/loopback-origin.test.ts`.
-
-## v1.9.4 — reliability release (2026-10-10) — NO scope movement
-
-v1.9.4 advances NO v1.9 scope: the automatic goal-to-subtask fan-out, the
-protected-evaluation anti-hack guard and the MCP runtime-registry wiring
-remain FUTURE exactly as bounded below (docs alone are never evidence).
-The release repairs reliability only: the desktop activity-transport
-root cause (the packaged builds' activity WebSocket was unreachable —
-now loopback-served by the same authority), the settled-reply E2E proof
-selector, an engine-transaction/run coordination gate, honest run
-metrics, an opt-in sanitized stream trace and the real-Windows
-acceptance harness. Evidence: `changelog.md` v1.9.4,
-`worklog.md` (v1.9.4 session).
+The migration never forks the product: ONE core, ONE transport, ONE theme
+token source — the Fyne shell binds the SAME tokens and the SAME live
+transport the shipped desktop uses, or it does not ship.
 
 ---
 
-## v1.9 — AI System Builder + long-horizon agentic engineering — **CURRENT (partial; boundary below)**
+## AI System Builder + long-horizon agentic engineering — **CURRENT (partial; boundary below)**
 
-v1.9 turns the runtime into the first real **AI System Builder** layer and
-adds the durable long-horizon Goal engine, bounded delegation, the approval
-authority, and deterministic repository navigation — always by EXTENDING the
-existing one-authority runtime, never by duplicating it.
+The runtime is the first real **AI System Builder** layer with the durable
+long-horizon Goal engine, bounded delegation, the approval authority, and
+deterministic repository navigation — always by EXTENDING the existing
+one-authority runtime, never by duplicating it. The delivered surface:
+`internal/aisystem` (durable store under `<DataDir>/ai-systems/`, atomic
+writes, bounded, deterministic ordering, corruption-tolerant; stable
+`systemId`, monotonic `revision`; CRUD + clone + export + import +
+activation with correct active-system fallback; reserved default system
+byte-identical to the pre-migration runtime; HTTP `/api/systems` + item /
+activate / clone / export / import; the full `internal/aisystem` test
+battery); the frozen execution binding (instructions, model override,
+reasoning ladder, tool surface constrained server-side at offer AND
+execution, skills surface, approval policy — published as an `ai_system`
+activity and travelling on the run response); the durable Goal engine
+(`internal/goal`, phases understanding → planning → acting → verifying →
+completed with waiting/exception states, honest progress, checkpoints,
+bounded replanning, recoverable tool failures block the STEP, turn budget
+parks instead of running away, boot recovery never falsely running);
+`internal/approval` (the ONE deterministic risk classification from tool
+identity + normalized arguments; policy vocabulary auto / ask-risky default
+/ ask-all; exact `CallKey` identity with a bounded decision ledger; the
+per-run `agent.WithApprovalGate` seam); the delegation engine
+(`internal/multiagent/subtasks`, explicit budgets, read-only parallelism
+that can only tighten, mutating work serialized, no nested spawning,
+deterministic merge); `repo_nav` deterministic navigation through the SAME
+path-safety authority as `repo_search`; progressive disclosure hardening;
+the zero-session reload persistence repair with its deterministic E2E
+regression pair.
 
-### Implemented in v1.9.0 (evidence-backed — D)
-
-* **AI System object (first-class, user-owned).** `internal/aisystem` —
-  durable store under `<DataDir>/ai-systems/` (atomic writes, bounded,
-  deterministic ordering, corruption-tolerant), stable `systemId`, name,
-  monotonic `revision`, instructions, model override, reasoning preference,
-  allowed tool surface, approval policy, skills surface, knowledge/memory/
-  compaction policy, verification policy, timestamps; CRUD + clone + export
-  + import + activation with correct active-system fallback; reserved
-  default system whose behavior is byte-identical to the pre-v1.9 runtime
-  (safe non-destructive migration; fresh installs get exactly one valid
-  default). HTTP: `/api/systems` (+ item/activate/clone/export/import).
-  Tests: `internal/aisystem/aisystem_test.go` (fresh-install default,
-  reload persistence, revision increments, freeze isolation, clone/export/
-  import round trip, reservation, validation bounds, corruption tolerance,
-  deterministic ordering, dangling-pointer repair).
-* **Execution binding.** The ACTIVE system's snapshot is frozen into every
-  run (`systemId` + `systemRevision`) before the run goroutine starts —
-  a mid-run edit can never mutate a running configuration. The binding
-  applies: instructions (system-prefix block), model override, reasoning
-  preference (the EXISTING v1.8.5 ladder: low=0, mid=1024, high=4096,
-  ultra=engine default; explicit request level wins), tool surface
-  (`ToolPolicy.AISystemConstrain` — server-side, offer AND execution, never
-  a prompt-side wish), skills surface (irrelevant/excluded skills never
-  inflate context), approval policy. The frozen identity is published as an
-  `ai_system` activity and travels on the run response. Tests:
-  agent/api suites; frontend view-model tests.
-* **Durable Goal engine.** `internal/goal` — goal state (goalId, original
-  goal, system binding, phase, plan, current step, per-step status/result/
-  evidence, evidence journal, changed files, verification, effort, turn
-  budget, timestamps, terminal state) persisted per goal with atomic
-  writes; phases `understanding → planning → acting → verifying →
-  completed` with waiting/exception states (`waiting_for_approval`,
-  `waiting_for_resource`, `paused`, `blocked`, `failed`); progress derives
-  from actual plan state (no decorative percentages); checkpoints after
-  planning, each completed step, approval boundaries and terminal
-  settlement; bounded replanning (default 2) with the failure evidence kept
-  at goal level (a plan revision can never erase the failure record);
-  recoverable tool failures block the STEP, never destroy the goal; turn
-  budget parks instead of running away; boot recovery marks any goal found
-  live with no run behind it as paused (never falsely running); terminal
-  goals stay terminal. The drive executor binds to the ONE orchestrator
-  with the frozen AI System snapshot. HTTP: `/api/goals` (+ start/pause/
-  resume/cancel/approve/reject). UI: the Goals card in the System Centre.
-  Tests: `internal/goal/goal_test.go` (full journey, honest fallback plan,
-  pause/resume without replaying committed mutations, cancel/reload,
-  recovery idempotence, approval parking + stale rejection, bounded replan,
-  turn budget, reload preservation of plan/approval/evidence, ordering).
-* **Approval authority.** `internal/approval` — the ONE deterministic risk
-  classification (`read-only`, `workspace-write`, `external-network`,
-  `destructive`, `privileged/host-level`) from tool identity + normalized
-  arguments; policy vocabulary (`auto`, `ask-risky` default, `ask-all`);
-  exact normalized call identity (`CallKey`) with a bounded decision ledger
-  (an approval is valid ONLY for the exact call); the per-run
-  `agent.WithApprovalGate` seam (chat/agent runs install none — behavior
-  unchanged; goal runs install a deny-by-default gate so no risky call
-  executes silently). Goal-level approvals persist durably
-  (`waiting_for_approval` + pending exact call survives reload; approve
-  resumes the exact call; rejection is evidence; stale approvals are
-  rejected explicitly). Tests: `internal/approval/approval_test.go`,
-  goal approval tests.
-* **Bounded sub-agents / delegation engine.** `internal/multiagent/subtasks`
-  — executable delegation ALONGSIDE the existing advisory specialists:
-  explicit budgets per subtask (tool surface, read/write capability,
-  context, deadline), read-only parallelism ≤ 2 (the concurrency seam can
-  only tighten, never widen), mutating work strictly serialized, no nested
-  spawning (the executor is a leaf), bounded fan-out (≤ 8), deadlines are
-  honest blocks, results merge deterministically in `subtaskId` order,
-  failures stay failed with unresolved issues, parent receives concise
-  structured evidence (never raw transcripts). Tests:
-  `internal/multiagent/subtasks_test.go`.
-* **Repository navigation.** `repo_nav` (`internal/repoindex/navigation.go`)
-  — deterministic `open` / `navigate` (line/symbol context) / `read`
-  (exact range) / `grep` (exact pattern, honest total match count) over
-  identified sources; every result carries path identity, exact range,
-  provenance and truncation state; entire files are never returned (line +
-  byte bounds); all paths through the SAME path-safety authority as
-  `repo_search` (traversal/absolute/UNC/volume forms refused identically
-  on Linux and Windows). Registered in the runtime next to `repo_search`.
-  Tests: `internal/repoindex/navigation_test.go`.
-* **Progressive disclosure hardening.** The composer's skill activation
-  filters through the AI System's enabled-skills surface; the tool surface
-  constrain applies at offer AND execution; irrelevant skills never inflate
-  the context (the v1.7 progressive markdown-skill disclosure is unchanged).
-* **P0 — the zero-session reload persistence defect (Linux E2E blocker).**
-  Root cause: `run()`'s lazy zero-session `createSession()` executed while
-  the composer still read idle — an enabled-composer observation could
-  legally sample INSIDE the startup window and reload before
-  `POST /api/run` was dispatched (session existed server-side pending;
-  transcript permanently empty). v1.9.0 sets the run-startup state BEFORE
-  any transport work, makes the lazy create preserve it
-  (`keepRunState`), cleans the state on every failure path, and
-  snapshots attachments before transport. The E2E now waits for the
-  deterministic "run left the client" marker (the optimistic user bubble)
-  plus settlement before reloading, and asserts the durable transcript
-  (user AND assistant rows) after reload. Deterministic regression pair:
-  `src/zero-session-send.test.ts` #6/#7.
-
-### v1.9 current/future boundary (NOT implemented — future work, D-planned)
+### Current/future boundary (NOT implemented — future work, D-planned)
 
 * Automatic sub-agent fan-out FROM the goal runner (the delegation engine is
   implemented and tested; the goal loop does not yet decompose steps into
   subtasks automatically).
-* Protected-evaluation anti-hack guard (spec §12): deterministic detection
-  of protected reference/answer artifact access around Lab evaluation
+* Protected-evaluation anti-hack guard: deterministic detection of
+  protected reference/answer artifact access around Lab evaluation
   contexts — designed, not implemented; opt-in and context-aware when it
   lands.
 * MCP runtime wiring (the `internal/mcp` client remains implemented and
   tested but not yet registered into the tool registry; the guarded
-  registration pipeline exists — the v1.9 constraint policy above already
-  covers MCP-class risk classification for when it lands).
+  registration pipeline exists — the constraint policy already covers
+  MCP-class risk classification for when it lands).
 * Oversized-output spool handles for ordinary shell/tool results (the
-  artifact/task-registry machinery exists since v1.7; the automatic spool
-  trigger for arbitrary outputs is future work).
-* Native-engine forward-pass arithmetic optimization BEYOND v1.9.2's
+  artifact/task-registry machinery exists; the automatic spool trigger for
+  arbitrary outputs is future work).
+* Native-engine forward-pass arithmetic optimization BEYOND the
   resolved-weight-table repair (the per-row tensor-name resolution
-  bottleneck and the unoptimized CI build are FIXED — measured 19.08 →
-  3.66 ms/token, bit-for-bit parity pinned by the native prefill_parity
-  gate; the remaining per-token cost is the genuine arithmetic: the
-  double-accumulator dot products and the fp16-widened attention loops).
-  SIMD-friendly batched matvec/GEMM-style prompt processing over those
-  loops is the next performance item — evidence-gated the same way
-  (standalone engine benchmark + run telemetry TTFT), not started.
+  bottleneck and the unoptimized CI build are FIXED — bit-for-bit parity
+  pinned by the native prefill parity gate; the remaining per-token cost is
+  the genuine arithmetic). SIMD-friendly batched prompt processing over
+  those loops is the next performance item — evidence-gated the same way,
+  not started.
 
-## v1.10 — Universal Agent — **FUTURE — NOT IMPLEMENTED**
+## Universal Agent — **FUTURE — NOT IMPLEMENTED**
 
 Controlled computer-use layer, all through explicit permission/trust
 boundaries: browser and desktop interaction, screen, mouse/keyboard,
@@ -464,20 +180,20 @@ connectors, voice foundation. Additionally:
 
 Never replace safety or objective verification with a circuit breaker alone.
 
-## v1.11 — AI Learning & Evaluation — **FUTURE — NOT IMPLEMENTED**
+## AI Learning & Evaluation — **FUTURE — NOT IMPLEMENTED**
 
 Evaluation suites, baselines, experiments, candidate variants, diagnostics,
 feedback learning, skill evolution, memory optimization, routing/context
 optimization, promotion/rollback, improvement history; representative
 local-model benchmark/evaluation suites; the chat-template compatibility
 matrix as living evidence; performance regression gates; candidate
-promotion/rollback decided ONLY by measured evidence. The v1.9 protected-
+promotion/rollback decided ONLY by measured evidence. The protected-
 evaluation guard is a prerequisite for trustworthy evaluation runs.
 
 Honesty gate: no system change becomes an "improvement" merely because the
 model says so — only measured evaluation evidence promotes a candidate.
 
-## v1.12 — Advanced Model Intelligence — **FUTURE — NOT IMPLEMENTED**
+## Advanced Model Intelligence — **FUTURE — NOT IMPLEMENTED**
 
 Multi-model routing, capability discovery, specialist models,
 vision/reasoning routing, draft/speculative models, dynamic loading and
@@ -487,7 +203,7 @@ embedding/vector infrastructure only when RAG measurements justify it.
 
 No specific external stack is mandatory for any of this.
 
-## v2.0 — SHEYTAN Local AI Platform — **FUTURE**
+## SHEYTAN Local AI Platform — **FUTURE**
 
 Strategic end state: a complete user-owned local AI platform where users
 create, run, understand, modify and continuously improve durable AI systems
@@ -495,7 +211,7 @@ while keeping ownership of their models, knowledge, memory, skills, tools,
 behavior, experiments and versions; scalable local workers, mature
 multi-run orchestration, cross-platform support, optional multi-process/
 remote workers, mature observability/evaluation, portable import/export/
-versioning (the v1.9 AI System export/import is the first portable unit).
+versioning (the AI System export/import is the first portable unit).
 
 ---
 
@@ -530,8 +246,8 @@ measurement behind them.
   claims stay separated (detection → backend availability → device
   enumeration → real execution).
 * Numeric/unsupported engine arguments fail before process spawn; the
-  modern llama.cpp CLI contract (b10642/b11205) is verified against the
-  binary `--help` fixtures.
+  modern llama.cpp CLI contract is verified against the binary `--help`
+  fixtures.
 * The codename-removal gate stays enabled and exact on tracked trees and
   clean-room drops.
 * Performance claims require measurements made on THIS codebase; numbers
