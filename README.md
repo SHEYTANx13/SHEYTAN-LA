@@ -8,7 +8,7 @@ SHEYTAN-LA is a local-first desktop AI engineering environment. One Go process o
 
 **SHEYTAN™ is a trademark of Parsaetak · © 2024–2026 Parsaetak. All rights reserved.**
 
-Licensed under a conservative mixed model — Apache-2.0 for explicitly designated open components, the **Parsaetak Proprietary License v1.1** for SHEYTAN-specific material. The complete licensing picture lives in `LICENSE.md`.
+Licensed under a conservative mixed model — Apache-2.0 for explicitly designated open components, the **Proprietary License** for SHEYTAN-specific material. The complete licensing picture lives in `LICENSE.md`.
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
@@ -146,9 +146,10 @@ Live configuration is one concurrency-safe source (`config.Source`) shared by ev
 | [`docs/FEATURES.md`](docs/FEATURES.md) | Single feature inventory (implemented vs coming) |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Capability-driven direction |
 | [`docs/3dstudio.md`](docs/3dstudio.md) | Optional 3D Studio contract |
-| [`docs/agent.md`](docs/agent.md) | Agent loop and tool surface |
+| [`docs/agent.md`](docs/agent.md) | Agent operating manual |
 | [`docs/UPDATE.md`](docs/UPDATE.md) | Current maintenance and update behavior |
-| [`docs/changelog.md`](docs/changelog.md) | Canonical release history (the only place version numbers live) |
+| [`docs/changelog.md`](docs/changelog.md) | Canonical release history |
+| [`docs/retired.md`](docs/retired.md) | Retired / legacy mechanisms (still under Proprietary License) |
 | [`SECURITY.md`](SECURITY.md) | Security policy and vulnerability reporting |
 | [`LICENSE.md`](LICENSE.md) | Full licensing model and legal texts |
 
