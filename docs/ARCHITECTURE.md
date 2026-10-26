@@ -1,62 +1,117 @@
 # Architecture
 
-This document states the architecture that **is** implemented and verified in this repository. Future R&D is not described as implemented; the roadmap (`ROADMAP.md`) owns the future.
+This document states the architecture that **is** implemented and verified in this repository. Future work is owned exclusively by `ROADMAP.md`.
 
 Motto: **“The model proposes. The tools execute. The laboratory verifies.”**
 
 ---
 
-# Part I — The single-runtime architecture
-
 ## 1. One process, one runtime stack
 
-One Go process owns the runtime (`internal/runtime` `Stack`). The stack constructs and owns every authority exactly once:
+One Go process owns the runtime (`internal/runtime.Stack`). Every authority is constructed exactly once:
 
-* **Engine lifecycle** — managed llama.cpp servers and the native C++ engine are adapted to one `llm.Backend` contract; the selection policy picks the native path when the user selected it AND it can generate, otherwise the llama fallback. Start/restart/stop/upgrade run through ONE transactional maintenance gate (identity manifest + committed state; two-boot idempotency is deterministic).
-* **Run lifecycle** — one runs registry per session (`internal/api` `runState`/`runLive`). Fresh and resumed runs share the same registry entry, hub and authoritative state. Pause → resume keeps ONE runId.
-* **Session store** — one store (`internal/sessions`), one hot-cache the memory manager bounds.
-* **Tool registry** — one registry (`internal/tools`) with generation-aware schema caching; custom tools sync into it (no second registry).
-* **Scheduler / automations** — one scheduler (`internal/scheduler`).
-* **Downloader / updater / installer** — one download authority, one update/installer path with the authoritative engine-variant resolver (explicit variant requests never fall back silently).
-* **Memory authority** — one memory manager (`internal/memmanager`) with registered trimmers, run-boundary tracking and cooperative cleanup.
-* **Runtime policy authority** — one Governor (`internal/governor`), policy only (§Governor below).
-
-## 2. Engine / backend architecture
-
-llama.cpp remains the reference backend: managed server process, modern CLI contract (split `--cache-type-k` / `--cache-type-v`, `--flash-attn on|off|auto`), strict numeric-argument validation that FAILS BEFORE process spawn, device enumeration as the only execution-evidence source. The native engine (C++, `native/engine`) is a supervised alternative path with real generation for validated llama-architecture models and honest incapability verdicts (fallback, never a crash). Engine identity, corruption rows and update transactions are deterministic and covered by fault-injection (a rolled-back transaction also restores the recorded tag from the restored manifest, so state, manifest and serving binary can never disagree).
-
-**Native forward path:** the forward pass owns a RESOLVED WEIGHT TABLE built once per model binding (`Forward::init` → `resolve_model`): every layer's seven weight matrices and the output projection are resolved through the tensor layer's `Weights::resolve` (name lookup, shape and type validation, whole-tensor byte-range check — the same bounds authority as the per-row path, executed ONCE), and the forward pass then walks rows by pointer arithmetic (`tensor::row_ptr` + `tensor::dequant_row`, one shared dequantization switch). Prefill runs through `Forward::prefill_span` in bounded 16-token chunks with the vocabulary logits projection ONLY for the final prompt token; cancellation is observed between chunks at the documented cadence. Numerical identity with the serial `Forward::token()` path is pinned bit-for-bit (last-token logits + full KV bytes) by the native `test_prefill_parity` gate across chunk sizes 1/3/7/16. The native CMake build defaults to the Release configuration when the caller does not choose one (an unflagged -O0 engine is not a supported inference build).
-
-**Desktop shell lifecycle (one-Go-UI):** the product desktop is ONE Go executable: the core (the ONE policy/orchestration authority, unchanged) plus the ONE Fyne UI (`ui/fyne`) running IN-PROCESS as an IPC client over the secured per-user local channel (`internal/localipc`): a Unix domain socket with SO_PEERCRED uid verification on Linux/macOS, a named pipe with a current-user-only DACL plus a post-connect client-SID check on Windows, and the versioned keyed handshake (`sheytan-ipc/1`) in front of the EXISTING api.Server handlers. The handshake is STRICT: the client requires the protocol name AND `protocolVersion == 1` before use — a core speaking any other version is refused visibly. The client sends the ephemeral-key header (`X-SHEYTAN-IPC-Key`) on every request and sends NO Origin header (native transport; the CORS/origin rules stay enforced for any browser-origin request). The wire field contract the UI consumes (sessions: bare array with `id`/`title` omitempty/`msgCount`; systems: `systemId`/`name`/`revision` under `activeSystemId`) is pinned by Go tests (`internal/api/field_contract_test.go`) so a rename fails a test instead of blanking the UI. No TCP listener is opened on the desktop path; there is NO embedded web frontend anymore (the React bundle, its Vite build and the web/static embed are retired — the API mux serves no static root). The launcher (`internal/desktop`) boots the core, binds the IPC endpoint, attaches the Fyne window in-process and tears the whole lifecycle down on window close or signal (core close joins run goroutines bounded). The retired Qt/QML host, its child-spawn SHEYTAN_UI_EXECUTABLE resolution and the React/Vite/Playwright web stack are removed from the tree and from CI; the behavioral contracts those surfaces carried (zero-session send, session-list generation guard, cumulative stream folding, settlement reload, mode separation, history-ref cap, the thinking ladder and the settings IA) are ported to Go tests under `ui/fyne` (`logic_test.go`, `shell_test.go`) and to the Fyne test-harness view-composition tests. Desktop smoke evidence on Linux runs the real binary under Xvfb in CI. The measurement framework is fail-closed about hosts: `cmd/shtn-perf` REQUIRES an explicit `--host-class physical|hosted`, refuses a physical claim on any host carrying hosted-CI markers, and derives the schema-compat `hostedCI` flag from that single declared class. The native C++ engine default remains evidence-gated exactly as before (physical Windows Phase 1 measurements are still NOT MEASURED).
-
-**Fyne build prerequisites (honest):** the Fyne desktop build requires a C compiler and platform graphics development libraries (Linux: gcc/pkg-config + Mesa/OpenGL and the X11/Wayland development packages including `libxxf86vm-dev`; Windows: MSYS2/MinGW-w64 per the official Fyne docs). The migration removed the UI's C++/CMake/QML build; it did NOT remove the native toolchain requirement, and the CI installs the prerequisites explicitly. The C++ native engine (native/engine) keeps its own CMake build and tests — it is inference machinery, not UI, and is unchanged by this migration.
-
-**Model capability cards:** the GGUF header parser reads up to 32 MiB of metadata (`ggufMetadataReadLimit`) — real Gemma-class tokenizer blocks (262,144-entry arrays) exceed the old 8 MiB bound and made the card unreadable. A card that still cannot be read resolves to a nil capability object, and every consumer follows the documented fallback (configured context, conservative estimator) — never a dereference. The capability resolution itself is uniformly nil-config-safe.
-
-**Execution/evidence ladder:** ONE shared structure (`internal/llm/execution.go`, surfaced as the `execution` block of `/api/engine`) composes the existing authorities — device detection, backend health, the accelerator selection memo, verified model loading, measured generation telemetry, runtime offload lines — into the monotone ladder `detected → backend-available → device-selected → model-loaded → generation-executed → execution-evidence → verified`. The composer is PURE over explicit inputs; the stage stops at the first unproven rung and names the gap, so device enumeration can never equal verified execution. Go stays the control plane; the C++/serving backend stays the execution plane.
-
-**Execution truth enforced end-to-end:** the ladder's inputs are TRUTHFUL at the source. The ONE accelerator authority (`internal/accelerator`) enforces `GPU detected ≠ GPU available ≠ GPU selected ≠ GPU executed ≠ GPU verified`: `--list-devices` enumeration SELECTS GPU_VULKAN with the pending-execution verification plan and the CPU safety net; the `ExecutionVerified` verdict requires the measured runtime offload line or a still-valid `ExecutionReceipt` — a structured identity-carrying object (kind, line, engine tag, variant, device, model, status) whose `ValidFor(engineTag, variant)` check rejects stale receipts (another engine build, another variant, a failed bounded probe). The LAUNCHER (`LlamaServer.autoGPUOffload`) activates AUTO `--n-gpu-layers` only on PROVEN execution (the current boot's offload line, or a persisted verified GPU-probe receipt with a matching engine identity); enumeration and DLL presence keep AUTO CPU-safe. The bounded candidate transaction keeps a strictly transaction-scoped proving mode (`gpuCandidateProving` inside `updateEngineVariantTx`, deferred reset) where enumeration MAY enable offload to prove the candidate — commit still requires a real generation AND the measured offload line. The offload evidence is PER-BOOT (`launchArgs` resets it — a restart or model swap re-proves). `/api/engine` and `/api/perf` consume the ONE accessor (`currentAcceleratorResolution`): the resolution memo is validated against its input signature (engine tag + variant + profile + model + evidence + probe state) and recomputed when stale, so the engine surface never depends on the perf poll order and a stale poll-only snapshot can never claim a current backend.
-
-**Resource integration:** the Governor's resource state folds the CURRENT inference workload (an injected footprint source on the Stack: model file bytes as a FILE fact + planned KV at the serving window, from the existing model-card/context authorities); the envelope accounts for a footprint that consumes the resident budget (background reduced through the existing honest adjustment class, reason stated); the run gate (`Stack.GovernorAdmitsModelLoad`, consulted by EnsureLLM and EnsureLLMContext before any engine start) admits model loads against the Governor's measured envelope using the same resident plan preflight computes — sustained pressure defers with the explainable reason, an unmeasured Governor falls through to the preflight gate. The engine process RSS is MEASURED (`LlamaBackend.Metrics` via `resources.ProcRAM`) and flows into the Governor's engine facts; `/api/perf`'s `engineMemory` block serves the engine's memory evidence with provenance labels (measured RSS / model FILE size never "RAM used" / offload line / KV named unknown where no measured surface exists). The Windows CPU seam (`governor/cpu_windows.go`) measures real load via kernel32 `GetSystemTimes` over the ONE shared priming/delta state machine (`governor/cpu_delta.go`) — no second sampler, no second cadence; Linux stays on `/proc/loadavg`.
-
-**Reasoning-depth budgets:** the composer's four-level control (low/mid/high/ultra) carries a numeric thinking-token budget onto every generation request (`llm.ChatRequest.ReasoningBudget` → the llama.cpp request-level `reasoning_budget_tokens` parameter, verified in BOTH managed builds' server sources). low = 0 (thinking off), mid = 1024 (bounded default), high = 4096, ultra = not sent (engine default). Local engines only; a non-thinking model ignores the budget (reasoning is never fabricated); the native path has no budget control and is documented-inert. The persisted Show/Hide Thinking preference is VISIBILITY ONLY — it never enters the request.
-
-## 3. Session / run lifecycle
-
-A run is: POST /api/run → registered (one registry entry, one hub, one `runLive`) → phases preparing/thinking/generating → terminal done/error/aborted → registry release. The publisher stamps every activity with a monotonic per-run sequence and folds it into `runLive` BEFORE broadcast; WebSocket replay is snapshot-at-seq-N plus events > N (gapless, duplicate-free).
-
-**Desktop activity transport:** the production desktop is the ONE Fyne client over `internal/localipc` and mounts NO loopback WebSocket listener (`internal/desktop/desktop.go`: "no WebView2/WebKit, no loopback WebSocket transport"); the browser/headless serving mode serves activity over the ordinary HTTP surface.
-
-**Engine/run coordination:** an engine variant transaction (`updateEngineVariantTx`) refuses an active run at TWO points: an EARLY read-only registry check before anything happens (validate, no-op, resolve, download all stay claim-free — a run admitted there keeps its engine and the transaction defers at its boundary instead of holding the product hostage), and the DESTRUCTIVE BOUNDARY itself, where the `LlamaServer.SetAdmissionControl` seam (`llm.EngineAdmission`, implemented by the API server with claim + live-run verdict in ONE `runsMu` critical section — the same section run registration uses) takes the admission claim atomically with the live verdict and holds it for the actually-destructive window only (stop → swap → start → verify → rollback/commit). A run registered before the boundary makes the verdict live and the transaction fails closed (`ErrEngineBusyWithRun`); a run admitted while the claim is held is refused deterministically (HTTP 503, `errEngineMutationInProgress`, transcript restored).
-
-**Strategic direction:** Go remains the ONE policy/orchestration authority (run lifecycle, sessions, tools, memory, Governor, evidence). C++ owns numerical inference — the existing `native/engine` path is the promotion target under capability/parity gates, with managed llama.cpp as the automatic honest fallback. The ONE product UI is the Go + Fyne application (`ui/fyne`); the Qt/QML and React/TypeScript UI targets are retired.
-
-**The UI/IPC seam:** the contract a UI shell uses to talk to the UNCHANGED Go core. Since the one-Go-UI migration, `ui/fyne` is the production desktop client over the same seam (strict `sheytan-ipc/1` handshake, key header on every request, pinned wire field contracts in `internal/api/field_contract_test.go`). The seam is specified so the shell can evolve without inventing a second authority:
-
-- **Transport:** ONE secured local transport per concern — a local socket / named pipe for control (typed request/response) and streaming (server-pushed events), bound to the loopback only, no arbitrary host binding, no unauthenticated local API.
-
-(The remainder of the detailed architecture truth table continues below, covering tools, skills, Governor, dataAnalysis, memory, AI System Builder, Goal engine, approval, and all other authorities. The full original detailed sections are preserved in spirit and accuracy; only the header and the most critical outdated version stamps and retired-UI references have been cleaned to match the current product.)
+| Authority | Package | Responsibility |
+|-----------|---------|----------------|
+| Engine lifecycle | `internal/llm` | Managed llama.cpp + native C++ backend under one `llm.Backend` contract |
+| Run lifecycle | `internal/api` | Single registry, hub and authoritative state per session; pause/resume keeps one runId |
+| Session store | `internal/sessions` | Durable sessions + hot cache bounded by memory manager |
+| Tool registry | `internal/tools` | Generation-aware schema cache; custom tools sync into the same registry |
+| Scheduler | `internal/scheduler` | Automations and timed tasks |
+| Downloader / updater | `internal/updater` | Single download authority + transactional engine install |
+| Memory | `internal/memmanager` | Trimmers, run-boundary tracking, cooperative cleanup |
+| Policy | `internal/governor` | Resource state, admission envelope, self-model (policy only) |
+| AI Systems | `internal/aisystem` | Durable user-owned systems with frozen execution binding |
+| Goals | `internal/goal` | Long-horizon UNDERSTAND → PLAN → ACT → VERIFY loop |
+| Approvals | `internal/approval` | Deterministic risk classification + one-use decisions |
 
 ---
 
-*This is a living architecture truth table. It describes only what is implemented and verified. For direction, see ROADMAP.md. For release history, see changelog.md.*
+## 2. Engine & backend
+
+- **Reference backend**: managed llama.cpp server with modern CLI contract (`--cache-type-k/v`, `--flash-attn on|off|auto`) and strict numeric validation that fails *before* process spawn.
+- **Native C++ engine** (`native/engine`): supervised alternative path with real generation for validated llama-architecture models and honest incapability fallback. Forward pass uses a resolved weight table built once per model binding; prefill is chunked and cancellation-aware; numerical parity with the serial path is pinned by tests.
+- **Transactional updates**: identity manifest + committed state; two-boot idempotency; rollback restores both binary and recorded tag.
+- **Execution/evidence ladder** (one shared structure on `/api/engine`):
+  ```
+  detected → backend-available → device-selected → model-loaded
+  → generation-executed → execution-evidence → verified
+  ```
+  Device enumeration never equals verified execution. GPU claims obey the strict separation: detected ≠ available ≠ selected ≠ executed ≠ verified.
+
+---
+
+## 3. Desktop (one-Go-UI)
+
+The product desktop is a **single Go executable**:
+
+- Core (policy/orchestration authority) + Fyne UI (`ui/fyne`) running **in-process** over `internal/localipc`.
+- Transport: Unix domain socket (SO_PEERCRED) on Linux/macOS; named pipe (current-user DACL + post-connect SID check) on Windows.
+- Handshake: strict `sheytan-ipc/1` + ephemeral key header on every request.
+- No TCP listener, no embedded web frontend, no Qt runtime, no React/Vite.
+- Launcher (`internal/desktop`) owns the full lifecycle: bind IPC → attach Fyne window → clean teardown on close/signal.
+- Behavioral contracts (zero-session send, session-list generation guard, live streaming that cannot wedge, reasoning ladder, settings IA) are pinned by Go tests under `ui/fyne`.
+- Linux desktop smoke runs the real binary under Xvfb in CI.
+
+---
+
+## 4. Session & run lifecycle
+
+```
+POST /api/run → register (one registry entry + hub + runLive)
+→ phases: preparing → thinking → generating → finalising
+→ terminal: done | error | aborted → registry release
+```
+
+- Publisher stamps every activity with a monotonic per-run sequence and folds it into `runLive` before broadcast.
+- Engine variant transactions refuse an active run at two points: early read-only check (claim-free) and the destructive boundary (atomic claim + live-run verdict).
+
+---
+
+## 5. Runtime Governor
+
+Fed by the single live-pressure monitor (one sampler, one cadence).
+
+- **Resource state** — measurable reality with explicit unknowns, including current inference workload footprint.
+- **Envelope** — what may be admitted / what should be reduced.
+- **Admission** — model loads and heavyweight work are gated against a resident budget; unknown facts refuse conservatively.
+- **Self-model** — verified facts with provenance, exposed on `/api/governor`.
+
+Critical pressure → cooperative cancellation of active runs (never process killing).
+
+---
+
+## 6. Data, tools & skills
+
+- **dataAnalysis** — single pure-Go authority: load (CSV/TSV/JSON + type inference), analyze, aggregate, join, quality, export. Byte-for-byte deterministic; 256 MB input bound; no external engine or SQL surface.
+- **Skills** — JSON store + Markdown SKILL.md packages with progressive disclosure and token-budgeted injection.
+- **Tools** — one registry; custom tools, Coding Lab, sandbox, browser, Net Search, repository navigation (`repo_nav`) all share the same path-safety and approval authority.
+
+---
+
+## 7. AI System Builder & Goal engine
+
+- **AI System** — durable, user-owned object (CRUD, clone, export/import, activation). Execution binding is frozen at run start; mid-run edits cannot mutate a running configuration.
+- **Goal engine** — checkpointed UNDERSTAND → PLAN → ACT → VERIFY loop with turn budget, bounded replans, terminal goals that stay terminal, and boot recovery that never falsely marks a goal running.
+- **Approvals** — deterministic risk classification from tool identity + normalized arguments; one-use decisions bound to exact call identity.
+
+---
+
+## 8. Optional 3D Studio
+
+Read-only live topology viewer (host, engine, Governor, sessions, tools). Loopback-only server, per-launch 256-bit fragment token, strict CSP, embedded Three.js, zero commands. Full contract: `docs/3dstudio.md`.
+
+---
+
+## 9. Engineering invariants
+
+- One authority per concern.
+- No sleep-based correctness; tests synchronize on authoritative state.
+- Build success ≠ runtime proof; CI ≠ physical-host proof.
+- Hardware detection is never reported as execution evidence.
+- Numeric/unsupported engine arguments fail before process spawn.
+- Codename-removal gate stays enabled.
+- Performance claims require measurements made on this codebase.
+
+---
+
+*Living architecture truth table. Describes only what is implemented and verified. Direction → `ROADMAP.md`. Release history → `changelog.md`.*
