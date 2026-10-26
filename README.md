@@ -8,7 +8,7 @@ SHEYTAN-LA is a full-featured local AI agent designed to work like the popular f
 
 One Go process owns the entire runtime (runs, tools, sessions, memory, approvals, policy). The desktop is a single native Go + Fyne application running in-process against that core over a secured per-user local IPC channel. Managed llama.cpp inference, an optional native C++ engine path, controlled tools, isolated coding workspaces, Net Search, memory, recall, objective verification, and a Runtime Governor that continuously understands the machine and keeps the host responsive.
 
-**This software is the sole original work of the Licensor (SHEYTAN and Parsaetak).** It was conceived, designed, implemented, and iterated entirely on a personal home device, assisted only by free web-based AI agents. No corporate team, no external contractors, no institutional funding.
+**This software is the sole original work of the Licensor (SHEYTAN and Parsaetak).** It was conceived, designed, implemented, and iterated entirely on a personal home device. The great majority of the development work was performed without a traditional IDE — by coordinating multiple free web-based AI agents that read the repository, plan changes, edit files, run verification, and produce commits for human review. No corporate team, no external contractors, no institutional funding.
 
 **SHEYTAN™ is a trademark of SHEYTAN and Parsaetak · © 2024–2026 SHEYTAN and Parsaetak. All rights reserved.**
 
@@ -152,7 +152,8 @@ Live configuration is one concurrency-safe source (`config.Source`) shared by ev
 | [`docs/FEATURES.md`](docs/FEATURES.md) | Single feature inventory (implemented vs coming) |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Capability-driven direction |
 | [`docs/3dstudio.md`](docs/3dstudio.md) | Optional 3D Studio contract |
-| [`docs/agent.md`](docs/agent.md) | Agent operating manual |
+| [`docs/agent.md`](docs/agent.md) | Agent operating manual (includes AI-agent workflow) |
+| [`docs/Dev-Notes.md`](docs/Dev-Notes.md) | **Mandatory living checklist** — AI agents must read before every update and mark after |
 | [`docs/UPDATE.md`](docs/UPDATE.md) | Current maintenance and update behavior |
 | [`docs/changelog.md`](docs/changelog.md) | Canonical release history |
 | [`docs/retired.md`](docs/retired.md) | Retired / legacy mechanisms (still under Proprietary License) |
