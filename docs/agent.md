@@ -1,6 +1,8 @@
 # Agent Operating Manual
 
-This manual guides an engineering agent through the SHEYTAN-LA repository. It states what the project is, where things live, how the work is verified, what proof means, and where to write. Every line is verifiable from the tree or from the hosted evidence it cites.
+This manual guides an engineering agent through the SHEYTAN-LA repository. It states what the project is, where things live, how the work is verified, what proof means, and where to write.
+
+**Every AI agent must read `docs/Dev-Notes.md` before starting any update** and must mark items after the work is verified.
 
 Status narrative lives in:
 
@@ -8,8 +10,45 @@ Status narrative lives in:
 - `docs/worklog.md` — session log with evidence classes
 - `docs/UPDATE.md` — current maintenance behavior
 - `docs/ROADMAP.md` — current / future boundary
+- `docs/Dev-Notes.md` — living checklist of open items (mandatory pre-flight)
 
 Architecture truth: `docs/ARCHITECTURE.md`.
+
+---
+
+## 0. How this project is developed
+
+Most of the development work on SHEYTAN-LA is performed **without a traditional IDE**. The primary development method is a multi-agent workflow:
+
+- Multiple AI agents (in parallel or sequential sessions) read the repository, plan, implement, test, and document changes.
+- The human operator (Licensor) reviews, decides, and performs the final push.
+- Agents work through the GitHub API / connected tools, editing files directly, running verification commands in a sandbox when available, and producing commits for the operator to push.
+- There is no central IDE project file, no required local IDE configuration, and no assumption that an agent has a full graphical desktop environment.
+
+This is intentional. The repository and its documentation are structured so that a competent AI agent can become productive quickly by reading this manual, `Dev-Notes.md`, `ARCHITECTURE.md`, and the relevant source.
+
+### Mandatory agent workflow
+
+1. **Read first**  
+   - `docs/Dev-Notes.md` (open items and process rules)  
+   - This file (`docs/agent.md`)  
+   - `docs/ARCHITECTURE.md` for any architectural change  
+   - `docs/ROADMAP.md` for direction questions
+
+2. **Plan**  
+   State the success condition, the files you will touch, and the evidence you will produce.
+
+3. **Implement**  
+   Prefer minimal, evidence-backed diffs. One authority per concern. No speculative refactors.
+
+4. **Verify**  
+   Run the verification ladder (section 3). Record the evidence class (local static / hosted / physical).
+
+5. **Document**  
+   Update `Dev-Notes.md` (mark items), and any affected public docs (`README.md`, `FEATURES.md`, `ARCHITECTURE.md`, `retired.md`, etc.) in the same change set.
+
+6. **Hand off**  
+   Agents do not push. Prepare the commit(s) and leave a clear summary for the human operator.
 
 ---
 
@@ -52,7 +91,7 @@ Motto: **“The model proposes. The tools execute. The laboratory verifies.”**
 | `scripts/` | CI helpers, consolidate-run-log, stress, codename gate |
 | `packaging/` | Launcher and NSIS installer |
 | `baselines/` | Hosted-class perf baselines (fail-closed host classification) |
-| `docs/` | All documentation |
+| `docs/` | All documentation (including `Dev-Notes.md`) |
 | `.github/workflows/build-desktop.yml` | The pipeline |
 
 ---
@@ -128,6 +167,7 @@ Never ask the agent to push; never fabricate a hosted result; record each run’
 
 | File | Purpose |
 |------|---------|
+| `docs/Dev-Notes.md` | **Mandatory pre-flight checklist** — read before every task, mark after |
 | `docs/changelog.md` | The only canonical release history |
 | `docs/worklog.md` | Session log: Task ID, evidence classes, sweeps, fixes, run verdicts |
 | `docs/UPDATE.md` | Current maintenance and update behavior |
@@ -135,5 +175,6 @@ Never ask the agent to push; never fabricate a hosted result; record each run’
 | `docs/ROADMAP.md` | Current / future boundary |
 | `docs/ARCHITECTURE.md` | Architecture truth (seams, IPC, engine contract) |
 | `docs/FEATURES.md` | Single feature inventory |
+| `docs/retired.md` | Retired / legacy mechanisms still under Proprietary License |
 
 Version identity lives in `internal/config.AppVersion`. Never hand-edit derived surfaces.
