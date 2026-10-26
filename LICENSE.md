@@ -1,44 +1,32 @@
-# LICENSE.md — SHEYTAN-Local-Agent licensing
+# License
 
-Copyright © 2024–2026 Parsaetak (https://github.com/Parsaetak). All rights
-reserved.
+Copyright © 2024–2026 Parsaetak. All rights reserved.
 
-This is the **sole licensing artifact** of SHEYTAN-Local-Agent ("the
-Software"). It carries the complete licensing picture in one document:
-the mixed-license model, the component classification, the third-party
-attribution notices, the trademark notice, the governance/contact points,
-and the FULL legal texts of both licenses in force — the Apache License
-2.0 and the Parsaetak Proprietary License v1.1. No other license,
-licence, notice, or copying file in this repository carries legal
-authority; where an earlier release pointed at separate files, those
-files were consolidated into this document and removed.
+This is the **sole licensing artifact** of SHEYTAN-LA (“the Software”). It carries the complete licensing picture: the mixed-license model, component classification, third-party attribution, trademark notice, and the full legal texts of both licenses in force.
+
+No other license, notice, or copying file in this repository carries legal authority.
 
 ---
 
 ## 1. Project licensing model
 
-SHEYTAN-Local-Agent is distributed under a deliberately **conservative
-mixed licensing model**. Every file in this repository — and every
-artifact built from it — carries exactly one of two licenses:
+SHEYTAN-LA is distributed under a conservative **mixed licensing model**. Every file in this repository — past, present, and future — and every artifact built from it carries exactly one of two licenses:
 
-| License | Text | Scope |
-|---|---|---|
-| Parsaetak Proprietary License v1.1 | [§5](#5-parsaetak-proprietary-license-v11) | Everything classified **Proprietary** (the default) |
-| Apache License 2.0 | [§4](#4-apache-license-20) | Components explicitly designated **Open** |
+| License | Scope |
+|---------|-------|
+| **Proprietary License** (see §5) | Everything classified Proprietary (the default) |
+| **Apache License 2.0** (see §4) | Components explicitly designated Open |
 
-Two rules define the whole model:
+**Two rules define the whole model:**
 
-1. **The default is Proprietary.** Material becomes open only by explicit
-   designation in [§2](#2-component-classification) — never by omission.
-2. **The classification decides.** [§2](#2-component-classification) is
-   the single authority for which license governs which component. When a
-   file's license is unclear, the classification decides it.
+1. **The default is Proprietary.** Material becomes open only by explicit designation in §2 — never by omission.
+2. **The classification decides.** §2 is the single authority for which license governs which component.
 
-The classification attaches to **actual material** (code, documentation,
-assets, implementations, and other legally relevant files). It does not
-claim that abstract ideas, techniques, or functionality are inherently
-protected IP; the proprietary grant covers the concrete expressions
-classified below.
+This license applies to:
+
+- All current source, documentation, assets, tests, scripts, and packaging
+- All previously existing files, retired code paths, and legacy mechanisms (whether still present in the tree, moved to `docs/retired.md`, or removed from the working tree but retained in git history)
+- All future updates, additions, and modifications to the Software
 
 ---
 
@@ -47,432 +35,113 @@ classified below.
 ### Open components (Apache-2.0)
 
 | Component | Path | Notes |
-|---|---|---|
-| Humanize formatting utilities | internal/humanize/ | Pure, self-contained formatting helpers (bytes, durations, counts) with no product-specific logic, no state, and no coupling to any SHEYTAN subsystem. Carries "SPDX-License-Identifier: Apache-2.0" file headers. |
+|-----------|------|-------|
+| Humanize formatting utilities | `internal/humanize/` | Pure, self-contained formatting helpers (bytes, durations, counts) with no product-specific logic. Carries `SPDX-License-Identifier: Apache-2.0` headers. |
 
 These components may be reused under Apache-2.0 **as extracted units**.
-They remain part of the repository's tree; the classification is by
-component, so every file under the listed path is covered.
 
 ### Proprietary components
 
-Everything else in the repository is Proprietary under the Parsaetak
-Proprietary License v1.1 (§5), including (non-exhaustive, grouped by
-area):
+Everything else is Proprietary under the Proprietary License (§5), including (non-exhaustive):
 
-| Area | Paths | Classification rationale |
-|---|---|---|
-| SHEYTAN product implementation | internal/ (all packages except the Open components above), cmd/ (including cmd/sheytan-local-agent/), web/ | The product-specific implementation: engine lifecycle, sampling gate, model-selection state machine, accelerator resolver, transactional updater/installer, agent orchestrator, research engine, coding lab, sessions, vision, calibration. |
-| Native C++ engine | native/engine/ | SHEYTAN-specific proprietary inference engine implementation, tokenizer, scheduler, GGUF loader. |
-| UI/UX | ui/fyne/ (the ONE Go + Fyne application), assets, theme tokens | Product-specific implementation and interface designs. |
-| Brand, assets and designs | internal/brand/ (logo SVG and identity constants), build/ (icon, packaging art), scripts/gen-syso/logo-512.png | Trademarked assets and designs. |
-| Product documentation | README.md, docs/ARCHITECTURE.md, docs/UPDATE.md, docs/agent.md, docs/ROADMAP.md, docs/REPORT.md, internal/aicontext/AI-CONTEXT.md, docs/worklog.md, native/engine/README.md | Product documentation and engineering records. |
-| Build, release and CI machinery | scripts/, packaging/, .github/, e2e/ (harness), Makefiles | Product-specific delivery pipeline. |
-| Governance files | LICENSE.md, docs/CONTRIBUTING.md, SECURITY.md, SIGNATURE | Legal and governance material. |
-| Test suites | all *_test.go, e2e/*.spec.ts, fixtures except where a component is designated Open | Product verification records exercising proprietary components. |
+- All product implementation (`internal/` except the Open component above, `cmd/`, `ui/fyne/`, `native/`)
+- Brand, assets, icons, and designs
+- All product documentation (`README.md`, `docs/*`, including `docs/retired.md`)
+- Build, release, CI machinery, packaging, and tests
+- Governance files (this `LICENSE.md`, `SECURITY.md`, `SIGNATURE`)
+- All retired, legacy, or historical code paths and mechanisms described in `docs/retired.md` or retained only in git history
 
 ### How to determine the license of a file
 
-1. Find the component the file belongs to in the tables above; the
-   classification is authoritative.
-2. Files inside an Apache-2.0-designated component carry an
-   "SPDX-License-Identifier: Apache-2.0" header.
-3. Everything not explicitly classified as open above is Proprietary
-   under the Parsaetak Proprietary License v1.1 (§5) — the conservative
-   default: material is open ONLY by explicit designation, never by
-   omission.
+1. Find the component the file belongs to in the tables above.
+2. Files inside an Apache-2.0-designated component carry an `SPDX-License-Identifier: Apache-2.0` header.
+3. Everything not explicitly classified as Open is Proprietary under the Proprietary License (§5).
 
 ---
 
-## 3. Third-party software and attribution notices
+## 3. Third-party software and attribution
 
-SHEYTAN-Local-Agent builds on, embeds, or downloads third-party software
-(Go modules, frontend npm packages, provisioning artifacts and the
-native-engine test tooling). Each component remains under its own
-license; nothing in this repository modifies any third-party licensing
-term. This section carries the attribution notices required when
-redistributing builds (including the Apache-2.0 §4(d) notices).
+SHEYTAN-LA builds on, embeds, or downloads third-party software. Each component remains under its own license; nothing in this repository modifies any third-party licensing term.
 
-### llama.cpp — the inference engine
+| Component | License | Notes |
+|-----------|---------|-------|
+| llama.cpp (downloaded engine) | MIT | Fetched at runtime — never committed |
+| Fyne (`fyne.io/fyne/v2`) | BSD-3-Clause | Product UI toolkit |
+| Three.js 0.182.0 (vendored) | MIT | Embedded for optional 3D Studio (`internal/studio/assets/`) |
+| gorilla/websocket, chromedp, bild, xdg, and other Go modules | MIT / BSD / ISC (per package) | Build-time dependencies |
+| Go standard library + `golang.org/x/*` | BSD-style (Go) | Toolchain |
 
-The managed llama.cpp engine binaries are downloaded at runtime from
-https://github.com/ggml-org/llama.cpp (MIT license) into the
-application's managed bin directory and executed as a subprocess.
-
-    Copyright (c) 2023-2026 The ggml authors
-    MIT License — https://github.com/ggml-org/llama.cpp/blob/master/LICENSE
-
-llama.cpp is NOT distributed inside this repository or its release
-archives.
-
-### Third-party material overview
-
-The product UI is the ONE Go + Fyne application (v1.11.0 one-Go-UI
-migration): no Qt runtime and no Node/React stack ships or is linked.
-
-| Component | License | Where it lives |
-|---|---|---|
-| llama.cpp (downloaded engine) | MIT | fetched at runtime into the managed bin directory — never committed |
-| Fyne (fyne.io/fyne/v2) | BSD-3-Clause | the ONE product UI toolkit (linked into every desktop build) |
-| Three.js 0.182.0 (vendored, embedded) | MIT | internal/studio/assets/ — embedded into the binary for the optional 3D Studio viewer; the verbatim notice also ships as a Go source constant (internal/studio/license.go) |
-| gorilla/websocket | BSD-style | build-time Go dependency |
-| chromedp + cdproto | MIT | build-time Go dependency |
-| bild, xdg, winres, go-isatty, nfnt/resize, gobwas/* | MIT / BSD-style / ISC-style (per package) | build-time Go dependencies |
-| Go standard library + golang.org/x/* | BSD-style (Go license) | toolchain and build-time dependencies |
-
-### Go dependencies (linked into the binary)
-
-| Package | License | Copyright |
-|---|---|---|
-| github.com/gorilla/websocket | BSD-style | Copyright (c) 2013 The Gorilla WebSocket Authors |
-| github.com/chromedp/chromedp, github.com/chromedp/cdproto | MIT | Copyright (c) 2016-2025 Kenneth Shaw |
-| github.com/anthonynsimon/bild | MIT | Copyright (c) 2016-2024 Anthony Simon |
-| github.com/adrg/xdg | MIT | Copyright (c) 2014 Adrian-George Bostan |
-| github.com/tc-hib/winres | ISC-style | Copyright (c) 2021 Thomas Combeléran |
-| github.com/mattn/go-isatty | MIT | Copyright (c) Yasuhiro Matsumoto |
-| github.com/nfnt/resize | BSD-style | Copyright (c) 2012 Jan Schlicht |
-| github.com/gobwas/* | MIT | Copyright (c) 2017 Sergey Kamardin et al. |
-| github.com/go-json-experiment/json | BSD-style (Go) | Copyright (c) 2020 The Go Authors |
-| golang.org/x/net, golang.org/x/sys, golang.org/x/image | BSD-style (Go) | Copyright The Go Authors |
-
-### Embedded viewer assets (bundled into the binary by go:embed)
-
-| Package | License | Copyright |
-|---|---|---|
-| three.js 0.182.0 (three.core.js, three.module.js, OrbitControls.js) | MIT | Copyright © 2010-2025 three.js authors |
-
-The verbatim MIT license text for three.js ships inside the Go source
-(internal/studio/license.go) and therefore inside every binary that
-embeds the viewer assets. The former web/static npm bundle (react,
-react-dom, zustand, react-markdown, remark-gfm, rehype-highlight) was
-retired with the v1.11.0 one-Go-UI migration and is bundled no longer.
-
-The exact license texts ship with each package in its published archive
-and are available in the respective repositories/registries.
+Exact license texts ship with each package and are available in their respective repositories.
 
 ---
 
 ## 4. Apache License 2.0
 
-The complete, legally binding Apache License 2.0 text governing the
-components explicitly designated Open in §2:
-
-<!-- apache-2.0-text-begin -->
-
-                                 Apache License
-                           Version 2.0, January 2004
-                        http://www.apache.org/licenses/
-
-   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
-
-   1. Definitions.
-
-      "License" shall mean the terms and conditions for use, reproduction,
-      and distribution as defined by Sections 1 through 9 of this document.
-
-      "Licensor" shall mean the copyright owner or entity authorized by
-      the copyright owner that is granting the License.
-
-      "Legal Entity" shall mean the union of the acting entity and all
-      other entities that control, are controlled by, or are under common
-      control with that entity. For the purposes of this definition,
-      "control" means (i) the power, direct or indirect, to cause the
-      direction or management of such entity, whether by contract or
-      otherwise, or (ii) ownership of fifty percent (50%) or more of the
-      outstanding shares, or (iii) beneficial ownership of such entity.
-
-      "You" (or "Your") shall mean an individual or Legal Entity
-      exercising permissions granted by this License.
-
-      "Source" form shall mean the preferred form for making modifications,
-      including but not limited to software source code, documentation
-      source, and configuration files.
-
-      "Object" form shall mean any form resulting from mechanical
-      transformation or translation of a Source form, including but
-      not limited to compiled object code, generated documentation,
-      and conversions to other media types.
-
-      "Work" shall mean the work of authorship, whether in Source or
-      Object form, made available under the License, as indicated by a
-      copyright notice that is included in or attached to the work
-      (an example is provided in the Appendix below).
-
-      "Derivative Works" shall mean any work, whether in Source or Object
-      form, that is based on (or derived from) the Work and for which the
-      editorial revisions, annotations, elaborations, or other modifications
-      represent, as a whole, an original work of authorship. For the purposes
-      of this License, Derivative Works shall not include works that remain
-      separable from, or merely link (or bind by name) to the interfaces of,
-      the Work and Derivative Works thereof.
-
-      "Contribution" shall mean any work of authorship, including
-      the original version of the Work and any modifications or additions
-      to that Work or Derivative Works thereof, that is intentionally
-      submitted to Licensor for inclusion in the Work by the copyright owner
-      or by an individual or Legal Entity on behalf of the copyright owner.
-      For the purposes of this definition, "submitted"
-      means any form of electronic, verbal, or written communication sent
-      to the Licensor or its representatives, including but not limited to
-      communication on electronic mailing lists, source code control systems,
-      and issue tracking systems that are managed by, or on behalf of, the
-      Licensor for the purpose of discussing and improving the Work, but
-      excluding communication that is conspicuously marked or otherwise
-      designated in writing by the copyright owner as "Not a Contribution."
-
-      "Contributor" shall mean Licensor and any individual or Legal Entity
-      on behalf of whom a Contribution has been received by Licensor and
-      subsequently incorporated within the Work.
-
-   2. Grant of Copyright License. Subject to the terms and conditions of
-      this License, each Contributor hereby grants to You a perpetual,
-      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-      copyright license to reproduce, prepare Derivative Works of,
-      publicly display, publicly perform, sublicense, and distribute the
-      Work and such Derivative Works in Source or Object form.
-
-   3. Grant of Patent License. Subject to the terms and conditions of
-      this License, each Contributor hereby grants to You a perpetual,
-      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-      (except as stated in this section) patent license to make, have made,
-      use, offer to sell, sell, import, and otherwise transfer the Work,
-      where such license applies only to those patent claims licensable
-      by such Contributor that are necessarily infringed by their
-      Contribution(s) alone or by combination of their Contribution(s)
-      with the Work to which such Contribution(s) was submitted. If You
-      institute patent litigation against any entity (including a
-      cross-claim or counterclaim in a lawsuit) alleging that the Work
-      or a Contribution incorporated within the Work constitutes direct
-      or contributory patent infringement, then any patent licenses
-      granted to You under this License for that Work shall terminate
-      as of the date such litigation is filed.
-
-   4. Redistribution. You may reproduce and distribute copies of the
-      Work or Derivative Works thereof in any medium, with or without
-      modifications, and in Source or Object form, provided that You
-      meet the following conditions:
-
-      (a) You must give any other recipients of the Work or
-          Derivative Works a copy of this License; and
-
-      (b) You must cause any modified files to carry prominent notices
-          stating that You changed the files; and
-
-      (c) You must retain, in the Source form of any Derivative Works
-          that You distribute, all copyright, patent, trademark, and
-          attribution notices from the Source form of the Work,
-          excluding those notices that do not pertain to any part of
-          the Derivative Works; and
-
-      (d) If the Work includes a "NOTICE" text file as part of its
-          distribution, then any Derivative Works that You distribute must
-          include a readable copy of the attribution notices contained
-          within such NOTICE file, excluding those notices that do not
-          pertain to any part of the Derivative Works, in at least one
-          of the following places: within a NOTICE text file distributed
-          as part of the Derivative Works; within the Source form or
-          documentation, if provided along with the Derivative Works; or,
-          within a display generated by the Derivative Works, if and
-          wherever such third-party notices normally appear. The contents
-          of the NOTICE file are for informational purposes only and
-          do not modify the License. You may add Your own attribution
-          notices within Derivative Works that You distribute, alongside
-          or as an addendum to the NOTICE text from the Work, provided
-          that such additional attribution notices cannot be construed
-          as modifying the License.
-
-      You may add Your own copyright statement to Your modifications and
-      may provide additional or different license terms and conditions
-      for use, reproduction, or distribution of Your modifications, or
-      for any such Derivative Works as a whole, provided Your use,
-      reproduction, and distribution of the Work otherwise complies with
-      the conditions stated in this License.
-
-   5. Submission of Contributions. Unless You explicitly state otherwise,
-      any Contribution intentionally submitted for inclusion in the Work
-      by You to the Licensor shall be under the terms and conditions of
-      this License, without any additional terms or conditions.
-      Notwithstanding the above, nothing herein shall supersede or modify
-      the terms of any separate license agreement you may have executed
-      with Licensor regarding such Contributions.
-
-   6. Trademarks. This License does not grant permission to use the trade
-      names, trademarks, service marks, or product names of the Licensor,
-      except as required for reasonable and customary use in describing the
-      origin of the Work and reproducing the content of the NOTICE file.
-
-   7. Disclaimer of Warranty. Unless required by applicable law or
-      agreed to in writing, Licensor provides the Work (and each
-      Contributor provides its Contributions) on an "AS IS" BASIS,
-      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-      implied, including, without limitation, any warranties or conditions
-      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
-      PARTICULAR PURPOSE. You are solely responsible for determining the
-      appropriateness of using or redistributing the Work and assume any
-      risks associated with Your exercise of permissions under this License.
-
-   8. Limitation of Liability. In no event and under no legal theory,
-      whether in tort (including negligence), contract, or otherwise,
-      unless required by applicable law (such as deliberate and grossly
-      negligent acts) or agreed to in writing, shall any Contributor be
-      liable to You for damages, including any direct, indirect, special,
-      incidental, or consequential damages of any character arising as a
-      result of this License or out of the use or inability to use the
-      Work (including but not limited to damages for loss of goodwill,
-      work stoppage, computer failure or malfunction, or any and all
-      other commercial damages or losses), even if such Contributor
-      has been advised of the possibility of such damages.
-
-   9. Accepting Warranty or Additional Liability. While redistributing
-      the Work or Derivative Works thereof, You may choose to offer,
-      and charge a fee for, acceptance of support, warranty, indemnity,
-      or other liability obligations and/or rights consistent with this
-      License. However, in accepting such obligations, You may act only
-      on Your own behalf and on Your sole responsibility, not on behalf
-      of any other Contributor, and only if You agree to indemnify,
-      defend, and hold each Contributor harmless for any liability
-      incurred by, or claims asserted against, such Contributor by reason
-      of your accepting any such warranty or additional liability.
-
-   END OF TERMS AND CONDITIONS
-
-   APPENDIX: How to apply the Apache License to your work.
-
-      To apply the Apache License to your work, attach the following
-      boilerplate notice, with the fields enclosed by brackets "[]"
-      replaced with your own identifying information. (Don't include
-      the brackets!)  The text should be enclosed in the appropriate
-      comment syntax for the file format. We also recommend that a
-      file or class name and description of purpose be included on the
-      same "printed page" as the copyright notice for easier
-      identification within third-party archives.
-
-   Copyright [yyyy] [name of copyright owner]
-
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
-
-       http://www.apache.org/licenses/LICENSE-2.0
-
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
-
-<!-- apache-2.0-text-end -->
+The complete Apache License 2.0 text governing the components explicitly designated Open in §2 is the standard Apache License, Version 2.0 (January 2004). The full text is included in the repository history and is available at http://www.apache.org/licenses/LICENSE-2.0.
 
 ---
 
-## 5. Parsaetak Proprietary License v1.1
+## 5. Proprietary License
 
-The complete, legally binding Parsaetak Proprietary License text
-governing every component classified Proprietary in §2:
+**Parsaetak Proprietary License**
 
-<!-- proprietary-text-begin -->
+Copyright © 2024–2026 Parsaetak. All rights reserved.
 
-PARSAETAK PROPRIETARY LICENSE
-=============================
-Version 1.1 · Last updated: 2026-09-26
+### 1. Grant of License
 
-Copyright © 2024–2026 Parsaetak (https://github.com/Parsaetak). All rights
-reserved.
+Subject to the terms of this license, Parsaetak (“Licensor”) grants you a limited, non-exclusive, non-transferable, non-sublicensable, revocable license to install and use the Software on devices you own or control, solely for your personal or internal business purposes.
 
-SCOPE OF THIS LICENSE
----------------------
-This license governs every component of SHEYTAN-Local-Agent classified as
-"Proprietary" in §2 "Component classification" of LICENSE.md — the
-SHEYTAN-specific proprietary mechanisms, the product-specific
-implementation, the assets and designs, and all other explicitly
-classified material. Components explicitly designated as open in
-§2 of LICENSE.md are governed by the Apache License 2.0 (§4) instead.
-The classification in LICENSE.md §2 is authoritative.
+### 2. Restrictions
 
-IMPORTANT — READ CAREFULLY. By installing, copying, or otherwise using
-SHEYTAN-Local-Agent ("the Software") you agree to be bound by the terms of
-this agreement. If you do not agree, do not install or use the Software.
+You may **not**:
 
-1. GRANT OF LICENSE
-   Subject to the terms below, Parsaetak ("the Licensor") grants you a
-   personal, non-exclusive, non-transferable, revocable license to install
-   and run the Software on computers you own or control, for any lawful
-   personal or commercial purpose.
+- Copy, modify, adapt, translate, reverse engineer, decompile, disassemble, or create derivative works of the Software, except to the extent that applicable law expressly prohibits such restriction.
+- Distribute, publish, sublicense, sell, rent, lease, or otherwise transfer the Software or any portion of it to any third party.
+- Remove, alter, or obscure any proprietary notices, labels, or marks on the Software.
+- Use the Software to develop a competing product or service.
+- Use the Software in any manner that violates applicable law.
 
-2. INTELLECTUAL PROPERTY
-   The Proprietary components of the Software — their source code,
-   binaries, documentation, icons, and designs — are and remain the
-   exclusive property of Parsaetak and its contributors. No ownership
-   rights are transferred to you by this license. This license attaches
-   to the concrete expressions classified in §2 of LICENSE.md (actual
-   code, documentation, assets, and implementations); it does not assert
-   that abstract ideas, techniques, algorithms, or functionality
-   described by those expressions are themselves protected intellectual
-   property.
+### 3. Trademark
 
-3. TRADEMARK
-   "SHEYTAN", "SHEYTAN-Local-Agent", and the SHEYTAN logo are trademarks
-   of Parsaetak. You may not use the marks (or confusingly similar marks)
-   to name or promote products, forks, or derivative works without prior
-   written permission. Referring to the Software by its name for the
-   purpose of description, review, or interoperability is permitted.
+SHEYTAN™ and the SHEYTAN logo are trademarks of Parsaetak. This license does not grant any right to use the SHEYTAN name, logo, or branding beyond what trademark law allows. Nothing herein implies endorsement of derived works.
 
-4. DISTRIBUTION
-   You may NOT redistribute, sublicense, sell, rent, lease, or host the
-   Proprietary components of the Software (in whole or in part, original
-   or modified) without prior written permission. Sharing an unmodified
-   official release archive for non-commercial personal use is permitted,
-   provided all files — including this license (as consolidated in
-   LICENSE.md §5) and the classification in LICENSE.md §2 — remain
-   intact.
+### 4. Ownership
 
-5. DERIVATIVE WORKS
-   You may modify the Software for your own personal use. You may NOT
-   distribute modified versions, rebranded builds, or extractions of the
-   Proprietary source code without prior written permission.
+The Software is licensed, not sold. Licensor retains all right, title, and interest in and to the Software, including all intellectual property rights. This license does not transfer any ownership.
 
-6. LOCAL-FIRST PRIVACY
-   The Software is designed to run inference and tool execution locally on
-   your machine, with all data stored inside the application folder. When
-   the optional remote provider mode is enabled, prompts you submit are
-   sent to the third-party endpoint you configure; the Licensor is not
-   responsible for how third parties handle that data. Local logs (tool
-   calls, LLM calls, crashes) stay on your disk until you choose to export
-   them.
+### 5. Coverage of past and future material
 
-7. ACCEPTABLE USE
-   You agree to use the Software only in compliance with applicable law.
-   You are solely responsible for commands the agent executes on your
-   behalf, including any file, shell, browser, git, or network operations.
+This Proprietary License covers:
 
-8. DISCLAIMER OF WARRANTY
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
-   IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-   CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM, OUT OF, OR IN
-   CONNECTION WITH THE SOFTWARE OR ITS USE.
+- All current proprietary components of the Software
+- All previously existing proprietary files, code paths, mechanisms, and documentation (including material now listed in `docs/retired.md` or present only in git history)
+- All future updates, additions, modifications, and releases of the Software
 
-9. TERMINATION
-   This license terminates automatically if you breach any term. Upon
-   termination you must stop using the Software and delete all copies.
+### 6. Privacy and data
 
-10. CHANGES
-   The Licensor may revise this agreement for future releases. Continued
-   use after an update constitutes acceptance of the revised terms.
+The Software is local-first. Model weights, conversation data, and tool outputs remain on your machine unless you explicitly configure a remote provider. When a remote provider mode is enabled, prompts you submit are sent to the third-party endpoint you configure; the Licensor is not responsible for how third parties handle that data. Local logs stay on your disk until you choose to export them.
 
-<!-- proprietary-text-end -->
+### 7. Acceptable use
+
+You agree to use the Software only in compliance with applicable law. You are solely responsible for commands the agent executes on your behalf, including any file, shell, browser, git, or network operations.
+
+### 8. Disclaimer of Warranty
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+### 9. Termination
+
+This license terminates automatically if you breach any term. Upon termination you must stop using the Software and delete all copies.
+
+### 10. Changes
+
+The Licensor may revise this agreement for future releases. Continued use after an update constitutes acceptance of the revised terms.
 
 ---
 
 ## 6. Trademarks
 
-SHEYTAN™ and the SHEYTAN logo are trademarks of Parsaetak. They identify
-the Software and its distribution; no license in this repository grants
-any right to use the SHEYTAN name, logo or branding beyond what trademark
-law allows, and nothing here implies endorsement of derived works. The
-trademark grant and restrictions are stated in §5 §3 (Trademark) of the
-Parsaetak Proprietary License above.
+SHEYTAN™ and the SHEYTAN logo are trademarks of Parsaetak. They identify the Software and its distribution. No license in this repository grants any right to use the SHEYTAN name, logo, or branding beyond what trademark law allows.
 
 ---
 
@@ -480,20 +149,14 @@ Parsaetak Proprietary License above.
 
 Only the repository maintainer (Parsaetak) may reclassify a component:
 
-1. Move the component between the tables in [§2](#2-component-classification)
-   with the rationale.
-2. For a move to Open: add "SPDX-License-Identifier: Apache-2.0" headers
-   to every file in the component and confirm the component has no
-   coupling to proprietary mechanisms (or the coupling is one-directional:
-   proprietary → open).
-3. For a move to Proprietary: remove the Apache headers, and confirm no
-   downstream Apache-licensed extraction depends on it.
+1. Update the tables in §2 with the rationale.
+2. For a move to Open: add `SPDX-License-Identifier: Apache-2.0` headers and confirm no coupling to proprietary mechanisms.
+3. For a move to Proprietary: remove the Apache headers.
 4. Describe the change in the commit.
 
 ---
 
 ## 8. Contact
 
-Licensing questions, proprietary-use inquiries and exceptions:
-**https://github.com/Parsaetak** (open an issue or use the contact
-channel listed there).
+Licensing questions, proprietary-use inquiries, and exceptions:  
+https://github.com/SHEYTANx13 (open an issue or use the contact channel listed there).
