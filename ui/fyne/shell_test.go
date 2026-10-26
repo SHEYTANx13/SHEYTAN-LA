@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/widget"
 )
 
 func newTestAppForShell(t *testing.T) (*App, *fakeCore) {
@@ -90,29 +91,142 @@ func TestShellNavigationSwitches(t *testing.T) {
 	}
 }
 
-// TestResponsiveLayoutBreakpoint pins the compact adaptation: below the
-// breakpoint the rail hides; at/above it the rail shows and content
-// leaves room for it.
+// TestResponsiveLayoutBreakpoint pins the three-zone adaptation: wide
+// windows show the full rail, medium windows the compact rail, and narrow
+// windows the top navigation strip — navigation is reachable in every
+// zone (run #54 UX contract: compact mode never silently hides it).
 func TestResponsiveLayoutBreakpoint(t *testing.T) {
 	rail := container.NewVBox()
+	topNav := container.NewHScroll(container.NewHBox(widget.NewLabel("nav")))
 	inner := container.NewStack()
-	l := &responsiveLayout{rail: rail, inner: inner}
+	l := &responsiveLayout{rail: rail, topNav: topNav, inner: inner}
 
 	l.Layout(nil, fyne.NewSize(1000, 700))
 	if !rail.Visible() {
 		t.Fatal("wide window must show the rail")
 	}
+	if topNav.Visible() {
+		t.Fatal("wide window must hide the top strip")
+	}
 	if inner.Size().Width >= 1000 {
 		t.Fatal("content must leave room for the rail on wide windows")
+	}
+
+	// Medium zone: the compact rail keeps its own width budget.
+	l.Layout(nil, fyne.NewSize(800, 700))
+	if !rail.Visible() {
+		t.Fatal("medium window must show the compact rail")
+	}
+	if rail.Size().Width != railWidthCompact {
+		t.Fatalf("compact rail width = %v, want %v", rail.Size().Width, railWidthCompact)
 	}
 
 	l.Layout(nil, fyne.NewSize(500, 700))
 	if rail.Visible() {
 		t.Fatal("narrow window must hide the rail (compact adaptation)")
 	}
+	if !topNav.Visible() {
+		t.Fatal("narrow window must show the top navigation strip — navigation stays reachable")
+	}
+	if inner.Position().Y != topStripHeight {
+		t.Fatalf("narrow window content must start below the strip, got Y=%v", inner.Position().Y)
+	}
 	if inner.Size().Width != 500 {
 		t.Fatalf("narrow window content must use the full width, got %v", inner.Size().Width)
 	}
+}
+
+// TestNavPolicySizeClasses pins the policy across the required window-size
+// classes: small laptop windows, 1280x800, 1440x900, 1920x1080 — plus the
+// exact breakpoint edges.
+func TestNavPolicySizeClasses(t *testing.T) {
+	cases := []struct {
+		width float32
+		want  navZone
+	}{
+		{360, navTopStrip},
+		{500, navTopStrip},
+		{639, navTopStrip},
+		{640, navRailCompact},
+		{800, navRailCompact},
+		{999, navRailCompact},
+		{1000, navRailWide},
+		{1280, navRailWide},
+		{1440, navRailWide},
+		{1920, navRailWide},
+	}
+	for _, c := range cases {
+		if got := navPolicy(c.width); got != c.want {
+			t.Errorf("navPolicy(%v) = %v, want %v", c.width, got, c.want)
+		}
+	}
+}
+
+// TestResponsiveLayoutDegenerateSizes: zero, negative and tiny available
+// sizes must never panic and never produce negative content geometry.
+func TestResponsiveLayoutDegenerateSizes(t *testing.T) {
+	rail := container.NewVBox()
+	topNav := container.NewHScroll(container.NewHBox(widget.NewLabel("nav")))
+	inner := container.NewStack()
+	l := &responsiveLayout{rail: rail, topNav: topNav, inner: inner}
+
+	for _, sz := range []fyne.Size{
+		fyne.NewSize(0, 0),
+		fyne.NewSize(1, 1),
+		fyne.NewSize(10, 10),
+		fyne.NewSize(200, 40),
+		fyne.NewSize(-50, -50),
+	} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("Layout(%v) panicked: %v", sz, r)
+				}
+			}()
+			l.Layout(nil, sz)
+			if inner.Size().Width < 0 || inner.Size().Height < 0 {
+				t.Fatalf("Layout(%v) produced negative inner size %v", sz, inner.Size())
+			}
+		}()
+	}
+}
+
+// TestCompactNavigationReachable: in the top-strip zone the strip must be
+// part of the built shell and carry a button for EVERY primary view.
+func TestCompactNavigationReachable(t *testing.T) {
+	ap, _ := newTestAppForShell(t)
+	sh := newShell(ap)
+	root := sh.root()
+	if sh.topNav == nil {
+		t.Fatal("shell must build the compact top navigation strip")
+	}
+	buttons := 0
+	var walk func(fyne.CanvasObject)
+	walk = func(o fyne.CanvasObject) {
+		if o == nil {
+			return
+		}
+		if b, ok := o.(*widget.Button); ok && b.Text != "" {
+			buttons++
+		}
+		switch c := o.(type) {
+		case *fyne.Container:
+			for _, child := range c.Objects {
+				walk(child)
+			}
+		case *container.Scroll:
+			walk(c.Content)
+		}
+	}
+	if r, ok := sh.topNav.(fyne.CanvasObject); ok {
+		walk(r)
+	} else {
+		t.Fatal("topNav must be a CanvasObject")
+	}
+	if buttons < len(primaryViews) {
+		t.Fatalf("compact strip carries %d buttons, want at least %d (one per primary view)", buttons, len(primaryViews))
+	}
+	_ = root
 }
 
 // TestViewsWithEmptyDataNoPanic pins honest empty states: a core that

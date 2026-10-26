@@ -192,9 +192,13 @@ evidence class named in parentheses:
   registry and the parsed model card (deterministic + orchestrator-level
   E2E over a fake engine).
 
-Windows CI runs the full Go/frontend/native gates on GitHub-hosted runners;
-Linux CI runs the headless gates. **Neither is a claim of physical-PC
-runtime verification** — CI is CI.
+Windows CI runs the full Go build/test/smoke gates (MSYS2 UCRT64 CGO for
+the Fyne desktop binary) on GitHub-hosted runners; Linux CI runs the
+headless gates plus the Fyne UI suite and the real-window Xvfb smoke.
+**Neither is a claim of physical-PC runtime verification** — CI is CI.
+Every run consolidates all job logs into one plain-text artifact
+(`SHEYTAN-LA-all-logs-run-<run-id>-attempt-<attempt>`), uploaded on red
+and green runs alike.
 
 ## Installation
 

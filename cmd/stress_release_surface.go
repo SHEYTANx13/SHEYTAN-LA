@@ -506,18 +506,110 @@ func stressReleaseSurface() error {
 	}
 
 	// 3k. The workflow's APP_VERSION must derive from the ONE Go
-	// authority (internal/config.AppVersion via the version command) —
-	// the retired package.json authority and the release-version.mjs
-	// validator must not return.
-	if !strings.Contains(w, "go run ./cmd/sheytan-local-agent version") {
+	// authority (internal/config.AppVersion) through the CGO-free
+	// resolver cmd/printversion (--plain / --json). Run #54
+	// (40394318382) proved that resolving the version through the full
+	// agent binary is load-bearing fragile: `go run
+	// ./cmd/sheytan-local-agent version` compiles ui/fyne (CGO), so on
+	// a fresh runner without the graphics development headers the
+	// resolution step — and every step that shares that pattern — dies
+	// before printing anything. The shell must not re-parse the
+	// presentation format either: no `| head -1 |` pipelines and no sed
+	// extraction of the human-readable banner. The retired
+	// package.json / release-version.mjs authorities must not return.
+	if !strings.Contains(w, "go run ./cmd/printversion --plain") {
 		return fmt.Errorf(
-			"workflow does not resolve APP_VERSION from the Go authority (expected the `go run ./cmd/sheytan-local-agent version` derivation step)",
+			"workflow does not resolve APP_VERSION from the Go authority via the CGO-free resolver (expected `go run ./cmd/printversion --plain` with CGO_ENABLED=0)",
 		)
+	}
+	for _, staleParse := range []string{
+		"version | head -1 | sed",
+		"| head -1 | sed -n",
+	} {
+		if strings.Contains(w, staleParse) {
+			return fmt.Errorf(
+				"workflow re-parses the agent's presentation output with %q — resolve the version via cmd/printversion --plain (machine-readable, fail-closed) instead of scraping the banner",
+				staleParse,
+			)
+		}
 	}
 	if strings.Contains(w, "release-version.mjs") ||
 		strings.Contains(w, "package.json") {
 		return fmt.Errorf(
 			"workflow still references the retired Node version authority (release-version.mjs / package.json)",
+		)
+	}
+
+	// 3l. Headless audit surface (run #54, 40394318382): the audit job
+	// is the HEADLESS core gate and its runner never installs the
+	// Fyne/CGO graphics prerequisites — the stress gate there MUST run
+	// under the `headless` build tag so it compiles without ui/fyne.
+	// The untagged invocation on a fresh Linux runner is exactly how
+	// run #54's "Stress + release-surface gate" step died in ~1s (cgo
+	// glfw compile: missing graphics headers), while the same suite
+	// passed 47/47 on a host that had the headers.
+	if !strings.Contains(w, "go run -tags headless ./cmd/sheytan-local-agent stress") {
+		return fmt.Errorf(
+			"audit job must run the stress gate headless (expected `go run -tags headless ./cmd/sheytan-local-agent stress`) — the audit runner has no Fyne/CGO graphics prerequisites and the desktop build would fail to compile there (run #54 root cause)",
+		)
+	}
+
+	// 3m. Windows toolchain environment (msys2 October 2026 news):
+	// MINGW64 is deprecated and its leaf packages are being dropped —
+	// the workflow must provision UCRT64 with the ucrt package set and
+	// the /ucrt64/bin PATH, and must not regress to the MINGW64
+	// spellings.
+	for _, ucrt := range []string{
+		"msystem: UCRT64",
+		"mingw-w64-ucrt-x86_64-gcc",
+		"/ucrt64/bin",
+		"C:\\msys64\\ucrt64\\bin",
+	} {
+		if !strings.Contains(w, ucrt) {
+			return fmt.Errorf(
+				"Windows CI must provision the UCRT64 toolchain (missing %q) — MINGW64 is deprecated per msys2's October 2026 announcement",
+				ucrt,
+			)
+		}
+	}
+	for _, mingw64 := range []string{
+		"msystem: MINGW64",
+		"mingw-w64-x86_64-",
+		"/mingw64/bin",
+		"C:\\msys64\\mingw64\\bin",
+	} {
+		if strings.Contains(w, mingw64) {
+			return fmt.Errorf(
+				"deprecated MINGW64 fragment %q still in the workflow — migrate to UCRT64 (mingw-w64-ucrt-x86_64-*, /ucrt64/bin) per msys2's October 2026 deprecation",
+				mingw64,
+			)
+		}
+	}
+
+	// 3n. Consolidated run-log contract (run #54 defect: the collector
+	// merged all per-job log parts into ONE flat directory, so
+	// identically named logs — gate-order.txt — overwrote each other
+	// before concatenation, and if-no-files-found: ignore could drop
+	// the mandatory artifact silently). The workflow must keep the
+	// per-job log parts namespaced, must fail the collector after
+	// preserving the report when sources are missing, and must upload
+	// exactly one consolidated artifact with if-no-files-found: error.
+	for _, consolidation := range []string{
+		"SHEYTAN-LA-all-logs-run-",
+		"scripts/ci/consolidate-run-log.sh",
+		"=== MISSING LOG SOURCE ===",
+		"=== ERROR INDEX ===",
+	} {
+		if !strings.Contains(w, consolidation) {
+			return fmt.Errorf(
+				"consolidated run-log contract missing %q — the one-file log must be namespaced, complete and uploaded on red runs too",
+				consolidation,
+			)
+		}
+	}
+	if strings.Contains(w, "merge-multiple: true") {
+		return fmt.Errorf(
+			"log-part download uses merge-multiple: true — identically named logs from different jobs (gate-order.txt) overwrite each other before consolidation",
 		)
 	}
 

@@ -65,6 +65,7 @@ type shell struct {
 	mu          sync.Mutex
 	body        *fyne.Container // swapped view content
 	rail        *fyne.Container
+	topNav      fyne.CanvasObject // compact top strip (navTopStrip zone)
 	status      *widget.Label
 	views       map[string]fyne.CanvasObject // cached built views (rebuilt on demand)
 	active      string
@@ -133,7 +134,9 @@ func newShell(ap *App) *shell {
 }
 
 // root assembles the full shell widget tree. Layout is responsive: the
-// navRailLayout switches rail position/visibility from the canvas width.
+// navPolicy resolves the navigation presentation from the canvas width —
+// wide rail, compact rail, or a top navigation strip — and navigation is
+// reachable in EVERY zone (compact mode never silently hides it).
 func (s *shell) root() fyne.CanvasObject {
 	s.body = container.NewStack()
 	s.rail = container.NewVBox()
@@ -156,35 +159,116 @@ func (s *shell) root() fyne.CanvasObject {
 		s.rail.Add(b)
 	}
 
+	// Compact top navigation: one button per primary view, horizontally
+	// scrollable, so narrow windows keep every destination reachable.
+	strip := container.NewHBox()
+	for _, v := range primaryViews {
+		vv := v
+		b := widget.NewButton(vv.label, func() { s.show(vv.id) })
+		b.Importance = widget.LowImportance
+		strip.Add(b)
+	}
+	s.topNav = container.NewHScroll(strip)
+
 	statusBar := container.NewVBox(widget.NewSeparator(), s.status)
 	content := container.NewBorder(nil, statusBar, s.rail, nil, s.body)
-	return container.New(&responsiveLayout{rail: s.rail, inner: content}, s.rail, content)
+	return container.New(&responsiveLayout{rail: s.rail, topNav: s.topNav, inner: content}, s.rail, s.topNav, content)
 }
 
-// responsiveLayout hides the rail when the canvas is narrow (compact
-// adaptation: navigation never consumes the entire narrow viewport). A
-// plain container+layout — no widget plumbing, no CurrentApp dependency
-// before the event loop starts.
+// navZone is the resolved navigation presentation for one available width.
+type navZone int
+
+const (
+	navRailWide    navZone = iota // >= wideBreakpoint: full rail
+	navRailCompact                // >= compactBreakpoint: narrow rail
+	navTopStrip                   // below compactBreakpoint: top strip
+)
+
+// Responsive breakpoints and zone dimensions. One policy, three zones:
+// the product adapts to the ACTUAL available width rather than a single
+// preset breakpoint (360-wide laptop windows through 1920+ desktops and
+// high-DPI scaling all resolve through the same pure function).
+const (
+	compactBreakpoint = float32(640)
+	wideBreakpoint    = float32(1000)
+	railWidthWide     = float32(170)
+	railWidthCompact  = float32(120)
+	topStripHeight    = float32(44)
+)
+
+// navPolicy is the SINGLE responsive decision — a pure function over the
+// available width so the layout policy is unit-testable independently of
+// widget trees and window systems.
+func navPolicy(width float32) navZone {
+	switch {
+	case width >= wideBreakpoint:
+		return navRailWide
+	case width >= compactBreakpoint:
+		return navRailCompact
+	default:
+		return navTopStrip
+	}
+}
+
+// responsiveLayout applies navPolicy to the shell geometry: it sizes and
+// positions the rail, the compact top strip and the content area, with
+// guards against zero/negative available sizes (tiny windows, collapsed
+// splitters, pre-layout zero passes).
 type responsiveLayout struct {
-	rail  fyne.CanvasObject
-	inner fyne.CanvasObject
+	rail   fyne.CanvasObject
+	topNav fyne.CanvasObject
+	inner  fyne.CanvasObject
 }
 
 func (l *responsiveLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
-	const railWidth = float32(150)
 	_ = objs
-	if size.Width < 640 {
+	w := size.Width
+	h := size.Height
+	if w < 0 {
+		w = 0
+	}
+	if h < 0 {
+		h = 0
+	}
+
+	switch navPolicy(w) {
+	case navRailWide:
+		railW := railWidthWide
+		if w < railW {
+			railW = w // degenerate guard: never overflow the canvas
+		}
+		l.topNav.Hide()
+		l.topNav.Resize(fyne.NewSize(0, 0))
+		l.rail.Show()
+		l.rail.Resize(fyne.NewSize(railW, h))
+		l.rail.Move(fyne.NewPos(0, 0))
+		l.inner.Resize(fyne.NewSize(w-railW, h))
+		l.inner.Move(fyne.NewPos(railW, 0))
+	case navRailCompact:
+		railW := railWidthCompact
+		if w < railW {
+			railW = w
+		}
+		l.topNav.Hide()
+		l.topNav.Resize(fyne.NewSize(0, 0))
+		l.rail.Show()
+		l.rail.Resize(fyne.NewSize(railW, h))
+		l.rail.Move(fyne.NewPos(0, 0))
+		l.inner.Resize(fyne.NewSize(w-railW, h))
+		l.inner.Move(fyne.NewPos(railW, 0))
+	default: // navTopStrip
 		l.rail.Hide()
 		l.rail.Resize(fyne.NewSize(0, 0))
 		l.rail.Move(fyne.NewPos(0, 0))
-		l.inner.Resize(fyne.NewSize(size.Width, size.Height))
-		l.inner.Move(fyne.NewPos(0, 0))
-	} else {
-		l.rail.Show()
-		l.rail.Resize(fyne.NewSize(railWidth, size.Height))
-		l.rail.Move(fyne.NewPos(0, 0))
-		l.inner.Resize(fyne.NewSize(size.Width-railWidth, size.Height))
-		l.inner.Move(fyne.NewPos(railWidth, 0))
+		stripH := topStripHeight
+		if h < stripH {
+			stripH = h // degenerate guard: content keeps a non-negative share
+		}
+		l.topNav.Show()
+		l.topNav.Resize(fyne.NewSize(w, stripH))
+		l.topNav.Move(fyne.NewPos(0, 0))
+		l.inner.Resize(fyne.NewSize(w, h-stripH))
+		l.inner.Move(fyne.NewPos(0, stripH))
 	}
 }
 

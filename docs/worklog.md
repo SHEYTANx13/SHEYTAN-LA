@@ -4244,3 +4244,51 @@ ONE artifact upload per job after ALL gates. Windows step 22 (W-ACC3): replaced 
 Start-Process -RedirectStandardOutput/-RedirectStandardError native-handle capture into ci-logs/win-qt-acceptance.out.log
 and .err.log, merged with process-facts prelude into ci-logs/win-qt-acceptance.log, keeping try/catch and
 empty-output guard. Local regression: gofmt clean, sessions -count=50 green, workflow YAML valid.
+
+---
+Task ID: 48 (v1.11.0 run #54 repair cycle)
+Agent: run #54 repair engineering session
+Task: repair run 40394318382 (commit e6e1968) — audit stress gate, Linux version
+resolution, Windows BUILD-INFO, log consolidation, MINGW64→UCRT64; responsive
+shell upgrade.
+
+Evidence trail (what was actually observed):
+- Jobs API step-level data for run #54: audit step 6 "Stress + release-surface
+  gate" FAILED (1s); Linux x64 step 4 "Resolve APP_VERSION" FAILED (1s), all
+  later steps skipped; Windows x64 steps 1–13 SUCCESS (incl. smoke), step 14
+  "Write BUILD-INFO.txt" FAILED (1s); consolidation job SUCCESS in 6s (its
+  artifact value degraded by the merge-multiple flattening). MINGW64
+  deprecation warning on the Windows job. Full job logs are auth-gated
+  (GET job logs → 403 "Must have admin rights to Repository") — diagnosis used
+  the public step data, the workflow at the failed commit, and local
+  reproduction; nothing was invented about hidden log content.
+- Local repro: full-agent version command without graphics headers → cgo fatal
+  `wayland-client-core.h: No such file or directory` (glfw); with a local
+  header prefix → v1.11.0 banner, sed parse OK. Stress 47/47 WITH headers.
+  Headless-tag build compiles with CGO_ENABLED=0 and no headers.
+  Windows BUILD-INFO step under pwsh 7.4.6 with the runner wrapper → PASS.
+
+Fixes shipped this cycle:
+- audit: stress gate now `-tags headless` (+ fixtures gate for the log
+  collector); printversion (--plain/--json) as the CGO-free version resolver
+  for both OS jobs; Linux cross-checks the compiled binary's banner.
+- Windows: UCRT64 toolchain; BUILD-INFO + package metadata rewritten as
+  explicit, individually-validated utf8NoBOM writes; smoke uses bounded
+  MainWindowHandle polling + graceful CloseMainWindow before force-kill.
+- Linux smoke: bounded Xvfb-lock + xwininfo window observation, SIGTERM with
+  zombie-safe reaping; package-gate step reports the root failure instead of a
+  vague upload annotation.
+- Consolidated log: namespaced log parts (no merge-multiple),
+  scripts/ci/consolidate-run-log.sh collector (summary/error index/warning
+  index/NEVER_STARTED/MISSING LOG SOURCE/deterministic full logs),
+  mandatory `SHEYTAN-LA-all-logs-run-<run-id>-attempt-<attempt>` artifact with
+  if-no-files-found:error; fixtures 9/9 as a standing audit gate.
+- ui/fyne: three-zone navPolicy (wide/compact rails + top strip) with
+  degenerate-size guards and 4 new tests; product minimum 360x320.
+- Gates updated (stress_release_surface.go 3k–3n): headless stress spelling,
+  printversion requirement + banner-scraping ban, UCRT64 requirement +
+  MINGW64 ban, consolidated-log contract; +97/-5 lines, gofmt-clean.
+
+Not run (honesty): hosted verification of this commit (operator push pending);
+Windows UCRT64 build/smoke/installer (no Windows host here); physical-host
+desktop, high-DPI, GPU rendering; mobile (never shipped/claimed).
