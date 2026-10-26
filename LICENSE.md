@@ -85,7 +85,7 @@ Copyright © 2024–2026 SHEYTAN and Parsaetak. All rights reserved.
 
 ### 1. Grant of License
 
-Subject to the terms of this license, SHEYTAN and Parsaetak (collectively “Licensor”) grant you a limited, non-exclusive, non-transferable, non-sublicensable, revocable license to install and use the Software on devices you own or control, solely for your personal or internal business purposes.
+Subject to the terms of this license, **SHEYTAN** and **Parsaetak** (collectively “Licensor”) grant you a limited, non-exclusive, non-transferable, non-sublicensable, revocable license to install and use the Software on devices you own or control, solely for your personal or internal business purposes.
 
 ### 2. Restrictions
 
