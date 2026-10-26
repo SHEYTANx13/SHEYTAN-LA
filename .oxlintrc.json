@@ -1,8 +1,0 @@
-{
-  "ignorePatterns": [
-    "node_modules/**",
-    "dist/**",
-    "web/static/**",
-    "native/engine/build/**"
-  ]
-}

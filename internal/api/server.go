@@ -1,4 +1,4 @@
-// Package api serves the embedded web UI and exposes the JSON REST+WS API
+// Package api exposes the JSON REST+WS API of the Go core
 // that the UI talks to.
 package api
 
@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -44,7 +43,6 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/vision"
-	"github.com/Parsaetak/SHEYTAN-local-agent/web"
 
 	"github.com/gorilla/websocket"
 )
@@ -825,9 +823,10 @@ func (s *Server) EnsureSetup() error {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// Static UI
-	staticRoot, _ := fs.Sub(web.StaticFS, "static")
-	mux.Handle("/", http.FileServer(http.FS(staticRoot)))
+	// No static UI: the ONE product UI is the in-process Fyne application
+	// (v1.11.0 one-Go-UI migration). The former embedded React bundle
+	// (web/static) and its file-server route are retired; unknown paths
+	// fall through to the API mux and 404.
 
 	// REST API
 	mux.HandleFunc("/api/state", s.handleState)

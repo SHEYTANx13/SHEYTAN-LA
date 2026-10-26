@@ -53,6 +53,10 @@ const (
 	EnvEndpoint = "SHEYTAN_IPC_ENDPOINT"
 	// EnvKey is the ephemeral handshake key. Never logged, never persisted.
 	EnvKey = "SHEYTAN_IPC_KEY"
+	// HeaderKey is the HTTP header carrying the ephemeral key. Enforced on
+	// the handshake; every core request from the one UI sends it for
+	// parity (v1.11.0 one-Go-UI migration — one name, one source).
+	HeaderKey = "X-SHEYTAN-IPC-Key"
 )
 
 // ErrUnauthorized is returned when a peer fails the transport-level

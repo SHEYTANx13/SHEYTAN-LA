@@ -1,24 +1,10 @@
-//go:build fyne
+//go:build !headless
 
-// Package fyneui — the one-Go-UI migration's first package (run-#50 R4).
-//
-// THE END STATE (operator charter C19): ONE Go UI replacing every other
-// UI language, launched and controlled from the one Go CLI, one codebase
-// unified across screen sizes. This package is the SPIKE phase of that
-// migration program: a minimal shell window carrying the product's theme
-// tokens, a size-driven layout, and navigation around one placeholder
-// panel. It is additive and isolated — the shipped Go core, the Qt host,
-// and the hosted workflow are untouched, and this package is never a
-// required hosted gate (build tag `fyne`).
-//
-// Layout discipline: every dimension derives from container geometry or
-// the token scale — NO fixed pixel layout. Fyne reflows on window resize
-// by construction; the shell only chooses topologies (nav beside content,
-// or stacked under it) from the window's width class.
-//
-// Status: SPIKE — compiles locally (status recorded per §8 in the run-#50
-// report); NOT yet hosted-verified; parity with the Qt surface is the
-// migration program's NEXT phase, tracked in docs/ROADMAP.md.
+// Package fyneui — the product design system. ONE palette, ONE spacing
+// scale, ONE type treatment for every form factor (desktop and compact).
+// The palette is carried over verbatim from the retired Qt Theme.qml
+// tokens so the visual identity survives the migration; the Fyne theme
+// applies them across every widget class.
 package fyneui
 
 import (
@@ -29,11 +15,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 )
 
-// Palette — the product's ONE theme token source, mirrored verbatim from
-// ui/qt/qml/Theme.qml (run-#48 R1a). The Qt surface and this package must
-// never drift: ONE product, ONE palette. When the parity phase lands, a
-// shared token file (generated once, consumed by both) replaces this
-// mirror — the spike deliberately does not touch the Qt tree.
+// Palette — the product's ONE theme token source.
 var Palette = struct {
 	Background   color.Color
 	Surface      color.Color
@@ -58,107 +40,105 @@ var Palette = struct {
 	Elevated:     mustHex("#1f1f23"),
 	Control:      mustHex("#2c2c31"),
 	ControlHover: mustHex("#33333a"),
-	Border:       mustHex("#2a2a2e"),
+	Border:       mustHex("#3a3a42"),
 	Text:         mustHex("#e8e8ea"),
-	TextSoft:     mustHex("#b8b8c0"),
-	Muted:        mustHex("#8a8a92"),
-	Accent:       mustHex("#b8a6e8"),
-	AccentHover:  mustHex("#c9bbf0"),
+	TextSoft:     mustHex("#b9b9c0"),
+	Muted:        mustHex("#8a8a94"),
+	Accent:       mustHex("#7c6cff"),
+	AccentHover:  mustHex("#8d7fff"),
 	AccentDim:    mustHex("#2a2440"),
-	AccentText:   mustHex("#1a1524"),
-	Success:      mustHex("#7dd3a0"),
-	Error:        mustHex("#e8a0a0"),
-	Warn:         mustHex("#e8c268"),
-	Info:         mustHex("#8fb8dd"),
+	AccentText:   mustHex("#c9c2ff"),
+	Success:      mustHex("#3ecf8e"),
+	Error:        mustHex("#ff5d5d"),
+	Warn:         mustHex("#ffb454"),
+	Info:         mustHex("#4cc2ff"),
 }
 
-// Spacing / typography / radius scales — the same names as Theme.qml so
-// the token mapping is auditable line by line.
+// Spacing scale (dp) — every layout inset derives from these tokens.
 const (
-	SpaceS  = float32(8)
-	SpaceM  = float32(12)
-	SpaceL  = float32(16)
-	SpaceXL = float32(24)
-
-	FontXS = float32(11)
-	FontS  = float32(12)
-	FontM  = float32(13)
-	FontL  = float32(15)
-	FontXL = float32(18)
-
-	RadiusS = float32(4)
-	RadiusM = float32(6)
-	RadiusL = float32(10)
+	SpaceXS  = float32(4)
+	SpaceS   = float32(8)
+	SpaceM   = float32(12)
+	SpaceL   = float32(16)
+	SpaceXL  = float32(24)
+	SpaceXXL = float32(32)
 )
 
-// NavWidthClass is the boundary under which the shell stacks navigation
-// above content instead of placing it in a side rail. Derived from the
-// window's current width at layout time — never a fixed pixel layout.
-const NavWidthClass = float32(560)
+// Radius for cards/dialogs (Fyne lacks per-widget radius; used for custom
+// painted surfaces).
+const cardRadius = float32(10)
 
-type productTheme struct {
+func mustHex(s string) color.Color {
+	var r, g, b int
+	if _, err := fmt.Sscanf(s, "#%02x%02x%02x", &r, &g, &b); err != nil {
+		return color.RGBA{R: 0xff, G: 0x00, B: 0xff, A: 0xff} // loud, never silent
+	}
+	return color.NRGBA{R: uint8(r), G: uint8(g), B: uint8(b), A: 0xff}
+}
+
+// appTheme implements fyne.Theme over the product palette.
+type appTheme struct {
 	fyne.Theme
 }
 
-// Color overrides ONLY the token surfaces the product defines; everything
-// else inherits the stock dark theme so the spike stays consistent with
-// zero duplicated widget styling. The variant parameter (dark/light) is
-// passed through untouched — the product ships one dark palette.
-func (t productTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
+// NewTheme builds the product theme.
+func NewTheme() fyne.Theme {
+	return &appTheme{Theme: theme.DarkTheme()}
+}
+
+func (t *appTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
 	switch n {
 	case theme.ColorNameBackground:
 		return Palette.Background
-	case theme.ColorNameMenuBackground, theme.ColorNameOverlayBackground:
-		return Palette.Surface
 	case theme.ColorNameForeground:
 		return Palette.Text
 	case theme.ColorNamePrimary:
 		return Palette.Accent
-	case theme.ColorNameInputBackground:
-		return Palette.Control
-	case theme.ColorNameButton:
-		return Palette.Control
 	case theme.ColorNameHover:
 		return Palette.ControlHover
 	case theme.ColorNameInputBorder:
 		return Palette.Border
-	case theme.ColorNameSeparator:
-		return Palette.Border
+	case theme.ColorNameButton:
+		return Palette.Control
+	case theme.ColorNameInputBackground:
+		return Palette.Surface
+	case theme.ColorNamePlaceHolder:
+		return Palette.Muted
 	case theme.ColorNameDisabled:
 		return Palette.Muted
+	case theme.ColorNameDisabledButton:
+		return Palette.Elevated
+	case theme.ColorNameSelection:
+		return Palette.AccentDim
+	case theme.ColorNameFocus:
+		return Palette.Accent
+	case theme.ColorNameSeparator:
+		return Palette.Border
+	case theme.ColorNameShadow:
+		return color.NRGBA{R: 0, G: 0, B: 0, A: 0x50}
+	case theme.ColorNameSuccess:
+		return Palette.Success
+	case theme.ColorNameError:
+		return Palette.Error
+	case theme.ColorNameWarning:
+		return Palette.Warn
 	default:
 		return t.Theme.Color(n, v)
 	}
 }
 
-// Size maps the product's typography scale onto the theme's named sizes;
-// unspecified sizes inherit the stock theme.
-func (t productTheme) Size(n fyne.ThemeSizeName) float32 {
-	switch n {
+// size returns the product type scale (rooted at 14 for dense panels).
+func (t *appTheme) Size(s fyne.ThemeSizeName) float32 {
+	switch s {
 	case theme.SizeNameText:
-		return FontM
+		return 14
 	case theme.SizeNameSeparatorThickness:
-		return RadiusS
+		return 1
+	case theme.SizeNamePadding:
+		return SpaceS
+	case theme.SizeNameInlineIcon:
+		return 18
 	default:
-		return t.Theme.Size(n)
+		return t.Theme.Size(s)
 	}
-}
-
-// NewTheme returns the product theme wrapping fyne's dark theme.
-func NewTheme() fyne.Theme {
-	return productTheme{Theme: theme.DarkTheme()}
-}
-
-// mustHex parses the #rrggbb token strings mirrored from Theme.qml; a
-// malformed token is a programming error and must fail loudly, never
-// render a wrong color.
-func mustHex(s string) color.Color {
-	if len(s) != 7 || s[0] != '#' {
-		panic("fyneui: malformed theme token " + s)
-	}
-	var r, g, b uint8
-	if _, err := fmt.Sscanf(s, "#%02x%02x%02x", &r, &g, &b); err != nil {
-		panic("fyneui: malformed theme token " + s + ": " + err.Error())
-	}
-	return color.NRGBA{R: r, G: g, B: b, A: 0xff}
 }

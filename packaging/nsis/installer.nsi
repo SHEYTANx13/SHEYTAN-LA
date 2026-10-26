@@ -42,14 +42,12 @@
 ;     so the desktop/Start Menu entries and their removal are symmetric
 ;     for every user of the machine.
 ;
-; v1.10.14 PAYLOAD CONTRACT (run #36 class):
-;   - the installer stages the COMPLETE application — the exact pair the
-;     portable ZIP ships: SHEYTAN-LA.exe (Go core + launcher) +
-;     sheytan-ui.exe (Qt host) + the deployed Qt runtime (the windeployqt
-;     output: Qt6Core.dll, plugins, QML imports). Compile-time assertions
-;     below refuse to build an installer that cannot boot the desktop —
-;     the run-#36 installer staged only the Go core, so every installed
-;     launch died silently at the ui-resolve step.
+; v1.11.0 PAYLOAD CONTRACT (one-Go-UI migration):
+;   - the installer stages the COMPLETE application — ONE executable:
+;     SHEYTAN-LA.exe (Go core + launcher + the ONE Fyne UI, all in the
+;     same Go binary). No second UI binary, no Qt runtime, no windeployqt
+;     output. Compile-time assertions below refuse to build when the
+;     staging executable is missing.
 ;   - UNINSTALL SYMMETRY: CI enumerates the exact payload tree into
 ;     payload-uninstall.nsh (one Delete per file, bottom-up RMDir per
 ;     directory) and the uninstaller includes it — the uninstaller
@@ -62,7 +60,7 @@
 ; entry below resolves through $INSTDIR.
 ;
 ; Contract:
-;   - installs the COMPLETE APPLICATION (the pair + Qt runtime + license
+;   - installs the COMPLETE APPLICATION (the one Go executable + license
 ;     + readme); models are NEVER bundled and NEVER deleted;
 ;   - per-machine install to $PROGRAMFILES64\SHEYTAN-LA;
 ;   - v1.3.6: the canonical data root is the INSTALL-LOCAL data tree
@@ -111,16 +109,6 @@ ManifestDPIAware true
 ; found" error further down.
 !if ! /FileExists "${BUILDDIR}\${EXE}"
   !error "NSIS: staging executable not found: ${BUILDDIR}\${EXE} (build the portable application first; pass an ABSOLUTE -DBUILDDIR from CI)"
-!endif
-
-; v1.10.14: the installer must ship the COMPLETE pair — a staging tree
-; without the Qt host or the Qt runtime builds an installer that closes
-; instantly on every launch (the run-#36 defect); it is refused here.
-!if ! /FileExists "${BUILDDIR}\sheytan-ui.exe"
-  !error "NSIS: staging Qt host not found: ${BUILDDIR}\sheytan-ui.exe (build the Qt host and run windeployqt first — the installer must ship the complete pair)"
-!endif
-!if ! /FileExists "${BUILDDIR}\Qt6Core.dll"
-  !error "NSIS: staging Qt runtime not found: ${BUILDDIR}\Qt6Core.dll (windeployqt must have deployed the Qt runtime beside the host)"
 !endif
 
 ; v1.10.14 UNINSTALL SYMMETRY: CI generates payload-uninstall.nsh from
@@ -253,13 +241,13 @@ upgrade_replaced:
   File /nonfatal "${BUILDDIR}\README.md"
   File /nonfatal "${BUILDDIR}\SIGNATURE"
   File "..\..\build\sheytan.ico"
-  ; v1.10.14 PAYLOAD: everything else the staged application carries —
-  ; sheytan-ui.exe, the Qt runtime (Qt6Core.dll + plugins + QML imports).
-  ; The CI payload-staging step excluded the portable-only files
-  ; (README.txt, BUILD-INFO.txt, AI-CONTEXT.md, SHEYTAN-LA.bat, models/,
-  ; workspace/) before makensis ran, so what lands in $INSTDIR is the
-  ; installed application. The hosted silent-install smoke asserts the
-  ; pair in the INSTALLED tree — the executable proof of this line.
+  ; v1.11.0 PAYLOAD: everything else the staged application carries
+  ; (license, readme, signature, icon). The CI payload-staging step
+  ; excludes portable-only files (README.txt, BUILD-INFO.txt,
+  ; AI-CONTEXT.md, SHEYTAN-LA.bat, models/, workspace/) before makensis
+  ; runs, so what lands in $INSTDIR is the installed application. The
+  ; hosted silent-install smoke asserts the executable in the INSTALLED
+  ; tree — the executable proof of this line.
   File /r "${BUILDDIR}\*.*"
 
   ; Version-aware upgrade bookkeeping.

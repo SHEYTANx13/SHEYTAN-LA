@@ -61,7 +61,7 @@ coverage.*
 .DS_Store
 Thumbs.db
 
-# Vite build output (synced into web/static at build time)
+# Release staging output (workflow packaging)
 /dist/
 
 # v1.1.5: C++ native engine build artifacts (CMake/Make output — the

@@ -3,7 +3,7 @@
 This is the C++ side of the **SHEYTAN Native AI Engine architecture**:
 
 ```text
-Qt Quick/QML host (ui/qt — the native desktop UI)
+Fyne UI (ui/fyne — the ONE Go desktop UI, in-process client)
       ↓
    Local IPC  (internal/localipc — per-user socket/pipe, keyed handshake)
       ↓

@@ -5,7 +5,7 @@
 > The model proposes. The tools execute. The laboratory verifies.
 > SHEYTAN measures the machine, governs the runtime and verifies the work.
 
-SHEYTAN™ Local-Agent is a local-first desktop AI engineering environment built around a Go core (the single authority for runs, tools, sessions, memory, approvals and policy), a native Qt Quick/QML desktop UI that consumes that core over a secured per-user local IPC channel, managed llama.cpp inference, a native C++ engine path, controlled tools, isolated coding workspaces, Net Search, memory, recall, objective verification — and a Runtime Governor that continuously understands the machine and governs runtime policy while keeping the host responsive.
+SHEYTAN™ Local-Agent is a local-first desktop AI engineering environment built around a Go core (the single authority for runs, tools, sessions, memory, approvals and policy) and ONE native Go + Fyne desktop UI — the same Go codebase ships Windows and Linux executables, running in-process against the core over a secured per-user local IPC channel — plus managed llama.cpp inference, a native C++ engine path, controlled tools, isolated coding workspaces, Net Search, memory, recall, objective verification — and a Runtime Governor that continuously understands the machine and governs runtime policy while keeping the host responsive.
 
 **SHEYTAN™ is a trademark of Parsaetak · © 2024–2026 Parsaetak. All rights reserved.**
 
@@ -33,11 +33,13 @@ One Go process owns the runtime: a single engine lifecycle over managed
 llama.cpp (with the native C++ engine as a validated alternative path), one
 run lifecycle (fresh and resumed runs share one registry, one hub, one
 authoritative state), one session store, one tool registry, one scheduler,
-one downloader, one installer/update path and one memory authority. The
-frontend is a React/TypeScript surface embedded into the binary. A Runtime
-Governor folds the existing live-pressure telemetry into a policy
-authority — it owns policy only; every action stays with its existing
-subsystem. Full truth: `docs/ARCHITECTURE.md`.
+one downloader, one installer/update path and one memory authority. The UI
+is the ONE Go + Fyne application (`ui/fyne`) running as an in-process
+client of the same core over the secured local IPC endpoint — no second UI
+implementation, no embedded browser, no Qt runtime. A Runtime Governor
+folds the existing live-pressure telemetry into a policy authority — it
+owns policy only; every action stays with its existing subsystem. Full
+truth: `docs/ARCHITECTURE.md`.
 
 ### Deterministic data analysis
 
@@ -199,8 +201,17 @@ session; `SHEYTAN-LA.exe serve` runs the headless server. Models are managed
 in-app (downloader is the ONE download authority); GGUF files can also be
 imported from disk.
 
-Build from source: Go 1.26, Node 24, `npm ci`, `npm run build`,
-`go build` (Windows desktop; `-tags headless` for CI/containers/servers).
+Build from source (one toolchain, no Node): install Go 1.26+ and the Fyne
+native build prerequisites — a C compiler (gcc/MinGW-w64/MSVC via the
+documented recipes), `pkg-config`, and the desktop graphics development
+libraries (Linux: `libgl1-mesa-dev`, `xorg-dev` components including
+`libxxf86vm-dev`, `libwayland-dev`, `libxkbcommon-dev`; Windows: MSYS2
+MinGW-w64 packages per docs.fyne.io). Then `go build ./cmd/sheytan-local-agent`
+produces the desktop binary; `-tags headless` builds the API-only variant
+for CI/containers/servers. The UI codebase is portable to Android/iOS by
+architecture (Fyne targets both), but shipping those platforms requires
+their SDKs/toolchains (iOS additionally requires macOS/Xcode) and is NOT
+claimed as verified here.
 
 ## Configuration
 

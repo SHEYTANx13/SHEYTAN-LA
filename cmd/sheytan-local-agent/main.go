@@ -1,8 +1,9 @@
 // Package main is the SHEYTAN-Local-Agent entry point.
 //
-// With no command, the per-platform entrypoint launches the native Qt
-// desktop host (Go core + secured local IPC; v1.10.1). Explicit CLI
-// subcommands continue through cmd.
+// With no command, the per-platform entrypoint launches the ONE Fyne
+// desktop UI in-process over the Go core's secured local IPC channel
+// (v1.11.0 one-Go-UI migration — the Qt/QML host and the React web shell
+// are retired). Explicit CLI subcommands continue through cmd.
 package main
 
 import (

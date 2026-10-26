@@ -249,8 +249,7 @@ func TestLicenseMDIsTheCompleteConsolidatedDocument(t *testing.T) {
 		"llama.cpp",
 		"The ggml authors",
 		"gorilla/websocket",
-		"Qt 6 (Core/Gui/Quick/QML/QuickControls2/Test)",
-		"react-markdown",
+		"fyne.io/fyne/v2",
 		"How to determine the license of a file",
 	} {
 		if !strings.Contains(content, anchor) && !strings.Contains(low, strings.ToLower(anchor)) {

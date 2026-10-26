@@ -82,7 +82,9 @@ func Serve(cfg *config.Config, args []string) int {
 	fmt.Printf("  sessions: %s\n", cfg.SessionsDir)
 	fmt.Printf("  data:    %s\n", cfg.DataDir)
 	fmt.Println()
-	fmt.Println("Open the URL above in your browser. Ctrl-C to stop.")
+	fmt.Println("HTTP API mode: the JSON REST + WebSocket API serves at the URL above")
+	fmt.Println("(the product UI is the desktop application; this mode is for tooling).")
+	fmt.Println("Ctrl-C to stop.")
 	fmt.Println()
 
 	if openBrowserEnabled {

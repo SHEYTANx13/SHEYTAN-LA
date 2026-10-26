@@ -85,7 +85,7 @@ func (s *Server) handleHandshake(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if s.key != "" {
-		got := r.Header.Get("X-SHEYTAN-IPC-Key")
+		got := r.Header.Get(HeaderKey)
 		if got == "" {
 			writeIpcError(w, http.StatusUnauthorized, "missing handshake key")
 			return

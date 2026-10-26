@@ -46,14 +46,18 @@ green gate proves the outcome).
   `internal/api/goal_drive_lifecycle_test.go`. Evidence: Probe A reproduced
   2/2 then green 2/2 post-fix; Probe B green 2/2 (the Go park machinery
   exonerated at this timing).
-* Qt acceptance harness — real UI over real IPC against the real core with
-  the packaged fixture engine; the on-disk QtTest `-o` report as the record
-  of record (I5); dual-channel dump emission (QWARN report + native stderr)
-  for every goal/chat-persist diagnostic, including the round-trip cancel
-  leg. Source: `ui/qt/tests/tst_acceptance.cpp` (emitDumpLine,
-  dumpGoalDiagnostics, dumpChatPersistDiagnostics). Evidence: hosted run
-  39339564546 (16 passed / 2 failed — real failures named); the dual-channel
-  repair's own hosted verdict NOT RUN.
+* One-Go-UI acceptance contracts — the UI behavioral contracts (zero-session
+  send, session-list generation guard, cumulative stream folding, terminal
+  settlement, mode separation, history-ref cap, thinking ladder, settings
+  IA quarantine rules) pinned as Go tests over a deterministic fake core.
+  Source: `ui/fyne/logic_test.go`, `ui/fyne/shell_test.go`. Evidence:
+  `go test ./ui/fyne/` green locally; hosted verdict pending push.
+* Fyne view-tree composition — every primary view and sub-panel builds a
+  non-empty widget tree against a live fake core; navigation switches
+  views; the responsive layout flips rail/compact at the breakpoint; empty
+  API data never panics. Source: `ui/fyne/shell_test.go`. Evidence:
+  `go test ./ui/fyne/` green locally (Fyne test harness); hosted verdict
+  pending push.
 * CI visibility system — errors-only failure summaries with the §9 severity
   contract (assertions/gates → ::error; QWARN/toolchain → ::warning;
   goal/chat-persist/captures-empty context → ::notice), dedup, caps,
@@ -103,7 +107,10 @@ FUTURE (v2.0 platform end state): durable AI systems users create, run,
 understand, modify and continuously improve; scalable local workers, mature
 multi-run orchestration, portable import/export/versioning.
 
-Qt migration boundary (Phase 2, honest): AI Systems editing/import, Goals,
+v1.11.0 one-Go-UI boundary (honest): the retired Qt/QML host and the
+React web frontend are removed; every shipped UI surface renders in the
+Fyne application over the same IPC seam. The former Phase-2 gap list
+(AI Systems editing/import, Goals,
 Coding Lab, Net Search page, repository index, tasks/automations,
 downloads/diagnostics panels remain on the documented headless/browser mode.
 

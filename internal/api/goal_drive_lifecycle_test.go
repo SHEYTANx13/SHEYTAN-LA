@@ -420,7 +420,7 @@ func TestGoalApproveConsumesGrantExactlyOnce(t *testing.T) {
 }
 
 // chunkedParkEngine is the P2 probe's engine fixture: the same wire shape
-// as scripts/fake-remote-engine.py (the Qt acceptance's engine) — chunked
+// as the retired Qt acceptance's fixture engine — chunked
 // delta content, flushed per chunk, "data: [DONE]" terminator. The chunk
 // pacing keeps the runs genuinely streamed, the way the hosted acceptance
 // drives them.
@@ -633,7 +633,7 @@ func TestGoalSystemRevisionFrozenContract(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Task ID 28 (v1.10.13 cycle) — §12 probes and the deterministic I6
-// regression. The fixture engine mirrors scripts/fake-remote-engine.py
+// regression. The fixture engine mirrors the retired scripts/fake-remote-engine.py
 // EXACTLY (the script stays read-only; the contract lives here): 9 SSE
 // chunks, ~150ms pacing per chunk, OpenAI chat.completions delta framing,
 // "data: [DONE]" terminator, the SAME answer for every request. The fast
@@ -641,7 +641,7 @@ func TestGoalSystemRevisionFrozenContract(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // exactFixtureEngine is the PACKAGED-PROFILE engine (register V9): the
-// exact wire shape and pacing of scripts/fake-remote-engine.py, which the
+// exact wire shape and pacing of the retired fixture engine, which the
 // Qt acceptance's core really drives (initTestCase pins it on port 18652).
 // The fast fixture (15ms, 4 chunks) never exercised this timing class.
 func exactFixtureEngine(t *testing.T) *httptest.Server {

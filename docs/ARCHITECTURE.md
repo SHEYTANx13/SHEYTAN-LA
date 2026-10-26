@@ -68,72 +68,57 @@ native `test_prefill_parity` gate across chunk sizes 1/3/7/16. The native
 CMake build defaults to the Release configuration when the caller does not
 choose one (an unflagged -O0 engine is not a supported inference build).
 
-**Desktop shell lifecycle (v1.10.1 Qt migration; v1.10.2 hardening;
-v1.10.3 IPC framing hardening):**
-the Wails/WebView shell is REMOVED from the product. The desktop pair is
-the Go core executable (the ONE policy/orchestration authority,
-unchanged) plus a native Qt Quick/QML host (`ui/qt`) that acts as an IPC
-CLIENT over a secured per-user local channel (`internal/localipc`): a
-Unix domain socket with SO_PEERCRED uid verification on Linux/macOS, a
-named pipe with a current-user-only DACL plus a post-connect client-SID
-check on Windows, and a versioned keyed handshake (`sheytan-ipc/1`) in
-front of the EXISTING api.Server handlers. **The handshake is STRICT as
-of v1.10.3: the client requires the protocol name AND
-`protocolVersion == 1` before `connected` flips — a core speaking any
-other version is refused visibly (R17). The CoreClient's HTTP framing
-is real as of v1.10.3: a response body completes when Content-Length is
-satisfied (the server may keep the socket open), close-delimited bodies
-still complete, a declared body beyond the 8 MiB bound and a head beyond
-the 64 KiB bound are refused deterministically before buffering. The
-activity WebSocket policy is explicit: only complete text frames carry
-events, fragmented frames are refused with a typed error, ping is
-answered with a masked pong, close is answered with a masked close
-reply and tears the stream down; the frame loop never starves frames
-queued behind a control frame. Every non-200/malformed client path
-surfaces a typed error — no silent swallowing. The wire field contract
-the QML consumes (sessions: bare array with `id`/`title` omitempty/
-`msgCount`; systems: `systemId`/`name`/`revision` under
-`activeSystemId`) is pinned by Go tests
-(`internal/api/qt_field_contract_test.go`) and QtTest framing slots
-(`ui/qt/tests/tst_acceptance.cpp`) so a rename fails a test instead of
-blanking the UI. Ids interpolated into request lines/URLs are
-percent-encoded defensively.** No TCP listener is opened on
-the desktop path; the embedded web frontend remains only as the
-documented headless/API serving mode. The launcher (`internal/desktop`)
-spawns the Qt host next to the core, hands it the endpoint + an
-ephemeral key through the environment, and terminates the whole
-lifecycle on child exit or signal; the resolution contract (the "none"
-sentinel, the explicit override WINNING over the next-to-core packaged
-layout as of v1.10.3, and the hard refusal when no UI can be located)
-is unit-tested
-(`internal/desktop/desktop_test.go`). Closing the QML window ends the
-process through the normal Qt close path. Run-goroutine teardown is
-deterministic: every run spawn is tracked and `Server.Close` JOINS them
-(bounded) before releasing the runtime stack (the Windows `t.TempDir`
-"directory is not empty" teardown failure of run 38152579695). The
-former Wails loopback activity transport and its CDP acceptance harness
-are retired with the Wails dependency itself. Qt Phase 2 of the R&D
-plan is implemented at the chat/sessions/streaming/settings surface and
-— since v1.10.2 — the AI Systems list/activation surface (a pure
-`/api/systems` client view: list, activate, typed error paths; the
-store's validation, persistence and reserved default stay server-owned).
-Remaining UI surfaces (AI Systems editing/import, Goals, Coding Lab, Net
-Search page, repository index, tasks/automations, downloads/diagnostics
-panels) are still served by the documented headless/web mode pending
-their Qt migration. The Linux desktop smoke
-(`scripts/qt-desktop-smoke.sh`) owns its whole environment — Xvfb
-display, an Openbox (or equivalent) window manager when one is
-available, its own close-request tool built from `scripts/closewin.c`,
-and trap-based cleanup — and proves G1–G5: keyed handshake, core-spawned
-UI PID, visible ≥200×200 top-level window, real core interaction, and a
-clean WM_DELETE_WINDOW exit with no orphan and no leaked endpoint. The
-measurement framework is fail-closed about hosts (v1.10.2):
-`cmd/shtn-perf` REQUIRES an explicit `--host-class physical|hosted`,
-refuses a physical claim on any host carrying hosted-CI markers, and
-derives the schema-compat `hostedCI` flag from that single declared
-class. The native
-C++ engine default remains evidence-gated exactly as before (physical
-Windows Phase 1 measurements are still NOT MEASURED).
+**Desktop shell lifecycle (v1.11.0 one-Go-UI migration):**
+the product desktop is ONE Go executable: the core (the ONE
+policy/orchestration authority, unchanged) plus the ONE Fyne UI
+(`ui/fyne`) running IN-PROCESS as an IPC client over the secured per-user
+local channel (`internal/localipc`): a Unix domain socket with
+SO_PEERCRED uid verification on Linux/macOS, a named pipe with a
+current-user-only DACL plus a post-connect client-SID check on Windows,
+and the versioned keyed handshake (`sheytan-ipc/1`) in front of the
+EXISTING api.Server handlers. The handshake is STRICT: the client
+requires the protocol name AND `protocolVersion == 1` before use — a
+core speaking any other version is refused visibly. The client sends the
+ephemeral-key header (`X-SHEYTAN-IPC-Key`) on every request for parity
+with the previous native client and sends NO Origin header (native
+transport; the CORS/origin rules stay enforced for any browser-origin
+request). The wire field contract the UI consumes (sessions: bare array
+with `id`/`title` omitempty/`msgCount`; systems: `systemId`/`name`/
+`revision` under `activeSystemId`) is pinned by Go tests
+(`internal/api/field_contract_test.go`) so a rename fails a test instead
+of blanking the UI. No TCP listener is opened on the desktop path; there
+is NO embedded web frontend anymore (the React bundle, its Vite build
+and the web/static embed are retired — the API mux serves no static
+root). The launcher (`internal/desktop`) boots the core, binds the IPC
+endpoint, attaches the Fyne window in-process and tears the whole
+lifecycle down on window close or signal (core close joins run
+goroutines bounded). The retired Qt/QML host, its child-spawn
+SHEYTAN_UI_EXECUTABLE resolution and the React/Vite/Playwright web stack
+are removed from the tree and from CI; the behavioral contracts those
+surfaces carried (zero-session send, session-list generation guard,
+cumulative stream folding, settlement reload, mode separation,
+history-ref cap, the thinking ladder and the settings IA) are ported to
+Go tests under `ui/fyne` (`logic_test.go`, `shell_test.go`) and to the
+Fyne test-harness view-composition tests. Desktop smoke evidence on
+Linux runs the real binary under Xvfb in CI. The former Qt smoke
+(`scripts/qt-desktop-smoke.sh`, `scripts/closewin.c`) is retired with
+the Qt host. The measurement framework is fail-closed about hosts
+(v1.10.2): `cmd/shtn-perf` REQUIRES an explicit
+`--host-class physical|hosted`, refuses a physical claim on any host
+carrying hosted-CI markers, and derives the schema-compat `hostedCI`
+flag from that single declared class. The native C++ engine default
+remains evidence-gated exactly as before (physical Windows Phase 1
+measurements are still NOT MEASURED).
+
+**Fyne build prerequisites (honest):** the Fyne desktop build requires a
+C compiler and platform graphics development libraries (Linux:
+gcc/pkg-config + Mesa/OpenGL and the X11/Wayland development packages
+including `libxxf86vm-dev`; Windows: MSYS2/MinGW-w64 per the official
+Fyne docs). The migration removed the UI's C++/CMake/QML build; it did
+NOT remove the native toolchain requirement, and the CI installs the
+prerequisites explicitly. The C++ native engine (native/engine) keeps
+its own CMake build and tests — it is inference machinery, not UI, and
+is unchanged by this migration.
 
 **Model capability cards (v1.8.1):** the GGUF header parser reads up to
 32 MiB of metadata (`ggufMetadataReadLimit`) — real Gemma-class tokenizer
@@ -239,7 +224,7 @@ capability token (constant-time compared, delivered ONLY through
 `GET /api/ws-origin` over the intercepted surface, never logged), a
 non-empty Origin the existing authority accepts (an absent Origin can
 never bypass the loopback authentication) and the exact listener Host.
-**v1.10.1+ truth: the production desktop is the native Qt client over
+**v1.11.0 truth: the production desktop is the ONE Fyne client over
 `internal/localipc` and mounts NO loopback WebSocket listener**
 (`internal/desktop/desktop.go`: "no WebView2/WebKit, no loopback
 WebSocket transport"); the browser/headless serving mode serves activity
@@ -297,24 +282,24 @@ C++ owns numerical inference — the existing `native/engine` path is the
 promotion target under capability/parity gates, with managed llama.cpp
 as the automatic honest fallback; the default is NOT flipped in v1.10.0
 (the blocking evidence is the physical-Windows warm-TTFT comparison
-against managed llama.cpp; see ROADMAP.md for the gate checklist). Qt
-(C++/QML) is the primary UI target for the next major cycle over a
-typed, coarse-grained IPC boundary (defined below); WinUI 3 remains an
-optional future Windows-only shell and C# is never the orchestrator.
+against managed llama.cpp; see ROADMAP.md for the gate checklist). The
+ONE product UI is the Go + Fyne application (`ui/fyne` — v1.11.0
+migration); the Qt/QML and React/TypeScript UI targets are retired.
+WinUI 3 remains an optional future Windows-only shell idea and C# is
+never the orchestrator.
 The R&D §10 measurement framework ships as `internal/perf` +
 `cmd/shtn-perf` (honest NOT-MEASURED semantics, nearest-rank P50/P95,
 host/model/method/limitation metadata, hosted-CI labeling, targets
 reported as measured gaps); the v1.10.0 baseline artifact is
 `baselines/perf-hosted-ci-v1.10.0.json`.
 
-**The Qt/IPC seam (v1.10.0 — DEFINED there; SHIPPED since v1.10.1).** The contract a
-future Qt (C++/QML) shell would use to talk to the UNCHANGED Go core.
-v1.10.0 only specified it. **v1.10.1 SHIPPED this seam: `ui/qt` is the
-production desktop client and the Wails shell is removed**; v1.10.2
-migrated the AI Systems drawer; v1.10.3 hardened the framing (Content-Length
-completion, oversize refusals), the strict `sheytan-ipc/1` handshake and
-the wire field contracts. The seam is specified so the shell can evolve
-without inventing a second authority:
+**The UI/IPC seam (v1.10.0 defined; v1.10.1 shipped; v1.11.0 carried by
+the ONE Fyne client).** The contract a UI shell uses to talk to the
+UNCHANGED Go core. The Qt host shipped it first; since v1.11.0 `ui/fyne`
+is the production desktop client over the same seam (strict
+`sheytan-ipc/1` handshake, key header on every request, pinned wire
+field contracts in `internal/api/field_contract_test.go`). The seam is
+specified so the shell can evolve without inventing a second authority:
 
 - **Transport:** ONE secured local transport per concern — a local
   socket / named pipe for control (typed request/response) and
@@ -337,15 +322,15 @@ without inventing a second authority:
   payload-size win on real hardware. No speculative zero-copy.
 - **Authority:** the Go core remains the ONLY run registry, session
   store, tool registry, scheduler, policy and evidence authority. The
-  Qt shell is a VIEW: it holds no second engine manager, no second run
+  Fyne shell is a VIEW: it holds no second engine manager, no second run
   registry, no copied Governor, no local policy. The model proposes;
   the tools execute; the laboratory verifies — unchanged.
-- **NOT ready (honest):** no Qt shell code, no IPC server, no message
-  schemas in code, no packaging/deployment work (Qt deploy requires
-  shipping QML modules/plugins — evaluated at Phase 2), no Windows
-  measurements of the seam, no shared-memory design beyond the
-  profiling gate above. The v1.10.0 deliverable is THIS definition
-  only.
+- **Mobile readiness (honest):** the Fyne UI codebase targets Android
+  and iOS by construction (same Go UI, platform portability by the
+  toolkit); actually SHIPPING those platforms requires their SDKs and
+  toolchains (Android SDK/NDK; iOS requires macOS/Xcode) and device
+  verification that has NOT been performed. No mobile ship claim is
+  made.
 
 **Run summary metrics (v1.9.4):** the settle summary carries
 `gateMs`/`ttftMs`/`persistMs`/`acceptToDoneMs`/`totalMs` plus aggregate
@@ -353,8 +338,7 @@ published-event counters (`events`, `deltas`, `firstDeltaMs`) —
 durations are monotonic wall-clock, counts only; the mislabelled
 `publishMs` is retired. Client-side boundaries (socket queue delay,
 write time, browser receipt, DOM visibility) are observable ONLY through
-the opt-in test-only trace (`src/stream-trace.ts`,
-`localStorage SHEYTAN_STREAM_TRACE=1`; lengths only, never content,
+the opt-in test-only trace (a retired dev-only trace of the web era; lengths only, never content,
 never in ordinary logs).
 
 **Run control (v1.7.4–v1.8.0):** pause requests land at safe boundaries

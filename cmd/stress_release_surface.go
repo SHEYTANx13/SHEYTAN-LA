@@ -19,13 +19,15 @@ import (
 //
 // These scenarios pin the current CI/desktop release surface so a workflow
 // or packaging regression fails the stress gate instead of shipping:
-// the pinned Node 24 + Go toolchains, the Qt-era Linux X11/xcb dependency
-// set (X11 headers for the smoke's closewin.c build, the xcb runtime
-// pieces the Qt xcb plugin loads, the REAL window manager and the
-// Xvfb/xdotool/x11-utils smoke tools), the Windows resource/icon pipeline
-// (gen-syso) and windowsgui subsystem, the packaged .bat launcher,
-// portable ZIP packaging under the release-contract artifact names,
-// collision-proof memory IDs, and Windows-safe log rotation.
+// the pinned Go 1.27 toolchain, the Fyne-era Linux dependency set
+// (gcc/pkg-config + the OpenGL/X11/Wayland development libraries the
+// Fyne CGO build links, including libxxf86vm-dev, plus the Xvfb/xauth
+// smoke tooling), the Windows resource/icon pipeline (gen-syso) and
+// windowsgui subsystem, the packaged .bat launcher, portable ZIP
+// packaging under the release-contract artifact names, collision-proof
+// memory IDs, and Windows-safe log rotation. The Node/React/Vite and
+// Qt/CMake/QML UI toolchains are RETIRED and their reintroduction is
+// banned here (v1.11.0 one-Go-UI migration).
 //
 // v1.10.4 (run 38569081029): the Linux dependency pin still required the
 // RETIRED Wails-era GTK stack (libgtk-4-dev / libwebkitgtk-6.0-dev) that
@@ -290,10 +292,10 @@ func stressReleaseSurface() error {
 	for _, action := range []string{
 		"actions/checkout@v7",
 		"actions/setup-go@v7",
-		"actions/setup-node@v7",
 		"actions/upload-artifact@v7",
 		"actions/download-artifact@v8",
 		"softprops/action-gh-release@v3",
+		"msys2/setup-msys2@v2",
 	} {
 		if !strings.Contains(w, action) {
 			return fmt.Errorf(
@@ -303,16 +305,26 @@ func stressReleaseSurface() error {
 		}
 	}
 
-	// 3e. The Node toolchain is PINNED (v1.1.1): the new React/Vite UI
-	// must never depend on whatever Node version the hosted runner
-	// happens to ship. Since v1.1.2 the pin lives once in the
-	// workflow-level env block (NODE_VERSION: "24") and every
-	// setup-node step consumes it via ${{ env.NODE_VERSION }} — the same
-	// single-source-of-truth pattern GO_VERSION already uses.
-	if !strings.Contains(w, `NODE_VERSION: "24"`) {
-		return fmt.Errorf(
-			"CI does not pin Node 24 for the frontend build (expected NODE_VERSION: \"24\" in the workflow env block)",
-		)
+	// 3e. The Node/frontend stack is RETIRED (v1.11.0 one-Go-UI): the
+	// workflow must not reinstall it — no Node pin, no setup-node, no
+	// npm/vite/web-static fragments. A reappearance means a second UI
+	// implementation is trying to come back.
+	for _, staleFrontend := range []string{
+		"NODE_VERSION:",
+		"actions/setup-node",
+		"npm run typecheck",
+		"npm run lint",
+		"npm run build",
+		"npm ci",
+		"web/static/index.html",
+		"sync:web",
+	} {
+		if strings.Contains(w, staleFrontend) {
+			return fmt.Errorf(
+				"retired frontend-era fragment %q found in the workflow — the one-Go-UI pipeline must not reinstall the Node/React/Vite stack",
+				staleFrontend,
+			)
+		}
 	}
 
 	// 3e2. Canonical package-root variables (v1.2.1): the workflow must
@@ -335,34 +347,33 @@ func stressReleaseSurface() error {
 		}
 	}
 
-	// 3f. THE CURRENT Linux CI dependency contract (v1.10.4 retarget of
-	// the v1.1.1 gate): the desktop host is the NATIVE Qt Quick client
-	// over localipc — the Wails-era GTK/WebKit development stack is
-	// RETIRED (v1.10.1) and must never return. The workflow must install
-	// what the current pipeline actually requires: the xcb runtime pieces
-	// the Qt xcb plugin loads, the X11 headers the smoke needs to build
-	// scripts/closewin.c with cc -lX11 (v1.10.3 R3), a REAL window
-	// manager for the G3/G5 geometry gates (openbox — no WM-less GUI
-	// claims), and the Xvfb/xdotool/x11-utils smoke tooling. Requiring a
-	// retired package here made the stress gate fail every v1.10.1+
-	// hosted run (run 38569081029, step 18) while the workflow itself was
-	// correct — the "stress scenario assumes a retired transport" class.
+	// 3f. THE CURRENT Linux CI dependency contract (v1.11.0 retarget):
+	// the desktop host is the ONE Fyne client — its CGO build needs
+	// gcc/pkg-config and the OpenGL/X11/Wayland development libraries
+	// (libxxf86vm-dev included: its absence killed the run-#51 Fyne
+	// spike's link step), and the desktop smoke needs Xvfb + xauth.
+	// Requiring a retired package here made the stress gate fail hosted
+	// runs while the workflow itself was correct (run 38569081029) — the
+	// pin tracks the CURRENT contract, never a retired transport.
 	for _, linuxDep := range []string{
+		"gcc",
+		"pkg-config",
+		"libgl1-mesa-dev",
+		"libegl1-mesa-dev",
 		"libx11-dev",
-		"libxkbcommon-x11-0",
-		"libxcb-cursor0",
-		"libxcb-icccm4",
-		"libxcb-keysyms1",
-		"libxcb-image0",
-		"libxcb-render-util0",
-		"openbox",
+		"libxcursor-dev",
+		"libxrandr-dev",
+		"libxinerama-dev",
+		"libxi-dev",
+		"libxxf86vm-dev",
+		"libwayland-dev",
+		"libxkbcommon-dev",
 		"xvfb",
-		"xdotool",
-		"x11-utils",
+		"xauth",
 	} {
 		if !strings.Contains(w, linuxDep) {
 			return fmt.Errorf(
-				"Linux CI dependencies missing %q — the Qt desktop smoke (G1–G5) needs the X11/xcb stack, a REAL window manager and the smoke tools",
+				"Linux CI dependencies missing %q — the Fyne desktop build (CGO/X11/OpenGL/Wayland) and the Xvfb smoke need the documented prerequisite set",
 				linuxDep,
 			)
 		}
@@ -378,10 +389,15 @@ func stressReleaseSurface() error {
 		"libwebkitgtk-6.0-dev",
 		"libgtk-3-dev",
 		"libwebkit2gtk-4.1-dev",
+		"qt6-base-dev",
+		"qtbase5-dev",
+		"qtdeclarative5-dev",
+		"qt6-declarative-dev",
+		"libqt5webengine",
 	} {
 		if strings.Contains(w, staleDep) {
 			return fmt.Errorf(
-				"retired Wails-era dependency %q still installed by Linux CI — the desktop host is the native Qt client; the GTK/WebKit stack must not return",
+				"retired UI-toolchain dependency %q still installed by Linux CI — the desktop host is the ONE Fyne client; the GTK/WebKit/Qt stacks must not return",
 				staleDep,
 			)
 		}
@@ -465,33 +481,43 @@ func stressReleaseSurface() error {
 		}
 	}
 
-	// 3j. The workflow must perform frontend verification before the Go
-	// build, and the Windows package must ship the launcher script under
-	// the contracted identity. v1.10.7: the workflow must also build the
-	// core from its relocated entry package (cmd/sheytan-local-agent/).
+	// 3j. The workflow must verify the ONE UI and the core before the
+	// packaging jobs, and the Windows package must ship the launcher
+	// script under the contracted identity. v1.10.7: the workflow must
+	// also build the core from its relocated entry package
+	// (cmd/sheytan-local-agent/). v1.11.0: the UI verification IS the Go
+	// UI suite (no frontend toolchain exists anymore).
 	for _, fragment := range []string{
-		"npm run typecheck",
-		"npm run lint",
-		"npm run build",
-		"web/static/index.html",
+		"go test ./ui/fyne/",
+		"go test ./internal/... -tags headless",
+		"go test ./internal/releasecontract/",
+		"Xvfb",
 		releasecontract.LauncherScript,
 		"./cmd/sheytan-local-agent",
 		"packaging/SHEYTAN-LA.bat",
+		"packaging/nsis/installer.nsi",
 	} {
 		if !strings.Contains(w, fragment) {
 			return fmt.Errorf(
-				"frontend/package release gate missing %q",
+				"UI/package release gate missing %q",
 				fragment,
 			)
 		}
 	}
 
-	// 3k. The current workflow intentionally does not use the broken,
-	// repository-wide Prettier gate that previously stopped CI before the
-	// actual build.
-	if strings.Contains(w, "npm run format:check") {
+	// 3k. The workflow's APP_VERSION must derive from the ONE Go
+	// authority (internal/config.AppVersion via the version command) —
+	// the retired package.json authority and the release-version.mjs
+	// validator must not return.
+	if !strings.Contains(w, "go run ./cmd/sheytan-local-agent version") {
 		return fmt.Errorf(
-			"workflow still contains the stale repository-wide format gate",
+			"workflow does not resolve APP_VERSION from the Go authority (expected the `go run ./cmd/sheytan-local-agent version` derivation step)",
+		)
+	}
+	if strings.Contains(w, "release-version.mjs") ||
+		strings.Contains(w, "package.json") {
+		return fmt.Errorf(
+			"workflow still references the retired Node version authority (release-version.mjs / package.json)",
 		)
 	}
 

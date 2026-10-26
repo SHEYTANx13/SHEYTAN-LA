@@ -64,7 +64,7 @@ area):
 |---|---|---|
 | SHEYTAN product implementation | internal/ (all packages except the Open components above), cmd/ (including cmd/sheytan-local-agent/), web/ | The product-specific implementation: engine lifecycle, sampling gate, model-selection state machine, accelerator resolver, transactional updater/installer, agent orchestrator, research engine, coding lab, sessions, vision, calibration. |
 | Native C++ engine | native/engine/ | SHEYTAN-specific proprietary inference engine implementation, tokenizer, scheduler, GGUF loader. |
-| Frontend (UI/UX) | src/, index.html, vite.config.ts, tsconfig*.json, styles | Product-specific implementation and interface designs. |
+| UI/UX | ui/fyne/ (the ONE Go + Fyne application), assets, theme tokens | Product-specific implementation and interface designs. |
 | Brand, assets and designs | internal/brand/ (logo SVG and identity constants), build/ (icon, packaging art), scripts/gen-syso/logo-512.png | Trademarked assets and designs. |
 | Product documentation | README.md, docs/ARCHITECTURE.md, docs/UPDATE.md, docs/agent.md, docs/ROADMAP.md, docs/REPORT.md, internal/aicontext/AI-CONTEXT.md, docs/worklog.md, native/engine/README.md | Product documentation and engineering records. |
 | Build, release and CI machinery | scripts/, packaging/, .github/, e2e/ (harness), Makefiles | Product-specific delivery pipeline. |
@@ -107,16 +107,17 @@ archives.
 
 ### Third-party material overview
 
+The product UI is the ONE Go + Fyne application (v1.11.0 one-Go-UI
+migration): no Qt runtime and no Node/React stack ships or is linked.
+
 | Component | License | Where it lives |
 |---|---|---|
 | llama.cpp (downloaded engine) | MIT | fetched at runtime into the managed bin directory — never committed |
-| Qt 6 (Core/Gui/Quick/QML/QuickControls2/Test) | LGPL-3.0 | dynamically linked by the native Qt desktop host (ui/qt) |
-| React, Zustand, react-markdown, remark/rehype stack | MIT | build-time frontend dependencies (headless/browser serving mode) |
+| Fyne (fyne.io/fyne/v2) | BSD-3-Clause | the ONE product UI toolkit (linked into every desktop build) |
 | gorilla/websocket | BSD-style | build-time Go dependency |
 | chromedp + cdproto | MIT | build-time Go dependency |
 | bild, xdg, winres, go-isatty, nfnt/resize, gobwas/* | MIT / BSD-style / ISC-style (per package) | build-time Go dependencies |
 | Go standard library + golang.org/x/* | BSD-style (Go license) | toolchain and build-time dependencies |
-| Highlight.js (via rehype-highlight) | BSD-3-Clause | frontend dependency |
 
 ### Go dependencies (linked into the binary)
 

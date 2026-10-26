@@ -22,16 +22,19 @@ import (
 	"strings"
 )
 
-// App roots and executable identity. Both app roots follow the
-// v1.10.14-fixed ONE-naming-map rule (D7/I11): the package roots spell the
-// product identically on the release page. The Linux EXECUTABLE inside the
-// package keeps its long historical name — only the package root, the ZIP
-// name and the artifact display names follow the map.
+// App roots and executable identity. Both app roots AND both executables
+// follow the ONE-naming-map rule (v1.10.14-fixed D7/I11; the executable
+// name unified in v1.11.0): the product is spelled identically on the
+// release page and inside every package.
 const (
 	WindowsAppRoot = "SHEYTAN-LA"
 	LinuxAppRoot   = "SHEYTAN-LA"
 	WindowsExeName = "SHEYTAN-LA.exe"
-	LinuxExeName   = "SHEYTAN-Local-Agent"
+	// v1.11.0 one-Go-UI migration: the Linux executable follows the SAME
+	// product identity as the package root and the Windows binary — ONE
+	// name everywhere (the long historical SHEYTAN-Local-Agent spelling
+	// is retired from the artifact set).
+	LinuxExeName   = "SHEYTAN-LA"
 	LauncherScript = "SHEYTAN-LA.bat"
 )
 
