@@ -2735,6 +2735,10 @@ jobs:
           # link-time symlinks; mesa-common-dev provides GL/gl.h and
           # GL/glext.h; libxkbcommon-dev provides the pkg-config module
           # the Qt xcb platform plugin's build-time lookup needs.
+          # v1.11.0 (run-#51, FIX-C): libxxf86vm-dev — GLFW's Linux link line
+          # requires -lXxf86vm; its absence killed the fyne-tagged spike at
+          # link time ("/usr/bin/ld: cannot find -lXxf86vm") while every
+          # neighboring X11 dev package was already present.
           sudo apt-get install -y \
             build-essential \
             pkg-config \
@@ -2750,6 +2754,7 @@ jobs:
             libxrandr-dev \
             libxinerama-dev \
             libxi-dev \
+            libxxf86vm-dev \
             libxkbcommon-dev \
             libxkbcommon0 \
             libx11-dev \

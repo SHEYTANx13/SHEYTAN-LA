@@ -26,6 +26,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const QT_TAG = 'v6.8.2';
 const QT_MACRO_URL =
@@ -85,7 +86,14 @@ function arg(flag, def) {
   return i >= 0 ? process.argv[i + 1] : def;
 }
 
-const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
+// Filesystem path derivation MUST go through fileURLToPath:
+// new URL(import.meta.url).pathname is "/D:/..."-shaped on Windows and
+// path.resolve() re-roots that into a duplicated drive (D:\D:\a\...) — the
+// exact run-#51 hosted failure of this probe's R2 contract row.
+// fileURLToPath canonicalizes the module URL to a real OS path first; every
+// derivation below is plain path.resolve/path.join on that canonical root.
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(scriptDir, '..');
 const uiQtDir = path.resolve(arg('--tree', path.join(repoRoot, 'ui/qt')));
 const cmakeBin = arg('--cmake', 'cmake');
 const keep = process.argv.includes('--keep');

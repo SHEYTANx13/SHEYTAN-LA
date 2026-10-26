@@ -34,7 +34,8 @@
 import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import * as nodePath from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -2403,11 +2404,52 @@ function cmakeArgs(body) {
   );
 }
 
-const QT_SOURCE_DIR = join(repoRoot, "ui", "qt");
+const QT_SOURCE_DIR = resolve(repoRoot, "ui", "qt");
+
+// Canonical path form for ANY CMake-side path (BASE or FILES): expand the
+// ${CMAKE_CURRENT_SOURCE_DIR} placeholder, then resolve() — which normalizes
+// mixed `/` and `\` separators into ONE platform form. The run-#51 hosted
+// I25-1 failure was exactly the missing normalization: on Windows the BASE
+// value "${CMAKE_CURRENT_SOURCE_DIR}/style" expanded to a MIXED-separator
+// path (\...\ui\qt/style) while FILES entries resolved through join() to
+// pure-`\` paths, so the raw `p.startsWith(base + sep)` prefix check below
+// rejected every valid style file. Relative entries resolve against
+// QT_SOURCE_DIR — the upstream CWD rule (Qt 6.8.2's
+// _qt_internal_process_resource resolves FILES against the LISTING directory,
+// qtbase v6.8.2 :2274-2284; BASE only feeds the QT_RESOURCE_ALIAS math,
+// doc.qt.io/qt-6.8/qt-add-resources.html). `pathImpl` is injectable so the
+// I25-1a regression row can prove the semantics against BOTH path grammars
+// (path.win32 / path.posix) from any host OS.
+function resolveQtPathWith(pathImpl, qtSourceDir, p) {
+  const expanded = p.replace(/\$\{CMAKE_CURRENT_SOURCE_DIR\}/g, qtSourceDir);
+  return isAbsolute(expanded)
+    ? pathImpl.resolve(expanded)
+    : pathImpl.resolve(qtSourceDir, expanded);
+}
 
 function resolveQtPath(p) {
-  const expanded = p.replace(/\$\{CMAKE_CURRENT_SOURCE_DIR\}/g, QT_SOURCE_DIR);
-  return isAbsolute(expanded) ? expanded : join(QT_SOURCE_DIR, expanded);
+  return resolveQtPathWith(nodePath, QT_SOURCE_DIR, p);
+}
+
+// Strict path containment WITHOUT raw string prefixes (run-#51 I25-1: a
+// prefix test is not a containment test — mixed separators alone made it
+// reject valid files). relative(base, candidate) is "" for the base itself,
+// `..`-led for every escape shape (direct parent walk, sibling, different
+// subtree) and absolute when no relative walk exists (different Windows
+// drive). A file DIRECTLY under BASE passes (rel "Button.qml"); only a
+// strict descent inside BASE passes.
+function isStrictlyInsideWith(pathImpl, base, candidate) {
+  const rel = pathImpl.relative(base, candidate);
+  return (
+    rel !== "" &&
+    rel !== ".." &&
+    !rel.startsWith(`..${pathImpl.sep}`) &&
+    !pathImpl.isAbsolute(rel)
+  );
+}
+
+function isStrictlyInside(base, candidate) {
+  return isStrictlyInsideWith(nodePath, base, candidate);
 }
 
 test("run-#50 R2/I25-3: resource blocks reference only targets defined BEFORE the reference (run-#49 configure class)", () => {
@@ -2452,13 +2494,15 @@ test("run-#51 R2/I25-1 (amended from run-#50): every qt_add_resources FILES entr
   const cmake = loadQtCmakeLists();
   const blocks = extractQtCommandBlocks(cmake, ["qt_add_resources"]);
   assert.ok(blocks.length >= 2, "the sheytan style must be embedded into both targets");
-  const offenders = [];
+  // A Set dedupes byte-identical diagnostics (the two parity blocks share the
+  // FILES form) while keeping every distinct named error visible.
+  const offenders = new Set();
   for (const b of blocks) {
     const args = cmakeArgs(b.body);
     const baseIdx = args.indexOf("BASE");
     const filesIdx = args.indexOf("FILES");
     if (baseIdx === -1 || filesIdx === -1) {
-      offenders.push(`${b.body.split("(")[0].trim()}: missing BASE or FILES`);
+      offenders.add(`${b.body.split("(")[0].trim()}: missing BASE or FILES`);
       continue;
     }
     const base = resolveQtPath(args[baseIdx + 1]);
@@ -2468,19 +2512,71 @@ test("run-#51 R2/I25-1 (amended from run-#50): every qt_add_resources FILES entr
       // alias = relative path from BASE.
       const p = resolveQtPath(f);
       if (!existsSync(p))
-        offenders.push(`${f}: resolves from ui/qt/ (upstream CWD rule) to ${p} but MISSING from the tree — this is the argument the hosted :2212 frame consumed (run-#50 class)`);
+        offenders.add(`${f}: resolves from ui/qt/ (upstream CWD rule) to ${p} but MISSING from the tree — this is the argument the hosted :2212 frame consumed (run-#50 class)`);
       else if (!statSync(p).isFile())
-        offenders.push(`${f}: referenced by ${b.name} but resolves to a DIRECTORY (the run-#49 class shape)`);
-      else if (!p.startsWith(base + sep))
-        offenders.push(`${f}: not under its declared BASE ${args[baseIdx + 1]} — the alias would escape the resource prefix`);
+        offenders.add(`${f}: referenced by ${b.name} but resolves to a DIRECTORY (the run-#49 class shape)`);
+      else if (!isStrictlyInside(base, p)) {
+        // Named escape shapes (each an automatic defect — the resource alias
+        // would escape the prefix): a `..` segment in the entry, a file
+        // sitting directly beside the BASE directory, and a valid file that
+        // resolves beneath a DIFFERENT directory (incl. cross-drive).
+        if (/(^|[\\/])\.\.([\\/]|$)/.test(f))
+          offenders.add(`${f}: TRAVERSES out of its declared BASE ${args[baseIdx + 1]} via a parent segment — the resource alias would escape the prefix`);
+        else if (dirname(p) === dirname(base))
+          offenders.add(`${f}: resolves to a SIBLING of its declared BASE ${args[baseIdx + 1]} — the file exists but the alias would escape the resource prefix`);
+        else
+          offenders.add(`${f}: resolves OUTSIDE its declared BASE ${args[baseIdx + 1]} beneath a different directory (${p}) — the alias would escape the resource prefix`);
+      }
     }
   }
   assert.deepStrictEqual(
-    offenders,
+    [...offenders],
     [],
-    "I25: every FILES entry must resolve (CWD rule) and sit under BASE (a referenced-but-missing entry is an automatic defect): " +
-      offenders.join(" | "),
+    "I25: every FILES entry must resolve (CWD rule) and sit strictly under BASE (a missing, non-file, or escaping entry is an automatic defect): " +
+      [...offenders].join(" | "),
   );
+});
+
+// Regression for the run-#51 hosted I25-1 failure: on Windows the BASE
+// expanded to a MIXED-separator path and the raw `startsWith(base + sep)`
+// prefix check rejected every valid style file. Canonicalization + relative()
+// containment must be separator-agnostic — proven here against BOTH platform
+// path grammars through the SAME functions the real tree test calls.
+test("run-#51 R2/I25-1a: FILES/BASE resolution + containment are separator-agnostic (win32/posix path-grammar simulation)", () => {
+  const win32 = nodePath.win32;
+  const posix = nodePath.posix;
+  const winQt = "D:\\a\\SHEYTAN-LA\\SHEYTAN-LA\\ui\\qt";
+  const posixQt = "/home/runner/work/SHEYTAN-LA/SHEYTAN-LA/ui/qt";
+
+  for (const [pathImpl, qtDir] of [[win32, winQt], [posix, posixQt]]) {
+    // BASE written the CMake way (forward slashes) canonicalizes to the pure
+    // platform form — no mixed separators survive resolve().
+    const base = resolveQtPathWith(pathImpl, qtDir, "${CMAKE_CURRENT_SOURCE_DIR}/style");
+    assert.equal(base, pathImpl.join(qtDir, "style"));
+
+    // The shipped style/-qualified FILES form resolves and sits strictly
+    // under BASE — including DIRECTLY under it.
+    const good = resolveQtPathWith(pathImpl, qtDir, "style/Button.qml");
+    assert.ok(isStrictlyInsideWith(pathImpl, base, good), `${good} must sit under ${base}`);
+
+    // The EXACT hosted shape: an absolute forward-slash FILES entry (what the
+    // Windows runner saw from CMake) must normalize and stay inside BASE.
+    const absMixed = resolveQtPathWith(pathImpl, qtDir, `${qtDir.split(pathImpl.sep).join("/")}/style/Menu.qml`);
+    assert.ok(isStrictlyInsideWith(pathImpl, base, absMixed), `${absMixed} must sit under ${base}`);
+
+    // The base directory itself is not strictly inside.
+    assert.ok(!isStrictlyInsideWith(pathImpl, base, base), "BASE itself must not pass containment");
+
+    // Named escape classes must all be REJECTED: a sibling file, a parent
+    // traversal, and a valid file beneath a different directory.
+    const escapes = [
+      pathImpl.resolve(qtDir, "Button.qml"), // sibling of BASE
+      pathImpl.resolve(base, "..", "Button.qml"), // parent traversal
+      pathImpl.resolve(qtDir, "qml", "Main.qml"), // different directory
+    ];
+    for (const bad of escapes)
+      assert.ok(!isStrictlyInsideWith(pathImpl, base, bad), `${bad} must be rejected as outside ${base}`);
+  }
 });
 
 // The closed exception list: files that intentionally belong to no target.
@@ -2600,6 +2696,27 @@ test("run-#51 R2: the real-macro configure probe exists, pins the upstream sourc
     /_qt_deferred_files/,
     "the probe must assert the deferred-file list the :2212 target_sources consumes",
   );
+  // run-#51 hosted defect (this R2 row's own failure): the probe derived its
+  // repo root from new URL(import.meta.url).pathname; on Windows runners
+  // path.resolve() re-rooted the URL form "/D:/..." into a duplicated drive
+  // (D:\D:\a\...) and the probe died before cmake ever ran. Filesystem path
+  // derivation must go through fileURLToPath — and must never regress.
+  // Comment-stripped: the probe's docs may NAME the retired pattern; no CODE
+  // may use it (same idiom as the R2/#43 row).
+  const probeCode = probe
+    .split("\n")
+    .filter((l) => !l.trim().startsWith("//"))
+    .join("\n");
+  assert.doesNotMatch(
+    probeCode,
+    /new URL\([^)]*\)\.pathname/,
+    "the probe must NOT derive filesystem paths from new URL(...).pathname — it re-roots to a duplicated drive (D:\\D:\\...) on Windows (run-#51 hosted failure); derive paths from fileURLToPath(import.meta.url)",
+  );
+  assert.match(
+    probeCode,
+    /fileURLToPath\(import\.meta\.url\)/,
+    "the probe must canonicalize its module URL with fileURLToPath before any path math",
+  );
   const run = spawnSync(process.execPath, [probePath], {
     encoding: "utf8",
     timeout: 600000,
@@ -2690,6 +2807,51 @@ test("run-#51 R3d: an additive fyne-tag compile gate exists on BOTH platform job
       /go build -tags fyne \.\/cmd\/\.\.\. \.\/ui\/fyne/,
       "the tagged build must cover the fyne packages (cmd hook + ui/fyne), nothing wider",
     );
+});
+
+test("run-#51 FIX-C: the Linux apt layer installs libxxf86vm-dev beside the other X11 dev packages and the fyne-tagged Linux gate remains required", () => {
+  const wf = loadWorkflow();
+  const stepStart = wf.indexOf("Install Linux build dependencies");
+  assert.ok(stepStart !== -1, "the Linux build-dependencies step must exist");
+  const nextStep = wf.indexOf("- name:", stepStart + 10);
+  const stepBody = wf.slice(stepStart, nextStep === -1 ? wf.length : nextStep);
+  // libxxf86vm-dev is the run-#51 root cause (hosted link died on
+  // `/usr/bin/ld: cannot find -lXxf86vm`); the neighboring X11 dev packages
+  // are pinned too so the repair never comes at their expense. Substring
+  // checks — intent-level, no indentation or comment overfitting.
+  for (const dep of [
+    "libxi-dev",
+    "libxrandr-dev",
+    "libxcursor-dev",
+    "libxinerama-dev",
+    "libxxf86vm-dev",
+  ])
+    assert.ok(
+      stepBody.includes(dep),
+      `the Linux apt install list must include ${dep} (run-#51: the hosted fyne link died on the missing Xxf86vm development library)`,
+    );
+  // The tagged gate stays REQUIRED: the build runs under its `if !` failure
+  // catcher, emits a verbatim ::error, exits 1, and is never weakened.
+  const gateStart = wf.indexOf("Build fyne-tagged spike (Linux)");
+  assert.ok(gateStart !== -1, "the Linux fyne-tagged build gate must exist");
+  const gateEnd = wf.indexOf("- name:", gateStart + 10);
+  const gateBody = wf.slice(gateStart, gateEnd === -1 ? wf.length : gateEnd);
+  assert.match(
+    gateBody,
+    /if ! go build -tags fyne \.\/cmd\/\.\.\. \.\/ui\/fyne/,
+    "the Linux fyne-tagged build must compile the real tagged surface under its failure catcher",
+  );
+  assert.match(
+    gateBody,
+    /::error::fyne-tagged spike compile failed \(linux\/amd64\)/,
+    "the Linux fyne gate failure must emit a verbatim ::error annotation",
+  );
+  assert.match(gateBody, /exit 1/, "the Linux fyne gate must exit 1 on compile failure");
+  assert.doesNotMatch(
+    gateBody,
+    /continue-on-error/,
+    "the Linux fyne gate must not be weakened with continue-on-error",
+  );
 });
 
 test("run-#51 R1d: BOTH platform jobs surface Qt configure errors verbatim (I17 annotation parity)", () => {
