@@ -17,5 +17,5 @@ func main() {
 }
 
 // runDefault is overridden by the per-platform entrypoint.
-// Both Windows and Linux launch the native Qt desktop host.
+// Both Windows and Linux launch the ONE Fyne desktop UI (internal/desktop).
 var runDefault = func() int { return 0 }

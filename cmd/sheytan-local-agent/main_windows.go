@@ -9,7 +9,9 @@ import (
 )
 
 func init() {
-	// On Windows with no subcommand, launch the native Qt desktop host.
+	// On Windows with no subcommand, launch the ONE Fyne desktop UI
+	// over the Go core's secured local IPC channel (v1.11.0 one-Go-UI
+	// migration — internal/desktop.Run owns core → IPC → Fyne order).
 	runDefault = func() int {
 		cfg, err := config.Load(config.DefaultPath())
 		if err != nil {

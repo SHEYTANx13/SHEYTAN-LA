@@ -114,6 +114,7 @@ migration): no Qt runtime and no Node/React stack ships or is linked.
 |---|---|---|
 | llama.cpp (downloaded engine) | MIT | fetched at runtime into the managed bin directory — never committed |
 | Fyne (fyne.io/fyne/v2) | BSD-3-Clause | the ONE product UI toolkit (linked into every desktop build) |
+| Three.js 0.182.0 (vendored, embedded) | MIT | internal/studio/assets/ — embedded into the binary for the optional 3D Studio viewer; the verbatim notice also ships as a Go source constant (internal/studio/license.go) |
 | gorilla/websocket | BSD-style | build-time Go dependency |
 | chromedp + cdproto | MIT | build-time Go dependency |
 | bild, xdg, winres, go-isatty, nfnt/resize, gobwas/* | MIT / BSD-style / ISC-style (per package) | build-time Go dependencies |
@@ -134,15 +135,17 @@ migration): no Qt runtime and no Node/React stack ships or is linked.
 | github.com/go-json-experiment/json | BSD-style (Go) | Copyright (c) 2020 The Go Authors |
 | golang.org/x/net, golang.org/x/sys, golang.org/x/image | BSD-style (Go) | Copyright The Go Authors |
 
-### Frontend dependencies (bundled into web/static by the build)
+### Embedded viewer assets (bundled into the binary by go:embed)
 
 | Package | License | Copyright |
 |---|---|---|
-| react, react-dom | MIT | Copyright (c) Meta Platforms, Inc. and affiliates |
-| zustand | MIT | Copyright (c) 2019 Paul Henschel |
-| react-markdown | MIT | Copyright (c) Espen Hovlandsdal et al. |
-| remark-gfm | MIT | Copyright (c) Titus Wormer et al. |
-| rehype-highlight (Highlight.js) | BSD-3-Clause | Copyright (c) Ivan Sagalaev and other contributors |
+| three.js 0.182.0 (three.core.js, three.module.js, OrbitControls.js) | MIT | Copyright © 2010-2025 three.js authors |
+
+The verbatim MIT license text for three.js ships inside the Go source
+(internal/studio/license.go) and therefore inside every binary that
+embeds the viewer assets. The former web/static npm bundle (react,
+react-dom, zustand, react-markdown, remark-gfm, rehype-highlight) was
+retired with the v1.11.0 one-Go-UI migration and is bundled no longer.
 
 The exact license texts ship with each package in its published archive
 and are available in the respective repositories/registries.

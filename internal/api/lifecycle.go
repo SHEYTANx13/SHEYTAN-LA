@@ -30,6 +30,14 @@ func (s *Server) Close() {
 		job.Cancel()
 	}
 
+	// v1.11.0: the 3D Studio viewer must never outlive the server —
+	// no orphaned loopback listener, no stale launch token.
+	if s.studioViewer != nil {
+		if err := s.studioViewer.Stop(); err != nil {
+			logging.Default().Warn("studio", "viewer stop during close: %v", err)
+		}
+	}
+
 	// Stop the scheduled engine-update loop FIRST and wait (bounded) for
 	// its in-flight pass to finish.
 	//

@@ -322,6 +322,12 @@ type Config struct {
 	SmoothStream bool `json:"smoothStream" yaml:"smoothStream"`
 	TargetFPS    int  `json:"targetFps" yaml:"targetFps"`
 
+	// v1.11.0: the optional 3D Studio (read-only system-topology
+	// visualizer over a locally bundled Three.js release). Enabled by
+	// default; disabling it removes the navigation entry AND makes the
+	// /api/studio/start control endpoint refuse with a named reason.
+	StudioEnabled bool `json:"studioEnabled" yaml:"studioEnabled"`
+
 	// ---------------------------------------------------------------------
 	// Autonomous Coding Lab.
 	// ---------------------------------------------------------------------
@@ -508,6 +514,10 @@ func Default() *Config {
 
 		SmoothStream: true,
 		TargetFPS:    120,
+
+		// 3D Studio defaults to ON — it is a passive read-only viewer
+		// and costs nothing until the user opens it.
+		StudioEnabled: true,
 
 		// Coding Lab defaults.
 		LabEnabled:           true,

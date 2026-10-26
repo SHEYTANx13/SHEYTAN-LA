@@ -137,6 +137,11 @@ evidence class named in parentheses:
 * sessions, memory, recall, skills, repository indexing, research, browser,
   sandbox, custom tools, coding lab, automations (unit/integration per
   surface);
+* an optional 3D Studio (v1.11.0): a read-only 3D map of the live system
+  topology rendered with a locally embedded Three.js r182 release in the
+  user's browser — loopback-only bind, per-launch fragment token, strict
+  CSP, zero commands, honest textual fallback without WebGL; disable it in
+  Settings → General (full contract in `docs/3dstudio.md`);
 * the session-list generation guard extended to the startup consumer:
   every list write — refresh or initialization — goes through the ONE
   monotonic generation, so stale responses can neither resurrect a

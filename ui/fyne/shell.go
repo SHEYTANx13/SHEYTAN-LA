@@ -29,7 +29,9 @@ type primaryView struct {
 	build func(*App) fyne.CanvasObject
 }
 
-// primaryViews — the 7-layer IA (workspace.ts contract: ids, order, modes).
+// primaryViews — the 7-layer IA (workspace.ts contract: ids, order, modes)
+// plus the v1.11.0 optional 3D Studio entry (read-only topology viewer;
+// the view itself honors the studioEnabled setting).
 var primaryViews = []primaryView{
 	{"chat", "Chat", theme.HomeIcon, buildChatView},
 	{"agent", "Agent", theme.ComputerIcon, buildAgentView},
@@ -38,6 +40,7 @@ var primaryViews = []primaryView{
 	{"automation", "Automation", theme.MediaFastForwardIcon, buildAutomationView},
 	{"system", "System", theme.InfoIcon, buildSystemView},
 	{"settings", "Settings", theme.SettingsIcon, buildSettingsView},
+	{"studio", "3D Studio", theme.ViewFullScreenIcon, buildStudioView},
 }
 
 // subPanel is a drawer-style surface opened over the shell (icon lazy —
@@ -266,29 +269,18 @@ func (s *shell) updateStatus() {
 	s.status.SetText(fmt.Sprintf("%s · %s · mode %s%s", conn, ver, mode, model))
 }
 
-// registerShortcuts wires desktop keyboard navigation (Ctrl+1..7 views,
-// Ctrl+N new session).
+// registerShortcuts wires desktop keyboard navigation (Ctrl+1..N views in
+// order, Ctrl+N new session). Views beyond the mapped number row simply
+// have no shortcut — never a broken binding on an empty key.
 func (ap *App) registerShortcuts() {
 	c := ap.w.Canvas()
+	keyByIndex := []fyne.KeyName{fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4, fyne.Key5, fyne.Key6, fyne.Key7}
 	for i, v := range primaryViews {
-		vv := v
-		var key fyne.KeyName
-		switch idx := i + 1; idx {
-		case 1:
-			key = fyne.Key1
-		case 2:
-			key = fyne.Key2
-		case 3:
-			key = fyne.Key3
-		case 4:
-			key = fyne.Key4
-		case 5:
-			key = fyne.Key5
-		case 6:
-			key = fyne.Key6
-		case 7:
-			key = fyne.Key7
+		if i >= len(keyByIndex) {
+			break // number row exhausted; the view stays reachable by pointer
 		}
+		vv := v
+		key := keyByIndex[i]
 		c.AddShortcut(&desktop.CustomShortcut{KeyName: key, Modifier: fyne.KeyModifierControl},
 			func(fyne.Shortcut) {
 				ap.shell.show(vv.id)

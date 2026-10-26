@@ -59,6 +59,8 @@ var SettingsFields = []SettingsField{
 	{Key: "smoothStream", Label: "Smooth streaming animation", Section: "general", Kind: FieldBool},
 	{Key: "showPerfHud", Label: "Show performance overlay", Section: "general", Kind: FieldBool},
 	{Key: "targetFps", Label: "Target frame rate", Section: "general", Kind: FieldInt},
+	{Key: "studioEnabled", Label: "3D Studio", Section: "general", Kind: FieldBool,
+		Hint: "Optional read-only 3D system-topology viewer (opens in the browser, embedded renderer)"},
 
 	// Models
 	{Key: "provider", Label: "Provider", Section: "models", Kind: FieldEnum, Enum: []string{"local", "remote"}},

@@ -40,6 +40,7 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recall"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/runtime"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/studio"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/vision"
@@ -123,6 +124,12 @@ type Server struct {
 	cloneJob     atomic.Pointer[gitclone.Job]
 	cloneRunning atomic.Bool
 	cloneStatus  atomic.Pointer[cloneStatusEnvelope]
+
+	// v1.11.0: the optional 3D Studio viewer (internal/studio). The
+	// server owns the lifecycle — started on demand via /api/studio/start,
+	// stopped via /api/studio/stop AND at Close time (no orphaned
+	// loopback listener). Lazy: nil until first start.
+	studioViewer *studio.Viewer
 
 	// active runs: sessionID → runState
 	runsMu sync.Mutex
@@ -832,8 +839,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/state", s.handleState)
 
 	// v1.10.1: the activity-transport discovery endpoint now answers
-	// SAME-ORIGIN unconditionally — the desktop UI is the native Qt
-	// host over the local IPC channel (it never consults this
+	// SAME-ORIGIN unconditionally — the desktop UI is the in-process
+	// Fyne client over the local IPC channel (it never consults this
 	// endpoint), and the browser/headless mode always streams over its
 	// own origin. The former loopback transport answer (a real origin
 	// + token for the Wails page) is retired with Wails itself.
@@ -896,6 +903,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/automation/task-tools/", s.handleAutomationTaskTool)
 	mux.HandleFunc("/api/automation/artifacts", s.handleAutomationArtifacts)
 	mux.HandleFunc("/api/automation/artifacts/", s.handleAutomationArtifacts)
+
+	// v1.11.0: the optional 3D Studio — start/stop/state of the loopback
+	// read-only topology viewer. The viewer itself (its own port + token)
+	// is INTERNAL to this server; these endpoints are the ONLY control
+	// surface and they carry no tool or mutation authority.
+	mux.HandleFunc("/api/studio/state", s.handleStudioState)
+	mux.HandleFunc("/api/studio/start", s.handleStudioStart)
+	mux.HandleFunc("/api/studio/stop", s.handleStudioStop)
 	mux.HandleFunc("/api/lab", s.handleLab)
 	mux.HandleFunc("/api/lab/", s.handleLabTask)
 	mux.HandleFunc("/api/research", s.handleResearch)

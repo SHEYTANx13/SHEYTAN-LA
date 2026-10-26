@@ -84,18 +84,30 @@ func (ap *App) installRuntimeCallbacks() {
 }
 
 // bootstrap loads the first session list and reports connection status.
+//
+// Threading contract (Fyne v2.8.2): bootstrap runs OFF the UI goroutine
+// (it is spawned from OnStarted), so every widget/state mutation below is
+// marshalled through uiDo (fyne.Do). The Xvfb smoke caught the un-marshalled
+// status writes as "Error in Fyne call thread" — the next Fyne release
+// removes that unsafe path entirely.
 func (ap *App) bootstrap() {
 	ctx := ap.rootCtx
 	if err := ap.client.Handshake(ctx); err != nil {
-		ap.shell.setBootError(err)
+		uiDo(func() { ap.shell.setBootError(err) })
 		return
 	}
-	ap.shell.coreVersion = ap.client.Version()
+	version := ap.client.Version()
 	if err := ap.rt.RefreshSessions(ctx); err != nil {
-		ap.shell.setBootError(err)
+		uiDo(func() {
+			ap.shell.coreVersion = version
+			ap.shell.setBootError(err)
+		})
 		return
 	}
-	ap.shell.setConnected()
+	uiDo(func() {
+		ap.shell.coreVersion = version
+		ap.shell.setConnected()
+	})
 }
 
 // Client exposes the core client (views use it).
@@ -111,8 +123,14 @@ func (ap *App) Window() fyne.Window { return ap.w }
 func (ap *App) Ctx() context.Context { return ap.rootCtx }
 
 // Close closes the window (programmatic shutdown path).
+//
+// Threading contract (Fyne v2.8.2): Close may be called from ANY goroutine
+// — the SIGTERM handler in internal/desktop, tests, future programmatic
+// exits — so the window close is marshalled onto the UI loop (fyne.Do via
+// uiDo). The Xvfb smoke traced the remaining "Error in Fyne call thread"
+// to the signal path calling this from its own goroutine.
 func (ap *App) Close() {
 	if ap.w != nil {
-		ap.w.Close()
+		uiDo(ap.w.Close)
 	}
 }

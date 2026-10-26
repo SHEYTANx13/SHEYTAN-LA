@@ -897,3 +897,45 @@ type AttachmentInput struct {
 	Name string
 	Data []byte
 }
+
+// StudioState reports the honest 3D Studio viewer lifecycle from the ONE
+// core authority (enabled / running / URL / port).
+type StudioState struct {
+	Enabled  bool   `json:"enabled"`
+	Running  bool   `json:"running"`
+	Reason   string `json:"reason,omitempty"`
+	URL      string `json:"url,omitempty"` // WITHOUT the token
+	Port     int    `json:"port,omitempty"`
+	Started  string `json:"startedAt,omitempty"`
+	Requests int64  `json:"requests"`
+	Version  string `json:"version,omitempty"`
+	License  string `json:"license,omitempty"`
+}
+
+// StudioStart launches the core-owned loopback viewer. The returned URL
+// includes the per-launch #t= fragment token; the UI must open it (or copy
+// it) verbatim and MUST NOT log it.
+type StudioStart struct {
+	URL     string `json:"url"`
+	Port    int    `json:"port"`
+	Version string `json:"version"`
+}
+
+// StudioState fetches the viewer lifecycle.
+func (c *CoreClient) StudioState(ctx context.Context) (StudioState, error) {
+	var out StudioState
+	err := c.do(ctx, http.MethodGet, "/api/studio/state", nil, &out)
+	return out, err
+}
+
+// StudioStart starts the viewer.
+func (c *CoreClient) StudioStart(ctx context.Context) (StudioStart, error) {
+	var out StudioStart
+	err := c.do(ctx, http.MethodPost, "/api/studio/start", map[string]any{}, &out)
+	return out, err
+}
+
+// StudioStop stops the viewer (idempotent at the core).
+func (c *CoreClient) StudioStop(ctx context.Context) error {
+	return c.do(ctx, http.MethodPost, "/api/studio/stop", map[string]any{}, nil)
+}

@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -33,6 +34,11 @@ type fakeCore struct {
 
 	sessions     []Session
 	failSessions bool
+
+	// studioEnabled flips the /api/studio/state contract for the view tests.
+	studioEnabled atomic.Bool
+	// failStudioState forces a 503 on /api/studio/state (typed-error path).
+	failStudioState bool
 
 	lastSelectModel string
 	configPatched   bool
@@ -63,6 +69,7 @@ func newFakeCore(t *testing.T) *fakeCore {
 	mux.HandleFunc("/api/run", f.handleRun)
 	mux.HandleFunc("/api/config", f.handleConfig)
 	mux.HandleFunc("/api/models/select", f.handleSelect)
+	mux.HandleFunc("/api/studio/state", f.handleStudioState)
 	f.srv = httptest.NewServer(mux)
 	// Point the unix-socket dialer at the TCP test server (test seam).
 	host := strings.TrimPrefix(f.srv.URL, "http://")
@@ -261,4 +268,34 @@ func deepMerge(dst, patch map[string]any) {
 func nowPtr() *time.Time {
 	t := time.Now()
 	return &t
+}
+
+// handleStudioState serves the studio lifecycle contract: enabled and
+// stopped by default (the viewer itself is core-owned and NOT started in
+// the fake — the view must render that state honestly). Tests flip
+// studioEnabled via the atomic flag.
+func (f *fakeCore) handleStudioState(w http.ResponseWriter, r *http.Request) {
+	if !f.authed(w, r) {
+		return
+	}
+	if f.failStudioState {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error": "core studio surface unavailable",
+		})
+		return
+	}
+	if !f.studioEnabled.Load() {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"enabled": false,
+			"running": false,
+			"reason":  "the 3D Studio is disabled in Settings (studioEnabled)",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled": true,
+		"running": false,
+		"version": "0.182.0",
+		"license": "MIT",
+	})
 }

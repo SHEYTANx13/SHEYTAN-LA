@@ -171,12 +171,12 @@ jobs:
           go test -race -tags headless -count=1 ./internal/api ./internal/agent ./internal/sessions ./internal/contextplan ./internal/histref ./internal/runtime ./internal/localipc 2>&1 | tee ci-logs/audit-go-race.log
           echo "gate OK: go test -race (critical packages)" >> ci-logs/gate-order.txt
 
-      - name: Stress release-surface gate
+      - name: Stress + release-surface gate
         run: |
           set -euo pipefail
-          echo "RUN go run ./cmd stress-release-surface" >> ci-logs/gate-order.txt
-          go run ./cmd stress-release-surface 2>&1 | tee ci-logs/audit-stress-surface.log
-          echo "gate OK: stress release surface" >> ci-logs/gate-order.txt
+          echo "RUN go run ./cmd/sheytan-local-agent stress" >> ci-logs/gate-order.txt
+          go run ./cmd/sheytan-local-agent stress 2>&1 | tee ci-logs/audit-stress-surface.log
+          echo "gate OK: stress suite (includes the release_surface scenario)" >> ci-logs/gate-order.txt
 
       - name: Release + version contract tests
         run: |
@@ -255,7 +255,7 @@ jobs:
           go build -o "$RUNNER_TEMP/SHEYTAN-LA" ./cmd/sheytan-local-agent
           file "$RUNNER_TEMP/SHEYTAN-LA"
 
-      - name: Desktop launch smoke (Xvfb: boot, window, clean shutdown)
+      - name: "Desktop launch smoke (Xvfb: boot, window, clean shutdown)"
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"
@@ -371,7 +371,7 @@ jobs:
           go vet ./ui/fyne/ 2>&1 | Tee-Object -FilePath "ci-logs/win-ui-vet.log"
           if ($LASTEXITCODE -ne 0) { throw "ui/fyne vet failed (windows/amd64)" }
 
-      - name: Windows resource pipeline (gen-syso: icon + version + DPI manifest)
+      - name: "Windows resource pipeline (gen-syso: icon + version + DPI manifest)"
         run: |
           $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
           $env:CGO_ENABLED = "1"
@@ -592,7 +592,7 @@ jobs:
           file "$bin" | tee ci-logs/linux-elf-check.log
           file "$bin" | grep -q "ELF 64-bit LSB.*x86-64" || { echo "::error::not an x86-64 ELF binary"; exit 1; }
 
-      - name: Launch smoke (Xvfb: boot, window, clean shutdown)
+      - name: "Launch smoke (Xvfb: boot, window, clean shutdown)"
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/linux-smoke"

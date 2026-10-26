@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SHEYTAN-LA 3D Studio — system topology</title>
+<link rel="stylesheet" href="/view/studio.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "/view/assets/three.module.js",
+    "three/addons/controls/OrbitControls.js": "/view/assets/OrbitControls.js"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app">
+  <header id="bar">
+    <span id="title">SHEYTAN-LA — 3D Studio (read-only system topology)</span>
+    <span id="state" role="status" aria-live="polite"></span>
+  </header>
+  <main id="stage" aria-label="3D topology canvas"></main>
+  <section id="fallback" hidden>
+    <h2>3D rendering unavailable</h2>
+    <p id="fallback-reason"></p>
+    <p>The textual topology equivalent below remains fully usable.</p>
+  </section>
+  <section id="textual" hidden aria-label="Textual topology equivalent">
+    <h2>Topology (textual equivalent)</h2>
+    <ul id="node-list"></ul>
+    <ul id="edge-list"></ul>
+  </section>
+  <footer id="controls">
+    <button id="btn-reset" type="button">Reset camera</button>
+    <button id="btn-fit" type="button">Fit to content</button>
+    <button id="btn-reload" type="button">Refresh topology</button>
+    <button id="btn-textual" type="button" aria-pressed="false">Show textual view</button>
+    <label><input type="checkbox" id="chk-motion" checked> Motion (auto-rotate disabled: render-on-demand)</label>
+    <span id="meta"></span>
+  </footer>
+</div>
+<script type="module" src="/view/studio.js"></script>
+</body>
+</html>
