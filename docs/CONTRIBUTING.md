@@ -7,7 +7,7 @@ Thank you for your interest in contributing to SHEYTAN-LA.
 SHEYTAN-LA uses a **conservative mixed licensing model**. The complete picture — classification, notices, and both full legal texts — lives in the sole licensing artifact [`../LICENSE.md`](../LICENSE.md):
 
 - `internal/humanize/` is designated **Apache-2.0** open.
-- Everything else is **Proprietary** under the Parsaetak Proprietary License v1.1.
+- Everything else is **Proprietary** under the Proprietary License.
 
 **What this means for contributions**
 
@@ -44,7 +44,7 @@ Beyond green CI, the project’s core rules:
 
 1. Fork / branch from `main`.
 2. Make the change with tests that fail without it.
-3. Update the affected documentation — `README.md`, `ARCHITECTURE.md`, `agent.md`, `FEATURES.md` and `ROADMAP.md` are part of the deliverable, not afterthoughts.
+3. Update the affected documentation — `README.md`, `ARCHITECTURE.md`, `agent.md`, `FEATURES.md`, `ROADMAP.md` and `retired.md` are part of the deliverable, not afterthoughts.
 4. Sign your commits (`git commit -s`) with a clear subject line when the change is release-relevant.
 5. Open a pull request describing: defect narrative (runtime evidence if a bug), the fix, and the verification you ran. Claims without evidence will be asked for evidence.
 
