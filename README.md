@@ -1,12 +1,16 @@
 # SHEYTAN-LA
 
-**A local-first AI software-engineering laboratory.**
+**A complete local AI agent that runs on your machine.**
 
 > The model proposes. The tools execute. The laboratory verifies.
 
-SHEYTAN-LA is a local-first desktop AI engineering environment. One Go process owns the entire runtime — runs, tools, sessions, memory, approvals, and policy. The desktop is a single native Go + Fyne application running in-process against that core over a secured per-user local IPC channel. Managed llama.cpp inference, an optional native C++ engine path, controlled tools, isolated coding workspaces, Net Search, memory, recall, objective verification, and a Runtime Governor that continuously understands the machine and governs policy while keeping the host responsive.
+SHEYTAN-LA is a full-featured local AI agent designed to work like the popular free and paid cloud agents you already know — chat, tools, long-horizon goals, memory, research, coding, automations — except everything stays on your computer. No account required. No data leaves your machine unless you explicitly enable a remote provider.
 
-**SHEYTAN™ is a trademark of Parsaetak · © 2024–2026 Parsaetak. All rights reserved.**
+One Go process owns the entire runtime (runs, tools, sessions, memory, approvals, policy). The desktop is a single native Go + Fyne application running in-process against that core over a secured per-user local IPC channel. Managed llama.cpp inference, an optional native C++ engine path, controlled tools, isolated coding workspaces, Net Search, memory, recall, objective verification, and a Runtime Governor that continuously understands the machine and keeps the host responsive.
+
+**This software is the sole original work of the Licensor (SHEYTAN and Parsaetak).** It was conceived, designed, implemented, and iterated entirely on a personal home device, assisted only by free web-based AI agents. No corporate team, no external contractors, no institutional funding.
+
+**SHEYTAN™ is a trademark of SHEYTAN and Parsaetak · © 2024–2026 SHEYTAN and Parsaetak. All rights reserved.**
 
 Licensed under a conservative mixed model — Apache-2.0 for explicitly designated open components, the **Proprietary License** for SHEYTAN-specific material. The complete licensing picture lives in `LICENSE.md`.
 
@@ -21,7 +25,9 @@ Branch:           main
 
 ## What SHEYTAN is
 
-SHEYTAN is not an Ollama or LM Studio wrapper. It is a laboratory: the model proposes, the tools execute, and the laboratory verifies. The product is Windows-first and local-first — computation, memory, and knowledge stay on the user’s machine.
+SHEYTAN is not an Ollama or LM Studio wrapper. It is a complete local agent laboratory: the model proposes, the tools execute, and the laboratory verifies. It is built to deliver the same class of capability users expect from modern free and paid cloud agents — persistent sessions, tool use, long-horizon goals, memory, research, coding assistance, and automations — while remaining fully local-first and under the user’s control.
+
+The product is Windows-first and local-first. Computation, memory, and knowledge stay on the user’s machine.
 
 ### Architecture in one paragraph
 
