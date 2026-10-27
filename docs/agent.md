@@ -1,54 +1,53 @@
 # Agent Operating Manual
 
-This manual guides an engineering agent through the SHEYTAN-LA repository. It states what the project is, where things live, how the work is verified, what proof means, and where to write.
+This manual is the durable operating guide for any AI agent working on SHEYTAN-LA.
 
-**Every AI agent must read `docs/Dev-Notes.md` before starting any update** and must mark items after the work is verified.
+**Two non-negotiable rules**
 
-Status narrative lives in:
-
-- `docs/changelog.md` — the only release history
-- `docs/worklog.md` — session log with evidence classes
-- `docs/UPDATE.md` — current maintenance behavior
-- `docs/ROADMAP.md` — current / future boundary
-- `docs/Dev-Notes.md` — living checklist of open items (mandatory pre-flight)
-
-Architecture truth: `docs/ARCHITECTURE.md`.
+1. The human’s current prompt / instructions always take precedence over any documentation, including this file and `Dev-Notes.md`.
+2. Before any work, the agent must read `docs/Dev-Notes.md` and follow the Agent Start Checklist written there.
 
 ---
 
-## 0. How this project is developed
+## 0. Development philosophy and method
 
-Most of the development work on SHEYTAN-LA is performed **without a traditional IDE**. The primary development method is a multi-agent workflow:
+SHEYTAN-LA is developed primarily through a multi-AI-agent workflow without a traditional IDE:
 
-- Multiple AI agents (in parallel or sequential sessions) read the repository, plan, implement, test, and document changes.
-- The human operator (Licensor) reviews, decides, and performs the final push.
-- Agents work through the GitHub API / connected tools, editing files directly, running verification commands in a sandbox when available, and producing commits for the operator to push.
-- There is no central IDE project file, no required local IDE configuration, and no assumption that an agent has a full graphical desktop environment.
+- Multiple AI agents (sequential or parallel) read the repository, plan, implement, verify, and document.
+- The human operator reviews, decides, and is the only one who pushes.
+- Agents edit files directly via tools, run verification when possible, and produce commits for human review.
+- There is no required local IDE configuration and no assumption of a full graphical desktop for the agent.
 
-This is intentional. The repository and its documentation are structured so that a competent AI agent can become productive quickly by reading this manual, `Dev-Notes.md`, `ARCHITECTURE.md`, and the relevant source.
+The process is deliberately complete at every stage. Speed comes from discipline, not from skipping steps.
 
-### Mandatory agent workflow
+### World-class staged development process
 
-1. **Read first**  
-   - `docs/Dev-Notes.md` (open items and process rules)  
-   - This file (`docs/agent.md`)  
-   - `docs/ARCHITECTURE.md` for any architectural change  
-   - `docs/ROADMAP.md` for direction questions
+Every non-trivial change must pass through these stages:
 
-2. **Plan**  
-   State the success condition, the files you will touch, and the evidence you will produce.
+| Stage | Required activity | Exit criterion |
+|-------|-------------------|----------------|
+| **1. Orient** | Read human prompt + `Dev-Notes.md` + this manual + relevant architecture/roadmap | Success condition stated in one sentence |
+| **2. Audit** | Inspect the exact code paths, tests, and docs that will be affected. Record what already exists and what is missing | Audit notes written (even if short) |
+| **3. Plan** | List files to touch, tests to add/run, docs to update, evidence class expected | Plan is minimal and matches the success condition |
+| **4. Implement** | Make the smallest correct change. One authority per concern. No drive-by refactors | Diff is focused |
+| **5. Verify** | Run the verification ladder (or the relevant subset). Record evidence class | Tests pass or failure is honestly reported |
+| **6. Document** | Update `Dev-Notes.md`, and every affected public doc, in the same change set | Docs match the code |
+| **7. Hand-off** | Produce a clear summary: what changed, evidence, remaining risks, next recommended item | Human can decide without re-deriving context |
 
-3. **Implement**  
-   Prefer minimal, evidence-backed diffs. One authority per concern. No speculative refactors.
+Skipping stages produces incomplete or brittle work. Agents are expected to complete every stage for the scope they accept.
 
-4. **Verify**  
-   Run the verification ladder (section 3). Record the evidence class (local static / hosted / physical).
+### Definition of Done
 
-5. **Document**  
-   Update `Dev-Notes.md` (mark items), and any affected public docs (`README.md`, `FEATURES.md`, `ARCHITECTURE.md`, `retired.md`, etc.) in the same change set.
+A change is done only when all of the following are true:
 
-6. **Hand off**  
-   Agents do not push. Prepare the commit(s) and leave a clear summary for the human operator.
+- Success condition stated at the start is met
+- Code (if any) compiles and relevant tests pass
+- Evidence class is recorded (`local-static` | `hosted` | `physical`)
+- `Dev-Notes.md` is updated
+- Affected public documentation is updated in the same change
+- No new version numbers appear in product-facing docs
+- No speculative work outside the stated success condition
+- Hand-off message is complete
 
 ---
 
@@ -56,26 +55,24 @@ This is intentional. The repository and its documentation are structured so that
 
 SHEYTAN-LA is a local-first AI engineering laboratory — not an Ollama or LM Studio wrapper.
 
-One Go core owns every authority exactly once (policy, runs, sessions, tools, approvals, memory, Governor) and serves its API over the secured `internal/localipc` channel (per-user Unix socket / named pipe, transport-level identity checks, versioned keyed handshake `sheytan-ipc/1`, bounded framing).
+One Go core owns every authority exactly once (policy, runs, sessions, tools, approvals, memory, Governor) and serves its API over the secured `internal/localipc` channel.
 
-The desktop is a single native Go + Fyne application (`ui/fyne`) running **in-process** against that core. There is no second UI language, no embedded browser, no Qt runtime, and no React/Vite frontend.
+The desktop is a single native Go + Fyne application (`ui/fyne`) running in-process against that core. There is no second UI language, no embedded browser, no Qt runtime, and no React/Vite frontend.
 
-Managed llama.cpp and a native C++ engine (`native/`) serve inference behind one backend contract. The native engine default remains evidence-gated.
+Managed llama.cpp and a native C++ engine serve inference behind one backend contract.
 
 Motto: **“The model proposes. The tools execute. The laboratory verifies.”**
 
-### Durable invariants (all releases)
+### Durable invariants
 
 - One authority per concern
-- No sleeps / timing hacks / retry storms — deterministic tests synchronize on authoritative state
+- No sleep-based correctness
 - Build / typecheck ≠ runtime proof
 - Device detection ≠ device execution
 - Model output ≠ objective evidence
-- No fake autonomy (everything bounded by permissions, approvals, workspace policy, the Governor, cancellation, pause and verification)
-- No fake long-context
-- No model-specific hard-coding
-- The codename-removal gate stays enabled
-- Release identity flows from the single Go authority (`internal/config.AppVersion`)
+- No fake autonomy
+- Codename-removal gate stays enabled
+- Release identity flows from `internal/config.AppVersion`
 
 ---
 
@@ -83,98 +80,87 @@ Motto: **“The model proposes. The tools execute. The laboratory verifies.”**
 
 | Path | Owns |
 |------|------|
-| `cmd/sheytan-local-agent/` | Entrypoints (desktop + headless) |
-| `cmd/printversion/` | CGO-free version resolver used by CI |
-| `internal/` | The Go core: `api`, `config`, `desktop`, `localipc`, `agent`, `aisystem`, `goal`, `approval`, `governor`, `llm`, `sessions`, `memory`, `tools`, `accelerator`, `studio`, `updater`, … |
-| `ui/fyne/` | The one product UI (Go + Fyne) |
-| `native/` | The C++ engine (CMake) and its parity/acceptance tests |
-| `scripts/` | CI helpers, consolidate-run-log, stress, codename gate |
-| `packaging/` | Launcher and NSIS installer |
-| `baselines/` | Hosted-class perf baselines (fail-closed host classification) |
-| `docs/` | All documentation (including `Dev-Notes.md`) |
-| `.github/workflows/build-desktop.yml` | The pipeline |
+| `cmd/sheytan-local-agent/` | Entrypoints |
+| `cmd/printversion/` | CGO-free version resolver |
+| `internal/` | Core authorities |
+| `ui/fyne/` | One product UI |
+| `native/` | C++ engine |
+| `scripts/` | CI helpers, stress, gates |
+| `packaging/` | Launcher and installer |
+| `docs/` | All documentation (including Dev-Notes) |
+| `.github/workflows/` | Pipeline |
 
 ---
 
-## 3. The verification ladder
+## 3. Verification ladder
 
-Run in this order before claiming anything:
-
-1. `gofmt -l .` — must print nothing
+1. `gofmt -l .`
 2. `go build -tags headless ./...`
 3. `go test ./internal/... -tags headless -count=1`
 4. `go test ./... -count=1`
-5. `go test -race -tags headless -count=1` on concurrency-heavy packages (`api`, `agent`, `sessions`, `runtime`, …)
+5. Race tests on concurrency-heavy packages
 6. `go vet ./...`
-7. `go test ./ui/fyne/ -count=1` (requires Fyne graphics development libraries)
-8. Stress suite (`go run -tags headless ./cmd/sheytan-local-agent stress`)
+7. `go test ./ui/fyne/` (when UI is affected)
+8. Stress suite
 9. Version gate via `cmd/printversion`
-
-Windows cross-proof (compile-level only): `GOOS=windows go build ./...` + `GOOS=windows go vet ./...`.
 
 ---
 
 ## 4. Evidence classes
 
-- **Local static proof**: compile, typecheck, unit/test runs, GOOS cross-builds. This is the only class available for some surfaces in a Linux-only environment.
-- **Hosted CI runtime proof**: a green GitHub Actions job on the exact revision. The hosted job is the only runtime authority for Windows packaging and full desktop smoke.
-- **Physical proof**: real-hardware measurements. The perf gate is fail-closed about hosts: `cmd/shtn-perf` requires an explicit `--host-class physical|hosted` and refuses a physical claim over detected hosted-CI markers.
+- **local-static** — compile, unit tests, cross-build
+- **hosted** — green GitHub Actions job on the exact revision
+- **physical** — real-hardware measurements (fail-closed host classification)
 
-A compile proof never upgrades to a runtime claim. State the class with every claim.
-
----
-
-## 5. The code-before-docs discipline
-
-Documentation never closes a failure item. Every failure closes as a code or workflow diff, or as an evidenced NOT-REPRODUCIBLE (with the reproduction transcript). A failure item “closed” by documentation edits alone is an automatic workflow failure.
-
-The mirror rule: do not edit anything the evidence does not name. Do not weaken a test, gate, or assertion to make a run green. Fix forward only what the run’s named evidence names.
+Never upgrade a lower class to a higher class by assertion.
 
 ---
 
-## 6. The CI contract
+## 5. Documentation discipline
 
-- Jobs: audit → Windows x64 (UCRT64) + Linux x64 → release (tag-gated only)
-- Every gate is a required gate
-- Consolidated one-file run-log artifact on every run (red and green)
-- Fyne desktop smoke under Xvfb on Linux
-- No publish on a plain main push — only on a version tag
-
----
-
-## 7. The push protocol
-
-The agent has no push credentials. The agent prepares commits (code + workflow + docs) and hands them to the operator. The operator pushes main, reads the run, then — once main is fully green — tags and pushes the tag for the publish job.
-
-Never ask the agent to push; never fabricate a hosted result; record each run’s verdict with its evidence class in `docs/worklog.md` only after reading the summary/annotations.
+- Docs must be based on code and evidence, not on intention or aspiration.
+- Agents must check all relevant docs before changing behaviour.
+- Every behavioural change that is user-visible or architectural must update the corresponding public doc in the same change set.
+- `Dev-Notes.md` is the living task list; public docs describe the product.
 
 ---
 
-## 8. Protected surfaces (do not churn without evidence)
+## 6. CI and push protocol
 
-- The one-Go-UI (Fyne) and the local IPC seam
-- The execution/evidence ladder and GPU truth model
-- The Runtime Governor admission path
-- The Goal engine terminal settlement guards
-- The session-list generation guard and zero-session Send contract
-- The stress suite and release-surface gates
-- The consolidated run-log collector
-- The codename-removal gate
+- Agents never push.
+- Operator pushes main, reads the run, then tags for release when green.
+- Consolidated run-log artifact is required on every run.
 
 ---
 
-## 9. Where to write what
+## 7. Protected surfaces
+
+Do not touch without an explicit item in Dev-Notes or a direct human instruction:
+
+- One-Go-UI and local IPC seam
+- Execution / evidence ladder and GPU truth model
+- Runtime Governor admission path
+- Goal engine terminal settlement
+- Session-list generation guard and zero-session Send
+- Stress suite and release-surface gates
+- Codename-removal gate
+
+---
+
+## 8. Where to write what
 
 | File | Purpose |
 |------|---------|
-| `docs/Dev-Notes.md` | **Mandatory pre-flight checklist** — read before every task, mark after |
-| `docs/changelog.md` | The only canonical release history |
-| `docs/worklog.md` | Session log: Task ID, evidence classes, sweeps, fixes, run verdicts |
-| `docs/UPDATE.md` | Current maintenance and update behavior |
-| `docs/agent.md` | This manual — durable operational truth only |
-| `docs/ROADMAP.md` | Current / future boundary |
-| `docs/ARCHITECTURE.md` | Architecture truth (seams, IPC, engine contract) |
-| `docs/FEATURES.md` | Single feature inventory |
-| `docs/retired.md` | Retired / legacy mechanisms still under Proprietary License |
+| `docs/Dev-Notes.md` | Mandatory living checklist + start process |
+| `docs/agent.md` | This manual |
+| `docs/ARCHITECTURE.md` | What is built |
+| `docs/ROADMAP.md` | Direction and capability families |
+| `docs/FEATURES.md` | Implemented vs coming inventory |
+| `docs/changelog.md` | Release history only |
+| `docs/worklog.md` | Session log |
+| `docs/retired.md` | Legacy mechanisms still under license |
+| `README.md` | Current product description |
 
-Version identity lives in `internal/config.AppVersion`. Never hand-edit derived surfaces.
+---
+
+*Follow the human prompt first. Follow this process second. Produce evidence. Keep the repository honest.*
