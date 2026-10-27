@@ -1,77 +1,73 @@
 # Dev Notes
 
-**Mandatory reading for every AI agent before starting any work.**
+**Human-only file.**  
+AI agents must **not** edit this file unless the human explicitly instructs them to do so in the current prompt.
 
-This file is the living checklist of known gaps, required updates, and verification items.
+AI agents write all working notes, progress, evidence, and hand-offs in `docs/ai-notes.md` instead.
 
-**Critical rule:** Agents must follow **both** this file **and** the human’s current prompt / instructions. The human prompt always takes precedence when there is any conflict. Documentation never overrides an explicit human instruction.
-
----
-
-## Agent Start Checklist (do this every session)
-
-1. Read the human’s current prompt completely.
-2. Read this file (`Dev-Notes.md`) completely.
-3. Read `docs/agent.md` (especially the staged development process and definition of done).
-4. Skim `docs/ARCHITECTURE.md` and `docs/ROADMAP.md` if the task touches architecture or direction.
-5. Pick **one** clear success condition (prefer an open item below, or the exact request in the human prompt).
-6. State the success condition, the files you will touch, and the evidence you will produce.
-7. Implement only what is required for that success condition.
-8. Verify (see definition of done).
-9. Update this file (mark items) and any affected public docs in the same change set.
-10. Hand off with evidence class and a short summary. Do not push.
+This file is the developer’s curated list of open items, priorities, and process rules. It is the source of truth for “what needs to be done.”
 
 ---
 
-## Definition of Done (every change must satisfy)
+## Agent obligations (read-only for AI)
 
-A change is done only when **all** of the following are true:
+Before any work an AI agent must:
 
-- [ ] Success condition stated at the start is met
-- [ ] Code (if any) compiles and relevant tests pass
-- [ ] Evidence class is recorded: `local-static` | `hosted` | `physical`
-- [ ] `Dev-Notes.md` updated (items marked or new items added)
-- [ ] Affected public docs updated in the same change (`README`, `ARCHITECTURE`, `FEATURES`, `ROADMAP`, `retired`, etc.)
-- [ ] No new version numbers introduced into product-facing docs
-- [ ] No speculative refactors or drive-by cleanups outside the stated success condition
-- [ ] Hand-off message includes: what changed, evidence, remaining risks
+1. Read the human’s current prompt (highest priority).
+2. Read this file.
+3. Read `docs/agent.md`.
+4. Read `docs/ai-notes.md` (previous agent hand-off).
+5. Follow the staged process and Definition of Done in `agent.md`.
+6. Write all of its own notes exclusively in `ai-notes.md`.
+
+---
+
+## Definition of Done (enforced on every change)
+
+- Success condition met
+- Relevant tests pass / evidence recorded
+- Evidence class stated (`local-static` | `hosted` | `physical`)
+- `ai-notes.md` updated with hand-off
+- Affected public docs updated in the same change
+- No version numbers introduced into product-facing docs
+- No work outside the stated success condition
 
 ---
 
 ## Open items
 
 ### Documentation & process
-- [ ] Keep `Dev-Notes.md` itself current after every meaningful change
-- [ ] Ensure every new public surface is mentioned in `README.md` and `FEATURES.md`
-- [ ] After any architecture change, update `ARCHITECTURE.md` in the same commit
-- [ ] After any retirement, update `retired.md`
+- [ ] Keep this file current (human)
+- [ ] Ensure every new public surface appears in README + FEATURES
+- [ ] Architecture changes update ARCHITECTURE.md in the same commit
+- [ ] Retirements update retired.md
 
 ### CI / packaging
-- [ ] Confirm hosted Windows UCRT64 build + smoke + installer remain green after next push
-- [ ] Confirm Linux Xvfb desktop smoke remains green
-- [ ] Verify consolidated run-log artifact is produced on both red and green runs
+- [ ] Hosted Windows UCRT64 build + smoke + installer green
+- [ ] Linux Xvfb desktop smoke green
+- [ ] Consolidated run-log artifact on red and green runs
 
 ### Product surface
-- [ ] Physical desktop verification of 3D Studio WebGL rendering
-- [ ] Physical high-DPI / multi-monitor behaviour of the Fyne shell
-- [ ] End-to-end Goal engine run on a real long-horizon task with human approval flow
+- [ ] Physical verification of 3D Studio WebGL
+- [ ] Physical high-DPI / multi-monitor Fyne behaviour
+- [ ] Real long-horizon Goal engine run with approval flow
 
-### Technical debt / future hardening
-- [ ] Governor is still policy-only; full closed-loop actuation not implemented
-- [ ] Native C++ engine default remains evidence-gated (physical Windows warm-TTFT still outstanding)
-- [ ] Automatic sub-agent fan-out from the Goal runner not yet implemented
-- [ ] MCP client implemented but not yet registered into the live tool registry
+### Technical debt
+- [ ] Governor still policy-only
+- [ ] Native engine default still evidence-gated
+- [ ] Automatic sub-agent fan-out from Goal runner
+- [ ] MCP client not yet in live tool registry
 
 ---
 
 ## Recently closed
 
-- [x] Full documentation overhaul (README, LICENSE, ARCHITECTURE, ROADMAP, FEATURES, agent, UPDATE, CONTRIBUTING, SECURITY, retired.md)
-- [x] Dual-licensor language (SHEYTAN + Parsaetak)
-- [x] One-Go-UI (Fyne) migration completed and documented
-- [x] Capability families from GPT6 research absorbed into ROADMAP; research file archived
-- [x] Agent Start Checklist + Definition of Done added
+- [x] Documentation overhaul and dual-licensor language
+- [x] One-Go-UI (Fyne) migration
+- [x] Capability families absorbed into ROADMAP; GPT6 research archived
+- [x] Agent Start Checklist + Definition of Done
+- [x] Separation of Dev-Notes (human) and ai-notes (AI)
 
 ---
 
-*This file is proprietary material under the Proprietary License.*
+*Proprietary material under the Proprietary License.*
