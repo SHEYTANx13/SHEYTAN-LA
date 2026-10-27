@@ -67,6 +67,9 @@ permissions:
   contents: read
 
 env:
+  # ONE version literal for the whole pipeline — jobs resolve it as
+  # ${APP_VERSION} (bash), ${env:APP_VERSION} (pwsh) or ${{ env.APP_VERSION }}.
+  APP_VERSION: "1.11.0"
   GO_VERSION: "1.27"
   # ONE canonical package root per platform (internal/releasecontract):
   # every staging directory, ZIP name, artifact name and release-metadata
@@ -130,9 +133,10 @@ jobs:
       - name: gofmt (enforced)
         run: |
           set -euo pipefail
-          unformatted=$(gofmt -l cmd internal ui)
+          mkdir -p ci-logs
+          unformatted=$(gofmt -l cmd internal ui | tee ci-logs/preflight-gofmt.log)
           if [ -n "$unformatted" ]; then
-            echo "::error::gofmt violations — run gofmt -w on:"
+            echo "::error::gofmt violations — run gofmt -w on: $(echo "$unformatted" | tr '\n' ' ')"
             echo "$unformatted"
             exit 1
           fi
@@ -382,8 +386,6 @@ jobs:
     runs-on: windows-latest
     needs: [preflight]
     timeout-minutes: 45
-    env:
-      APP_VERSION: "1.11.0"
     defaults:
       run:
         shell: pwsh
@@ -689,8 +691,6 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [preflight]
     timeout-minutes: 45
-    env:
-      APP_VERSION: "1.11.0"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1070,8 +1070,6 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
-    env:
-      APP_VERSION: "1.11.0"
     steps:
       - name: Download Windows package
         uses: actions/download-artifact@v8

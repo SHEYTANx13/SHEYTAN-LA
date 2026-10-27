@@ -107,7 +107,7 @@ fi
   echo ""
   echo "=== ERROR INDEX ==="
   if [ -d "$PARTS" ]; then
-    grep -rn -E "EXIT_CODE: [1-9][0-9]* FAIL|::error::|ERROR: " "$PARTS" 2>/dev/null | sort || true
+    grep -rn -E "EXIT_CODE: [1-9][0-9]* FAIL|::error::|ERROR: |--- FAIL:|^FAIL|exit status [1-9]" "$PARTS" 2>/dev/null | sort || true
   fi
   echo ""
   echo "=== WARNING INDEX ==="

@@ -73,7 +73,11 @@ func (v *settingsView) buildSection(id string) fyne.CanvasObject {
 // controls are a shipped contract: wrong types produced documented 400s.
 func (v *settingsView) controlFor(f SettingsField) fyne.CanvasObject {
 	label := widget.NewLabelWithStyle(f.Label, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	hint := wrappedLabel(f.Key)
+	hintText := f.Hint
+	if hintText == "" {
+		hintText = f.Key
+	}
+	hint := wrappedLabel(hintText)
 	row := container.NewVBox(label, hint)
 
 	switch f.Kind {
@@ -309,9 +313,6 @@ func (v *settingsView) stringValue(f SettingsField) string {
 		return ""
 	}
 	if f.LLM {
-		if f.Key == "preset" {
-			return c.LLM.Preset
-		}
 		return ""
 	}
 	switch f.Key {
