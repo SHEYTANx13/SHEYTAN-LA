@@ -9,7 +9,6 @@
 package fyneui
 
 import (
-	"context"
 	"strings"
 	"testing"
 )
