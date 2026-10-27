@@ -60,7 +60,7 @@ var SettingsFields = []SettingsField{
 	{Key: "showPerfHud", Label: "Show performance overlay", Section: "general", Kind: FieldBool},
 	{Key: "targetFps", Label: "Target frame rate", Section: "general", Kind: FieldInt},
 	{Key: "webWorkspaceEnabled", Label: "Web Workspace", Section: "general", Kind: FieldBool,
-		Help: "On-demand rich-content renderer (Markdown, code, diffs, tables, charts) in your browser — read-only, loopback-only, zero commands."},
+		Hint: "On-demand rich-content renderer (Markdown, code, diffs, tables, charts) in your browser — read-only, loopback-only, zero commands."},
 	{Key: "studioEnabled", Label: "3D Studio", Section: "general", Kind: FieldBool,
 		Hint: "Optional read-only 3D system-topology viewer (opens in the browser, embedded renderer)"},
 

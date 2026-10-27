@@ -212,6 +212,10 @@ func (v *settingsView) boolValue(f SettingsField) bool {
 		return c.Mlock
 	case "browserHeadless":
 		return c.BrowserHeadless
+	case "webWorkspaceEnabled":
+		return c.WebWorkspaceEnabled
+	case "studioEnabled":
+		return c.StudioEnabled
 	}
 	return false
 }

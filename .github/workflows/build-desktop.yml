@@ -957,11 +957,44 @@ jobs:
       - name: Checkout (collector script)
         uses: actions/checkout@v7
 
-      - name: Download all log parts (namespaced, no merge)
+      # v1.11.0 run #87 repair (run 40577343895): one explicit download per
+      # expected part. The pattern download left the collector unable to
+      # find the preflight part even though the artifact existed and the
+      # download step reported success — the pattern extraction layout is
+      # an assumption the collector cannot verify, and continue-on-error
+      # masks the true outcome. Explicit name+path pins the layout: each
+      # part lands in exactly the directory the collector's --job name
+      # names, by construction. A missing artifact (skipped job) fails its
+      # own step only and the collector still classifies it honestly.
+      - name: Download preflight log part
         uses: actions/download-artifact@v8
         with:
-          pattern: "*-logs-part-attempt${{ github.run_attempt }}"
-          path: ci-parts/
+          name: preflight-logs-part-attempt${{ github.run_attempt }}
+          path: ci-parts/preflight-logs-part-attempt${{ github.run_attempt }}/
+        continue-on-error: true
+      - name: Download audit log part
+        uses: actions/download-artifact@v8
+        with:
+          name: audit-logs-part-attempt${{ github.run_attempt }}
+          path: ci-parts/audit-logs-part-attempt${{ github.run_attempt }}/
+        continue-on-error: true
+      - name: Download ui log part
+        uses: actions/download-artifact@v8
+        with:
+          name: ui-logs-part-attempt${{ github.run_attempt }}
+          path: ci-parts/ui-logs-part-attempt${{ github.run_attempt }}/
+        continue-on-error: true
+      - name: Download windows log part
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-logs-part-attempt${{ github.run_attempt }}
+          path: ci-parts/windows-logs-part-attempt${{ github.run_attempt }}/
+        continue-on-error: true
+      - name: Download linux log part
+        uses: actions/download-artifact@v8
+        with:
+          name: linux-logs-part-attempt${{ github.run_attempt }}
+          path: ci-parts/linux-logs-part-attempt${{ github.run_attempt }}/
         continue-on-error: true
 
       - name: Build the consolidated run log
@@ -1005,6 +1038,14 @@ jobs:
             echo ""
             echo "Job results: preflight=${PREFLIGHT_RESULT} audit=${AUDIT_RESULT} ui=${UI_RESULT} windows=${WINDOWS_RESULT} linux=${LINUX_RESULT}"
           } >> "$GITHUB_STEP_SUMMARY"
+          # Run #87 lesson: preserve the exact ci-parts layout INSIDE the
+          # report so a MISSING LOG SOURCE classification is always
+          # diagnosable from the artifact alone.
+          {
+            echo ""
+            echo "=== PARTS LAYOUT (as seen by the collector) ==="
+            find ci-parts -maxdepth 2 2>/dev/null | LC_ALL=C sort
+          } >> consolidated-run-log.txt
           exit $rc
 
       # The ONE mandatory user-facing log artifact: if-no-files-found:

@@ -127,6 +127,12 @@ type Server struct {
 	cloneRunning atomic.Bool
 	cloneStatus  atomic.Pointer[cloneStatusEnvelope]
 
+	// hostMu guards the lazy lifecycle of the two loopback hosts below
+	// (studioViewer, workspaceHost). Without it, two concurrent start
+	// requests race the nil check and can leak one listener; the lazy
+	// write sits on the HTTP hot path where no test exercises it.
+	hostMu sync.Mutex
+
 	// v1.11.0: the optional 3D Studio viewer (internal/studio). The
 	// server owns the lifecycle — started on demand via /api/studio/start,
 	// stopped via /api/studio/stop AND at Close time (no orphaned

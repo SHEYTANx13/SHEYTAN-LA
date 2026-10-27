@@ -67,11 +67,14 @@ func (s *Server) handlePresentationState(w http.ResponseWriter, r *http.Request)
 		})
 		return
 	}
-	if s.workspaceHost == nil {
+	s.hostMu.Lock()
+	host := s.workspaceHost
+	s.hostMu.Unlock()
+	if host == nil {
 		writeJSON(w, map[string]any{"enabled": true, "running": false})
 		return
 	}
-	st := s.workspaceHost.State()
+	st := host.State()
 	writeJSON(w, map[string]any{
 		"enabled":   true,
 		"running":   st.Running,
@@ -96,15 +99,18 @@ func (s *Server) handlePresentationStart(w http.ResponseWriter, r *http.Request)
 			"the Web Workspace is disabled in Settings — enable it under Settings → General (webWorkspaceEnabled)"))
 		return
 	}
+	s.hostMu.Lock()
 	if s.workspaceHost == nil {
 		s.workspaceHost = webworkspace.NewHost(s)
 	}
-	url, err := s.workspaceHost.Start()
+	host := s.workspaceHost
+	s.hostMu.Unlock()
+	url, err := host.Start()
 	if err != nil {
 		writeErr(w, http.StatusConflict, err)
 		return
 	}
-	st := s.workspaceHost.State()
+	st := host.State()
 	logging.Default().Info("workspace", "Web Workspace host started on %s (port %d)", st.URL, st.Port)
 	writeJSON(w, map[string]any{
 		"url":  url, // includes #t= fragment — the ONLY place the token travels
@@ -119,11 +125,14 @@ func (s *Server) handlePresentationStop(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusMethodNotAllowed, errMethodNotAllowed())
 		return
 	}
-	if s.workspaceHost == nil {
+	s.hostMu.Lock()
+	host := s.workspaceHost
+	s.hostMu.Unlock()
+	if host == nil {
 		writeJSON(w, map[string]any{"running": false})
 		return
 	}
-	if err := s.workspaceHost.Stop(); err != nil {
+	if err := host.Stop(); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -207,8 +216,11 @@ func (s *Server) handlePresentationPublish(w http.ResponseWriter, r *http.Reques
 // stopWorkspaceHost is the Close()-time cleanup: the loopback listener
 // never outlives the core (same contract as the 3D Studio viewer).
 func (s *Server) stopWorkspaceHost() {
-	if s.workspaceHost != nil {
-		if err := s.workspaceHost.Stop(); err != nil {
+	s.hostMu.Lock()
+	host := s.workspaceHost
+	s.hostMu.Unlock()
+	if host != nil {
+		if err := host.Stop(); err != nil {
 			logging.Default().Warn("workspace", "host stop during close: %v", err)
 		}
 	}

@@ -30,13 +30,22 @@ func (s *Server) Close() {
 		job.Cancel()
 	}
 
-	// v1.11.0: the 3D Studio viewer must never outlive the server —
-	// no orphaned loopback listener, no stale launch token.
-	if s.studioViewer != nil {
-		if err := s.studioViewer.Stop(); err != nil {
+	// v1.11.0: the loopback hosts must never outlive the server —
+	// no orphaned listener, no stale launch token. The fields are read
+	// under hostMu (the same mutex the lazy start paths use).
+	s.hostMu.Lock()
+	studioViewer := s.studioViewer
+	s.hostMu.Unlock()
+	if studioViewer != nil {
+		if err := studioViewer.Stop(); err != nil {
 			logging.Default().Warn("studio", "viewer stop during close: %v", err)
 		}
 	}
+
+	// v1.11.0 fix: the Web Workspace host has the same contract. The
+	// stopWorkspaceHost cleanup existed but was never called — the
+	// loopback listener leaked past Close.
+	s.stopWorkspaceHost()
 
 	// Stop the scheduled engine-update loop FIRST and wait (bounded) for
 	// its in-flight pass to finish.

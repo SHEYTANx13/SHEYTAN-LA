@@ -264,6 +264,14 @@ type Config struct {
 	ResearchReddit     bool     `json:"researchReddit,omitempty"`
 	ResearchWeb        bool     `json:"researchWeb,omitempty"`
 	ResearchUserAgent_ string   `json:"researchUserAgent,omitempty"`
+
+	// v1.11.0 hybrid-UI surfaces (Settings → General toggles). The mirror
+	// must declare them or the settings checkboxes can never reflect the
+	// persisted state.
+	WebWorkspaceEnabled bool `json:"webWorkspaceEnabled,omitempty"`
+
+	// v1.11.0: the optional 3D Studio viewer toggle.
+	StudioEnabled bool `json:"studioEnabled,omitempty"`
 }
 
 // LLMCfg mirrors the nested llm sampling object (deep-merged per field).
