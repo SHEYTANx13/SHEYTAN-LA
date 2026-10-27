@@ -18,8 +18,8 @@
 //     DPI-unaware, so Windows reported 96 DPI no matter what the display
 //     scaling really was — on a 125-150% laptop the WHOLE interface rendered
 //     at 1x and every dialog, tab and control looked miniaturized. With the
-//     manifest, the Wails/WebView2 shell sees the true scale and renders
-//     crisp at native size.
+//     manifest, the packaged desktop application sees the true scale and
+//     renders crisp at native size.
 //
 // Run from the module root:  go run ./scripts/gen-syso
 package main
@@ -137,7 +137,7 @@ func main() {
 	}
 
 	// 6) 1.1.6 §12: also emit a standalone multi-resolution .ico for
-	// packaged shortcut/application metadata (Wails NSIS/installer,
+	// packaged shortcut/application metadata (the NSIS installer,
 	// Windows Explorer property sheets). Same brand mark, same ladder.
 	if err := writeICO("build/sheytan.ico", img); err != nil {
 		fatal("write ico: %v", err)

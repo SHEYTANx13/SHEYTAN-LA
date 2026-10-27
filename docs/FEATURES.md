@@ -26,6 +26,9 @@ Hardware claims use five distinct classes everywhere: hardware **detected** (a p
 - Four-level reasoning-depth control (Low / Mid / High / Ultra) with real numeric thinking-token budgets
 - Show/Hide Thinking control (presentation only)
 - Optional 3D Studio — read-only live system topology map (loopback-only, per-launch token, strict CSP, embedded Three.js)
+- Optional Web Workspace — on-demand rich-content rendering of typed presentation blocks (Markdown, code, diffs, tables, chart specs, raw-data degradation) over a loopback host with per-launch token, strict CSP, offline assets and zero browser-originating actions
+- Typed presentation contract — versioned immutable blocks, deterministic renderer selection, bounded payloads, required provenance, unknown-kind degradation (all pinned by `internal/presentation` tests)
+- Boot visibility contract — window shown before core setup completes; named per-step boot timings (pinned by `ui/fyne` Prepare test)
 
 ### Inference & hardware truth
 - Managed llama.cpp inference with modern CLI contract and strict numeric-argument validation before spawn

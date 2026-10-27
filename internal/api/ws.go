@@ -20,17 +20,12 @@ var upgrader = websocket.Upgrader{
 // allowedOrigin accepts same-origin requests and explicitly permits the
 // loopback origins commonly used by the local development UI.
 //
-// No wildcard origin is accepted.
-//
-// v1.9.4 (P0): the desktop shell's own page is also accepted. Packaged
-// desktop builds serve the page through the webview's resource-request
-// interception — origin http://wails.localhost (Windows WebView2) or
-// wails://wails.localhost (Linux/WebKit custom scheme) — while the
-// activity WebSocket rides the v1.9.4 loopback transport
-// (http://127.0.0.1:PORT, see loopback.go). That page origin against a
-// LOOPBACK request host is the local desktop application itself; it is
-// never accepted against a non-loopback host, and no other origin is
-// broadened.
+// No wildcard origin is accepted. The retired desktop-shell page origin
+// of the pre-Fyne webview era was removed with that shell: today the
+// ONE product UI is the in-process Fyne client over local IPC (it never
+// consults this transport), and browser/headless modes stream over
+// their OWN origin. Only same-origin and the documented loopback
+// development frontends are accepted.
 func allowedOrigin(origin, host string) bool {
 	origin = strings.TrimSpace(origin)
 
@@ -50,16 +45,6 @@ func allowedOrigin(origin, host string) bool {
 	// Same-origin request.
 	if requestHost != "" && originHost == requestHost {
 		return true
-	}
-
-	// v1.9.4: the Wails desktop shell page (the exact production origin —
-	// host wails.localhost with no port, http or the custom wails scheme)
-	// reaching the loopback activity transport.
-	if isLoopbackHost(requestHost) && originHost == "wails.localhost" {
-		switch strings.ToLower(u.Scheme) {
-		case "http", "https", "wails":
-			return true
-		}
 	}
 
 	// Local development frontends.
@@ -86,12 +71,11 @@ func isLoopbackHost(host string) bool {
 }
 
 // handleWSOrigin answers the activity-transport discovery probe (v1.9.4
-// contract, v1.10.1 revision): the loopback transport was the Wails
-// desktop page's channel and is retired with Wails itself. The native Qt
-// host consumes the local IPC channel instead and never calls this
-// endpoint; every remaining serving mode (browser/headless/dev) streams
-// the activity WebSocket over its OWN origin, so the authoritative answer
-// is always the empty origin.
+// contract, v1.10.1 revision): the loopback transport was the retired
+// webview desktop shell's channel and went away with that shell. Every
+// remaining serving mode (browser/headless/dev) streams the activity
+// WebSocket over its OWN origin, so the authoritative answer is always
+// the empty origin.
 func (s *Server) handleWSOrigin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"origin": "",

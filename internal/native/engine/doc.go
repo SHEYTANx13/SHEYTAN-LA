@@ -5,9 +5,7 @@
 //
 // The target stack is:
 //
-//	React/TypeScript
-//	      ↓
-//	    Wails
+//	Fyne desktop UI (ui/fyne)
 //	      ↓
 //	   Go Core
 //	      ↓

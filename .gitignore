@@ -13,8 +13,8 @@
 # Build outputs
 /dist-stage/
 # /build/ receives GENERATED artifacts (icon-preview.png from gen-syso,
-# shot dirs from tooling) — but build/config.yml is committed Wails source
-# metadata that CI audits (release-version.mjs + workflow grep). Ignore the
+# shot dirs from tooling) — but build/config.yml is committed packaging
+# metadata that CI audits (version contract + workflow grep). Ignore the
 # directory CONTENTS, then re-include the one source file. A blanket `/build/`
 # is what silently swallowed build/config.yml and broke the v1.1.2 CI runs:
 # the file existed on disk, `git add .` skipped it, and GitHub got ENOENT.

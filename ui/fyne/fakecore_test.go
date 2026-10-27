@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -39,6 +40,14 @@ type fakeCore struct {
 	studioEnabled atomic.Bool
 	// failStudioState forces a 503 on /api/studio/state (typed-error path).
 	failStudioState bool
+
+	// wsEnabled flips the /api/presentation/state contract for the
+	// Web Workspace view tests.
+	wsEnabled atomic.Bool
+	// failWSState forces a 503 on /api/presentation/state.
+	failWSState bool
+	// wsBlocks stores published blocks (typed publish contract).
+	wsBlocks []map[string]any
 
 	lastSelectModel string
 	configPatched   bool
@@ -70,6 +79,11 @@ func newFakeCore(t *testing.T) *fakeCore {
 	mux.HandleFunc("/api/config", f.handleConfig)
 	mux.HandleFunc("/api/models/select", f.handleSelect)
 	mux.HandleFunc("/api/studio/state", f.handleStudioState)
+	mux.HandleFunc("/api/presentation/state", f.handleWSState)
+	mux.HandleFunc("/api/presentation/start", f.handleWSStart)
+	mux.HandleFunc("/api/presentation/stop", f.handleWSStop)
+	mux.HandleFunc("/api/presentation/blocks", f.handleWSBlocks)
+	mux.HandleFunc("/api/presentation/publish", f.handleWSPublish)
 	f.srv = httptest.NewServer(mux)
 	// Point the unix-socket dialer at the TCP test server (test seam).
 	host := strings.TrimPrefix(f.srv.URL, "http://")
@@ -298,4 +312,99 @@ func (f *fakeCore) handleStudioState(w http.ResponseWriter, r *http.Request) {
 		"version": "0.182.0",
 		"license": "MIT",
 	})
+}
+
+// ---------------------------------------------------------------------------
+// v1.11.0 Web Workspace fake surface — mirrors the core contract:
+// enabled/stopped by default, typed publish, honest blocks list.
+// ---------------------------------------------------------------------------
+
+func (f *fakeCore) handleWSState(w http.ResponseWriter, r *http.Request) {
+	if !f.authed(w, r) {
+		return
+	}
+	if f.failWSState {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"error": "core presentation surface unavailable",
+		})
+		return
+	}
+	if !f.wsEnabled.Load() {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"enabled": false,
+			"running": false,
+			"reason":  "the Web Workspace is disabled in Settings (webWorkspaceEnabled)",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"enabled": true,
+		"running": false,
+		"stats":   map[string]any{"published": len(f.wsBlocks), "live": len(f.wsBlocks), "evicted": 0},
+	})
+}
+
+func (f *fakeCore) handleWSStart(w http.ResponseWriter, r *http.Request) {
+	if !f.authed(w, r) {
+		return
+	}
+	if !f.wsEnabled.Load() {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error": "the Web Workspace is disabled in Settings",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"url":  "http://127.0.0.1:9/workspace#t=fake",
+		"port": 9,
+	})
+}
+
+func (f *fakeCore) handleWSStop(w http.ResponseWriter, r *http.Request) {
+	if !f.authed(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"running": false})
+}
+
+func (f *fakeCore) handleWSBlocks(w http.ResponseWriter, r *http.Request) {
+	if !f.authed(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"version": 1,
+		"blocks":  f.wsBlocks,
+	})
+}
+
+func (f *fakeCore) handleWSPublish(w http.ResponseWriter, r *http.Request) {
+	if !f.authed(w, r) {
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	var in map[string]any
+	if err := json.Unmarshal(body, &in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if src, _ := in["source"].(string); strings.TrimSpace(src) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "publish requires a provenance source"})
+		return
+	}
+	stored := map[string]any{
+		"id":      fmt.Sprintf("b-%03d", len(f.wsBlocks)+1),
+		"version": 1,
+		"kind":    in["kind"],
+		"payload": in["payload"],
+		"source":  in["source"],
+	}
+	if v, ok := in["title"]; ok {
+		stored["title"] = v
+	}
+	f.wsBlocks = append(f.wsBlocks, stored)
+	writeJSON(w, http.StatusOK, map[string]any{"block": stored})
 }

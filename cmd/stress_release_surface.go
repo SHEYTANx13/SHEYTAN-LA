@@ -30,11 +30,11 @@ import (
 // banned here (v1.11.0 one-Go-UI migration).
 //
 // v1.10.4 (run 38569081029): the Linux dependency pin still required the
-// RETIRED Wails-era GTK stack (libgtk-4-dev / libwebkitgtk-6.0-dev) that
-// v1.10.1 removed from the workflow when the desktop became the native
-// Qt client — the stress gate failed on every v1.10.1+ hosted run while
-// the workflow itself was correct. The pin now tracks the CURRENT
-// contract: the Qt-era dependency set is REQUIRED, the whole retired
+// RETIRED webview-era GTK stack (libgtk-4-dev / libwebkitgtk-6.0-dev)
+// that v1.10.1 removed from the workflow when the desktop became a
+// native client — the stress gate failed on every v1.10.1+ hosted run
+// while the workflow itself was correct. The pin now tracks the CURRENT
+// contract: the Fyne-era dependency set is REQUIRED, the whole retired
 // GTK/WebKit stack is BANNED.
 
 func stressReleaseSurface() error {
@@ -379,11 +379,11 @@ func stressReleaseSurface() error {
 		}
 	}
 
-	// The whole retired Wails-era GTK/WebKit stack is banned in BOTH
+	// The whole retired webview-era GTK/WebKit stack is banned in BOTH
 	// generations (v2: libgtk-3-dev / libwebkit2gtk-4.1-dev; v3:
 	// libgtk-4-dev / libwebkitgtk-6.0-dev): reinstalling any of them
-	// would reintroduce the second-desktop-shell ambiguity the v1.10.x
-	// Qt migration removed.
+	// would reintroduce the second-desktop-shell ambiguity the earlier
+	// native-client migrations removed.
 	for _, staleDep := range []string{
 		"libgtk-4-dev",
 		"libwebkitgtk-6.0-dev",

@@ -40,17 +40,45 @@ One Go process owns the runtime (`internal/runtime.Stack`). Every authority is c
 
 ---
 
-## 3. Desktop (one-Go-UI)
+## 3. Desktop (one-Go-UI, hybrid rendering surfaces)
 
-The product desktop is a **single Go executable**:
+The product desktop is a **single Go executable** with TWO on-demand
+rendering surfaces served by the same core:
 
 - Core (policy/orchestration authority) + Fyne UI (`ui/fyne`) running **in-process** over `internal/localipc`.
 - Transport: Unix domain socket (SO_PEERCRED) on Linux/macOS; named pipe (current-user DACL + post-connect SID check) on Windows.
 - Handshake: strict `sheytan-ipc/1` + ephemeral key header on every request.
-- No TCP listener, no embedded web frontend, no Qt runtime, no React/Vite.
-- Launcher (`internal/desktop`) owns the full lifecycle: bind IPC → attach Fyne window → clean teardown on close/signal.
+- No embedded web runtime, no Qt runtime, no second UI implementation. The Fyne window is the native shell for controls, sessions, runs, approvals and settings.
+- **Boot visibility contract**: the launcher (`internal/desktop`) binds the IPC endpoint, builds and SHOWS the window, and only then finishes core setup (first-run setup, maintenance gate) — a live process is never windowless, and each boot step logs its elapsed time.
 - Behavioral contracts (zero-session send, session-list generation guard, live streaming that cannot wedge, reasoning ladder, settings IA) are pinned by Go tests under `ui/fyne`.
 - Linux desktop smoke runs the real binary under Xvfb in CI.
+
+### 3.1 Typed presentation contract (v1.11.0)
+
+`internal/presentation` is the ONE Go-owned envelope/registry for rich
+content shared by both rendering surfaces: versioned immutable blocks
+(stable ID, closed kind set, bounded payload, REQUIRED provenance),
+deterministic renderer selection (`Select(kind)` — the model cannot
+steer where its output renders), and safe degradation (unknown kinds
+become raw-data artifact blocks; oversized payloads fail closed).
+`ExtractBlocks` deterministically splits a finished answer into
+code/markdown blocks. There is no HTML kind: model-generated markup is
+never trusted.
+
+### 3.2 Web Workspace (on-demand, browser-hosted)
+
+`internal/webworkspace` renders published blocks with browser-grade
+fidelity. Security boundary — identical in kind to the 3D Studio
+(§8): loopback-only ephemeral bind, per-launch 256-bit fragment token,
+strict CSP, allow-listed embedded offline assets, GET-only surface,
+`textContent`-only DOM construction (no markup-injecting sinks), and
+ZERO browser-originating actions (the page has no write, command or
+configuration endpoint; browser actions do not exist by design). The
+page reads the SAME registry the Fyne shell reads; the host never
+outlives `Server.Close()`. An embedded WebView host was evaluated and
+NOT adopted (packaging/verification risk across both desktop targets in
+this timebox); the browser-hosted companion window is the shipped,
+documented slice — the same decision the 3D Studio made.
 
 ---
 

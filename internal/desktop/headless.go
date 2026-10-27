@@ -1,9 +1,10 @@
 //go:build headless
 
 // Headless desktop shell (v1.1.3): the same runtime stack and HTTP/WebSocket
-// API as the Wails window, without any GUI dependency. Selected with the
-// `headless` build tag — used by CI, containers, servers, and the headless
-// test suite on machines without GTK/WebKit development libraries.
+// API as the Fyne desktop window, without any GUI dependency. Selected
+// with the `headless` build tag — used by CI, containers, servers, and
+// the headless test suite on machines without graphics development
+// libraries.
 package desktop
 
 import (

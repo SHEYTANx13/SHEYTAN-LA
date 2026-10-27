@@ -15,8 +15,8 @@ import (
 // these surfaces must agree with the Go value:
 //
 //   - internal/config.AppVersion           (THE authority)
-//   - build/config.yml  productVersion     (Wails-era file retained as
-//     packaging metadata the workflow greps)
+//   - build/config.yml  productVersion     (packaging metadata mirror,
+//     contract-pinned to the Go authority and grepped by the workflow)
 //   - SIGNATURE first line                 (release identity)
 //
 // A version bump edits AppVersion and SIGNATURE; this test fails the

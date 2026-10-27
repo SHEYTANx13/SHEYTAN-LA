@@ -12,7 +12,7 @@ This document is the focused contract for the feature: what it is, what it can n
 
 ## Platform shape (honest)
 
-The viewer is browser-hosted: “Open 3D Studio” starts the loopback server and opens the user’s default browser. The Fyne window deliberately does **not** embed a web runtime — a maintained embedded webview (WebKitGTK / WebView2) was not verifiable on both desktop targets in the shipping timebox, so the honest slice shipped: the same viewer, the same offline assets, the same security boundary, hosted by the browser the user already trusts. This is a documented decision, not a hidden limitation; the feature remains irrelevant to the shell when unused (nothing starts until “Open 3D Studio” is pressed, nothing polls while stopped).
+The viewer is browser-hosted: “Open 3D Studio” starts the loopback server and opens the user’s default browser. The Fyne window deliberately does **not** embed a web runtime — a maintained embedded webview (WebKitGTK / WebView2) was not verifiable on both desktop targets in the shipping timebox, so the honest slice shipped: the same viewer, the same offline assets, the same security boundary, hosted by the browser the user already trusts. This is a documented decision, not a hidden limitation; the feature remains irrelevant to the shell when unused (nothing starts until “Open 3D Studio” is pressed, nothing polls while stopped). The v1.11.0 Web Workspace is a SEPARATE, equally read-only loopback surface (typed content blocks, not topology) with its own host and token — the Studio is never a bridge into it.
 
 ## Security boundary
 
@@ -47,6 +47,6 @@ The viewer is browser-hosted: “Open 3D Studio” starts the loopback server an
 ## Verification status (honest)
 
 - **PASS** locally: studio package tests (security, lifecycle, schema), API contract tests (state/start/stop/disabled/topology DTO), UI view tests (enabled / disabled / core-error), full `go build ./...`, headless + full test sweeps, race gate on the touched packages.
-- **PASS** locally (Linux, Xvfb): the real binary boots with the 8-entry navigation, the viewer starts/stops through the API contract, and the page serves with its security headers (curl-level checks in tests).
+- **PASS** locally (Linux, Xvfb): the real binary boots with the full navigation (now including the v1.11.0 Web Workspace entry), the viewer starts/stops through the API contract, and the page serves with its security headers (curl-level checks in tests).
 - **NOT RUN**: rendering the actual WebGL scene on physical desktop hardware (Windows and Linux with real GPUs) — the hosted CI runners provide no GPU/browser pair for this. The Go-side contract (assets, token, CSP, DTO, lifecycle) is fully tested; the pixel-level WebGL output is not claimed as verified.
 - **NOT RUN**: Windows-hosted verification of the feature (the release pipeline must prove it after the operator push).

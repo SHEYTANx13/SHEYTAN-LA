@@ -37,6 +37,7 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
 	nativeengine "github.com/Parsaetak/SHEYTAN-local-agent/internal/native/engine"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/preflight"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/presentation"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recall"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/runtime"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
@@ -44,6 +45,7 @@ import (
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/vision"
+	"github.com/Parsaetak/SHEYTAN-local-agent/internal/webworkspace"
 
 	"github.com/gorilla/websocket"
 )
@@ -130,6 +132,13 @@ type Server struct {
 	// stopped via /api/studio/stop AND at Close time (no orphaned
 	// loopback listener). Lazy: nil until first start.
 	studioViewer *studio.Viewer
+
+	// v1.11.0 hybrid UI: the Web Workspace host (internal/webworkspace)
+	// and the ONE presentation registry (internal/presentation) shared
+	// by both rendering surfaces. Same ownership contract as the studio
+	// viewer: lazy host, stopped at Close time, loopback-only.
+	workspaceHost *webworkspace.Host
+	presentReg    *presentation.Registry
 
 	// active runs: sessionID → runState
 	runsMu sync.Mutex
@@ -637,6 +646,10 @@ func New(cfg *config.Config) (*Server, error) {
 			next := stack.Src.Load()
 			_ = config.Save(next.ConfigPath(), next)
 		},
+
+		// v1.11.0: the ONE presentation registry (both rendering
+		// surfaces read this store; neither keeps its own copy).
+		presentReg: presentation.NewRegistry(),
 	}
 
 	// v1.6.0 P3: open the custom tools store under the EXISTING
@@ -843,7 +856,8 @@ func (s *Server) Handler() http.Handler {
 	// Fyne client over the local IPC channel (it never consults this
 	// endpoint), and the browser/headless mode always streams over its
 	// own origin. The former loopback transport answer (a real origin
-	// + token for the Wails page) is retired with Wails itself.
+	// + token for the retired webview shell page) is retired with that
+	// shell.
 	mux.HandleFunc("/api/ws-origin", s.handleWSOrigin)
 
 	// v1.8.0: the Runtime Governor / system-health surface — the ONE
@@ -911,6 +925,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/studio/state", s.handleStudioState)
 	mux.HandleFunc("/api/studio/start", s.handleStudioStart)
 	mux.HandleFunc("/api/studio/stop", s.handleStudioStop)
+
+	// v1.11.0 hybrid UI: the Web Workspace — typed presentation blocks,
+	// on-demand loopback rendering surface. Control plane only; the page
+	// itself is read-only (zero browser-originating actions).
+	mux.HandleFunc("/api/presentation/state", s.handlePresentationState)
+	mux.HandleFunc("/api/presentation/start", s.handlePresentationStart)
+	mux.HandleFunc("/api/presentation/stop", s.handlePresentationStop)
+	mux.HandleFunc("/api/presentation/blocks", s.handlePresentationBlocks)
+	mux.HandleFunc("/api/presentation/publish", s.handlePresentationPublish)
 	mux.HandleFunc("/api/lab", s.handleLab)
 	mux.HandleFunc("/api/lab/", s.handleLabTask)
 	mux.HandleFunc("/api/research", s.handleResearch)

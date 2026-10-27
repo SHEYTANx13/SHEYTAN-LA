@@ -11,9 +11,9 @@ This document records major functions, subsystems, and mechanisms that were prev
 | Mechanism | Status | Notes |
 |-----------|--------|-------|
 | Qt / QML desktop host (`ui/qt/`) | Fully retired | Replaced by the single Go + Fyne application (`ui/fyne`). All behavioral contracts were ported to Go tests. |
-| Wails desktop shell | Fully retired | Earlier webview-based desktop host. Removed before the Qt era. |
+| First-generation webview desktop shell | Fully retired | An early webview-based desktop host, removed before the Qt era. Its page-origin allow-list entry was removed from the WebSocket origin gate in v1.11.0 (the last live trace of it in the tracked tree). |
 | React + Vite + Playwright frontend (`src/`, `web/`) | Fully retired | Embedded web frontend used for headless/browser mode and early desktop experiments. No longer present in the tree or CI. |
-| Loopback WebSocket activity transport | Retired for desktop | Previously used by Wails/Qt-era shells. Desktop now uses pure local IPC; browser/headless mode still uses ordinary HTTP. |
+| Loopback WebSocket activity transport | Retired for desktop | Previously used by the early webview/Qt-era shells. Desktop now uses pure local IPC; browser/headless mode still uses ordinary HTTP. |
 
 ---
 

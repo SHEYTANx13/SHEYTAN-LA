@@ -24,6 +24,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/api"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
@@ -62,9 +63,19 @@ func failBoot(step string, err error) int {
 // Run starts the SHEYTAN desktop application and blocks until the Fyne
 // window closes.
 //
-// Launch order is deterministic: core up → IPC endpoint bound → Fyne UI
-// attached as the ONE in-process client → run until the window closes →
-// clean core shutdown.
+// Launch order is deterministic (v1.11.0 boot-visibility contract):
+// core up → IPC endpoint bound → WINDOW BUILT AND SHOWN → remaining core
+// setup (EnsureSetup) → event loop until the window closes → clean core
+// shutdown.
+//
+// The window comes BEFORE EnsureSetup deliberately (run #55 class, CI
+// run 40410335100: the Windows smoke observed a live process with no
+// window for the whole 60 s budget). The previous order ran every core
+// boot step before the window existed, so ANY slow step — setup,
+// maintenance, a cold disk — kept the process windowless for its entire
+// duration. Now the process owns a real top-level window within seconds
+// of launch regardless of core speed: the fix is the boot order, not a
+// longer timeout and not a liveness-only check.
 func Run(cfg *config.Config) int {
 	if cfg == nil {
 		return failBoot("config", errors.New("missing configuration"))
@@ -73,6 +84,11 @@ func Run(cfg *config.Config) int {
 	// Taskbar/notification identity (no-op where the concept does not
 	// exist).
 	_ = platform.SetAppUserModelID(config.AppUserModelID)
+
+	bootAt := time.Now()
+	step := func(name string) {
+		logging.Default().Info("desktop", "boot step %s done (elapsed %s)", name, time.Since(bootAt).Round(time.Millisecond))
+	}
 
 	srv, err := api.New(cfg)
 	if err != nil {
@@ -85,10 +101,7 @@ func Run(cfg *config.Config) int {
 		srv.Close()
 		logging.Default().Info("desktop", "server closed")
 	}()
-
-	if err := srv.EnsureSetup(); err != nil {
-		return failBoot("setup", err)
-	}
+	step("core init")
 
 	// The ONE local channel to the UI client. A transport failure is a
 	// HARD, VISIBLE fault: the desktop exits non-zero instead of launching
@@ -111,6 +124,7 @@ func Run(cfg *config.Config) int {
 		ipc.Stop()
 		logging.Default().Info("desktop", "ipc stopped")
 	}()
+	step("ipc bound")
 
 	logging.Default().Info("desktop", "%s v%s (Fyne desktop, one Go UI)", config.AppName, config.AppVersion)
 	fmt.Printf("%s v%s (Fyne desktop, one Go UI)\n", config.AppName, config.AppVersion)
@@ -118,11 +132,27 @@ func Run(cfg *config.Config) int {
 	fmt.Printf("  core endpoint: %s\n", ipc.Endpoint())
 
 	// The Fyne app is the ONLY UI: it connects to the same authenticated
-	// endpoint the Qt host used, in-process. No child binary, no
-	// SHEYTAN_UI_EXECUTABLE spawn override — the one-Go-UI program
-	// removed the second implementation entirely.
+	// endpoint in-process. No child binary, no separate UI executable —
+	// the one-Go-UI program removed the second implementation entirely.
 	client := fyneui.NewCoreClient(ipc.Endpoint(), key)
 	app := fyneui.NewDesktopApp(client)
+
+	// WINDOW FIRST (see the run #55 narrative above): build and show the
+	// real top-level window now, then finish the core boot, then start
+	// the event loop. A Prepare failure is a hard, visible fault.
+	if err := app.Prepare(); err != nil {
+		return failBoot("window", err)
+	}
+	step("window shown")
+
+	// Core setup AFTER the window exists: first-run setup, installer
+	// state, startup maintenance gate and prewarm happen with a visible
+	// window on screen. A failure here is still fatal (message box +
+	// exit 1) — visibility changed, control flow did not.
+	if err := srv.EnsureSetup(); err != nil {
+		return failBoot("setup", err)
+	}
+	step("core setup")
 
 	// Termination signals close the window; the deferred shutdowns above
 	// then stop the IPC and the core in order.
