@@ -1,65 +1,60 @@
 # Agent Operating Manual
 
-This manual is the durable operating guide for any AI agent working on SHEYTAN-LA.
+This is the durable operating guide for any AI agent working on SHEYTAN-LA.
 
-**Two non-negotiable rules**
+**Non-negotiable rules**
 
-1. The human’s current prompt / instructions always take precedence over any documentation, including this file and `Dev-Notes.md`.
-2. Before any work, the agent must read `docs/Dev-Notes.md` and follow the Agent Start Checklist written there.
+1. The human’s current prompt always takes absolute precedence over every document, including this one.
+2. `docs/Dev-Notes.md` is **human-only**. AI agents must not edit it unless the human explicitly orders it in the current prompt.
+3. AI agents write all working notes, progress, evidence, and hand-offs exclusively in `docs/ai-notes.md`.
+4. Work must be fast, focused, and free of double work. Attention and tokens are limited; use them deliberately.
 
 ---
 
-## 0. Development philosophy and method
+## 0. Efficient multi-agent development process
 
-SHEYTAN-LA is developed primarily through a multi-AI-agent workflow without a traditional IDE:
+SHEYTAN-LA is developed primarily by coordinating multiple AI agents without a traditional IDE. The human operator reviews and is the only one who pushes.
 
-- Multiple AI agents (sequential or parallel) read the repository, plan, implement, verify, and document.
-- The human operator reviews, decides, and is the only one who pushes.
-- Agents edit files directly via tools, run verification when possible, and produce commits for human review.
-- There is no required local IDE configuration and no assumption of a full graphical desktop for the agent.
+### Token, attention, and effort rules
 
-The process is deliberately complete at every stage. Speed comes from discipline, not from skipping steps.
+- Load the **minimum necessary context**: human prompt → `Dev-Notes.md` (read-only) → `ai-notes.md` (previous hand-off) → `agent.md` → only the specific code/docs required for the success condition.
+- Do **not** re-read or re-summarize large docs that have not changed and are not relevant to the current success condition.
+- Prefer one clear success condition per session. Finish it completely (including docs and hand-off) before starting another.
+- Avoid exploratory refactors, drive-by cleanups, or “while I’m here” changes.
+- Do not duplicate information that already lives in ARCHITECTURE, ROADMAP, FEATURES, or Dev-Notes. Point to it instead.
+- When verification is needed, run the smallest relevant subset of the verification ladder first. Escalate only if the small set is green and more coverage is required.
+- If blocked, stop early, record the blocker in `ai-notes.md`, and hand off. Do not burn tokens looping.
 
-### World-class staged development process
+### Staged process (complete, no skipped stages, no double work)
 
-Every non-trivial change must pass through these stages:
+| Stage | Activity | Exit criterion |
+|-------|----------|----------------|
+| 1. Orient | Read human prompt + Dev-Notes (read-only) + ai-notes + this manual | One-sentence success condition |
+| 2. Audit | Inspect only the code/docs that the success condition actually touches | Short audit note in ai-notes |
+| 3. Plan | Minimal file list + tests + docs to update | Plan matches success condition exactly |
+| 4. Implement | Smallest correct change | Focused diff |
+| 5. Verify | Relevant tests / checks only | Evidence class recorded |
+| 6. Document | Update affected public docs + write hand-off in ai-notes | Docs match code; ai-notes current |
+| 7. Hand-off | Clear summary for human or next agent | Next step is obvious |
 
-| Stage | Required activity | Exit criterion |
-|-------|-------------------|----------------|
-| **1. Orient** | Read human prompt + `Dev-Notes.md` + this manual + relevant architecture/roadmap | Success condition stated in one sentence |
-| **2. Audit** | Inspect the exact code paths, tests, and docs that will be affected. Record what already exists and what is missing | Audit notes written (even if short) |
-| **3. Plan** | List files to touch, tests to add/run, docs to update, evidence class expected | Plan is minimal and matches the success condition |
-| **4. Implement** | Make the smallest correct change. One authority per concern. No drive-by refactors | Diff is focused |
-| **5. Verify** | Run the verification ladder (or the relevant subset). Record evidence class | Tests pass or failure is honestly reported |
-| **6. Document** | Update `Dev-Notes.md`, and every affected public doc, in the same change set | Docs match the code |
-| **7. Hand-off** | Produce a clear summary: what changed, evidence, remaining risks, next recommended item | Human can decide without re-deriving context |
-
-Skipping stages produces incomplete or brittle work. Agents are expected to complete every stage for the scope they accept.
+Never perform the same analysis or rewrite the same section twice in one session unless new evidence forces it.
 
 ### Definition of Done
 
-A change is done only when all of the following are true:
-
-- Success condition stated at the start is met
-- Code (if any) compiles and relevant tests pass
-- Evidence class is recorded (`local-static` | `hosted` | `physical`)
-- `Dev-Notes.md` is updated
-- Affected public documentation is updated in the same change
-- No new version numbers appear in product-facing docs
-- No speculative work outside the stated success condition
-- Hand-off message is complete
+- Success condition met
+- Relevant tests pass / evidence recorded
+- Evidence class stated
+- `ai-notes.md` contains an up-to-date hand-off
+- Affected public docs updated in the same change
+- `Dev-Notes.md` left untouched (unless human ordered otherwise)
+- No version numbers added to product-facing docs
+- No work outside the stated success condition
 
 ---
 
 ## 1. What this is
 
-SHEYTAN-LA is a local-first AI engineering laboratory — not an Ollama or LM Studio wrapper.
-
-One Go core owns every authority exactly once (policy, runs, sessions, tools, approvals, memory, Governor) and serves its API over the secured `internal/localipc` channel.
-
-The desktop is a single native Go + Fyne application (`ui/fyne`) running in-process against that core. There is no second UI language, no embedded browser, no Qt runtime, and no React/Vite frontend.
-
-Managed llama.cpp and a native C++ engine serve inference behind one backend contract.
+SHEYTAN-LA is a local-first AI engineering laboratory. One Go core owns every authority exactly once and serves it over secured local IPC. The desktop is a single in-process Go + Fyne application. Managed llama.cpp + optional native C++ engine.
 
 Motto: **“The model proposes. The tools execute. The laboratory verifies.”**
 
@@ -67,100 +62,87 @@ Motto: **“The model proposes. The tools execute. The laboratory verifies.”**
 
 - One authority per concern
 - No sleep-based correctness
-- Build / typecheck ≠ runtime proof
-- Device detection ≠ device execution
+- Build success ≠ runtime proof
+- Detection ≠ execution
 - Model output ≠ objective evidence
-- No fake autonomy
-- Codename-removal gate stays enabled
-- Release identity flows from `internal/config.AppVersion`
+- Codename-removal gate enabled
+- Version identity from `internal/config.AppVersion` only
 
 ---
 
-## 2. Repository map
+## 2. Repository map (high level)
 
-| Path | Owns |
-|------|------|
-| `cmd/sheytan-local-agent/` | Entrypoints |
-| `cmd/printversion/` | CGO-free version resolver |
-| `internal/` | Core authorities |
-| `ui/fyne/` | One product UI |
-| `native/` | C++ engine |
-| `scripts/` | CI helpers, stress, gates |
-| `packaging/` | Launcher and installer |
-| `docs/` | All documentation (including Dev-Notes) |
-| `.github/workflows/` | Pipeline |
+- `cmd/` — entrypoints and printversion
+- `internal/` — all core authorities
+- `ui/fyne/` — one product UI
+- `native/` — C++ engine
+- `docs/` — documentation (Dev-Notes = human, ai-notes = AI)
+- `.github/workflows/` — CI
 
 ---
 
-## 3. Verification ladder
+## 3. Verification ladder (use the smallest sufficient prefix)
 
 1. `gofmt -l .`
 2. `go build -tags headless ./...`
-3. `go test ./internal/... -tags headless -count=1`
-4. `go test ./... -count=1`
-5. Race tests on concurrency-heavy packages
-6. `go vet ./...`
-7. `go test ./ui/fyne/` (when UI is affected)
-8. Stress suite
-9. Version gate via `cmd/printversion`
+3. Relevant package tests
+4. Race tests only on concurrency-critical packages when touched
+5. UI tests only when `ui/fyne` is touched
+6. Full stress / release-surface only when the change affects those contracts
 
 ---
 
 ## 4. Evidence classes
 
-- **local-static** — compile, unit tests, cross-build
-- **hosted** — green GitHub Actions job on the exact revision
-- **physical** — real-hardware measurements (fail-closed host classification)
+- `local-static` — compile + unit tests
+- `hosted` — green GitHub Actions on the exact revision
+- `physical` — real hardware (fail-closed)
 
-Never upgrade a lower class to a higher class by assertion.
-
----
-
-## 5. Documentation discipline
-
-- Docs must be based on code and evidence, not on intention or aspiration.
-- Agents must check all relevant docs before changing behaviour.
-- Every behavioural change that is user-visible or architectural must update the corresponding public doc in the same change set.
-- `Dev-Notes.md` is the living task list; public docs describe the product.
+Never inflate the class.
 
 ---
 
-## 6. CI and push protocol
+## 5. Documentation rules
 
-- Agents never push.
-- Operator pushes main, reads the run, then tags for release when green.
-- Consolidated run-log artifact is required on every run.
+- Docs must reflect code and evidence, never intention alone.
+- AI agents update public docs when behaviour or architecture changes, and write session state only in `ai-notes.md`.
+- `Dev-Notes.md` remains the human’s prioritised backlog.
+
+---
+
+## 6. Push protocol
+
+Agents never push. Operator pushes and tags.
 
 ---
 
 ## 7. Protected surfaces
 
-Do not touch without an explicit item in Dev-Notes or a direct human instruction:
+Touch only with an explicit human request or a clear item in Dev-Notes:
 
-- One-Go-UI and local IPC seam
-- Execution / evidence ladder and GPU truth model
-- Runtime Governor admission path
+- One-Go-UI + local IPC
+- Execution/evidence ladder + GPU truth
+- Governor admission
 - Goal engine terminal settlement
-- Session-list generation guard and zero-session Send
-- Stress suite and release-surface gates
+- Session-list generation guard + zero-session Send
+- Stress / release-surface gates
 - Codename-removal gate
 
 ---
 
-## 8. Where to write what
+## 8. File responsibilities
 
-| File | Purpose |
-|------|---------|
-| `docs/Dev-Notes.md` | Mandatory living checklist + start process |
-| `docs/agent.md` | This manual |
-| `docs/ARCHITECTURE.md` | What is built |
-| `docs/ROADMAP.md` | Direction and capability families |
-| `docs/FEATURES.md` | Implemented vs coming inventory |
-| `docs/changelog.md` | Release history only |
-| `docs/worklog.md` | Session log |
-| `docs/retired.md` | Legacy mechanisms still under license |
-| `README.md` | Current product description |
+| File | Who writes | Purpose |
+|------|------------|---------|
+| `docs/Dev-Notes.md` | Human only | Curated open items and process rules |
+| `docs/ai-notes.md` | AI agents | Working notes, evidence, hand-offs |
+| `docs/agent.md` | Human (+ rare AI under instruction) | This manual |
+| `docs/ARCHITECTURE.md` | Both (when architecture changes) | What is built |
+| `docs/ROADMAP.md` | Both (when direction changes) | Capability direction |
+| `docs/FEATURES.md` | Both | Implemented vs coming |
+| `README.md` | Both | Current product description |
+| `docs/changelog.md` | Human / release process | Release history |
 
 ---
 
-*Follow the human prompt first. Follow this process second. Produce evidence. Keep the repository honest.*
+*Human prompt first. Minimum context. One success condition. Evidence. Clean hand-off in ai-notes.md. No double work.*
