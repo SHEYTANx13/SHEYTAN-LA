@@ -152,8 +152,9 @@ Live configuration is one concurrency-safe source (`config.Source`) shared by ev
 | [`docs/FEATURES.md`](docs/FEATURES.md) | Single feature inventory (implemented vs coming) |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Capability-driven direction |
 | [`docs/3dstudio.md`](docs/3dstudio.md) | Optional 3D Studio contract |
-| [`docs/agent.md`](docs/agent.md) | Agent operating manual (includes AI-agent workflow) |
-| [`docs/Dev-Notes.md`](docs/Dev-Notes.md) | **Mandatory living checklist** — AI agents must read before every update and mark after |
+| [`docs/agent.md`](docs/agent.md) | Agent operating manual (process, efficiency rules, definition of done) |
+| [`docs/Dev-Notes.md`](docs/Dev-Notes.md) | **Human-only** curated open items and priorities |
+| [`docs/ai-notes.md`](docs/ai-notes.md) | **AI agents only** — working notes, evidence, hand-offs |
 | [`docs/UPDATE.md`](docs/UPDATE.md) | Current maintenance and update behavior |
 | [`docs/changelog.md`](docs/changelog.md) | Canonical release history |
 | [`docs/retired.md`](docs/retired.md) | Retired / legacy mechanisms (still under Proprietary License) |
