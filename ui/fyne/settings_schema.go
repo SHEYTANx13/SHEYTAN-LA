@@ -1,22 +1,14 @@
 //go:build !headless
 
-// Settings schema — the ONE declarative registry for the Settings surface,
-// ported verbatim from the retired src/settings-sections.ts FIELD_PLACEMENT
-// (v1.3.0 IA: user-outcome sections; expert fields quarantined in
-// Advanced; automated fields never rendered as controls). The core config
-// schema (internal/config) remains the only authority for values, defaults
-// and validation; this registry decides WHERE a field is edited and its
-// wire type.
+// Settings schema — the ONE declarative registry for the Settings surface.
 package fyneui
 
-// SettingsSection mirrors the 8-section IA.
 type SettingsSection struct {
 	ID    string
 	Label string
 	Hint  string
 }
 
-// SettingsSections in display order.
 var SettingsSections = []SettingsSection{
 	{"general", "General", "Startup, workspace, interaction"},
 	{"models", "Models", "Local models, provider, vision"},
@@ -28,7 +20,6 @@ var SettingsSections = []SettingsSection{
 	{"advanced", "Advanced", "Expert controls"},
 }
 
-// FieldKind is the wire type of a settings field.
 type FieldKind int
 
 const (
@@ -40,21 +31,17 @@ const (
 	FieldTools
 )
 
-// SettingsField describes one editable control.
 type SettingsField struct {
-	Key     string // config JSON path ("temperature" lives under llm)
+	Key     string
 	Label   string
 	Section string
 	Kind    FieldKind
-	Enum    []string // FieldEnum choices
-	LLM     bool     // nested under the llm object (deep-merged)
+	Enum    []string
+	LLM     bool
 	Hint    string
 }
 
-// SettingsFields is FIELD_PLACEMENT + type info. Order within a section is
-// display order.
 var SettingsFields = []SettingsField{
-	// General
 	{Key: "llamaAutoStart", Label: "Start model engine with the app", Section: "general", Kind: FieldBool},
 	{Key: "smoothStream", Label: "Smooth streaming animation", Section: "general", Kind: FieldBool},
 	{Key: "showPerfHud", Label: "Show performance overlay", Section: "general", Kind: FieldBool},
@@ -64,20 +51,17 @@ var SettingsFields = []SettingsField{
 	{Key: "studioEnabled", Label: "3D Studio", Section: "general", Kind: FieldBool,
 		Hint: "Optional read-only 3D system-topology viewer (opens in the browser, embedded renderer)"},
 
-	// Models
 	{Key: "provider", Label: "Provider", Section: "models", Kind: FieldEnum, Enum: []string{"local", "remote"}},
 	{Key: "model", Label: "Model (selection belongs in the Models view)", Section: "models", Kind: FieldString},
 	{Key: "remoteBaseUrl", Label: "Remote base URL", Section: "models", Kind: FieldString},
 	{Key: "remoteModel", Label: "Remote model", Section: "models", Kind: FieldString},
 	{Key: "visionEnabled", Label: "Vision (multimodal input)", Section: "models", Kind: FieldBool},
 
-	// Performance
 	{Key: "numCtx", Label: "Context window (tokens)", Section: "performance", Kind: FieldInt, LLM: true},
 	{Key: "historyWindowPct", Label: "History window (%)", Section: "performance", Kind: FieldInt},
 	{Key: "continuumEnabled", Label: "Continuum context carry", Section: "performance", Kind: FieldBool},
 	{Key: "performanceMode", Label: "Runtime posture", Section: "performance", Kind: FieldEnum, Enum: []string{"auto", "manual"}},
 
-	// Agent & Tools
 	{Key: "maxIterations", Label: "Max agent iterations", Section: "agent", Kind: FieldInt},
 	{Key: "parallelTools", Label: "Run tools in parallel", Section: "agent", Kind: FieldBool},
 	{Key: "thinkingMode", Label: "Thinking output", Section: "agent", Kind: FieldBool},
@@ -89,7 +73,6 @@ var SettingsFields = []SettingsField{
 	{Key: "labAllowNetwork", Label: "Allow Lab network access", Section: "agent", Kind: FieldBool},
 	{Key: "sandboxEnabled", Label: "Sandbox tool execution", Section: "agent", Kind: FieldBool},
 
-	// Network
 	{Key: "researchEnabled", Label: "Research / net search", Section: "network", Kind: FieldBool},
 	{Key: "researchBackend", Label: "Research backend", Section: "network", Kind: FieldString},
 	{Key: "researchSearxngUrl", Label: "SearXNG URL", Section: "network", Kind: FieldString},
@@ -98,11 +81,9 @@ var SettingsFields = []SettingsField{
 	{Key: "researchReddit", Label: "Reddit search", Section: "network", Kind: FieldBool},
 	{Key: "researchWeb", Label: "Web search", Section: "network", Kind: FieldBool},
 
-	// Updates
 	{Key: "updateSchedule", Label: "Automatic update policy", Section: "updates", Kind: FieldEnum,
 		Enum: []string{"off", "daily", "weekly"}},
 
-	// Advanced — the ONLY expert surface (ported placement)
 	{Key: "llamaBinPath", Label: "llama.cpp binary path", Section: "advanced", Kind: FieldString},
 	{Key: "llamaHost", Label: "llama host", Section: "advanced", Kind: FieldString},
 	{Key: "llamaPort", Label: "llama port", Section: "advanced", Kind: FieldInt},
@@ -143,16 +124,16 @@ var SettingsFields = []SettingsField{
 	{Key: "maxTokens", Label: "Max tokens", Section: "advanced", Kind: FieldInt, LLM: true},
 	{Key: "repeatPenalty", Label: "Repeat penalty", Section: "advanced", Kind: FieldFloat, LLM: true},
 	{Key: "seed", Label: "Seed", Section: "advanced", Kind: FieldInt, LLM: true},
+	// Developer debug — OFF by default; enables DEBUG log lines for runtime diagnosis.
+	{Key: "developerDebug", Label: "Developer debug logging", Section: "advanced", Kind: FieldBool,
+		Hint: "When on, writes DEBUG lines to app.log (boot timings, IPC detail, gate steps). Off by default. Also set SHEYTAN_DEVELOPER_DEBUG=1."},
 }
 
-// AutomatedFields are implementation knobs the runtime manages; they are
-// reported as read-only evidence and never rendered as controls.
 var AutomatedFields = []string{
 	"engineCompat", "engineCompatReason", "engineCompatAt",
 	"visionMmprojDetection", "engineBackend", "nativeEnginePath",
 }
 
-// FieldsForSection returns the fields of one section in display order.
 func FieldsForSection(id string) []SettingsField {
 	out := make([]SettingsField, 0, 8)
 	for _, f := range SettingsFields {
@@ -163,10 +144,6 @@ func FieldsForSection(id string) []SettingsField {
 	return out
 }
 
-// BuildPatch produces the wire patch for one field: nested llm.* fields go
-// under the deep-merged "llm" object; everything else is top-level. This
-// is the exact typed-merge contract the core enforces (flat llm keys are
-// silently dropped by the typed merge).
 func BuildPatch(f SettingsField, value any) map[string]any {
 	if !f.LLM {
 		return map[string]any{f.Key: value}
@@ -174,7 +151,6 @@ func BuildPatch(f SettingsField, value any) map[string]any {
 	return map[string]any{"llm": map[string]any{f.Key: value}}
 }
 
-// EnabledToolsPatch builds the one-patch rewrite of the enabledTools CSV.
 func EnabledToolsPatch(enabled []string) map[string]any {
 	return map[string]any{"enabledTools": enabled}
 }
