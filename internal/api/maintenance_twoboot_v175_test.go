@@ -34,10 +34,12 @@ package api
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
@@ -75,6 +77,10 @@ func newTwoBootServer(t *testing.T, dataDir, model string) *maintenanceTestHarne
 // commitEngineTransaction simulates EXACTLY what a real engine install
 // commit leaves behind: the managed binary, the engine-install.json
 // manifest beside it, and the recorded tag in installed.json.
+//
+// WriteFile of the binary retries on ETXTBSY ("text file busy"): prewarm
+// or a still-running managed process can hold the inode briefly on Linux
+// (run 40686992270 — TestMaintenanceGateUntrustworthyIdentityRunsHonestTransaction).
 func commitEngineTransaction(t *testing.T, cfg *config.Config, tag string) {
 	t.Helper()
 
@@ -85,9 +91,22 @@ func commitEngineTransaction(t *testing.T, cfg *config.Config, tag string) {
 	}
 
 	bin := filepath.Join(binDir, "llama-server")
+	payload := []byte("fake llama-server " + tag)
 
-	if err := os.WriteFile(bin, []byte("fake llama-server "+tag), 0o755); err != nil {
-		t.Fatalf("write binary: %v", err)
+	var last error
+	for attempt := 0; attempt < 20; attempt++ {
+		last = os.WriteFile(bin, payload, 0o755)
+		if last == nil {
+			break
+		}
+		// Linux: text file busy while another process still maps/execs the file.
+		if !errors.Is(last, os.ErrExist) && !isTextFileBusy(last) {
+			t.Fatalf("write binary: %v", last)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if last != nil {
+		t.Fatalf("write binary after retries: %v", last)
 	}
 
 	manifest := `{"tag":"` + tag + `","sha256":"deadbeef","size":1024,"source":"test"}`
@@ -97,6 +116,49 @@ func commitEngineTransaction(t *testing.T, cfg *config.Config, tag string) {
 	}
 
 	updater.RecordEngineTag(cfg, tag)
+}
+
+// isTextFileBusy reports Linux ETXTBSY-class errors from WriteFile.
+func isTextFileBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return containsFold(s, "text file busy") || containsFold(s, "etxtbsy")
+}
+
+func containsFold(s, sub string) bool {
+	return len(s) >= len(sub) && (s == sub ||
+		len(sub) == 0 ||
+		indexFold(s, sub) >= 0)
+}
+
+func indexFold(s, sub string) int {
+	// small local helper — avoids strings.ToLower allocation in hot path of tests
+	ls, lsub := len(s), len(sub)
+	if lsub == 0 {
+		return 0
+	}
+	for i := 0; i+lsub <= ls; i++ {
+		match := true
+		for j := 0; j < lsub; j++ {
+			a, b := s[i+j], sub[j]
+			if a >= 'A' && a <= 'Z' {
+				a += 'a' - 'A'
+			}
+			if b >= 'A' && b <= 'Z' {
+				b += 'a' - 'A'
+			}
+			if a != b {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
 }
 
 // TestMaintenanceTwoBootsDoNotRedownloadCommittedEngine — the §6 two-boot
