@@ -42,7 +42,6 @@ func isLicenseArtifact(name string) bool {
 	if ext := filepath.Ext(base); codeExtensions[ext] {
 		return false
 	}
-	// Embed body used by brand is not a license artifact.
 	if base == "brand_license_body.md" {
 		return false
 	}
@@ -252,16 +251,24 @@ func describeLicenseDiffLine(idx int, shipped, authoritative []string) string {
 	return b.String()
 }
 
+// TestLicenseSyncContractSurvivesWindowsLineEndings builds CRLF/CR samples
+// from the *normalized* LF authority only. Naively replacing \n in a string
+// that already contains \r\n (Windows checkout of the embed file before
+// brand init normalization) produces \r\r\n and is not a valid test of the
+// contract — run 40685008386 class.
 func TestLicenseSyncContractSurvivesWindowsLineEndings(t *testing.T) {
-	crlf := strings.ReplaceAll(brand.LicenseText, "\n", "\r\n")
-	cr := strings.ReplaceAll(brand.LicenseText, "\n", "\r")
-	if normalizeLicenseText(crlf) != normalizeLicenseText(brand.LicenseText) {
+	base := normalizeLicenseText(brand.LicenseText)
+	body := strings.TrimSuffix(base, "\n")
+	crlf := strings.ReplaceAll(body, "\n", "\r\n") + "\r\n"
+	cr := strings.ReplaceAll(body, "\n", "\r") + "\r"
+
+	if normalizeLicenseText(crlf) != base {
 		t.Fatal("a CRLF-rendered LICENSE.md must satisfy the synchronization contract")
 	}
-	if normalizeLicenseText(cr) != normalizeLicenseText(brand.LicenseText) {
+	if normalizeLicenseText(cr) != base {
 		t.Fatal("a CR-rendered LICENSE.md must satisfy the synchronization contract")
 	}
-	if normalizeLicenseText(brand.LicenseText+"\n\n\n") != normalizeLicenseText(brand.LicenseText) {
+	if normalizeLicenseText(base+"\n\n\n") != base {
 		t.Fatal("trailing-newline variance must not break the synchronization contract")
 	}
 }

@@ -27,8 +27,17 @@
 #     launcher's native endings; the index copy stays LF exactly as
 #     committed, so nothing is renormalized.
 #
+#   LICENSE.md + internal/brand/brand_license_body.md -> text eol=lf
+#     The sole license artifact and its go:embed twin must stay LF so
+#     brand.LicenseText and root LICENSE.md compare equal after the
+#     releasecontract EOL normalizer on every platform (Windows run
+#     40685008386: CRLF embed made TestLicenseSyncContractSurvivesWindowsLineEndings
+#     fail by turning existing \r\n into \r\r\n).
+#
 # Everything else (installer sources under packaging/nsis, docs, web
 # assets, baselines) keeps repository-native endings: NSIS accepts both
 # endings and no other tool in the pipeline normalizes line endings.
 *.go text eol=lf
 *.bat text eol=crlf
+LICENSE.md text eol=lf
+internal/brand/brand_license_body.md text eol=lf

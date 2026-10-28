@@ -10,15 +10,27 @@ package brand
 
 import (
 	_ "embed"
+	"strings"
 	"time"
 )
 
-// LicenseText is the complete consolidated license document (preferred
-// short form). Loaded via go:embed so markdown backticks in the text
-// cannot break a Go raw string. Root LICENSE.md must stay in exact sync.
+// licenseBody is the raw embed (may arrive as CRLF on Windows checkouts).
+// LicenseText is the platform-stable LF form used by gen-license and
+// releasecontract — always normalized at init so EOL never drifts.
 //
 //go:embed brand_license_body.md
+var licenseBody string
+
+// LicenseText is the complete consolidated license document (preferred
+// short form), always LF-terminated after package init.
 var LicenseText string
+
+func init() {
+	s := licenseBody
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	LicenseText = strings.TrimRight(s, "\n") + "\n"
+}
 
 const (
 	Name            = "SHEYTAN"
