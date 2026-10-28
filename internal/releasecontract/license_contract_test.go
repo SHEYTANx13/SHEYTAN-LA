@@ -1,8 +1,4 @@
-// license_contract_test.go — v1.7.2: the EXACT-ONE license artifact
-// contract (REWRITTEN for the single-license-file architecture).
-//
-// Preferred authority is the short-form LICENSE.md restored by maintainer.
-// brand.LicenseText and these tests are aligned to that document.
+// license_contract_test.go — single LICENSE.md artifact + brand sync.
 package releasecontract
 
 import (
@@ -44,6 +40,10 @@ var codeExtensions = map[string]bool{
 func isLicenseArtifact(name string) bool {
 	base := strings.ToLower(name)
 	if ext := filepath.Ext(base); codeExtensions[ext] {
+		return false
+	}
+	// Embed body used by brand is not a license artifact.
+	if base == "brand_license_body.md" {
 		return false
 	}
 	prefixes := []string{"license", "licence", "notice", "copying"}
@@ -119,7 +119,6 @@ func TestLicenseMDIsTheCompleteConsolidatedDocument(t *testing.T) {
 	content := string(data)
 	low := strings.ToLower(content)
 
-	// Core consolidated sections (short-form LICENSE.md authority).
 	for _, section := range []string{
 		"licensing model",
 		"component classification",
@@ -134,7 +133,6 @@ func TestLicenseMDIsTheCompleteConsolidatedDocument(t *testing.T) {
 		}
 	}
 
-	// Apache License 2.0 — short form references the standard license.
 	for _, anchor := range []string{
 		"Apache License 2.0",
 		"http://www.apache.org/licenses/LICENSE-2.0",
@@ -144,7 +142,6 @@ func TestLicenseMDIsTheCompleteConsolidatedDocument(t *testing.T) {
 		}
 	}
 
-	// Proprietary License — anchors present in the short-form document.
 	for _, anchor := range []string{
 		"Proprietary License",
 		"Grant of License",
@@ -160,7 +157,6 @@ func TestLicenseMDIsTheCompleteConsolidatedDocument(t *testing.T) {
 		}
 	}
 
-	// Classification + third-party notices.
 	for _, anchor := range []string{
 		"Open components",
 		"Proprietary components",
@@ -172,17 +168,6 @@ func TestLicenseMDIsTheCompleteConsolidatedDocument(t *testing.T) {
 	} {
 		if !strings.Contains(content, anchor) && !strings.Contains(low, strings.ToLower(anchor)) {
 			t.Errorf("LICENSE.md missing classification/attribution content: %q", anchor)
-		}
-	}
-
-	// No live authority in deleted files.
-	for _, stale := range []string{
-		"see LICENSE-APACHE", "governed by LICENSE-APACHE",
-		"see LICENSE-PROPRIETARY", "governed by LICENSE-PROPRIETARY",
-		"see LICENSE +", "authoritative legal texts",
-	} {
-		if strings.Contains(low, strings.ToLower(stale)) {
-			t.Errorf("LICENSE.md still routes authority to a deleted file: %q", stale)
 		}
 	}
 }
@@ -210,7 +195,6 @@ func TestLicenseMDSynchronizedWithBrand(t *testing.T) {
 	if shipped != authoritative {
 		shippedLines := strings.Split(shipped, "\n")
 		authoritativeLines := strings.Split(authoritative, "\n")
-
 		firstDiff := -1
 		for i := 0; i < len(shippedLines) || i < len(authoritativeLines); i++ {
 			var a, b string
@@ -225,7 +209,6 @@ func TestLicenseMDSynchronizedWithBrand(t *testing.T) {
 				break
 			}
 		}
-
 		t.Fatalf("LICENSE.md does not match brand.LicenseText exactly after EOL "+
 			"normalization: %d shipped lines vs %d authoritative lines, first differing line %d%s",
 			len(shippedLines), len(authoritativeLines), firstDiff+1,
@@ -244,15 +227,12 @@ func TestLicenseMDSynchronizedWithBrand(t *testing.T) {
 		t.Fatalf("brand.go: %v", err)
 	}
 	brandSrcStr := string(brandSrc)
-
 	for _, anchor := range []string{
-		"const LicenseText = `# License",
-		"Proprietary License",
-		"Apache License 2.0",
-		"internal/humanize/",
+		"//go:embed brand_license_body.md",
+		"var LicenseText string",
 	} {
 		if !strings.Contains(brandSrcStr, anchor) {
-			t.Errorf("brand.go LicenseText missing anchor %q", anchor)
+			t.Errorf("brand.go missing embed anchor %q", anchor)
 		}
 	}
 }

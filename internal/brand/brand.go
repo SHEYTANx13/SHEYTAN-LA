@@ -15,42 +15,23 @@ import (
 
 // LicenseText is the complete consolidated license document (preferred
 // short form). Loaded via go:embed so markdown backticks in the text
-// cannot break a Go raw string. scripts/gen-license.go and the
-// releasecontract tests keep root LICENSE.md in exact sync with this.
+// cannot break a Go raw string. Root LICENSE.md must stay in exact sync.
 //
-//go:embed license.md
+//go:embed brand_license_body.md
 var LicenseText string
 
 const (
-	// Name is the short product name.
-	Name = "SHEYTAN"
-	// FullName is the complete product name.
-	FullName = "SHEYTAN-Local-Agent"
-	// Trademark is the brand with the ™ mark, for display surfaces.
-	Trademark = "SHEYTAN™"
-	// Licensor is the legal entity that owns the copyright and license.
-	Licensor = "Parsaetak"
-	// LicensorURL is the official licensor contact point.
-	LicensorURL = "https://github.com/Parsaetak"
-	// TrademarkNotice is the formal trademark attribution line.
-	TrademarkNotice = "SHEYTAN and the SHEYTAN logo are trademarks of Parsaetak."
-	// LicenseName is the human name of the license.
-	LicenseName = "Mixed: Apache-2.0 (designated components) + Proprietary"
-
-	// SignedBy is the application author/signer — v1.0.8. Every release
-	// of SHEYTAN-Local-Agent is authored and signed under this name; it
-	// is embedded in the exe version resource (CompanyName), printed in
-	// the About dialog, and carried in the SIGNATURE block of each
-	// distribution archive.
-	SignedBy = "Parsa Tak"
-	// SignedByRole is the role line printed under the signature.
-	SignedByRole = "Author & Application Signer"
+	Name             = "SHEYTAN"
+	FullName         = "SHEYTAN-Local-Agent"
+	Trademark        = "SHEYTAN™"
+	Licensor         = "Parsaetak"
+	LicensorURL      = "https://github.com/Parsaetak"
+	TrademarkNotice  = "SHEYTAN and the SHEYTAN logo are trademarks of Parsaetak."
+	LicenseName      = "Mixed: Apache-2.0 (designated components) + Proprietary"
+	SignedBy         = "Parsa Tak"
+	SignedByRole     = "Author & Application Signer"
 )
 
-// LogoSVG is the full-color flame mark (gradient flame on a deep ember
-// disc) used everywhere the brand appears: the app UI, the window icon,
-// the splash — and, since v1.0.5, the rendered .exe icon. It lives here so
-// the GUI theme and the build-time icon generator can never drift apart.
 const LogoSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 24 24">
 <defs>
   <linearGradient id="flame" x1="0" y1="1" x2="0" y2="0">
@@ -70,7 +51,6 @@ const LogoSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512
 <path d="M12.2 10.4c1.5 1.1 2.6 2.4 2.6 4.2 0 1.9-1.3 3.4-3 3.4-1.1 0-2-.6-2.5-1.5-.2 1.5.8 3.3 2.1 4-.5.1-1 .2-1.6.1-2.4-.3-4.1-2.5-3.8-5 .2-1.6 1.2-2.6 2.2-3.6.9-.9 1.7-1.9 2-3.1.6.7 1.3 1.2 2 1.5z" fill="url(#flameInner)" opacity=".9"/>
 </svg>`
 
-// CopyrightYears returns the copyright range "2024–<current year>".
 func CopyrightYears() string {
 	y := time.Now().Year()
 	if y <= 2024 {
@@ -79,25 +59,18 @@ func CopyrightYears() string {
 	return "2024–" + itoa(y)
 }
 
-// Copyright returns the canonical copyright line, e.g.
-// "© 2024–2026 Parsaetak. All rights reserved."
 func Copyright() string {
 	return "© " + CopyrightYears() + " " + Licensor + ". All rights reserved."
 }
 
-// Notice returns the short one-line legal footer used in the UI.
 func Notice() string {
 	return Trademark + " · " + Copyright()
 }
 
-// SignatureLine returns the one-line authorship attribution, e.g.
-// "Signed by Parsa Tak — Author & Application Signer".
 func SignatureLine() string {
 	return "Signed by " + SignedBy + " — " + SignedByRole
 }
 
-// SignatureBlock returns the full signature text carried in the About
-// dialog and the SIGNATURE file of every distribution archive.
 func SignatureBlock(version string) string {
 	return "SHEYTAN-Local-Agent v" + version + "\n" +
 		"Signed by: " + SignedBy + "\n" +
@@ -108,7 +81,6 @@ func SignatureBlock(version string) string {
 		TrademarkNotice + "\n"
 }
 
-// LicenseFooter is the compact attribution block shown in About dialogs.
 const LicenseFooter = "SHEYTAN™ is a trademark of Parsaetak.\nLicensed under the conservative mixed model — Apache-2.0 for designated open components, Proprietary for SHEYTAN-specific material. The complete licensing picture lives in LICENSE.md (the sole licensing artifact).\n" + LicensorURL
 
 func itoa(n int) string {
