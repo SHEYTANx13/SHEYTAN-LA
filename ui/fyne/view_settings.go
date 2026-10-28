@@ -57,7 +57,6 @@ func buildSettingsView(ap *App) fyne.CanvasObject {
 	return root
 }
 
-// buildSection renders one section's fields from the typed registry.
 func (v *settingsView) buildSection(id string) fyne.CanvasObject {
 	rows := container.NewVBox()
 	for _, f := range FieldsForSection(id) {
@@ -69,8 +68,6 @@ func (v *settingsView) buildSection(id string) fyne.CanvasObject {
 	return container.NewScroll(rows)
 }
 
-// controlFor builds the type-correct control for one field. Type-correct
-// controls are a shipped contract: wrong types produced documented 400s.
 func (v *settingsView) controlFor(f SettingsField) fyne.CanvasObject {
 	label := widget.NewLabelWithStyle(f.Label, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	hintText := f.Hint
@@ -83,8 +80,7 @@ func (v *settingsView) controlFor(f SettingsField) fyne.CanvasObject {
 	switch f.Kind {
 	case FieldBool:
 		c := widget.NewCheck("", func(on bool) { v.patch(f, on) })
-		face := c
-		row.Add(face)
+		row.Add(c)
 		v.bindBool(f, c)
 	case FieldInt:
 		e := widget.NewEntry()
@@ -108,7 +104,6 @@ func (v *settingsView) controlFor(f SettingsField) fyne.CanvasObject {
 		row.Add(e)
 		v.bindString(f, e)
 	case FieldTools:
-		// rendered as the matrix below
 	}
 	return widget.NewCard("", "", row)
 }
@@ -163,7 +158,6 @@ func (v *settingsView) bindString(f SettingsField, e *widget.Entry) {
 	}()
 }
 
-// waitConfig blocks (bounded) until the initial config read lands.
 func (v *settingsView) waitConfig() {
 	for i := 0; i < 100 && v.config == nil; i++ {
 		time.Sleep(50 * time.Millisecond)
@@ -182,6 +176,8 @@ func (v *settingsView) boolValue(f SettingsField) bool {
 		return c.SmoothStream
 	case "showPerfHud":
 		return c.ShowPerfHUD
+	case "developerDebug":
+		return c.DeveloperDebug
 	case "visionEnabled":
 		return c.VisionEnabled
 	case "continuumEnabled":
@@ -362,7 +358,6 @@ func (v *settingsView) stringValue(f SettingsField) string {
 	return ""
 }
 
-// patch applies one typed patch through the core and re-reads.
 func (v *settingsView) patch(f SettingsField, val any) {
 	ap := v.ap
 	go func() {
@@ -370,6 +365,11 @@ func (v *settingsView) patch(f SettingsField, val any) {
 		if _, err := ap.Client().PatchConfig(ap.Ctx(), patch); err != nil {
 			uiDo(func() { v.showErr("save "+f.Key, err) })
 			return
+		}
+		if f.Key == "developerDebug" {
+			if on, ok := val.(bool); ok {
+				setDeveloperDebugLive(on)
+			}
 		}
 		if cfg, err := ap.Client().Config(ap.Ctx()); err == nil {
 			uiDo(func() {
@@ -399,8 +399,6 @@ func (v *settingsView) patchFloat(f SettingsField, s string) {
 	v.patch(f, x)
 }
 
-// buildToolsMatrix renders the enabledTools checkboxes from the catalog
-// and rewrites the CSV as ONE patch (the shipped contract).
 func (v *settingsView) buildToolsMatrix() fyne.CanvasObject {
 	box := container.NewVBox(widget.NewLabelWithStyle("Enabled tools", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
 	go func() {
@@ -432,8 +430,6 @@ func (v *settingsView) buildToolsMatrix() fyne.CanvasObject {
 }
 
 func (v *settingsView) toolsPatched(name string, on bool) {
-	// Recompute the full enabled set from the current config + toggles and
-	// rewrite it as one patch.
 	set := map[string]bool{}
 	if v.config != nil {
 		for _, t := range v.config.EnabledTools {
@@ -461,7 +457,6 @@ func (v *settingsView) toolsPatched(name string, on bool) {
 	}()
 }
 
-// buildDiagnostics is the read-only evidence surface (health, logs).
 func (v *settingsView) buildDiagnostics() fyne.CanvasObject {
 	logs := wrappedLabel("Loading logs…")
 	go func() {
