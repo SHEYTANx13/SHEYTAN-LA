@@ -367,8 +367,8 @@ components explicitly designated Open in §2:
 
 ## 5. Parsaetak Proprietary License v1.1
 
-The complete, legally binding Parsaetak Proprietary License v1.1 text
-governing everything classified Proprietary in §2:
+The complete, legally binding Parsaetak Proprietary License text governing
+everything classified Proprietary in §2:
 
 <!-- proprietary-v1.1-text-begin -->
 
