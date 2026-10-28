@@ -396,7 +396,7 @@ jobs:
             throw "Fyne UI tests compile gate failed"
           }
 
-      - name: Windows resource pipeline (gen-syso: icon + version + DPI manifest)
+      - name: "Windows resource pipeline (gen-syso: icon + version + DPI manifest)"
         run: |
           $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
           if (Test-Path scripts/gen-syso.go) {
