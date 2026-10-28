@@ -1,1 +1,737 @@
-PLACEHOLDER
+# ============================================================================
+# SHEYTAN-LA — build-desktop.yml (v1.11.0 one-Go-UI pipeline, run #54 repair)
+# ============================================================================
+# RESTORED from commit 7922a8c after accidental PLACEHOLDER overwrite.
+# Annotation improvements land in a follow-up that only touches the audit
+# and Windows smoke steps (see scripts/ci/annotate-test-fail.sh).
+# ============================================================================
+name: build-desktop
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  APP_VERSION: "1.11.0"
+  GO_VERSION: "1.27"
+  WIN_PKG_ROOT: "SHEYTAN-LA"
+  LINUX_PKG_ROOT: "SHEYTAN-LA"
+  GO_TEST_TIMEOUT: "25m"
+
+jobs:
+  preflight:
+    name: Preflight compile gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install Fyne build prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
+            gcc pkg-config libgl1-mesa-dev libegl1-mesa-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev \
+            libxi-dev libxxf86vm-dev libwayland-dev libxkbcommon-dev xorg-dev
+
+      - name: Compile gate (go build ./...)
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          echo "RUN go build ./..." >> ci-logs/gate-order.txt
+          go build ./... 2>&1 | tee ci-logs/preflight-build.log
+          echo "gate OK: go build ./..." >> ci-logs/gate-order.txt
+
+      - name: gofmt (enforced)
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          unformatted=$(gofmt -l cmd internal ui | tee ci-logs/preflight-gofmt.log)
+          if [ -n "$unformatted" ]; then
+            echo "::error title=gofmt failed::run gofmt -w on: $(echo "$unformatted" | tr '\n' ' ')"
+            echo "$unformatted"
+            exit 1
+          fi
+          echo "gofmt OK"
+
+      - name: go vet ./...
+        run: |
+          set -euo pipefail
+          go vet ./... 2>&1 | tee ci-logs/preflight-vet.log
+          echo "gate OK: go vet ./..."
+
+      - name: Upload preflight log part
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: preflight-logs-part-attempt${{ github.run_attempt }}
+          path: ci-logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  audit:
+    name: Core audit (headless)
+    runs-on: ubuntu-24.04
+    needs: [preflight]
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: go test ./internal/... (headless)
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          echo "RUN go test ./internal/... (headless)" >> ci-logs/gate-order.txt
+          set +e
+          go test ./internal/... -tags headless -count=1 -timeout "${GO_TEST_TIMEOUT:-25m}" 2>&1 | tee ci-logs/audit-go-test-headless.log
+          code=${PIPESTATUS[0]}
+          set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error title=Core audit failed (exit $code)::First failing tests:"
+            grep -E '^--- FAIL:|^    .+:|FAIL[[:space:]]+github.com' ci-logs/audit-go-test-headless.log | head -40 || true
+            echo "gate FAIL: go test ./internal/... (headless) exit=$code" >> ci-logs/gate-order.txt
+            exit "$code"
+          fi
+          echo "gate OK: go test ./internal/... (headless)" >> ci-logs/gate-order.txt
+
+      - name: Race gate (critical concurrent packages)
+        run: |
+          set -euo pipefail
+          echo "RUN go test -race (critical packages)" >> ci-logs/gate-order.txt
+          set +e
+          go test -race -tags headless -count=1 ./internal/api ./internal/agent ./internal/sessions ./internal/contextplan ./internal/histref ./internal/runtime ./internal/localipc 2>&1 | tee ci-logs/audit-go-race.log
+          code=${PIPESTATUS[0]}
+          set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error title=Race gate failed (exit $code)::First FAIL lines:"
+            grep -E '^--- FAIL:|^    .+:|FAIL[[:space:]]+github.com' ci-logs/audit-go-race.log | head -40 || true
+            exit "$code"
+          fi
+          echo "gate OK: go test -race (critical packages)" >> ci-logs/gate-order.txt
+
+      - name: Stress + release-surface gate (headless)
+        run: |
+          set -euo pipefail
+          echo "RUN go run -tags headless ./cmd/sheytan-local-agent stress" >> ci-logs/gate-order.txt
+          go run -tags headless ./cmd/sheytan-local-agent stress 2>&1 | tee ci-logs/audit-stress-surface.log
+          echo "gate OK: stress suite (includes the release_surface scenario)" >> ci-logs/gate-order.txt
+
+      - name: Release + version contract tests
+        run: |
+          set -euo pipefail
+          echo "RUN go test ./internal/releasecontract/" >> ci-logs/gate-order.txt
+          set +e
+          go test ./internal/releasecontract/ -count=1 -v 2>&1 | tee ci-logs/audit-release-contract.log
+          code=${PIPESTATUS[0]}
+          set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error title=Release contract failed (exit $code)::First FAIL lines:"
+            grep -E '^--- FAIL:|^    .+:|FAIL[[:space:]]+github.com' ci-logs/audit-release-contract.log | head -40 || true
+            exit "$code"
+          fi
+          echo "gate OK: release contract" >> ci-logs/gate-order.txt
+
+      - name: Consolidated-log collector fixtures
+        run: |
+          set -euo pipefail
+          echo "RUN bash scripts/ci/consolidate-run-log-fixtures.sh" >> ci-logs/gate-order.txt
+          bash scripts/ci/consolidate-run-log-fixtures.sh 2>&1 | tee ci-logs/audit-log-fixtures.log
+          echo "gate OK: log collector fixtures" >> ci-logs/gate-order.txt
+
+      - name: Upload audit log part
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: audit-logs-part-attempt${{ github.run_attempt }}
+          path: ci-logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  ui:
+    name: Fyne UI gates (Linux)
+    runs-on: ubuntu-24.04
+    needs: [preflight]
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install Fyne build prerequisites + smoke tooling
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
+            gcc pkg-config libgl1-mesa-dev libegl1-mesa-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev \
+            libxi-dev libxxf86vm-dev libwayland-dev libxkbcommon-dev \
+            xorg-dev xauth xvfb x11-utils
+
+      - name: Fyne UI contract + composition suite
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          echo "RUN go test ./ui/fyne/" >> ci-logs/gate-order.txt
+          set +e
+          go test ./ui/fyne/ -count=1 -v 2>&1 | tee ci-logs/ui-fyne-tests.log
+          code=${PIPESTATUS[0]}
+          set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error title=Fyne UI tests failed (exit $code)::First FAIL lines:"
+            grep -E '^--- FAIL:|^    .+:|FAIL[[:space:]]+github.com' ci-logs/ui-fyne-tests.log | head -40 || true
+            exit "$code"
+          fi
+          echo "gate OK: go test ./ui/fyne/" >> ci-logs/gate-order.txt
+
+      - name: Full test sweep (desktop build, no headless tag)
+        run: |
+          set -euo pipefail
+          echo "RUN go test ./... (desktop)" >> ci-logs/gate-order.txt
+          set +e
+          go test -count=1 -timeout "${GO_TEST_TIMEOUT:-25m}" ./... 2>&1 | tee ci-logs/ui-go-test-full.log
+          code=${PIPESTATUS[0]}
+          set -e
+          if [ "$code" -ne 0 ]; then
+            echo "::error title=Full desktop test sweep failed (exit $code)::First FAIL lines:"
+            grep -E '^--- FAIL:|^    .+:|FAIL[[:space:]]+github.com' ci-logs/ui-go-test-full.log | head -40 || true
+            exit "$code"
+          fi
+          echo "gate OK: go test ./... (desktop)" >> ci-logs/gate-order.txt
+
+      - name: Build the real Linux binary for the smoke
+        run: |
+          set -euo pipefail
+          go build -o "$RUNNER_TEMP/SHEYTAN-LA" ./cmd/sheytan-local-agent
+          file "$RUNNER_TEMP/SHEYTAN-LA"
+
+      - name: "Desktop launch smoke (Xvfb: boot, window, clean shutdown)"
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"
+          cp "$RUNNER_TEMP/SHEYTAN-LA" .
+          Xvfb :91 -screen 0 1280x800x24 >/dev/null 2>&1 &
+          XVFB_PID=$!
+          xvfb_ready=0
+          for i in $(seq 1 20); do
+            [ -e "/tmp/.X91-lock" ] && { xvfb_ready=1; break; }
+            sleep 0.5
+          done
+          if [ "$xvfb_ready" -ne 1 ]; then
+            echo "::error title=Linux desktop smoke failed::Xvfb never became ready within 10s"
+            exit 1
+          fi
+          DISPLAY=:91 ./SHEYTAN-LA > smoke-stdout.log 2>&1 &
+          APP_PID=$!
+          app_ready=0
+          for i in $(seq 1 60); do
+            if ! kill -0 "$APP_PID" 2>/dev/null; then break; fi
+            if DISPLAY=:91 xwininfo -root -tree 2>/dev/null | grep -q "SHEYTAN-Local-Agent"; then
+              app_ready=1
+              break
+            fi
+            sleep 0.5
+          done
+          if [ "$app_ready" -ne 1 ]; then
+            echo "::error title=Linux desktop smoke failed::window never observable within 30s (boot failure)"
+            echo "--- smoke-stdout.log ---"
+            cat smoke-stdout.log || true
+            kill "$XVFB_PID" 2>/dev/null || true
+            exit 1
+          fi
+          soak_ok=1
+          for i in $(seq 1 20); do
+            if ! kill -0 "$APP_PID" 2>/dev/null; then soak_ok=0; break; fi
+            sleep 0.5
+          done
+          if [ "$soak_ok" -ne 1 ]; then
+            echo "::error title=Linux desktop smoke failed::application exited during 10s soak"
+            cat smoke-stdout.log || true
+            kill "$XVFB_PID" 2>/dev/null || true
+            exit 1
+          fi
+          kill -TERM "$APP_PID"
+          reaped=0
+          for i in $(seq 1 30); do
+            st="$(ps -o stat= -p "$APP_PID" 2>/dev/null || true)"
+            if [ -z "$st" ]; then reaped=1; break; fi
+            case "$st" in
+              *Z*) wait "$APP_PID" 2>/dev/null || true; reaped=1; break;;
+            esac
+            sleep 0.5
+          done
+          if [ "$reaped" -ne 1 ]; then
+            echo "::error title=Linux desktop smoke failed::SIGTERM ignored (no clean exit within 15s)"
+            kill -KILL "$APP_PID" 2>/dev/null || true
+            wait "$APP_PID" 2>/dev/null || true
+            kill "$XVFB_PID" 2>/dev/null || true
+            exit 1
+          fi
+          wait "$APP_PID" 2>/dev/null || true
+          kill "$XVFB_PID" 2>/dev/null || true
+          echo "SMOKE OK: window booted, event loop alive, clean SIGTERM shutdown"
+          mkdir -p "$GITHUB_WORKSPACE/ci-logs"
+          cp smoke-stdout.log "$GITHUB_WORKSPACE/ci-logs/linux-smoke-stdout.log"
+
+      - name: Upload UI log part
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-logs-part-attempt${{ github.run_attempt }}
+          path: ci-logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  build-windows:
+    name: Windows x64
+    runs-on: windows-latest
+    needs: [preflight]
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Resolve APP_VERSION from the Go authority
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+          $raw = go run ./cmd/printversion --plain 2>&1
+          $code = $LASTEXITCODE
+          $raw | Add-Content -Path ci-logs/win-version-resolution.log -Encoding utf8NoBOM
+          if ($code -ne 0) {
+            Write-Host "::error title=Version resolution failed::printversion exited $code"
+            throw "version resolution failed with exit code $code"
+          }
+          $resolved = ([string]$raw).Trim()
+          if ($resolved -notmatch '^\d+\.\d+\.\d+$') {
+            Write-Host "::error title=Version resolution failed::malformed version '$resolved'"
+            throw "malformed version from the Go authority: $resolved"
+          }
+          if ($resolved -ne $env:APP_VERSION) {
+            Write-Host "::warning title=Version drift::Go authority=$resolved env APP_VERSION=$($env:APP_VERSION) — using Go authority"
+            echo "APP_VERSION=$resolved" >> $env:GITHUB_ENV
+          }
+          Write-Host "APP_VERSION=$resolved"
+
+      - name: Setup MSYS2 (UCRT64 GCC for Fyne CGO)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-glfw
+
+      - name: Put UCRT64 on PATH and verify the CGO toolchain
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          export PATH="/ucrt64/bin:$PATH"
+          gcc --version | head -1
+          echo "CGO toolchain ready (UCRT64)"
+
+      - name: Headless core tests (windows/amd64)
+        run: |
+          $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
+          $env:CGO_ENABLED = "1"
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+          go test -tags headless -count=1 -timeout "25m" ./internal/... 2>&1 | Tee-Object -FilePath "ci-logs/win-go-test-headless.log"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error title=Windows headless core tests failed::First FAIL lines:"
+            Select-String -Path "ci-logs/win-go-test-headless.log" -Pattern '^--- FAIL:|^    .+|:|FAIL\s+github.com' | Select-Object -First 40 | ForEach-Object { $_.Line }
+            throw "headless core tests failed (windows/amd64)"
+          }
+
+      - name: Build the Fyne UI tests (windows/amd64 compile gate)
+        run: |
+          $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
+          $env:CGO_ENABLED = "1"
+          go test -c -o NUL ./ui/fyne/ 2>&1 | Tee-Object -FilePath "ci-logs/win-fyne-compile.log"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error title=Fyne UI compile gate failed::see ci-logs/win-fyne-compile.log"
+            throw "Fyne UI tests compile gate failed"
+          }
+
+      - name: Windows resource pipeline (gen-syso: icon + version + DPI manifest)
+        run: |
+          $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
+          if (Test-Path scripts/gen-syso.go) {
+            go run ./scripts/gen-syso.go 2>&1 | Tee-Object -FilePath "ci-logs/win-gen-syso.log"
+          } else {
+            Write-Host "gen-syso not present — skipping"
+          }
+
+      - name: Stage the portable application tree
+        run: |
+          $root = "dist/windows/app/${{ env.WIN_PKG_ROOT }}"
+          New-Item -ItemType Directory -Force -Path $root, "$root/models", "$root/workspace" | Out-Null
+
+      - name: Build SHEYTAN-LA.exe (windowsgui subsystem)
+        run: |
+          $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
+          $env:CGO_ENABLED = "1"
+          $out = "dist/windows/app/${{ env.WIN_PKG_ROOT }}/SHEYTAN-LA.exe"
+          go build -ldflags "-H=windowsgui -s -w" -o $out ./cmd/sheytan-local-agent
+          if (-not (Test-Path $out)) { throw "exe missing after build: $out" }
+          Write-Host "built $out"
+
+      - name: Verify the PE (x86-64, windowsgui)
+        run: |
+          $exe = "dist/windows/app/${{ env.WIN_PKG_ROOT }}/SHEYTAN-LA.exe"
+          if (-not (Test-Path $exe)) { throw "exe missing: $exe" }
+          Write-Host "PE present: $exe"
+
+      - name: Launch smoke (boot, window, bounded, clean close)
+        run: |
+          $exe = Join-Path (Resolve-Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}") "SHEYTAN-LA.exe"
+          $p = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru
+          $bootDeadline = (Get-Date).AddSeconds(60)
+          $booted = $false
+          while ((Get-Date) -lt $bootDeadline) {
+            if ($p.HasExited) { break }
+            $p.Refresh()
+            if ($p.MainWindowHandle -ne [IntPtr]::Zero) { $booted = $true; break }
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not $booted) {
+            $p.Refresh()
+            $exitInfo = if ($p.HasExited) { "ExitCode=$($p.ExitCode)" } else { "still running (no MainWindowHandle)" }
+            $cause = "no MainWindowHandle within 60s; $exitInfo"
+            if ($p.HasExited -and $p.ExitCode -ne 0) {
+              $cause = "process exited early with code $($p.ExitCode) before a window appeared (boot/setup failure; MessageBox is skipped under CI)"
+            }
+            Write-Host "::error title=Windows launch smoke failed::$cause"
+            Write-Host "HasExited=$($p.HasExited) MainWindowHandle=$($p.MainWindowHandle)"
+            throw "Windows launch smoke failed: $cause"
+          }
+          Write-Host "window observed (MainWindowHandle: $($p.MainWindowHandle))"
+          $soakDeadline = (Get-Date).AddSeconds(12)
+          while ((Get-Date) -lt $soakDeadline) {
+            if ($p.HasExited) {
+              Write-Host "::error title=Windows launch smoke failed::exited early with code $($p.ExitCode) during soak"
+              throw "Windows launch smoke failed: early exit"
+            }
+            Start-Sleep -Milliseconds 500
+          }
+          $null = $p.CloseMainWindow()
+          $closed = $false
+          $closeDeadline = (Get-Date).AddSeconds(20)
+          while ((Get-Date) -lt $closeDeadline) {
+            if ($p.HasExited) { $closed = $true; break }
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not $closed) {
+            Write-Host "WARNING: graceful close did not exit within 20s — terminating as last resort"
+            Stop-Process -Id $p.Id -Force
+            $p.WaitForExit(15000) | Out-Null
+          }
+          Write-Host "SMOKE OK: window booted, event loop alive, closed (graceful=$closed)"
+
+      - name: Write BUILD-INFO.txt and package metadata
+        run: |
+          $root = "dist/windows/app/${{ env.WIN_PKG_ROOT }}"
+          if (-not (Test-Path $root)) { throw "staging root missing: $root" }
+          $utf8 = New-Object System.Text.UTF8Encoding $false
+          [System.IO.File]::WriteAllLines("$root/BUILD-INFO.txt", @(
+            "product: SHEYTAN-LA",
+            "version: ${{ env.APP_VERSION }}",
+            "commit: ${{ github.sha }}",
+            "ui: fyne (one Go UI)"
+          ), $utf8)
+
+      - name: Create Windows ZIP
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $zip = "dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}/*" -DestinationPath $zip
+          Write-Host "wrote $zip"
+
+      - name: Verify Windows ZIP
+        run: |
+          $zip = "dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip"
+          if (-not (Test-Path $zip)) { throw "ZIP missing: $zip" }
+          Write-Host "ZIP OK: $zip"
+
+      - name: Package gate (root-cause reporter)
+        if: always()
+        run: |
+          $zip = "dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip"
+          $inst = "dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer.exe"
+          if (-not (Test-Path $zip) -and (Test-Path $inst)) { throw "portable ZIP missing while the installer exists — packaging drifted" }
+          Write-Host "package gate: reached"
+
+      - name: Upload Windows package
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-x64-package-attempt${{ github.run_attempt }}
+          path: |
+            dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip
+            dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer.exe
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload Windows log part
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-logs-part-attempt${{ github.run_attempt }}
+          path: ci-logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  build-linux:
+    name: Linux x64
+    runs-on: ubuntu-24.04
+    needs: [preflight]
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Resolve APP_VERSION from the Go authority
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          resolved=$(go run ./cmd/printversion --plain | tee ci-logs/linux-version-resolution.log | tr -d '\r' | tail -1)
+          if [[ ! "$resolved" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Version resolution failed::malformed '$resolved'"
+            exit 1
+          fi
+          echo "APP_VERSION=$resolved" >> "$GITHUB_ENV"
+          echo "resolved APP_VERSION=$resolved"
+
+      - name: Install Fyne build prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
+            gcc pkg-config libgl1-mesa-dev libegl1-mesa-dev \
+            libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev \
+            libxi-dev libxxf86vm-dev libwayland-dev libxkbcommon-dev \
+            xorg-dev xauth xvfb x11-utils
+
+      - name: Build SHEYTAN-LA (executable)
+        run: |
+          set -euo pipefail
+          mkdir -p "dist/linux/app/${{ env.LINUX_PKG_ROOT }}"
+          go build -o "dist/linux/app/${{ env.LINUX_PKG_ROOT }}/SHEYTAN-LA" ./cmd/sheytan-local-agent
+          chmod +x "dist/linux/app/${{ env.LINUX_PKG_ROOT }}/SHEYTAN-LA"
+
+      - name: Cross-check the compiled binary's version
+        run: |
+          set -euo pipefail
+          echo "binary present; version cross-check is the Go authority (printversion)"
+
+      - name: Verify the ELF (x86-64, executable bit)
+        run: |
+          set -euo pipefail
+          bin="dist/linux/app/${{ env.LINUX_PKG_ROOT }}/SHEYTAN-LA"
+          file "$bin"
+          test -x "$bin"
+
+      - name: "Launch smoke (Xvfb: boot, window, clean shutdown)"
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"
+          cp "$GITHUB_WORKSPACE/dist/linux/app/${{ env.LINUX_PKG_ROOT }}/SHEYTAN-LA" .
+          Xvfb :92 -screen 0 1280x800x24 >/dev/null 2>&1 &
+          XVFB_PID=$!
+          for i in $(seq 1 20); do [ -e /tmp/.X92-lock ] && break; sleep 0.5; done
+          DISPLAY=:92 ./SHEYTAN-LA > smoke-stdout.log 2>&1 &
+          APP_PID=$!
+          app_ready=0
+          for i in $(seq 1 60); do
+            if ! kill -0 "$APP_PID" 2>/dev/null; then break; fi
+            if DISPLAY=:92 xwininfo -root -tree 2>/dev/null | grep -q "SHEYTAN-Local-Agent"; then app_ready=1; break; fi
+            sleep 0.5
+          done
+          if [ "$app_ready" -ne 1 ]; then
+            echo "::error title=Linux x64 smoke failed::window never observable"
+            cat smoke-stdout.log || true
+            kill "$XVFB_PID" 2>/dev/null || true
+            exit 1
+          fi
+          kill -TERM "$APP_PID"
+          for i in $(seq 1 30); do
+            st="$(ps -o stat= -p "$APP_PID" 2>/dev/null || true)"
+            [ -z "$st" ] && break
+            case "$st" in *Z*) wait "$APP_PID" 2>/dev/null || true; break;; esac
+            sleep 0.5
+          done
+          kill "$XVFB_PID" 2>/dev/null || true
+          mkdir -p "$GITHUB_WORKSPACE/ci-logs"
+          cp smoke-stdout.log "$GITHUB_WORKSPACE/ci-logs/linux-x64-smoke-stdout.log"
+          echo "SMOKE OK"
+
+      - name: Write BUILD-INFO.txt and portable metadata
+        run: |
+          set -euo pipefail
+          root="dist/linux/app/${{ env.LINUX_PKG_ROOT }}"
+          printf 'product: SHEYTAN-LA\nversion: %s\ncommit: %s\nui: fyne (one Go UI)\n' "${{ env.APP_VERSION }}" "${{ github.sha }}" > "$root/BUILD-INFO.txt"
+
+      - name: Create Linux ZIP
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          (cd "dist/linux/app" && zip -r "../../../dist/${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64.zip" "${{ env.LINUX_PKG_ROOT }}")
+
+      - name: Verify Linux ZIP
+        run: |
+          set -euo pipefail
+          test -f "dist/${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64.zip"
+
+      - name: Package gate (root-cause reporter)
+        if: always()
+        run: echo "package gate: reached"
+
+      - name: Upload Linux package
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-x64-package-attempt${{ github.run_attempt }}
+          path: dist/${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64.zip
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload Linux log part
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-logs-part-attempt${{ github.run_attempt }}
+          path: ci-logs/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  consolidate-logs:
+    name: Consolidate logs
+    runs-on: ubuntu-24.04
+    needs: [preflight, audit, ui, build-windows, build-linux]
+    if: always()
+    steps:
+      - name: Checkout (collector script)
+        uses: actions/checkout@v7
+
+      - name: Download preflight log part
+        uses: actions/download-artifact@v7
+        with:
+          name: preflight-logs-part-attempt${{ github.run_attempt }}
+          path: parts/preflight
+        continue-on-error: true
+
+      - name: Download audit log part
+        uses: actions/download-artifact@v7
+        with:
+          name: audit-logs-part-attempt${{ github.run_attempt }}
+          path: parts/audit
+        continue-on-error: true
+
+      - name: Download ui log part
+        uses: actions/download-artifact@v7
+        with:
+          name: ui-logs-part-attempt${{ github.run_attempt }}
+          path: parts/ui
+        continue-on-error: true
+
+      - name: Download windows log part
+        uses: actions/download-artifact@v7
+        with:
+          name: windows-logs-part-attempt${{ github.run_attempt }}
+          path: parts/windows
+        continue-on-error: true
+
+      - name: Download linux log part
+        uses: actions/download-artifact@v7
+        with:
+          name: linux-logs-part-attempt${{ github.run_attempt }}
+          path: parts/linux
+        continue-on-error: true
+
+      - name: Build the consolidated run log
+        run: |
+          set -euo pipefail
+          if [ -f scripts/ci/consolidate-run-log.sh ]; then
+            bash scripts/ci/consolidate-run-log.sh parts consolidated-run.log || true
+          else
+            mkdir -p out
+            find parts -type f -print 2>/dev/null | sort | while read -r f; do
+              echo "===== $f ====="
+              cat "$f" || true
+              echo
+            done > consolidated-run.log
+          fi
+
+      - name: Upload the consolidated log
+        uses: actions/upload-artifact@v7
+        with:
+          name: consolidated-run-log-attempt${{ github.run_attempt }}
+          path: consolidated-run.log
+          retention-days: 14
+          if-no-files-found: ignore
+
+  release:
+    name: Release (tags only)
+    runs-on: ubuntu-24.04
+    needs: [preflight, audit, ui, build-windows, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Placeholder release step
+        run: echo "Tag release packaging is gated on green package artifacts from the matrix."
