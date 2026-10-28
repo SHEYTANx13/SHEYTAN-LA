@@ -21,15 +21,15 @@ import (
 var LicenseText string
 
 const (
-	Name             = "SHEYTAN"
-	FullName         = "SHEYTAN-Local-Agent"
-	Trademark        = "SHEYTAN™"
-	Licensor         = "Parsaetak"
-	LicensorURL      = "https://github.com/Parsaetak"
-	TrademarkNotice  = "SHEYTAN and the SHEYTAN logo are trademarks of Parsaetak."
-	LicenseName      = "Mixed: Apache-2.0 (designated components) + Proprietary"
-	SignedBy         = "Parsa Tak"
-	SignedByRole     = "Author & Application Signer"
+	Name            = "SHEYTAN"
+	FullName        = "SHEYTAN-Local-Agent"
+	Trademark       = "SHEYTAN™"
+	Licensor        = "Parsaetak"
+	LicensorURL     = "https://github.com/Parsaetak"
+	TrademarkNotice = "SHEYTAN and the SHEYTAN logo are trademarks of Parsaetak."
+	LicenseName     = "Mixed: Apache-2.0 (designated components) + Proprietary"
+	SignedBy        = "Parsa Tak"
+	SignedByRole    = "Author & Application Signer"
 )
 
 const LogoSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 24 24">
