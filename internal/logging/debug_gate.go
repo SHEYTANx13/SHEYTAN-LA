@@ -20,7 +20,6 @@ func init() {
 }
 
 // SetDeveloperDebug turns DEBUG sink writes on or off at runtime.
-// Safe for concurrent use; settings patches call this after a successful save.
 func SetDeveloperDebug(on bool) {
 	developerDebug.Store(on)
 }
@@ -28,4 +27,12 @@ func SetDeveloperDebug(on bool) {
 // DeveloperDebug reports whether DEBUG lines are currently enabled.
 func DeveloperDebug() bool {
 	return developerDebug.Load()
+}
+
+// Debug logs to app.log only when developer debug is enabled (default OFF).
+func (m *Manager) Debug(category, format string, args ...interface{}) {
+	if !DeveloperDebug() {
+		return
+	}
+	m.log("DEBUG", category, format, args...)
 }
