@@ -17,7 +17,6 @@
 package desktop
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -63,19 +62,19 @@ func failBoot(step string, err error) int {
 // Run starts the SHEYTAN desktop application and blocks until the Fyne
 // window closes.
 //
-// Launch order is deterministic (v1.11.0 boot-visibility contract):
-// core up → IPC endpoint bound → WINDOW BUILT AND SHOWN → remaining core
-// setup (EnsureSetup) → event loop until the window closes → clean core
-// shutdown.
+// Launch order (v1.11.0+ boot-visibility + interactive-loading):
 //
-// The window comes BEFORE EnsureSetup deliberately (run #55 class, CI
-// run 40410335100: the Windows smoke observed a live process with no
-// window for the whole 60 s budget). The previous order ran every core
-// boot step before the window existed, so ANY slow step — setup,
-// maintenance, a cold disk — kept the process windowless for its entire
-// duration. Now the process owns a real top-level window within seconds
-// of launch regardless of core speed: the fix is the boot order, not a
-// longer timeout and not a liveness-only check.
+//	core up → IPC bound → WINDOW BUILT AND SHOWN → event loop starts
+//	→ EnsureSetup runs in parallel (dirs, maintenance, prewarm)
+//	→ UI bootstrap (handshake + sessions) proceeds against the live core
+//	→ clean shutdown on window close
+//
+// The window comes BEFORE EnsureSetup deliberately (run #55 class):
+// a live process must never stay windowless. Starting the event loop
+// before EnsureSetup returns additionally means the shell can paint and
+// process OS events while setup/prewarm finish — perceived load time
+// drops without relaxing fail-closed semantics (setup failure still
+// closes the window and returns exit 1).
 func Run(cfg *config.Config) int {
 	if cfg == nil {
 		return failBoot("config", errors.New("missing configuration"))
@@ -137,22 +136,27 @@ func Run(cfg *config.Config) int {
 	client := fyneui.NewCoreClient(ipc.Endpoint(), key)
 	app := fyneui.NewDesktopApp(client)
 
-	// WINDOW FIRST (see the run #55 narrative above): build and show the
-	// real top-level window now, then finish the core boot, then start
-	// the event loop. A Prepare failure is a hard, visible fault.
+	// WINDOW FIRST: build and show the real top-level window now.
 	if err := app.Prepare(); err != nil {
 		return failBoot("window", err)
 	}
 	step("window shown")
 
-	// Core setup AFTER the window exists: first-run setup, installer
-	// state, startup maintenance gate and prewarm happen with a visible
-	// window on screen. A failure here is still fatal (message box +
-	// exit 1) — visibility changed, control flow did not.
-	if err := srv.EnsureSetup(); err != nil {
-		return failBoot("setup", err)
-	}
-	step("core setup")
+	// Core setup IN PARALLEL with the event loop: first-run setup,
+	// installer state, startup maintenance gate and prewarm proceed while
+	// the shell paints. Fail-closed: any setup error closes the window
+	// and forces a non-zero exit after Run returns.
+	setupErr := make(chan error, 1)
+	go func() {
+		err := srv.EnsureSetup()
+		if err != nil {
+			logging.Default().Error("desktop", "boot failed at setup: %v", err)
+			// Close the window so Run() unblocks; the main path returns 1.
+			app.Close()
+		}
+		setupErr <- err
+		step("core setup")
+	}()
 
 	// Termination signals close the window; the deferred shutdowns above
 	// then stop the IPC and the core in order.
@@ -165,8 +169,27 @@ func Run(cfg *config.Config) int {
 		app.Close()
 	}()
 
-	_ = context.Background // context reserved for the app-lifetime scope
 	code := app.Run()
+
+	// If setup failed while the UI was running, surface it and fail closed.
+	select {
+	case err := <-setupErr:
+		if err != nil {
+			return failBoot("setup", err)
+		}
+	default:
+		// Setup still running (user closed the window early) — wait briefly
+		// so the goroutine can finish or we drain on Close via srv.Close.
+		select {
+		case err := <-setupErr:
+			if err != nil {
+				return failBoot("setup", err)
+			}
+		case <-time.After(3 * time.Second):
+			logging.Default().Info("desktop", "setup still in flight at UI exit — srv.Close will join")
+		}
+	}
+
 	logging.Default().Info("desktop", "ui exit: clean close (exit code %d)", code)
 	return code
 }
