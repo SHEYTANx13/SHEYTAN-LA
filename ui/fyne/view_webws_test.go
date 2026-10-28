@@ -66,7 +66,7 @@ func TestExtractBlocksForPublishEdgeCases(t *testing.T) {
 func TestWorkspacePublishRoundTripThroughFakeCore(t *testing.T) {
 	f := newFakeCore(t)
 	defer f.srv.Close()
-	c := NewCoreClient(f.endpoint, f.key)
+	c := f.client()
 	ctx := contextBackground()
 
 	if err := c.Handshake(ctx); err != nil {
@@ -110,7 +110,7 @@ func TestWorkspacePublishRoundTripThroughFakeCore(t *testing.T) {
 func TestWorkspaceStateDisabledHonestReason(t *testing.T) {
 	f := newFakeCore(t)
 	defer f.srv.Close()
-	c := NewCoreClient(f.endpoint, f.key)
+	c := f.client()
 	ctx := contextBackground()
 	if err := c.Handshake(ctx); err != nil {
 		t.Fatalf("handshake: %v", err)
@@ -136,7 +136,7 @@ func TestWorkspaceStateErrorPath(t *testing.T) {
 	f := newFakeCore(t)
 	defer f.srv.Close()
 	f.failWSState = true
-	c := NewCoreClient(f.endpoint, f.key)
+	c := f.client()
 	ctx := contextBackground()
 	if err := c.Handshake(ctx); err != nil {
 		t.Fatalf("handshake: %v", err)
@@ -151,7 +151,7 @@ func TestWorkspaceStateErrorPath(t *testing.T) {
 func TestWorkspacePublishRequiresSource(t *testing.T) {
 	f := newFakeCore(t)
 	defer f.srv.Close()
-	c := NewCoreClient(f.endpoint, f.key)
+	c := f.client()
 	ctx := contextBackground()
 	if err := c.Handshake(ctx); err != nil {
 		t.Fatalf("handshake: %v", err)
