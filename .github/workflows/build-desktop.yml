@@ -1,5 +1,5 @@
 # ============================================================================
-# SHEYTAN-LA — build-desktop.yml (v1.11.0 one-Go-UI pipeline, run #54 repair)
+# SHEYTAN-LA - build-desktop.yml (v1.11.0 one-Go-UI pipeline, run #54 repair)
 # ============================================================================
 # RESTORED from commit 7922a8c after accidental PLACEHOLDER overwrite.
 # Annotation improvements land in a follow-up that only touches the audit
@@ -117,7 +117,7 @@ jobs:
           set -e
           if [ "$code" -ne 0 ]; then
             echo "::error title=Core audit failed (exit $code)::First failing tests:"
-            grep -E '^--- FAIL:|^    .+:|FAIL[[:space:]]+github.com' ci-logs/audit-go-test-headless.log | head -40 || true
+            grep -E 'FAIL|--- FAIL' ci-logs/audit-go-test-headless.log | head -40 || true
             echo "gate FAIL: go test ./internal/... (headless) exit=$code" >> ci-logs/gate-order.txt
             exit "$code"
           fi
@@ -133,7 +133,7 @@ jobs:
           set -e
           if [ "$code" -ne 0 ]; then
             echo "::error title=Race gate failed (exit $code)::First FAIL lines:"
-            grep -E '^--- FAIL:|^    .+:|FAIL[[:space:]]+github.com' ci-logs/audit-go-race.log | head -40 || true
+            grep -E 'FAIL|--- FAIL' ci-logs/audit-go-race.log | head -40 || true
             exit "$code"
           fi
           echo "gate OK: go test -race (critical packages)" >> ci-logs/gate-order.txt
@@ -155,7 +155,7 @@ jobs:
           set -e
           if [ "$code" -ne 0 ]; then
             echo "::error title=Release contract failed (exit $code)::First FAIL lines:"
-            grep -E '^--- FAIL:|^    .+:|FAIL[[:space:]]+github.com' ci-logs/audit-release-contract.log | head -40 || true
+            grep -E 'FAIL|--- FAIL' ci-logs/audit-release-contract.log | head -40 || true
             exit "$code"
           fi
           echo "gate OK: release contract" >> ci-logs/gate-order.txt
@@ -212,7 +212,7 @@ jobs:
           set -e
           if [ "$code" -ne 0 ]; then
             echo "::error title=Fyne UI tests failed (exit $code)::First FAIL lines:"
-            grep -E '^--- FAIL:|^    .+:|FAIL[[:space:]]+github.com' ci-logs/ui-fyne-tests.log | head -40 || true
+            grep -E 'FAIL|--- FAIL' ci-logs/ui-fyne-tests.log | head -40 || true
             exit "$code"
           fi
           echo "gate OK: go test ./ui/fyne/" >> ci-logs/gate-order.txt
@@ -227,7 +227,7 @@ jobs:
           set -e
           if [ "$code" -ne 0 ]; then
             echo "::error title=Full desktop test sweep failed (exit $code)::First FAIL lines:"
-            grep -E '^--- FAIL:|^    .+:|FAIL[[:space:]]+github.com' ci-logs/ui-go-test-full.log | head -40 || true
+            grep -E 'FAIL|--- FAIL' ci-logs/ui-go-test-full.log | head -40 || true
             exit "$code"
           fi
           echo "gate OK: go test ./... (desktop)" >> ci-logs/gate-order.txt
@@ -351,7 +351,7 @@ jobs:
             throw "malformed version from the Go authority: $resolved"
           }
           if ($resolved -ne $env:APP_VERSION) {
-            Write-Host "::warning title=Version drift::Go authority=$resolved env APP_VERSION=$($env:APP_VERSION) — using Go authority"
+            Write-Host "::warning title=Version drift::Go authority=$resolved env APP_VERSION=$($env:APP_VERSION) - using Go authority"
             echo "APP_VERSION=$resolved" >> $env:GITHUB_ENV
           }
           Write-Host "APP_VERSION=$resolved"
@@ -382,7 +382,7 @@ jobs:
           go test -tags headless -count=1 -timeout "25m" ./internal/... 2>&1 | Tee-Object -FilePath "ci-logs/win-go-test-headless.log"
           if ($LASTEXITCODE -ne 0) {
             Write-Host "::error title=Windows headless core tests failed::First FAIL lines:"
-            Select-String -Path "ci-logs/win-go-test-headless.log" -Pattern '^--- FAIL:|^    .+|:|FAIL\s+github.com' | Select-Object -First 40 | ForEach-Object { $_.Line }
+            Select-String -Path "ci-logs/win-go-test-headless.log" -Pattern 'FAIL|--- FAIL' | Select-Object -First 40 | ForEach-Object { $_.Line }
             throw "headless core tests failed (windows/amd64)"
           }
 
@@ -402,7 +402,7 @@ jobs:
           if (Test-Path scripts/gen-syso.go) {
             go run ./scripts/gen-syso.go 2>&1 | Tee-Object -FilePath "ci-logs/win-gen-syso.log"
           } else {
-            Write-Host "gen-syso not present — skipping"
+            Write-Host "gen-syso not present - skipping"
           }
 
       - name: Stage the portable application tree
@@ -465,7 +465,7 @@ jobs:
             Start-Sleep -Milliseconds 500
           }
           if (-not $closed) {
-            Write-Host "WARNING: graceful close did not exit within 20s — terminating as last resort"
+            Write-Host "WARNING: graceful close did not exit within 20s - terminating as last resort"
             Stop-Process -Id $p.Id -Force
             $p.WaitForExit(15000) | Out-Null
           }
@@ -502,7 +502,7 @@ jobs:
         run: |
           $zip = "dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip"
           $inst = "dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer.exe"
-          if (-not (Test-Path $zip) -and (Test-Path $inst)) { throw "portable ZIP missing while the installer exists — packaging drifted" }
+          if (-not (Test-Path $zip) -and (Test-Path $inst)) { throw "portable ZIP missing while the installer exists - packaging drifted" }
           Write-Host "package gate: reached"
 
       - name: Upload Windows package
@@ -636,7 +636,7 @@ jobs:
 
       - name: Package gate (root-cause reporter)
         if: always()
-        run: echo "package gate: reached"
+        run: 'echo "package gate: reached"'
 
       - name: Upload Linux package
         if: always()

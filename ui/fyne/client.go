@@ -272,6 +272,9 @@ type Config struct {
 
 	// v1.11.0: the optional 3D Studio viewer toggle.
 	StudioEnabled bool `json:"studioEnabled,omitempty"`
+
+	// Opt-in developer debug logging (default off).
+	DeveloperDebug bool `json:"developerDebug,omitempty"`
 }
 
 // LLMCfg mirrors the nested llm sampling object (deep-merged per field).
