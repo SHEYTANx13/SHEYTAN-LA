@@ -328,17 +328,6 @@ type Config struct {
 	// /api/studio/start control endpoint refuse with a named reason.
 	StudioEnabled bool `json:"studioEnabled" yaml:"studioEnabled"`
 
-	// v1.11.0 hybrid UI: the on-demand Web Workspace (rich-content
-	// rendering surface over a loopback host). Enabled by default;
-	// disabling it refuses /api/presentation/start with a named reason
-	// and the shell keeps rendering everything natively. The workspace
-	// owns no state: it reads the ONE presentation registry.
-	WebWorkspaceEnabled bool `json:"webWorkspaceEnabled" yaml:"webWorkspaceEnabled"`
-
-	// DeveloperDebug (opt-in) enables verbose DEBUG lines in app.log.
-	// Default false. Toggle via Settings → Advanced or SHEYTAN_DEVELOPER_DEBUG=1.
-	DeveloperDebug bool `json:"developerDebug" yaml:"developerDebug"`
-
 	// ---------------------------------------------------------------------
 	// Autonomous Coding Lab.
 	// ---------------------------------------------------------------------
@@ -529,13 +518,6 @@ func Default() *Config {
 		// 3D Studio defaults to ON — it is a passive read-only viewer
 		// and costs nothing until the user opens it.
 		StudioEnabled: true,
-
-		// Web Workspace defaults to ON — it starts nothing until the
-		// user opens it (on-demand host, loopback-only, read-only).
-		WebWorkspaceEnabled: true,
-
-		// Developer debug stays OFF by default (opt-in only).
-		DeveloperDebug: false,
 
 		// Coding Lab defaults.
 		LabEnabled:           true,

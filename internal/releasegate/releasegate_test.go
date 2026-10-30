@@ -50,13 +50,10 @@ func sourceFiles(t *testing.T, root string) []string {
 	t.Helper()
 	var files []string
 	// "build" is walked because build/config.yml is committed packaging
-	// metadata. A blanket `/build/` .gitignore pattern swallowed it for
+	// source metadata. A blanket `/build/` .gitignore pattern swallowed it for
 	// v1.1.2: the file existed locally, git never tracked it, and CI
 	// failed with ENOENT. Walking it here makes that failure loud.
-	// v1.11.0 run #87 repair: "ui" is walked (the ONE UI since the
-	// one-Go-UI migration) and the retired "web" is not — the gate must
-	// cover the tree that actually ships.
-	for _, top := range []string{"internal", "cmd", "ui", "scripts", ".github", "build"} {
+	for _, top := range []string{"internal", "cmd", "web", "scripts", ".github", "build"} {
 		base := filepath.Join(root, top)
 		filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {

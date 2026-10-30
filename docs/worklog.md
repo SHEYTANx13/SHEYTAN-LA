@@ -7,18 +7,7 @@ Direction → `ROADMAP.md`
 
 ---
 
-## Current focus (2026-10-27 / 1.11.0)
-
-**Hybrid UI + repair session (this session)**
-- Web Workspace shipped: `internal/presentation` (typed block contract) + `internal/webworkspace` (loopback read-only renderer) + Fyne control view and chat publish path.
-- Boot visibility contract: window shown before core setup; per-step boot timings (run #55 class).
-- All live retired-webview-shell references removed (origin-gate branch, comments, docs); regression scan green.
-- Device-enumeration cache: bounded failure TTL + boot-time invalidation + explicit refresh seam.
-- Pre-existing reds fixed: gofmt drift in `internal/research/service.go`; LICENSE.md ↔ brand contract drift restored through the designed generator.
-
----
-
-## Previous focus (2026-10-26 / 1.11.0)
+## Current focus (2026-10-26 / 1.11.0)
 
 **Documentation overhaul (this session)**  
 - Full rewrite of README, SECURITY, ROADMAP, FEATURES, CONTRIBUTING, agent, UPDATE, 3dstudio, ARCHITECTURE.  

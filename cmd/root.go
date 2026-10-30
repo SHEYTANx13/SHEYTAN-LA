@@ -139,12 +139,6 @@ func RunWithDefaultFn(defaultFn func() int) int {
 	// current run. Everything above a banner is verifiably historical.
 	logging.Default().SessionBanner(brand.FullName, config.AppVersion)
 
-	// Opt-in developer debug (default OFF). Env SHEYTAN_DEVELOPER_DEBUG or Settings.
-	if cfg.DeveloperDebug {
-		logging.SetDeveloperDebug(true)
-		logging.Default().Info("logging", "developer debug enabled from config")
-	}
-
 	// v1.7.4: bootstrap replay — the pre-canonical lines (path notes,
 	// sampling repairs, migration decisions) land in app.log right
 	// AFTER the session banner: the banner still separates this run's

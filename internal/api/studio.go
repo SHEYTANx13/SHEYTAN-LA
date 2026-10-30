@@ -36,14 +36,11 @@ func (s *Server) handleStudioState(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	s.hostMu.Lock()
-	viewer := s.studioViewer
-	s.hostMu.Unlock()
-	if viewer == nil {
+	if s.studioViewer == nil {
 		writeJSON(w, map[string]any{"enabled": true, "running": false})
 		return
 	}
-	st := viewer.State()
+	st := s.studioViewer.State()
 	writeJSON(w, map[string]any{
 		"enabled":   true,
 		"running":   st.Running,
@@ -70,18 +67,15 @@ func (s *Server) handleStudioStart(w http.ResponseWriter, r *http.Request) {
 			"the 3D Studio is disabled in Settings — enable it under Settings → General (studioEnabled)"))
 		return
 	}
-	s.hostMu.Lock()
 	if s.studioViewer == nil {
 		s.studioViewer = studio.NewViewer(s)
 	}
-	viewer := s.studioViewer
-	s.hostMu.Unlock()
-	url, err := viewer.Start()
+	url, err := s.studioViewer.Start()
 	if err != nil {
 		writeErr(w, http.StatusConflict, err)
 		return
 	}
-	st := viewer.State()
+	st := s.studioViewer.State()
 	logging.Default().Info("studio", "3D Studio viewer started on %s (port %d)", st.URL, st.Port)
 	writeJSON(w, map[string]any{
 		"url":     url, // includes #t= fragment — the ONLY place the token travels
@@ -97,14 +91,11 @@ func (s *Server) handleStudioStop(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, errMethodNotAllowed())
 		return
 	}
-	s.hostMu.Lock()
-	viewer := s.studioViewer
-	s.hostMu.Unlock()
-	if viewer == nil {
+	if s.studioViewer == nil {
 		writeJSON(w, map[string]any{"running": false})
 		return
 	}
-	if err := viewer.Stop(); err != nil {
+	if err := s.studioViewer.Stop(); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

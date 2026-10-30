@@ -26,14 +26,14 @@ Hardware claims use five distinct classes everywhere: hardware **detected** (a p
 - Four-level reasoning-depth control (Low / Mid / High / Ultra) with real numeric thinking-token budgets
 - Show/Hide Thinking control (presentation only)
 - Optional 3D Studio — read-only live system topology map (loopback-only, per-launch token, strict CSP, embedded Three.js)
-- Optional Web Workspace — on-demand rich-content rendering of typed presentation blocks (Markdown, code, diffs, tables, chart specs, raw-data degradation) over a loopback host with per-launch token, strict CSP, offline assets and zero browser-originating actions
-- Typed presentation contract — versioned immutable blocks, deterministic renderer selection, bounded payloads, required provenance, unknown-kind degradation (all pinned by `internal/presentation` tests)
-- Boot visibility contract — window shown before core setup completes; named per-step boot timings (pinned by `ui/fyne` Prepare test)
+- Hybrid presentation contract — versioned, bounded, kind-validated block envelopes (`internal/presentation`) with deterministic surface selection and safe degradation of unknown kinds
+- On-demand Web Workspace — browser-hosted read-only rich viewer (`internal/workspace`: markdown/code/diff/table/chart-spec), loopback-only bind, per-launch fragment token, strict CSP, offline embedded assets, zero command endpoints
 
 ### Inference & hardware truth
 - Managed llama.cpp inference with modern CLI contract and strict numeric-argument validation before spawn
 - Native C++ engine path with real generation for validated llama-architecture models and honest fallback
 - Execution/evidence ladder: `detected → backend-available → device-selected → model-loaded → generation-executed → execution-evidence → verified`
+- Typed resolution causes — every accelerator resolution reports a stable machine-readable `reasonCode` alongside the human-readable reason; a code never upgrades the evidence state
 - AUTO GPU posture contract with honest separation of detection from execution
 - Runtime Governor policy loop with resource state, envelope, admission, and self-model
 

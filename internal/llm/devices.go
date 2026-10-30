@@ -16,14 +16,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/accelerator"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
 )
 
@@ -44,22 +42,9 @@ var (
 	deviceCache = map[string]deviceCacheEntry{}
 )
 
-// deviceCacheTTL bounds how long one SUCCESSFUL enumeration stays fresh
-// (the engine binary is keyed by mtime, so a binary swap invalidates
-// immediately).
+// deviceCacheTTL bounds how long one enumeration stays fresh (the engine
+// binary is keyed by mtime, so a binary swap invalidates immediately).
 const deviceCacheTTL = 24 * time.Hour
-
-// deviceFailureTTL bounds how long a FAILED probe may answer for a
-// binary that has no fresh successful enumeration (v1.11.0 observability
-// rule: a failed capability probe must not poison the cache for the full
-// success TTL — a transient loader/driver failure re-probes after the
-// bounded failure window, while a measured success keeps its full TTL).
-// A var (not a const) so tests can tighten it deterministically.
-var deviceFailureTTL = 5 * time.Minute
-
-// timeNow is the clock seam for the cache freshness checks (tests
-// advance it deterministically — no sleep-based correctness).
-var timeNow = time.Now
 
 func deviceCacheKey(binPath string) string {
 	if fi, err := os.Stat(binPath); err == nil {
@@ -72,23 +57,13 @@ func deviceCacheKey(binPath string) string {
 // enumerateEngineDevices is the swappable enumeration authority behind
 // the v1.6.2 runtime backend verification (tests inject deterministic
 // failures; production always runs the real engine probe).
-var enumerateEngineDevices = enumerateEngineDevicesReal
-
-// probeEngineDevices is the swappable PROBE (exec + parse + error
-// folding) behind the cache — v1.11.0: cache-behavior tests swap THIS
-// seam so the real cache logic always runs.
-var probeEngineDevices = probeEngineDevicesReal
+var enumerateEngineDevices = EnumerateEngineDevices
 
 // EnumerateEngineDevices runs the installed engine's own device listing
-// (llama.cpp --list-devices) through the swappable authority. supported=
-// false means this build does not implement the flag (older releases) —
-// callers fall back to the documented weaker evidence with the reason
-// recorded, never a claim.
+// (llama.cpp --list-devices). supported=false means this build does not
+// implement the flag (older releases) — callers fall back to the documented
+// weaker evidence with the reason recorded, never a claim.
 func EnumerateEngineDevices(binPath string) (devices []accelerator.Device, supported bool, err error) {
-	return enumerateEngineDevices(binPath)
-}
-
-func enumerateEngineDevicesReal(binPath string) (devices []accelerator.Device, supported bool, err error) {
 	if binPath == "" {
 		return nil, false, fmt.Errorf("no engine binary provisioned")
 	}
@@ -97,45 +72,14 @@ func enumerateEngineDevicesReal(binPath string) (devices []accelerator.Device, s
 
 	deviceMu.Lock()
 
-	if entry, ok := deviceCache[key]; ok {
-		// Freshness bound: a SUCCESSFUL probe serves for the full TTL; a
-		// FAILED probe only for the bounded failure window (a transient
-		// failure must re-probe soon instead of poisoning the cache).
-		ttl := deviceCacheTTL
-		if entry.err != nil || (!entry.supported && entry.devices == nil) {
-			ttl = deviceFailureTTL
-		}
-		if timeNow().Sub(entry.at) < ttl {
-			devices, supported, err := entry.devices, entry.supported, entry.err
-			deviceMu.Unlock()
-			return devices, supported, err
-		}
+	if entry, ok := deviceCache[key]; ok && time.Since(entry.at) < deviceCacheTTL {
+		devices, supported, err := entry.devices, entry.supported, entry.err
+		deviceMu.Unlock()
+		return devices, supported, err
 	}
 
 	deviceMu.Unlock()
 
-	// Probe the real world through the swappable authority (exec + parse
-	// + error folding — the seam cache tests replace).
-	devices, supported, parseErr := probeEngineDevices(binPath)
-
-	deviceMu.Lock()
-	deviceCache[key] = deviceCacheEntry{
-		key:       key,
-		at:        timeNow(),
-		devices:   devices,
-		supported: supported,
-		err:       parseErr,
-	}
-	deviceMu.Unlock()
-
-	return devices, supported, parseErr
-}
-
-// probeEngineDevicesReal runs the engine's --list-devices once and folds
-// the outcome: an unknown-argument refusal means this build does not
-// implement the flag — a MEASURED "unsupported" verdict, not a failure
-// to know.
-func probeEngineDevicesReal(binPath string) (devices []accelerator.Device, supported bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), enumerateTimeout)
 	defer cancel()
 
@@ -146,6 +90,18 @@ func probeEngineDevicesReal(binPath string) (devices []accelerator.Device, suppo
 
 	devices, supported, parseErr := ParseEngineDeviceOutput(string(out))
 
+	deviceMu.Lock()
+	deviceCache[key] = deviceCacheEntry{
+		key:       key,
+		at:        time.Now(),
+		devices:   devices,
+		supported: supported,
+		err:       parseErr,
+	}
+	deviceMu.Unlock()
+
+	// A build that errors on --list-devices does not support enumeration —
+	// that is a MEASURED "unsupported" verdict, not a failure to know.
 	if execErr != nil {
 		if isUnknownArgumentError(string(out)) {
 			return nil, false, nil
@@ -155,32 +111,6 @@ func probeEngineDevicesReal(binPath string) (devices []accelerator.Device, suppo
 	}
 
 	return devices, supported, parseErr
-}
-
-// engineBinPath resolves the managed engine binary path the same way
-// every enumeration caller does (one resolution rule, no drift).
-func engineBinPath(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
-	}
-	if cfg.LlamaBinPath != "" {
-		return cfg.LlamaBinPath
-	}
-	return filepath.Join(cfg.DataDir, "bin", llamaBinaryName())
-}
-
-// InvalidateDeviceCache drops the cached enumeration for one engine
-// binary (v1.11.0 bounded-invalidation contract): engine BOOT calls this
-// so every run observes per-boot device facts, and any explicit refresh
-// action goes through the canonical probe with a fresh timestamp instead
-// of a stale memo. A binary update invalidates automatically (the cache
-// key embeds path+size+mtime); boot invalidation covers everything that
-// changes WITHOUT a binary swap (driver/loader state, ICD changes).
-func InvalidateDeviceCache(binPath string) {
-	key := deviceCacheKey(binPath)
-	deviceMu.Lock()
-	delete(deviceCache, key)
-	deviceMu.Unlock()
 }
 
 // ParseEngineDeviceOutput parses the --list-devices output. Pure function —

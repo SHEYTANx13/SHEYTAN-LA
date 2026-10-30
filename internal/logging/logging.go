@@ -302,7 +302,10 @@ func (m *Manager) rotatedPath(n int) string {
 	return filepath.Join(m.dir, fmt.Sprintf("app-%d.log", n))
 }
 
-// Debug is defined in debug_gate.go (gated by DeveloperDebug, default OFF).
+// Debug/Info/Warn/Error log to app.log with a category.
+func (m *Manager) Debug(category, format string, args ...interface{}) {
+	m.log("DEBUG", category, format, args...)
+}
 func (m *Manager) Info(category, format string, args ...interface{}) {
 	m.log("INFO", category, format, args...)
 }

@@ -1,248 +1,235 @@
 package presentation
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
-func TestEnvelopeVersionIsOne(t *testing.T) {
-	if EnvelopeVersion != 1 {
-		t.Fatalf("envelope version drifted: %d", EnvelopeVersion)
-	}
-}
-
-func TestPublishAssignsStableUniqueIDs(t *testing.T) {
-	r := NewRegistry()
-	b1, err := r.Publish(Block{Kind: KindMarkdown, Payload: "# hi", Source: "test"})
+func mustPut(t *testing.T, s *Store, b Block) Block {
+	t.Helper()
+	got, err := s.Put(b)
 	if err != nil {
-		t.Fatalf("publish: %v", err)
+		t.Fatalf("Put(%s): %v", b.ID, err)
 	}
-	b2, err := r.Publish(Block{Kind: KindMarkdown, Payload: "# hi", Source: "test"})
-	if err != nil {
-		t.Fatalf("publish 2: %v", err)
+	return got
+}
+
+func TestValidateCanonicalizesEnvelope(t *testing.T) {
+	b := Block{ID: "run1/resp-final", Kind: KindMarkdown, Payload: []byte("# Hello")}
+	if err := b.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
 	}
-	if b1.ID == "" || b2.ID == "" {
-		t.Fatal("publish returned empty ids")
+	if b.V != Version {
+		t.Errorf("V = %d, want %d", b.V, Version)
 	}
-	if b1.ID == b2.ID {
-		t.Fatalf("duplicate id %q for two publishes", b1.ID)
+	if b.Encoding != "utf8" {
+		t.Errorf("Encoding = %q, want utf8", b.Encoding)
 	}
-	got, ok := r.Get(b1.ID)
-	if !ok {
-		t.Fatalf("Get(%q) missing", b1.ID)
+	if b.CreatedAt.IsZero() {
+		t.Error("CreatedAt not stamped")
 	}
-	if got.Version != EnvelopeVersion {
-		t.Fatalf("block version = %d, want %d", got.Version, EnvelopeVersion)
-	}
-	if got.Payload != "# hi" {
-		t.Fatalf("payload mutated: %q", got.Payload)
+	if b.Degrade != nil {
+		t.Errorf("known kind must not degrade: %+v", b.Degrade)
 	}
 }
 
-func TestPublishRejectsMissingProvenance(t *testing.T) {
-	r := NewRegistry()
-	if _, err := r.Publish(Block{Kind: KindText, Payload: "x"}); err == nil {
-		t.Fatal("publish without source must fail closed")
+func TestValidateUnknownKindDegradesNotFails(t *testing.T) {
+	b := Block{ID: "b1", Kind: Kind("hologram"), Payload: []byte("raw future data")}
+	if err := b.Validate(); err != nil {
+		t.Fatalf("unknown kind must be accepted: %v", err)
+	}
+	if b.Degrade == nil || b.Degrade.Reason != DegradeUnknownKind {
+		t.Fatalf("Degrade = %+v, want kind-unknown record", b.Degrade)
+	}
+	if SelectSurface(b.Kind) != SurfaceNative {
+		t.Errorf("unknown kind must select the native surface, got %q", SelectSurface(b.Kind))
 	}
 }
 
-func TestPublishRejectsOversizedPayload(t *testing.T) {
-	r := NewRegistry()
-	big := strings.Repeat("a", MaxPayloadBytes+1)
-	if _, err := r.Publish(Block{Kind: KindText, Payload: big, Source: "test"}); err == nil {
-		t.Fatal("oversized payload must fail closed, never truncate silently")
+func TestValidateRefusals(t *testing.T) {
+	cases := []struct {
+		name string
+		b    Block
+		want error
+	}{
+		{"empty id", Block{Kind: KindText}, ErrID},
+		{"id with space", Block{ID: "bad id", Kind: KindText}, ErrID},
+		{"id too long", Block{ID: strings.Repeat("x", MaxIDLen+1), Kind: KindText}, ErrID},
+		{"title too long", Block{ID: "b", Kind: KindText, Title: strings.Repeat("t", MaxTitleLen+1)}, ErrTitle},
+		{"source too long", Block{ID: "b", Kind: KindText, Source: strings.Repeat("s", MaxSourceLen+1)}, ErrSource},
+		{"text oversize", Block{ID: "b", Kind: KindText, Payload: make([]byte, MaxTextPayload+1)}, ErrPayload},
+		{"invalid utf8", Block{ID: "b", Kind: KindText, Payload: []byte{0xff, 0xfe, 0x01}}, ErrPayload},
+		{"table not json", Block{ID: "b", Kind: KindTable, Payload: []byte("not json")}, ErrPayload},
+		{"table rows not arrays", Block{ID: "b", Kind: KindTable, Payload: []byte(`{"columns":["a"],"rows":[42]}`)}, ErrPayload},
+		{"table too many rows", Block{ID: "b", Kind: KindTable, Payload: tablePayload(MaxTableRows+1, 1)}, ErrPayload},
+		{"table too many cells", Block{ID: "b", Kind: KindTable, Payload: tablePayload(60, 90)}, ErrPayload},
+		{"chart oversize", Block{ID: "b", Kind: KindChart, Payload: make([]byte, MaxJSONPayload+1)}, ErrPayload},
+		{"artifact without path", Block{ID: "b", Kind: KindArtifact}, ErrArtifact},
+		{"artifact with content", Block{ID: "b", Kind: KindArtifact, Path: "a.csv", Payload: make([]byte, MaxMetaPayload+1)}, ErrPayload},
+		{"3d oversize", Block{ID: "b", Kind: Kind3D, Payload: make([]byte, MaxMetaPayload+1)}, ErrPayload},
+		{"oversize unknown kind", Block{ID: "b", Kind: Kind("x"), Payload: make([]byte, MaxJSONPayload+1)}, ErrPayload},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.b.Validate()
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("Validate err = %v, want %v", err, tc.want)
+			}
+		})
 	}
 }
 
-func TestUnknownKindDegradesToRawDataState(t *testing.T) {
-	r := NewRegistry()
-	b, err := r.Publish(Block{Kind: "hologram", Payload: "future content", Source: "test"})
-	if err != nil {
-		t.Fatalf("unknown kind must publish, not reject: %v", err)
+func tablePayload(rows, cols int) []byte {
+	var sb strings.Builder
+	sb.WriteString(`{"columns":[`)
+	for c := 0; c < cols; c++ {
+		if c > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(`"c"`)
 	}
-	if b.Kind != KindArtifact {
-		t.Fatalf("degraded kind = %q, want %q", b.Kind, KindArtifact)
+	sb.WriteString(`],"rows":[`)
+	for r := 0; r < rows; r++ {
+		if r > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteByte('[')
+		for c := 0; c < cols; c++ {
+			if c > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteString(`"x"`)
+		}
+		sb.WriteByte(']')
 	}
-	if b.Meta["originalKind"] != "hologram" {
-		t.Fatalf("original kind not preserved: %v", b.Meta)
+	sb.WriteString(`]}`)
+	return []byte(sb.String())
+}
+
+func TestValidateTableWithinBounds(t *testing.T) {
+	b := Block{ID: "tbl", Kind: KindTable, Payload: []byte(`{"columns":["name","value"],"rows":[["a",1],["b",2]]}`)}
+	if err := b.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
 	}
-	if b.Payload != "future content" {
-		t.Fatal("degradation lost the payload")
-	}
-	// Known kinds are never degraded.
-	k, err := r.Publish(Block{Kind: KindCode, Payload: "x", Source: "test"})
-	if err != nil || k.Kind != KindCode {
-		t.Fatalf("known kind degraded: %v %q", err, k.Kind)
+	if b.Encoding != "json" {
+		t.Errorf("Encoding = %q, want json", b.Encoding)
 	}
 }
 
-func TestSanitizeStripsNulOnly(t *testing.T) {
-	in := "ab\x00cd"
-	if got := Sanitize(in); got != "abcd" {
-		t.Fatalf("sanitize = %q", got)
+func TestSelectSurfaceDeterministic(t *testing.T) {
+	// The policy is a pure function of the kind — same input, same output,
+	// forever. Pinned here so no future change can make it stateful.
+	want := map[Kind]Surface{
+		KindText:     SurfaceNative,
+		KindStatus:   SurfaceNative,
+		KindArtifact: SurfaceNative,
+		KindMarkdown: SurfaceWorkspace,
+		KindCode:     SurfaceWorkspace,
+		KindDiff:     SurfaceWorkspace,
+		KindTable:    SurfaceWorkspace,
+		KindChart:    SurfaceWorkspace,
+		Kind3D:       SurfaceStudio,
+		Kind("??"):   SurfaceNative,
 	}
-	if got := Sanitize("tab\tnewline\n"); got != "tab\tnewline\n" {
-		t.Fatal("sanitize altered non-NUL bytes")
-	}
-}
-
-func TestSelectIsDeterministicAndModelProof(t *testing.T) {
-	cases := map[string]string{
-		KindText:      "native",
-		KindStatus:    "native",
-		KindMarkdown:  "workspace",
-		KindCode:      "workspace",
-		KindDiff:      "workspace",
-		KindTable:     "workspace",
-		KindChartSpec: "workspace",
-		KindArtifact:  "workspace",
-		KindScene3D:   "workspace",
-		"hologram":    "workspace", // unknown → the richest degradation surface
-		"":            "workspace",
-	}
-	for kind, want := range cases {
-		for i := 0; i < 5; i++ {
-			if got := Select(kind); got != want {
-				t.Fatalf("Select(%q) = %q, want %q (must be deterministic)", kind, got, want)
+	for k, s := range want {
+		for i := 0; i < 3; i++ {
+			if got := SelectSurface(k); got != s {
+				t.Fatalf("SelectSurface(%q)[%d] = %q, want %q", k, i, got, s)
 			}
 		}
 	}
 }
 
-func TestRegistryBoundEvictsOldestAndReports(t *testing.T) {
-	r := NewRegistry()
-	var firstID string
-	for i := 0; i < MaxBlocks; i++ {
-		b, err := r.Publish(Block{Kind: KindText, Payload: "x", Source: "test"})
-		if err != nil {
-			t.Fatalf("publish %d: %v", i, err)
-		}
-		if i == 0 {
-			firstID = b.ID
-		}
+func TestStoreUpsertOneIDOneArtifact(t *testing.T) {
+	s := NewStore(0)
+	mustPut(t, s, Block{ID: "b1", Kind: KindText, Payload: []byte("v1")})
+	mustPut(t, s, Block{ID: "b1", Kind: KindMarkdown, Payload: []byte("v2 — replaced")})
+	if s.Len() != 1 {
+		t.Fatalf("Len = %d, want 1 (one ID is one logical artifact)", s.Len())
 	}
-	if _, ok := r.Get(firstID); !ok {
-		t.Fatal("registry below bound lost the oldest block")
+	got, ok := s.Get("b1")
+	if !ok || string(got.Payload) != "v2 — replaced" || got.Kind != KindMarkdown {
+		t.Fatalf("Get = %+v ok=%v, want replaced markdown v2", got, ok)
 	}
-	// One more → the oldest is evicted, counted, and never silent.
-	b, err := r.Publish(Block{Kind: KindText, Payload: "y", Source: "test"})
-	if err != nil {
-		t.Fatalf("publish over bound: %v", err)
-	}
-	if _, ok := r.Get(firstID); ok {
-		t.Fatal("over-bound registry kept the evicted block")
-	}
-	if _, ok := r.Get(b.ID); !ok {
-		t.Fatal("newest block missing after eviction")
-	}
-	st := r.Stats()
-	if st.Evicted != 1 || st.Live != MaxBlocks {
-		t.Fatalf("stats = %+v, want evicted=1 live=%d", st, MaxBlocks)
+	// Provenance survives replacement when the producer re-issues it.
+	if got.CreatedAt.IsZero() {
+		t.Error("CreatedAt lost on replacement")
 	}
 }
 
-func TestPublishWithIDDuplicateIsTypedError(t *testing.T) {
-	r := NewRegistry()
-	if _, err := r.PublishWithID(Block{Kind: KindText, Payload: "a", Source: "s"}, "fixed-id"); err != nil {
-		t.Fatalf("first publish: %v", err)
+func TestStoreBoundedLRU(t *testing.T) {
+	s := NewStore(3)
+	for i := 0; i < 5; i++ {
+		mustPut(t, s, Block{ID: string(rune('a' + i)), Kind: KindText, Payload: []byte("x")})
 	}
-	if _, err := r.PublishWithID(Block{Kind: KindText, Payload: "b", Source: "s"}, "fixed-id"); err == nil {
-		t.Fatal("duplicate id must be a typed error, never a silent remap")
+	if s.Len() != 3 {
+		t.Fatalf("Len = %d, want 3", s.Len())
 	}
-	// The original entry is intact (one ID = one logical artifact).
-	got, _ := r.Get("fixed-id")
-	if got.Payload != "a" {
-		t.Fatalf("duplicate publish mutated the original: %q", got.Payload)
+	list := s.List()
+	if len(list) != 3 || list[0].ID != "c" || list[2].ID != "e" {
+		t.Fatalf("List = %+v, want oldest-evicted [c d e]", list)
+	}
+	if _, ok := s.Get("a"); ok {
+		t.Error("evicted block 'a' still present")
+	}
+	if _, ok := s.Get("e"); !ok {
+		t.Error("newest block 'e' missing")
 	}
 }
 
-func TestConcurrentPublishIsRaceFreeAndBounded(t *testing.T) {
-	r := NewRegistry()
+func TestStoreRefusesInvalid(t *testing.T) {
+	s := NewStore(0)
+	if _, err := s.Put(Block{Kind: KindText}); !errors.Is(err, ErrID) {
+		t.Fatalf("Put without ID: err = %v, want ErrID", err)
+	}
+	if s.Len() != 0 {
+		t.Fatalf("invalid block stored (Len=%d)", s.Len())
+	}
+}
+
+func TestStoreListSnapshotIsCopy(t *testing.T) {
+	s := NewStore(0)
+	mustPut(t, s, Block{ID: "b1", Kind: KindText, Payload: []byte("x")})
+	list := s.List()
+	list[0].ID = "mutated"
+	if again := s.List(); again[0].ID != "b1" {
+		t.Fatal("List leaked the internal snapshot")
+	}
+}
+
+func TestStoreConcurrentPutGet(t *testing.T) {
+	s := NewStore(64)
 	var wg sync.WaitGroup
-	for g := 0; g < 8; g++ {
+	for w := 0; w < 8; w++ {
 		wg.Add(1)
-		go func() {
+		go func(w int) {
 			defer wg.Done()
 			for i := 0; i < 50; i++ {
-				_, _ = r.Publish(Block{Kind: KindText, Payload: "x", Source: "concurrent"})
+				_, _ = s.Put(Block{ID: "shared", Kind: KindText, Payload: []byte("w")})
+				_, _ = s.Get("shared")
+				_ = s.List()
+				_ = s.Len()
 			}
-		}()
+		}(w)
 	}
 	wg.Wait()
-	if st := r.Stats(); st.Live > MaxBlocks {
-		t.Fatalf("registry exceeded its bound: %+v", st)
+	if s.Len() != 1 {
+		t.Fatalf("Len = %d, want 1", s.Len())
 	}
 }
 
-func TestExtractBlocksSplitsFencesDeterministically(t *testing.T) {
-	answer := "Here is prose.\n\n```go\nfmt.Println(1)\nfmt.Println(2)\n```\n\nAnd a tail.\n"
-	got := ExtractBlocks(answer, "run-1", "sess-1", "test")
-	if len(got) != 3 {
-		t.Fatalf("blocks = %d, want 3 (prose, code, prose): %+v", len(got), got)
+func TestMetaOfBoundedDescriptor(t *testing.T) {
+	ts := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	b := Block{ID: "b1", Kind: KindDiff, Title: "t", RunID: "r", SessionID: "s",
+		CreatedAt: ts, Payload: []byte("--- a\n+++ b\n")}
+	m := MetaOf(b)
+	if m.Bytes != len(b.Payload) || m.Kind != KindDiff || !m.CreatedAt.Equal(ts) {
+		t.Fatalf("Meta = %+v", m)
 	}
-	if got[0].Kind != KindMarkdown || got[0].Payload != "Here is prose." {
-		t.Fatalf("block0 = %+v", got[0])
-	}
-	if got[1].Kind != KindCode || got[1].Language != "go" {
-		t.Fatalf("block1 = %+v", got[1])
-	}
-	if got[1].Payload != "fmt.Println(1)\nfmt.Println(2)\n" {
-		t.Fatalf("code payload = %q", got[1].Payload)
-	}
-	if got[2].Kind != KindMarkdown || got[2].Payload != "And a tail." {
-		t.Fatalf("block2 = %+v", got[2])
-	}
-	for _, b := range got {
-		if b.RunID != "run-1" || b.SessionID != "sess-1" || b.Source != "test" {
-			t.Fatalf("provenance lost: %+v", b)
-		}
-	}
-	// Determinism: same input → identical payload/kind sequence.
-	again := ExtractBlocks(answer, "run-1", "sess-1", "test")
-	for i := range got {
-		if got[i].Kind != again[i].Kind || got[i].Payload != again[i].Payload {
-			t.Fatalf("extraction not deterministic at %d", i)
-		}
-	}
-}
-
-func TestExtractBlocksEdgeCases(t *testing.T) {
-	if got := ExtractBlocks("", "r", "s", "t"); got != nil {
-		t.Fatalf("empty answer must yield no blocks, got %+v", got)
-	}
-	if got := ExtractBlocks("plain prose only", "r", "s", "t"); len(got) != 1 || got[0].Kind != KindMarkdown {
-		t.Fatalf("prose-only answer = %+v", got)
-	}
-	// Unterminated fence: the rest of the answer is the code body —
-	// nothing is dropped.
-	got := ExtractBlocks("before\n```\ncode body", "r", "s", "t")
-	if len(got) != 2 || got[1].Kind != KindCode || got[1].Payload != "code body\n" {
-		t.Fatalf("unterminated fence = %+v", got)
-	}
-	// Bare fence without language.
-	got = ExtractBlocks("```\nx\n```", "r", "s", "t")
-	if len(got) != 1 || got[0].Kind != KindCode || got[0].Language != "" {
-		t.Fatalf("bare fence = %+v", got)
-	}
-}
-
-func TestListNewestFirst(t *testing.T) {
-	r := NewRegistry()
-	var ids []string
-	for i := 0; i < 3; i++ {
-		b, err := r.Publish(Block{Kind: KindText, Payload: string(rune('a' + i)), Source: "s"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		ids = append(ids, b.ID)
-	}
-	got := r.List(2)
-	if len(got) != 2 || got[0].ID != ids[2] || got[1].ID != ids[1] {
-		t.Fatalf("list order = %+v", got)
-	}
-	all := r.List(0)
-	if len(all) != 3 || all[0].ID != ids[2] {
-		t.Fatalf("list(all) = %+v", all)
+	if m.Title != "t" || m.RunID != "r" || m.SessionID != "s" {
+		t.Fatalf("Meta provenance lost: %+v", m)
 	}
 }

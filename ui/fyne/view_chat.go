@@ -42,6 +42,7 @@ type chatView struct {
 	sessions    []Session
 	messages    []Message
 	errLabel    *widget.Label
+	wsBtn       *widget.Button
 	newBtn      *widget.Button
 	delBtn      *widget.Button
 	renBtn      *widget.Button
@@ -118,6 +119,10 @@ func buildChatView(ap *App) fyne.CanvasObject {
 	v.stopBtn = widget.NewButtonWithIcon("Stop", theme.MediaStopIcon(), v.stop)
 	v.stopBtn.Importance = widget.DangerImportance
 	v.regenBtn = widget.NewButtonWithIcon("Regenerate", theme.MediaReplayIcon(), v.regenerate)
+	// Web Workspace (on-demand): opens the browser-hosted rich surface for
+	// the settled rich blocks. The native transcript stays the source of
+	// truth; a browser/server failure only disables this extra surface.
+	v.wsBtn = widget.NewButtonWithIcon("Workspace", theme.ComputerIcon(), v.openWorkspace)
 
 	v.newBtn = widget.NewButtonWithIcon("New", theme.ContentAddIcon(), func() {
 		go func() {
@@ -139,7 +144,7 @@ func buildChatView(ap *App) fyne.CanvasObject {
 	// Composer: gated ONLY while a run is live (zero-session send is the
 	// contract — an empty session list must not wedge the composer).
 	composer := container.NewVBox(
-		container.NewHBox(v.thinking, v.netSearch, layoutSpacer(), v.sendBtn, v.stopBtn, v.regenBtn),
+		container.NewHBox(v.thinking, v.netSearch, layoutSpacer(), v.wsBtn, v.sendBtn, v.stopBtn, v.regenBtn),
 		v.input,
 	)
 	controls := container.NewHBox(v.newBtn, v.renBtn, v.delBtn)
@@ -331,6 +336,16 @@ func (v *chatView) onSettled() {
 		if s, ok := v.ap.rt.ActiveSession(); ok {
 			v.messages = s.Messages
 			v.transcript.Refresh()
+			// Issue the settled assistant response as a workspace block
+			// (markdown kind). Registration is additive: it can only fail
+			// by refusing invalid content, and the native rendering above
+			// is untouched either way.
+			if len(s.Messages) > 0 {
+				last := s.Messages[len(s.Messages)-1]
+				if last.Role == "assistant" && strings.TrimSpace(last.Content) != "" {
+					_, _ = v.ap.Workspace().RegisterChatResponse(s.ID, last.Content)
+				}
+			}
 		}
 	}
 	v.liveBox.Hide()
@@ -345,6 +360,17 @@ func (v *chatView) onSettled() {
 func (v *chatView) showErr(what string, err error) {
 	v.errLabel.SetText(what + " failed: " + err.Error())
 	v.errLabel.Show()
+}
+
+// openWorkspace starts (if needed) the loopback workspace server and hands
+// the per-launch URL to the default browser. Failure is surfaced in the
+// native shell; the native transcript never depends on this succeeding.
+func (v *chatView) openWorkspace() {
+	if err := v.ap.openWorkspace(); err != nil {
+		v.showErr("open workspace", err)
+		return
+	}
+	v.errLabel.Hide()
 }
 
 func (v *chatView) confirmDelete() {

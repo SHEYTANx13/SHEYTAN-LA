@@ -4,7 +4,6 @@ package platform
 
 import (
 	"fmt"
-	"os"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -24,12 +23,6 @@ var (
 // path; the box makes that story visible to the operator's eyes, not
 // only to the log.
 //
-// CI / headless runners: MessageBoxW has no operator to click OK and
-// would hang the process for the full smoke budget (run 40686992270
-// Windows launch smoke — process alive, no MainWindowHandle). When CI
-// or GITHUB_ACTIONS is set, the call is a no-op; the named-step ERROR
-// line in app.log remains the catcher.
-//
 // Syscall-only: user32!MessageBoxW through LazySystemDLL/LazyProc — the
 // exact surface identity_windows.go already uses (no cgo, no new
 // dependency). Best-effort observability: a failure to show the box is
@@ -39,10 +32,6 @@ var (
 // clicks OK, the process exits with its original code (exit codes and
 // control flow are UNCHANGED — visibility only).
 func MessageBox(title, text string) error {
-	if os.Getenv("CI") != "" || os.Getenv("GITHUB_ACTIONS") != "" {
-		return nil
-	}
-
 	if err := procMessageBoxW.Find(); err != nil {
 		return fmt.Errorf("MessageBoxW unavailable: %w", err)
 	}

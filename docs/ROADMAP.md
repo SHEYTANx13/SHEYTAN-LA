@@ -44,11 +44,10 @@ Status: **DELIVERED** — proven by current repository behaviour, code, tests or
 
 ### One-Go-UI (Fyne)
 - Single Go + Fyne desktop running in-process over secured local IPC
-- Full retirement of Qt/QML, React/Vite and every earlier webview shell (last origin-gate trace removed in v1.11.0)
+- Full retirement of Qt/QML and React/Vite
 - Responsive three-zone shell
 - Session-list generation guard, non-wedging live streaming, zero-session Send
 - Optional 3D Studio
-- Hybrid rendering: typed presentation contract + on-demand browser-hosted Web Workspace (read-only, loopback, zero commands)
 - CI visibility, stress gate, UCRT64 Windows, Xvfb Linux desktop smoke
 
 ---

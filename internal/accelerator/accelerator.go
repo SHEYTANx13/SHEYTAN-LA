@@ -189,6 +189,24 @@ type Evidence struct {
 	Workload Workload `json:"workload"`
 }
 
+// ReasonCode is the machine-readable cause taxonomy for resolution
+// outcomes (v1.11.0 observability contract). Every Resolution carries
+// exactly one code next to the human-readable Reason; the code is stable
+// API (diagnostics/UI/log consumers match on it), while Reason remains
+// free text. The code NEVER upgrades the evidence state — a
+// pending-verify selection is still unverified.
+type ReasonCode string
+
+const (
+	ReasonCodeRequestedCPU       ReasonCode = "requested-cpu"               // explicit CPU request honored
+	ReasonCodeNPUVerified        ReasonCode = "npu-benchmark-verified"      // full NPU gate chain incl. measured benchmark
+	ReasonCodeGPUVerified        ReasonCode = "gpu-execution-verified"      // measured offload / valid receipt
+	ReasonCodeGPUPendingVerify   ReasonCode = "gpu-selected-pending-verify" // enumerated selection, no execution evidence yet
+	ReasonCodeNoAccelEvidence    ReasonCode = "no-accelerator-evidence-cpu" // fallback to CPU after failed gates
+	ReasonCodeBackendUnsupported ReasonCode = "backend-unsupported"         // engine build lacks the backend/enumeration
+	ReasonCodeNoMatchingDevice   ReasonCode = "no-matching-device"          // backend supported but zero usable devices
+)
+
 // Resolution is the stored, inspectable result of one resolution.
 type Resolution struct {
 	Requested   Requested   `json:"requested"`
@@ -200,6 +218,7 @@ type Resolution struct {
 	Batch       int         `json:"batch,omitempty"`
 	KVCache     string      `json:"kvCache,omitempty"`
 	Reason      string      `json:"reason"`              // ALWAYS set — the why
+	ReasonCode  ReasonCode  `json:"reasonCode"`          // ALWAYS set — the typed why (v1.11.0)
 	Fallbacks   []string    `json:"fallbacks,omitempty"` // failed gates, in order
 
 	// --- v1.2.6 continuation: EXPLICIT EVIDENCE STATE ------------------
@@ -379,6 +398,7 @@ func Resolve(requested Requested, ev Evidence) Resolution {
 	if res.Requested == RequestCPU {
 		res.AutoProfile = ProfileCPUSafe
 		res.Reason = "requested CPU"
+		res.ReasonCode = ReasonCodeRequestedCPU
 		res.ExecutionVerified = true
 		res.Verification = VerificationCPUExecution
 		return res
@@ -393,6 +413,7 @@ func Resolve(requested Requested, ev Evidence) Resolution {
 				res.Device = device
 				res.AutoProfile = ProfileLowPowerNPU
 				res.Reason = reason
+				res.ReasonCode = ReasonCodeNPUVerified
 				// NPU selection requires the FULL gate chain
 				// INCLUDING a measured benchmark — the only
 				// path here that can be verified-selected.
@@ -422,10 +443,12 @@ func Resolve(requested Requested, ev Evidence) Resolution {
 
 			if verified {
 				res.Fallback = "none"
+				res.ReasonCode = ReasonCodeGPUVerified
 			} else {
 				// Selected but UNVERIFIED: the CPU path is the guaranteed
 				// fallback — GPU detection is not GPU execution.
 				res.Fallback = "safe"
+				res.ReasonCode = ReasonCodeGPUPendingVerify
 			}
 
 			applyWorkloadTuning(&res, ev)
@@ -439,10 +462,26 @@ func Resolve(requested Requested, ev Evidence) Resolution {
 	res.AutoProfile = ProfileCPUSafe
 	res.Selected = KindCPU
 	res.Reason = "no accelerator proven usable by measured evidence — CPU"
+	res.ReasonCode = cpuFallbackCode(ev)
 	res.ExecutionVerified = true
 	res.Verification = VerificationCPUExecution
 	res.Fallback = "none"
 	return res
+}
+
+// cpuFallbackCode picks the typed fallback cause: a supported engine with
+// zero usable devices reports no-matching-device; an engine build without
+// the backend/enumeration reports backend-unsupported; anything else is
+// the generic no-evidence fallback. Detection vs execution honesty is
+// unchanged — every code here ends on the CPU path.
+func cpuFallbackCode(ev Evidence) ReasonCode {
+	if !ev.EnumerationSupported || !ev.VulkanBackendPresent {
+		return ReasonCodeBackendUnsupported
+	}
+	if len(ev.EngineDevices) == 0 {
+		return ReasonCodeNoMatchingDevice
+	}
+	return ReasonCodeNoAccelEvidence
 }
 
 // availableBackends lists the backends the evidence shows are AVAILABLE

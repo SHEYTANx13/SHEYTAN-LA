@@ -20,12 +20,12 @@ var upgrader = websocket.Upgrader{
 // allowedOrigin accepts same-origin requests and explicitly permits the
 // loopback origins commonly used by the local development UI.
 //
-// No wildcard origin is accepted. The retired desktop-shell page origin
-// of the pre-Fyne webview era was removed with that shell: today the
-// ONE product UI is the in-process Fyne client over local IPC (it never
-// consults this transport), and browser/headless modes stream over
-// their OWN origin. Only same-origin and the documented loopback
-// development frontends are accepted.
+// No wildcard origin is accepted.
+//
+// The retired first-generation webview desktop shell's custom page origin
+// exception was removed with that shell (v1.11.0 retirement scan): the
+// one-Go-UI desktop is an in-process Fyne client over the local IPC
+// channel and never opens an activity WebSocket through a page origin.
 func allowedOrigin(origin, host string) bool {
 	origin = strings.TrimSpace(origin)
 
@@ -72,10 +72,11 @@ func isLoopbackHost(host string) bool {
 
 // handleWSOrigin answers the activity-transport discovery probe (v1.9.4
 // contract, v1.10.1 revision): the loopback transport was the retired
-// webview desktop shell's channel and went away with that shell. Every
-// remaining serving mode (browser/headless/dev) streams the activity
-// WebSocket over its OWN origin, so the authoritative answer is always
-// the empty origin.
+// webview desktop page's channel and is retired with that shell. The
+// desktop is the in-process Fyne client over the local IPC channel and
+// never calls this endpoint; every remaining serving mode
+// (browser/headless/dev) streams the activity WebSocket over its OWN
+// origin, so the authoritative answer is always the empty origin.
 func (s *Server) handleWSOrigin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"origin": "",

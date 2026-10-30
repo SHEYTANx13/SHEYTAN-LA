@@ -5,7 +5,7 @@
 //
 // The target stack is:
 //
-//	Fyne desktop UI (ui/fyne)
+//	Desktop UI (Fyne, one Go UI)
 //	      ↓
 //	   Go Core
 //	      ↓

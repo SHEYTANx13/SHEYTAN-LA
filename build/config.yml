@@ -7,8 +7,8 @@ info:
 
 # v1.11.0: build metadata is carried by internal/config.AppVersion (the
 # ONE canonical release version, pinned by internal/releasecontract) +
-# SIGNATURE (release identity) + this file's productVersion mirror. The
-# desktop build is the ONE Go binary: core + launcher + the Fyne UI
-# (ui/fyne); all earlier desktop shells and web frontends are retired.
-# See docs/ARCHITECTURE.md for the boundary contract and
-# .github/workflows/build-desktop.yml for the build flow.
+# SIGNATURE (release identity) + this file's productVersion. The desktop
+# build is the ONE Go binary: core + launcher + the Fyne UI (ui/fyne);
+# the Qt Quick/QML host and the React web frontend are both retired.
+# See docs/ARCHITECTURE.md for the boundary
+# contract and .github/workflows/build-desktop.yml for the build flow.

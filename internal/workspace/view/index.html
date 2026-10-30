@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>SHEYTAN-LA — Workspace</title>
+<link rel="stylesheet" href="workspace.css">
+</head>
+<body>
+<header id="topbar">
+  <h1>Workspace</h1>
+  <span id="conn" role="status" aria-live="polite">connecting…</span>
+  <button id="refresh" type="button" title="Reload the block list (R)">Refresh</button>
+</header>
+<main id="layout">
+  <nav id="blocklist" aria-label="Content blocks">
+    <p id="empty" class="empty" hidden>No rich blocks yet. Blocks appear here when the runtime issues markdown, code, diff, table or chart content.</p>
+    <ul id="blocks" role="listbox" aria-label="Blocks"></ul>
+  </nav>
+  <section id="detail" aria-label="Block detail" aria-live="polite">
+    <div id="placeholder" class="empty">
+      <p>Select a block on the left to render it here.</p>
+      <p class="hint">The Workspace is a read-only viewer: content is issued by the Go runtime and rendered with browser-grade typography. Nothing you type here reaches the model — actions stay in the native application.</p>
+    </div>
+  </section>
+</main>
+<noscript><p class="error">The Workspace requires JavaScript to render its offline, bundled viewer. The native application remains fully usable without it.</p></noscript>
+<script type="module" src="workspace.js"></script>
+</body>
+</html>

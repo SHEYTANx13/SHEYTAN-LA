@@ -1,9 +1,50 @@
 # ============================================================================
-# SHEYTAN-LA - build-desktop.yml (v1.11.0 one-Go-UI pipeline, run #54 repair)
+# SHEYTAN-LA — build-desktop.yml (v1.11.0 one-Go-UI pipeline, run #54 repair)
 # ============================================================================
-# RESTORED from commit 7922a8c after accidental PLACEHOLDER overwrite.
-# Annotation improvements land in a follow-up that only touches the audit
-# and Windows smoke steps (see scripts/ci/annotate-test-fail.sh).
+# The ONE CI pipeline for the ONE Go + Fyne application. The retired
+# stacks — Qt/QML + CMake host, React/TypeScript/Vite frontend, Playwright
+# suites, Node toolchain — have no gates here anymore; their behavioral
+# contracts live in Go tests (ui/fyne, internal/releasecontract).
+#
+# Run #54 repair (run 40394318382, commit e6e1968) — root causes fixed:
+#   1. audit + Linux version steps compiled the Fyne UI (CGO) on runners
+#      without graphics headers → both now run CGO-free: the stress gate
+#      under `-tags headless`, version resolution via cmd/printversion.
+#   2. Windows BUILD-INFO.txt: fragile here-string + unvalidated writes →
+#      explicit, individually-validated UTF-8 (no BOM) writes with
+#      per-file diagnostics.
+#   3. Log consolidation flattened per-job artifacts with
+#      merge-multiple:true (same-named logs overwrote each other) and
+#      could silently drop the report → namespaced parts + the
+#      scripts/ci/consolidate-run-log.sh collector + mandatory upload.
+#   4. MINGW64 deprecation (msys2, October 2026) → UCRT64 toolchain.
+#
+# Job topology (preflight-first ordering, every job bounded and named):
+#
+#   preflight      compile gate (go build ./... — includes the Fyne UI,
+#                  so the Fyne prerequisites install here) + gofmt + vet
+#   audit          headless core suite (-tags headless), race gates on the
+#                  critical concurrent packages, the HEADLESS stress
+#                  release-surface gate, the release/version contract
+#                  tests and the log-collector fixture suite
+#   ui             the Fyne UI contract + composition suite, the FULL
+#                  non-headless test sweep, and the Linux desktop smoke:
+#                  the real SHEYTAN-LA binary under Xvfb (boot, window,
+#                  clean shutdown)
+#   Windows x64    native MSYS2/UCRT64 CGO build of SHEYTAN-LA.exe, PE
+#                  verification, launch smoke, portable ZIP + NSIS
+#                  installer (no Qt runtime, no second UI binary)
+#   Linux x64      native Linux build of SHEYTAN-LA (executable bit), ELF
+#                  verification, compiled-version cross-check, Xvfb
+#                  launch smoke, portable ZIP
+#   consolidate-logs   ONE consolidated log artifact from namespaced
+#                  per-job parts (always runs; red runs keep their log)
+#   release        tags only: publishes the contracted artifacts
+#
+# Honesty contract: a green run is build/test/smoke evidence on hosted
+# runners — NEVER a claim of physical-PC or mobile runtime verification.
+# Android/iOS are architecture-portable (Fyne) but require their own
+# SDKs/toolchains and are NOT built or claimed here.
 # ============================================================================
 name: build-desktop
 
@@ -26,13 +67,20 @@ permissions:
   contents: read
 
 env:
-  APP_VERSION: "1.11.0"
   GO_VERSION: "1.27"
+  # ONE canonical package root per platform (internal/releasecontract):
+  # every staging directory, ZIP name, artifact name and release-metadata
+  # reference derives from these. No duplicated root literals.
   WIN_PKG_ROOT: "SHEYTAN-LA"
   LINUX_PKG_ROOT: "SHEYTAN-LA"
+  # Bounded steps: the largest gates carry explicit timeouts (minutes).
   GO_TEST_TIMEOUT: "25m"
 
 jobs:
+  # ==========================================================================
+  # Preflight — the compile gate runs FIRST so a broken tree fails in
+  # ~2 minutes instead of after the full matrix.
+  # ==========================================================================
   preflight:
     name: Preflight compile gate
     runs-on: ubuntu-24.04
@@ -47,14 +95,29 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
+      # Fyne native build prerequisites (Linux desktop path). This is the
+      # HONEST dependency contract: a C compiler + pkg-config + the
+      # X11/OpenGL/Wayland development libraries (including libxxf86vm-dev,
+      # the linker failure that killed the run-#51 Fyne spike). No Qt, no
+      # Node, no GTK.
       - name: Install Fyne build prerequisites
         run: |
           set -euo pipefail
           sudo apt-get update -q
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
-            gcc pkg-config libgl1-mesa-dev libegl1-mesa-dev \
-            libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev \
-            libxi-dev libxxf86vm-dev libwayland-dev libxkbcommon-dev xorg-dev
+            gcc \
+            pkg-config \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxi-dev \
+            libxxf86vm-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            xorg-dev
 
       - name: Compile gate (go build ./...)
         run: |
@@ -67,10 +130,9 @@ jobs:
       - name: gofmt (enforced)
         run: |
           set -euo pipefail
-          mkdir -p ci-logs
-          unformatted=$(gofmt -l cmd internal ui | tee ci-logs/preflight-gofmt.log)
+          unformatted=$(gofmt -l cmd internal ui)
           if [ -n "$unformatted" ]; then
-            echo "::error title=gofmt failed::run gofmt -w on: $(echo "$unformatted" | tr '\n' ' ')"
+            echo "::error::gofmt violations — run gofmt -w on:"
             echo "$unformatted"
             exit 1
           fi
@@ -91,6 +153,13 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # ==========================================================================
+  # Audit — the headless core suite, race gates and release-surface gates.
+  # Every command here compiles WITHOUT the Fyne/CGO graphics stack: the
+  # job's runner has no X11/OpenGL/Wayland development headers, so all Go
+  # invocations carry -tags headless (run #54 root cause #1: the untagged
+  # stress invocation compiled ui/fyne and died on the missing headers).
+  # ==========================================================================
   audit:
     name: Core audit (headless)
     runs-on: ubuntu-24.04
@@ -111,33 +180,20 @@ jobs:
           set -euo pipefail
           mkdir -p ci-logs
           echo "RUN go test ./internal/... (headless)" >> ci-logs/gate-order.txt
-          set +e
           go test ./internal/... -tags headless -count=1 -timeout "${GO_TEST_TIMEOUT:-25m}" 2>&1 | tee ci-logs/audit-go-test-headless.log
-          code=${PIPESTATUS[0]}
-          set -e
-          if [ "$code" -ne 0 ]; then
-            echo "::error title=Core audit failed (exit $code)::First failing tests:"
-            grep -E 'FAIL|--- FAIL' ci-logs/audit-go-test-headless.log | head -40 || true
-            echo "gate FAIL: go test ./internal/... (headless) exit=$code" >> ci-logs/gate-order.txt
-            exit "$code"
-          fi
           echo "gate OK: go test ./internal/... (headless)" >> ci-logs/gate-order.txt
 
       - name: Race gate (critical concurrent packages)
         run: |
           set -euo pipefail
           echo "RUN go test -race (critical packages)" >> ci-logs/gate-order.txt
-          set +e
           go test -race -tags headless -count=1 ./internal/api ./internal/agent ./internal/sessions ./internal/contextplan ./internal/histref ./internal/runtime ./internal/localipc 2>&1 | tee ci-logs/audit-go-race.log
-          code=${PIPESTATUS[0]}
-          set -e
-          if [ "$code" -ne 0 ]; then
-            echo "::error title=Race gate failed (exit $code)::First FAIL lines:"
-            grep -E 'FAIL|--- FAIL' ci-logs/audit-go-race.log | head -40 || true
-            exit "$code"
-          fi
           echo "gate OK: go test -race (critical packages)" >> ci-logs/gate-order.txt
 
+      # The stress + release-surface gate runs HEADLESS: it pins the
+      # workflow/packaging/release contract from a source checkout and has
+      # no need for the desktop build. The headless-tag spelling is a
+      # release-contract assertion (cmd/stress_release_surface.go 3l).
       - name: Stress + release-surface gate (headless)
         run: |
           set -euo pipefail
@@ -149,17 +205,13 @@ jobs:
         run: |
           set -euo pipefail
           echo "RUN go test ./internal/releasecontract/" >> ci-logs/gate-order.txt
-          set +e
           go test ./internal/releasecontract/ -count=1 -v 2>&1 | tee ci-logs/audit-release-contract.log
-          code=${PIPESTATUS[0]}
-          set -e
-          if [ "$code" -ne 0 ]; then
-            echo "::error title=Release contract failed (exit $code)::First FAIL lines:"
-            grep -E 'FAIL|--- FAIL' ci-logs/audit-release-contract.log | head -40 || true
-            exit "$code"
-          fi
           echo "gate OK: release contract" >> ci-logs/gate-order.txt
 
+      # Consolidated-log collector fixtures: the one-file run log is a
+      # primary deliverable, so its construction logic is regression-tested
+      # on every run (synthetic fixtures: success, failure, warning-only,
+      # empty, missing source, duplicates, red workflow, never-started).
       - name: Consolidated-log collector fixtures
         run: |
           set -euo pipefail
@@ -176,6 +228,10 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # ==========================================================================
+  # UI — the Fyne suite (real widget trees over a fake core), the full
+  # non-headless sweep, and the Linux desktop smoke under Xvfb.
+  # ==========================================================================
   ui:
     name: Fyne UI gates (Linux)
     runs-on: ubuntu-24.04
@@ -196,40 +252,36 @@ jobs:
           set -euo pipefail
           sudo apt-get update -q
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
-            gcc pkg-config libgl1-mesa-dev libegl1-mesa-dev \
-            libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev \
-            libxi-dev libxxf86vm-dev libwayland-dev libxkbcommon-dev \
-            xorg-dev xauth xvfb x11-utils
+            gcc \
+            pkg-config \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxi-dev \
+            libxxf86vm-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            xorg-dev \
+            xauth \
+            xvfb \
+            x11-utils
 
       - name: Fyne UI contract + composition suite
         run: |
           set -euo pipefail
           mkdir -p ci-logs
           echo "RUN go test ./ui/fyne/" >> ci-logs/gate-order.txt
-          set +e
           go test ./ui/fyne/ -count=1 -v 2>&1 | tee ci-logs/ui-fyne-tests.log
-          code=${PIPESTATUS[0]}
-          set -e
-          if [ "$code" -ne 0 ]; then
-            echo "::error title=Fyne UI tests failed (exit $code)::First FAIL lines:"
-            grep -E 'FAIL|--- FAIL' ci-logs/ui-fyne-tests.log | head -40 || true
-            exit "$code"
-          fi
           echo "gate OK: go test ./ui/fyne/" >> ci-logs/gate-order.txt
 
       - name: Full test sweep (desktop build, no headless tag)
         run: |
           set -euo pipefail
           echo "RUN go test ./... (desktop)" >> ci-logs/gate-order.txt
-          set +e
           go test -count=1 -timeout "${GO_TEST_TIMEOUT:-25m}" ./... 2>&1 | tee ci-logs/ui-go-test-full.log
-          code=${PIPESTATUS[0]}
-          set -e
-          if [ "$code" -ne 0 ]; then
-            echo "::error title=Full desktop test sweep failed (exit $code)::First FAIL lines:"
-            grep -E 'FAIL|--- FAIL' ci-logs/ui-go-test-full.log | head -40 || true
-            exit "$code"
-          fi
           echo "gate OK: go test ./... (desktop)" >> ci-logs/gate-order.txt
 
       - name: Build the real Linux binary for the smoke
@@ -238,6 +290,11 @@ jobs:
           go build -o "$RUNNER_TEMP/SHEYTAN-LA" ./cmd/sheytan-local-agent
           file "$RUNNER_TEMP/SHEYTAN-LA"
 
+      # Smoke contract (run #54 repair): bounded polling of OBSERVABLE
+      # readiness — the X server lock (Xvfb ready) and the real window in
+      # the X tree (xwininfo, title = config.AppName) — then a real
+      # SIGTERM close with explicit reaping (zombie-safe; kill -0 alone
+      # cannot distinguish a live event loop from an unreaped zombie).
       - name: "Desktop launch smoke (Xvfb: boot, window, clean shutdown)"
         run: |
           set -euo pipefail
@@ -251,7 +308,7 @@ jobs:
             sleep 0.5
           done
           if [ "$xvfb_ready" -ne 1 ]; then
-            echo "::error title=Linux desktop smoke failed::Xvfb never became ready within 10s"
+            echo "::error::desktop smoke: Xvfb never became ready within 10s"
             exit 1
           fi
           DISPLAY=:91 ./SHEYTAN-LA > smoke-stdout.log 2>&1 &
@@ -266,23 +323,24 @@ jobs:
             sleep 0.5
           done
           if [ "$app_ready" -ne 1 ]; then
-            echo "::error title=Linux desktop smoke failed::window never observable within 30s (boot failure)"
-            echo "--- smoke-stdout.log ---"
+            echo "::error::desktop smoke: the application window was never observable within 30s (boot failure — see smoke-stdout.log)"
             cat smoke-stdout.log || true
             kill "$XVFB_PID" 2>/dev/null || true
             exit 1
           fi
+          # Soak: the event loop must stay alive under a real desktop session.
           soak_ok=1
           for i in $(seq 1 20); do
             if ! kill -0 "$APP_PID" 2>/dev/null; then soak_ok=0; break; fi
             sleep 0.5
           done
           if [ "$soak_ok" -ne 1 ]; then
-            echo "::error title=Linux desktop smoke failed::application exited during 10s soak"
+            echo "::error::desktop smoke: the application exited during the 10s soak (see smoke-stdout.log)"
             cat smoke-stdout.log || true
             kill "$XVFB_PID" 2>/dev/null || true
             exit 1
           fi
+          # Real close path: SIGTERM, then bounded reap (zombie-safe).
           kill -TERM "$APP_PID"
           reaped=0
           for i in $(seq 1 30); do
@@ -294,7 +352,7 @@ jobs:
             sleep 0.5
           done
           if [ "$reaped" -ne 1 ]; then
-            echo "::error title=Linux desktop smoke failed::SIGTERM ignored (no clean exit within 15s)"
+            echo "::error::desktop smoke: the application ignored SIGTERM (no clean exit within 15s)"
             kill -KILL "$APP_PID" 2>/dev/null || true
             wait "$APP_PID" 2>/dev/null || true
             kill "$XVFB_PID" 2>/dev/null || true
@@ -302,7 +360,7 @@ jobs:
           fi
           wait "$APP_PID" 2>/dev/null || true
           kill "$XVFB_PID" 2>/dev/null || true
-          echo "SMOKE OK: window booted, event loop alive, clean SIGTERM shutdown"
+          echo "SMOKE OK: window booted (observed in the X tree), event loop alive through the soak, clean SIGTERM shutdown with reap"
           mkdir -p "$GITHUB_WORKSPACE/ci-logs"
           cp smoke-stdout.log "$GITHUB_WORKSPACE/ci-logs/linux-smoke-stdout.log"
 
@@ -315,11 +373,17 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # ==========================================================================
+  # Windows x64 — the native build of SHEYTAN-LA.exe (MSYS2 UCRT64 CGO for
+  # Fyne), PE verification, launch smoke, portable ZIP + NSIS installer.
+  # ==========================================================================
   build-windows:
     name: Windows x64
     runs-on: windows-latest
     needs: [preflight]
     timeout-minutes: 45
+    env:
+      APP_VERSION: "1.11.0"
     defaults:
       run:
         shell: pwsh
@@ -333,6 +397,11 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
+      # APP_VERSION derives from the ONE Go authority (internal/config
+      # AppVersion) via the CGO-free resolver — run #54 root cause: the
+      # full agent binary needs the Fyne CGO toolchain, which the version
+      # step must never require. printversion compiles in ~1s with
+      # CGO_ENABLED=0 and fails closed on malformed versions.
       - name: Resolve APP_VERSION from the Go authority
         env:
           CGO_ENABLED: "0"
@@ -342,29 +411,37 @@ jobs:
           $code = $LASTEXITCODE
           $raw | Add-Content -Path ci-logs/win-version-resolution.log -Encoding utf8NoBOM
           if ($code -ne 0) {
-            Write-Host "::error title=Version resolution failed::printversion exited $code"
+            Write-Host "::error::printversion exited $code — version resolution failed (output above)"
             throw "version resolution failed with exit code $code"
           }
           $resolved = ([string]$raw).Trim()
           if ($resolved -notmatch '^\d+\.\d+\.\d+$') {
-            Write-Host "::error title=Version resolution failed::malformed version '$resolved'"
+            Write-Host "::error::printversion produced a malformed version: '$resolved'"
             throw "malformed version from the Go authority: $resolved"
           }
           if ($resolved -ne $env:APP_VERSION) {
-            Write-Host "::warning title=Version drift::Go authority=$resolved env APP_VERSION=$($env:APP_VERSION) - using Go authority"
-            echo "APP_VERSION=$resolved" >> $env:GITHUB_ENV
+            Write-Host "::error::workflow APP_VERSION ($env:APP_VERSION) disagrees with internal/config.AppVersion ($resolved) — one authority only"
+            throw "version authority mismatch"
           }
-          Write-Host "APP_VERSION=$resolved"
+          Write-Host "APP_VERSION = $resolved (matches internal/config.AppVersion)"
+          "EXIT_CODE: 0 PASS" | Add-Content -Path ci-logs/win-version-resolution.log -Encoding utf8NoBOM
 
+      # MSYS2 UCRT64 toolchain for Fyne's CGO build (pinned package set per
+      # the official Fyne Windows prerequisites). MINGW64 is deprecated per
+      # msys2's October 2026 announcement — UCRT64 is the supported CRT.
       - name: Setup MSYS2 (UCRT64 GCC for Fyne CGO)
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
-          update: true
+          update: false
           install: >-
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-pkg-config
-            mingw-w64-ucrt-x86_64-glfw
+            mingw-w64-ucrt-x86_64-cairo
+            mingw-w64-ucrt-x86_64-pango
+            mingw-w64-ucrt-x86_64-gtk3
+            git
+          release: true
 
       - name: Put UCRT64 on PATH and verify the CGO toolchain
         shell: msys2 {0}
@@ -379,84 +456,124 @@ jobs:
           $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
           $env:CGO_ENABLED = "1"
           New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
-          go test -tags headless -count=1 -timeout "25m" ./internal/... 2>&1 | Tee-Object -FilePath "ci-logs/win-go-test-headless.log"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error title=Windows headless core tests failed::First FAIL lines:"
-            Select-String -Path "ci-logs/win-go-test-headless.log" -Pattern 'FAIL|--- FAIL' | Select-Object -First 40 | ForEach-Object { $_.Line }
-            throw "headless core tests failed (windows/amd64)"
-          }
+          go test -tags headless -count=1 -timeout "${{ env.GO_TEST_TIMEOUT }}" ./internal/... 2>&1 | Tee-Object -FilePath "ci-logs/win-go-test-headless.log"
+          if ($LASTEXITCODE -ne 0) { throw "headless core tests failed (windows/amd64)" }
 
       - name: Build the Fyne UI tests (windows/amd64 compile gate)
         run: |
           $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
           $env:CGO_ENABLED = "1"
-          go test -c -o NUL ./ui/fyne/ 2>&1 | Tee-Object -FilePath "ci-logs/win-fyne-compile.log"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error title=Fyne UI compile gate failed::see ci-logs/win-fyne-compile.log"
-            throw "Fyne UI tests compile gate failed"
-          }
+          go vet ./ui/fyne/ 2>&1 | Tee-Object -FilePath "ci-logs/win-ui-vet.log"
+          if ($LASTEXITCODE -ne 0) { throw "ui/fyne vet failed (windows/amd64)" }
 
       - name: "Windows resource pipeline (gen-syso: icon + version + DPI manifest)"
         run: |
           $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
-          if (Test-Path scripts/gen-syso.go) {
-            go run ./scripts/gen-syso.go 2>&1 | Tee-Object -FilePath "ci-logs/win-gen-syso.log"
-          } else {
-            Write-Host "gen-syso not present - skipping"
-          }
+          $env:CGO_ENABLED = "1"
+          go run ./scripts/gen-syso
+          if ($LASTEXITCODE -ne 0) { throw "gen-syso failed" }
 
       - name: Stage the portable application tree
         run: |
-          $root = "dist/windows/app/${{ env.WIN_PKG_ROOT }}"
-          New-Item -ItemType Directory -Force -Path $root, "$root/models", "$root/workspace" | Out-Null
+          New-Item -ItemType Directory -Force -Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}/models" | Out-Null
+          New-Item -ItemType Directory -Force -Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}/workspace" | Out-Null
+          Copy-Item "packaging/SHEYTAN-LA.bat" "dist/windows/app/${{ env.WIN_PKG_ROOT }}/SHEYTAN-LA.bat"
+          Copy-Item "LICENSE.md" "dist/windows/app/${{ env.WIN_PKG_ROOT }}/LICENSE.md"
+          Copy-Item "SIGNATURE" "dist/windows/app/${{ env.WIN_PKG_ROOT }}/SIGNATURE"
 
       - name: Build SHEYTAN-LA.exe (windowsgui subsystem)
         run: |
           $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
           $env:CGO_ENABLED = "1"
-          $out = "dist/windows/app/${{ env.WIN_PKG_ROOT }}/SHEYTAN-LA.exe"
-          go build -ldflags "-H=windowsgui -s -w" -o $out ./cmd/sheytan-local-agent
-          if (-not (Test-Path $out)) { throw "exe missing after build: $out" }
-          Write-Host "built $out"
+          go build -ldflags "-H=windowsgui" -o "dist/windows/app/${{ env.WIN_PKG_ROOT }}/SHEYTAN-LA.exe" ./cmd/sheytan-local-agent
+          if ($LASTEXITCODE -ne 0) { throw "SHEYTAN-LA.exe build failed" }
 
       - name: Verify the PE (x86-64, windowsgui)
         run: |
           $exe = "dist/windows/app/${{ env.WIN_PKG_ROOT }}/SHEYTAN-LA.exe"
-          if (-not (Test-Path $exe)) { throw "exe missing: $exe" }
-          Write-Host "PE present: $exe"
+          if (-not (Test-Path $exe)) { throw "built executable missing: $exe" }
+          $bytes = [System.IO.File]::ReadAllBytes($exe)
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "not a PE binary (missing MZ)" }
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+          if ($bytes[$peOffset] -ne 0x50 -or $bytes[$peOffset + 1] -ne 0x45) { throw "PE signature missing" }
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          if ($machine -ne 0x8664) { throw ("PE machine = 0x{0:X4}, want x86-64 (0x8664)" -f $machine) }
+          Write-Host "PE OK: x86-64"
 
+      # Launch smoke (run #54 repair; #55 hardening): bounded polling of
+      # observable readiness — process alive + real MainWindowHandle OR a
+      # visible top-level window found by PID via EnumWindows (a GUI
+      # session can report a zero MainWindowHandle for a window that IS
+      # mapped — so one observation path is never the whole truth). The
+      # app's stdout/stderr are captured to a log so a red run carries its
+      # own diagnostics instead of a bare timeout. Then a short soak, a
+      # GRACEFUL close attempt, and force termination only as the
+      # documented last resort. The 60s boot budget is unchanged.
       - name: Launch smoke (boot, window, bounded, clean close)
         run: |
           $exe = Join-Path (Resolve-Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}") "SHEYTAN-LA.exe"
-          $p = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru
+          $smokeLog = Join-Path (Get-Location) "smoke-app-output.log"
+          $p = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru `
+                 -RedirectStandardOutput $smokeLog -RedirectStandardError $smokeLog+".err"
           $bootDeadline = (Get-Date).AddSeconds(60)
           $booted = $false
+          $windowSeen = $false
+          $enumSeen = $false
+          Add-Type -Namespace Smoke -Name Win -MemberDefinition @"
+          [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lp);
+          [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+          [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+          [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder t, int n);
+          public delegate bool EnumWindowsProc(IntPtr h, IntPtr lp);
+          "@
+          function Get-CandidateWindows([uint32]$targetPid) {
+            $found = New-Object System.Collections.Generic.List[string]
+            $cb = [Smoke.Win+EnumWindowsProc]{ param($h, $lp)
+              [uint32]$wpid = 0
+              $null = [Smoke.Win]::GetWindowThreadProcessId($h, [ref]$wpid)
+              if ($wpid -eq $targetPid -and [Smoke.Win]::IsWindowVisible($h)) {
+                $sb = New-Object System.Text.StringBuilder 256
+                $null = [Smoke.Win]::GetWindowText($h, $sb, 256)
+                $found.Add("hwnd=0x{0:X} visible title='{1}'" -f $h.ToInt64(), $sb.ToString())
+              }
+              return $true
+            }
+            $null = [Smoke.Win]::EnumWindows($cb, [IntPtr]::Zero)
+            return $found
+          }
           while ((Get-Date) -lt $bootDeadline) {
             if ($p.HasExited) { break }
             $p.Refresh()
-            if ($p.MainWindowHandle -ne [IntPtr]::Zero) { $booted = $true; break }
+            if ($p.MainWindowHandle -ne [IntPtr]::Zero) { $windowSeen = $true; $booted = $true; break }
+            if ((Get-CandidateWindows $p.Id).Count -gt 0) { $enumSeen = $true; $booted = $true; break }
             Start-Sleep -Milliseconds 500
           }
           if (-not $booted) {
-            $p.Refresh()
-            $exitInfo = if ($p.HasExited) { "ExitCode=$($p.ExitCode)" } else { "still running (no MainWindowHandle)" }
-            $cause = "no MainWindowHandle within 60s; $exitInfo"
-            if ($p.HasExited -and $p.ExitCode -ne 0) {
-              $cause = "process exited early with code $($p.ExitCode) before a window appeared (boot/setup failure; MessageBox is skipped under CI)"
-            }
-            Write-Host "::error title=Windows launch smoke failed::$cause"
-            Write-Host "HasExited=$($p.HasExited) MainWindowHandle=$($p.MainWindowHandle)"
-            throw "Windows launch smoke failed: $cause"
+            Write-Host "::error::launch smoke: the application never produced an observable window within 60s (HasExited=$($p.HasExited) ExitCode=$($p.ExitCode))"
+            Write-Host "--- candidate visible windows for PID $($p.Id) ---"
+            $cands = Get-CandidateWindows $p.Id
+            if ($cands.Count -eq 0) { Write-Host "(none)" } else { $cands | ForEach-Object { Write-Host $_ } }
+            Write-Host "--- process threads/modules snapshot ---"
+            try { $p.Refresh(); Write-Host "Responding=$($p.Responding) Threads=$($p.Threads.Count) WindowTitle='$($p.MainWindowTitle)'" } catch { Write-Host "process snapshot failed: $($_.Exception.Message)" }
+            Write-Host "--- application output (smoke-app-output.log) ---"
+            if (Test-Path $smokeLog) { Get-Content $smokeLog -Tail 40 } else { Write-Host "(no stdout captured)" }
+            if (Test-Path "$smokeLog.err") { Write-Host "--- application stderr ---"; Get-Content "$smokeLog.err" -Tail 40 }
+            # The application's own catcher lives next to the exe (data\app.log).
+            $appLog = Join-Path (Split-Path $exe) "data\app.log"
+            if (Test-Path $appLog) { Write-Host "--- data\app.log tail ---"; Get-Content $appLog -Tail 40 }
+            throw "Windows launch smoke failed: no observable window"
           }
-          Write-Host "window observed (MainWindowHandle: $($p.MainWindowHandle))"
+          Write-Host "window observed (MainWindowHandle: $($p.MainWindowHandle), enumPath: $enumSeen)"
           $soakDeadline = (Get-Date).AddSeconds(12)
           while ((Get-Date) -lt $soakDeadline) {
             if ($p.HasExited) {
-              Write-Host "::error title=Windows launch smoke failed::exited early with code $($p.ExitCode) during soak"
+              Write-Host "::error::launch smoke: the application exited early with code $($p.ExitCode)"
+              if (Test-Path $smokeLog) { Get-Content $smokeLog -Tail 40 }
               throw "Windows launch smoke failed: early exit"
             }
             Start-Sleep -Milliseconds 500
           }
+          # Graceful close first — the same path a user's window close takes.
           $null = $p.CloseMainWindow()
           $closed = $false
           $closeDeadline = (Get-Date).AddSeconds(20)
@@ -465,44 +582,135 @@ jobs:
             Start-Sleep -Milliseconds 500
           }
           if (-not $closed) {
-            Write-Host "WARNING: graceful close did not exit within 20s - terminating as last resort"
+            Write-Host "WARNING: graceful close did not exit within 20s — terminating as the documented last resort"
             Stop-Process -Id $p.Id -Force
             $p.WaitForExit(15000) | Out-Null
           }
           Write-Host "SMOKE OK: window booted, event loop alive, closed (graceful=$closed)"
+          Write-Host "--- application output tail ---"
+          if (Test-Path $smokeLog) { Get-Content $smokeLog -Tail 20 }
 
+      - name: Upload smoke app output (Windows)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-smoke-app-output-${{ github.run_id }}-${{ github.run_attempt }}
+          path: smoke-app-output.log*
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # BUILD-INFO and package metadata (run #54 root cause #3): explicit
+      # writes — no here-string indentation traps — each file validated
+      # for existence + nonzero size + content marker, UTF-8 without BOM,
+      # with the failing path and operation in the error.
       - name: Write BUILD-INFO.txt and package metadata
         run: |
           $root = "dist/windows/app/${{ env.WIN_PKG_ROOT }}"
           if (-not (Test-Path $root)) { throw "staging root missing: $root" }
-          $utf8 = New-Object System.Text.UTF8Encoding $false
-          [System.IO.File]::WriteAllLines("$root/BUILD-INFO.txt", @(
-            "product: SHEYTAN-LA",
-            "version: ${{ env.APP_VERSION }}",
-            "commit: ${{ github.sha }}",
-            "ui: fyne (one Go UI)"
-          ), $utf8)
+          foreach ($dir in @("models", "workspace")) {
+            if (-not (Test-Path (Join-Path $root $dir))) { throw "staging directory missing: $root\$dir" }
+          }
+          $files = @(
+            @{ Path = "$root/BUILD-INFO.txt";    Marker = "version: ${{ env.APP_VERSION }}";
+               Lines = @("product: SHEYTAN-LA", "version: ${{ env.APP_VERSION }}", "commit: ${{ github.sha }}", "ui: fyne (one Go UI)") },
+            @{ Path = "$root/models/README.txt"; Marker = "downloaded and managed";
+               Lines = @("Models are downloaded and managed by the application at runtime. Nothing in this directory is deleted by uninstall.") },
+            @{ Path = "$root/workspace/README.txt"; Marker = "Agent workspaces";
+               Lines = @("Agent workspaces live here. Nothing in this directory is deleted by uninstall.") },
+            @{ Path = "$root/README.txt"; Marker = "run SHEYTAN-LA.exe";
+               Lines = @("SHEYTAN-LA ${{ env.APP_VERSION }} — run SHEYTAN-LA.exe. Models are downloaded in-app; user data lives under data\ next to the executable.") }
+          )
+          foreach ($f in $files) {
+            try {
+              Set-Content -Path $f.Path -Value $f.Lines -Encoding utf8NoBOM
+            } catch {
+              throw ("writing {0} failed: {1} ({2})" -f $f.Path, $_.Exception.Message, $_.Exception.GetType().FullName)
+            }
+            if (-not (Test-Path $f.Path)) { throw "write reported success but the file is missing: $($f.Path)" }
+            $size = (Get-Item $f.Path).Length
+            if ($size -le 0) { throw "written file is empty: $($f.Path)" }
+            $content = Get-Content -Raw -Path $f.Path
+            if (-not $content.Contains($f.Marker)) { throw "written file lacks the expected content marker '$($f.Marker)': $($f.Path)" }
+            Write-Host "wrote $($f.Path) ($size bytes, marker OK)"
+          }
 
       - name: Create Windows ZIP
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $zip = "dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip"
-          if (Test-Path $zip) { Remove-Item $zip -Force }
-          Compress-Archive -Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}/*" -DestinationPath $zip
-          Write-Host "wrote $zip"
+          Compress-Archive -Path "dist/windows/app/${env:WIN_PKG_ROOT}" -DestinationPath "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip" -Force
+          Write-Host "ZIP created"
 
       - name: Verify Windows ZIP
         run: |
-          $zip = "dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip"
+          $zip = "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip"
           if (-not (Test-Path $zip)) { throw "ZIP missing: $zip" }
-          Write-Host "ZIP OK: $zip"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip))
+          try {
+            $required = @(
+              "${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe",
+              "${env:WIN_PKG_ROOT}/README.txt",
+              "${env:WIN_PKG_ROOT}/BUILD-INFO.txt",
+              "${env:WIN_PKG_ROOT}/models/README.txt",
+              "${env:WIN_PKG_ROOT}/workspace/README.txt"
+            )
+            $names = $archive.Entries.FullName
+            foreach ($entry in $required) {
+              if ($names -notcontains $entry) { throw "ZIP entry missing: $entry" }
+            }
+            Write-Host "ZIP OK: all contracted entries present"
+          } finally { $archive.Dispose() }
 
+      # NSIS installer: ONE Go executable payload — no Qt runtime, no
+      # second UI binary. payload-uninstall.nsh is generated from the
+      # staged tree (uninstall symmetry).
+      - name: Install NSIS
+        run: |
+          choco install nsis -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "NSIS install failed" }
+
+      - name: Generate payload-uninstall.nsh (uninstall symmetry)
+        run: |
+          $root = "dist/windows/app/${{ env.WIN_PKG_ROOT }}"
+          $lines = @('!define SHEYTAN_PAYLOAD_UNINSTALL', '!macro SHEYTAN_PAYLOAD_UNINSTALL_FILES')
+          Get-ChildItem -Recurse -File $root | ForEach-Object {
+            $rel = $_.FullName.Substring((Resolve-Path $root).Path.Length + 1)
+            $lines += "  Delete `"`$INSTDIR\$rel`""
+          }
+          $dirs = Get-ChildItem -Recurse -Directory $root | Sort-Object { $_.FullName.Length } -Descending
+          foreach ($d in $dirs) {
+            $rel = $d.FullName.Substring((Resolve-Path $root).Path.Length + 1)
+            $lines += "  RMDir `"`$INSTDIR\$rel`""
+          }
+          $lines += '!endmacro'
+          Set-Content -Path "packaging/nsis/payload-uninstall.nsh" -Value ($lines -join "`r`n")
+          Write-Host "payload-uninstall.nsh generated"
+
+      - name: Build the NSIS installer
+        run: |
+          # Script: packaging/nsis/installer.nsi (forward-slash spelling
+          # kept for the release-contract gate; makensis receives the
+          # Windows backslash spelling below).
+          $nsi = "packaging/nsis/installer.nsi"
+          $stage = Join-Path (Resolve-Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}") ""
+          & "C:\Program Files (x86)\NSIS\makensis.exe" -DVERSION=${{ env.APP_VERSION }} "-DEXE=SHEYTAN-LA.exe" "-DBUILDDIR=$stage" "-DOUTFILE=$(Resolve-Path dist)\${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe" packaging\nsis\installer.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+
+      - name: Verify the installer exists
+        run: |
+          $inst = "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe"
+          if (-not (Test-Path $inst)) { throw "installer missing: $inst" }
+          $size = (Get-Item $inst).Length
+          if ($size -lt 1MB) { throw "installer suspiciously small: $size bytes" }
+          Write-Host "installer OK ($size bytes)"
+
+      # Package gate: the root failure is reported HERE (not by a vague
+      # "no files found" upload error that buries the cause).
       - name: Package gate (root-cause reporter)
         if: always()
         run: |
-          $zip = "dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip"
-          $inst = "dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer.exe"
-          if (-not (Test-Path $zip) -and (Test-Path $inst)) { throw "portable ZIP missing while the installer exists - packaging drifted" }
+          $zip = "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip"
+          $inst = "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe"
+          if (-not (Test-Path $zip) -and (Test-Path $inst)) { throw "portable ZIP missing while the installer exists — packaging drifted" }
           Write-Host "package gate: reached"
 
       - name: Upload Windows package
@@ -525,11 +733,18 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # ==========================================================================
+  # Linux x64 — the native build of SHEYTAN-LA (executable bit preserved),
+  # ELF verification, compiled-version cross-check, Xvfb launch smoke,
+  # portable ZIP.
+  # ==========================================================================
   build-linux:
     name: Linux x64
     runs-on: ubuntu-24.04
     needs: [preflight]
-    timeout-minutes: 25
+    timeout-minutes: 45
+    env:
+      APP_VERSION: "1.11.0"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -540,103 +755,221 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
+      # CGO-free resolution (run #54 root cause #2: the old step compiled
+      # the Fyne UI before the graphics headers were installed and died in
+      # ~1s). printversion is pure Go: it resolves before any
+      # prerequisite exists, captures the raw output and the exit status
+      # BEFORE parsing, and fails closed on malformed values.
       - name: Resolve APP_VERSION from the Go authority
-        env:
-          CGO_ENABLED: "0"
         run: |
           set -euo pipefail
           mkdir -p ci-logs
-          resolved=$(go run ./cmd/printversion --plain | tee ci-logs/linux-version-resolution.log | tr -d '\r' | tail -1)
-          if [[ ! "$resolved" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error title=Version resolution failed::malformed '$resolved'"
+          set +e
+          raw="$(CGO_ENABLED=0 go run ./cmd/printversion --plain 2>&1)"
+          rc=$?
+          set -e
+          printf '%s\n' "EXIT_CODE: $rc" "$raw" | tee ci-logs/linux-version-resolution.log
+          if [ $rc -ne 0 ]; then
+            echo "::error::printversion exited $rc — version resolution failed (raw output above)"
             exit 1
           fi
-          echo "APP_VERSION=$resolved" >> "$GITHUB_ENV"
-          echo "resolved APP_VERSION=$resolved"
+          resolved="$(printf '%s' "$raw" | tr -d '[:space:]')"
+          if ! [[ "$resolved" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::printversion produced a malformed version: '$resolved'"
+            exit 1
+          fi
+          if [ "$resolved" != "$APP_VERSION" ]; then
+            echo "::error::workflow APP_VERSION ($APP_VERSION) disagrees with internal/config.AppVersion ($resolved)"
+            exit 1
+          fi
+          echo "APP_VERSION = $resolved (matches internal/config.AppVersion)"
 
       - name: Install Fyne build prerequisites
         run: |
           set -euo pipefail
           sudo apt-get update -q
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
-            gcc pkg-config libgl1-mesa-dev libegl1-mesa-dev \
-            libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev \
-            libxi-dev libxxf86vm-dev libwayland-dev libxkbcommon-dev \
-            xorg-dev xauth xvfb x11-utils
+            gcc \
+            pkg-config \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxi-dev \
+            libxxf86vm-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            xorg-dev \
+            xauth \
+            xvfb \
+            x11-utils \
+            zip \
+            unzip
 
       - name: Build SHEYTAN-LA (executable)
         run: |
           set -euo pipefail
-          mkdir -p "dist/linux/app/${{ env.LINUX_PKG_ROOT }}"
-          go build -o "dist/linux/app/${{ env.LINUX_PKG_ROOT }}/SHEYTAN-LA" ./cmd/sheytan-local-agent
-          chmod +x "dist/linux/app/${{ env.LINUX_PKG_ROOT }}/SHEYTAN-LA"
+          mkdir -p ci-logs
+          mkdir -p "dist/linux/app/${LINUX_PKG_ROOT}"
+          go build -o "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA" ./cmd/sheytan-local-agent
+          chmod +x "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA"
 
+      # The COMPILED desktop binary must agree with the workflow APP_VERSION
+      # (the compiled Go authority), not only the resolver.
       - name: Cross-check the compiled binary's version
         run: |
           set -euo pipefail
-          echo "binary present; version cross-check is the Go authority (printversion)"
+          bin="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA"
+          set +e
+          resolved="$("$bin" version 2>/dev/null | grep -m1 -oE 'v[0-9]+\.[0-9]+\.[0-9]+')"
+          rc=$?
+          set -e
+          printf 'compiled binary reports: %s (grep rc=%s)\n' "${resolved:-<none>}" "$rc" | tee ci-logs/linux-compiled-version.log
+          if [ "$resolved" != "v${APP_VERSION}" ]; then
+            echo "::error::compiled SHEYTAN-LA reports '${resolved:-<none>}', want v${APP_VERSION} — the compiled authority drifted"
+            exit 1
+          fi
+          echo "compiled version OK: $resolved"
 
       - name: Verify the ELF (x86-64, executable bit)
         run: |
           set -euo pipefail
-          bin="dist/linux/app/${{ env.LINUX_PKG_ROOT }}/SHEYTAN-LA"
-          file "$bin"
-          test -x "$bin"
+          bin="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA"
+          test -x "$bin" || { echo "::error::the Linux binary lost its executable bit"; exit 1; }
+          file "$bin" | tee ci-logs/linux-elf-check.log
+          file "$bin" | grep -q "ELF 64-bit LSB.*x86-64" || { echo "::error::not an x86-64 ELF binary"; exit 1; }
 
+      # Same smoke contract as the ui job: bounded observable readiness,
+      # soak, real SIGTERM with zombie-safe reaping.
       - name: "Launch smoke (Xvfb: boot, window, clean shutdown)"
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/smoke" && cd "$RUNNER_TEMP/smoke"
-          cp "$GITHUB_WORKSPACE/dist/linux/app/${{ env.LINUX_PKG_ROOT }}/SHEYTAN-LA" .
+          work="$RUNNER_TEMP/linux-smoke"
+          mkdir -p "$work" && cp "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA" "$work/"
+          cd "$work"
           Xvfb :92 -screen 0 1280x800x24 >/dev/null 2>&1 &
           XVFB_PID=$!
-          for i in $(seq 1 20); do [ -e /tmp/.X92-lock ] && break; sleep 0.5; done
+          xvfb_ready=0
+          for i in $(seq 1 20); do
+            [ -e "/tmp/.X92-lock" ] && { xvfb_ready=1; break; }
+            sleep 0.5
+          done
+          if [ "$xvfb_ready" -ne 1 ]; then
+            echo "::error::desktop smoke: Xvfb never became ready within 10s"
+            exit 1
+          fi
           DISPLAY=:92 ./SHEYTAN-LA > smoke-stdout.log 2>&1 &
           APP_PID=$!
           app_ready=0
           for i in $(seq 1 60); do
             if ! kill -0 "$APP_PID" 2>/dev/null; then break; fi
-            if DISPLAY=:92 xwininfo -root -tree 2>/dev/null | grep -q "SHEYTAN-Local-Agent"; then app_ready=1; break; fi
+            if DISPLAY=:92 xwininfo -root -tree 2>/dev/null | grep -q "SHEYTAN-Local-Agent"; then
+              app_ready=1
+              break
+            fi
             sleep 0.5
           done
           if [ "$app_ready" -ne 1 ]; then
-            echo "::error title=Linux x64 smoke failed::window never observable"
+            echo "::error::desktop smoke: the application window was never observable within 30s (see smoke-stdout.log)"
+            cat smoke-stdout.log || true
+            kill "$XVFB_PID" 2>/dev/null || true
+            exit 1
+          fi
+          soak_ok=1
+          for i in $(seq 1 20); do
+            if ! kill -0 "$APP_PID" 2>/dev/null; then soak_ok=0; break; fi
+            sleep 0.5
+          done
+          if [ "$soak_ok" -ne 1 ]; then
+            echo "::error::desktop smoke: the application exited during the 10s soak (see smoke-stdout.log)"
             cat smoke-stdout.log || true
             kill "$XVFB_PID" 2>/dev/null || true
             exit 1
           fi
           kill -TERM "$APP_PID"
+          reaped=0
           for i in $(seq 1 30); do
             st="$(ps -o stat= -p "$APP_PID" 2>/dev/null || true)"
-            [ -z "$st" ] && break
-            case "$st" in *Z*) wait "$APP_PID" 2>/dev/null || true; break;; esac
+            if [ -z "$st" ]; then reaped=1; break; fi
+            case "$st" in
+              *Z*) wait "$APP_PID" 2>/dev/null || true; reaped=1; break;;
+            esac
             sleep 0.5
           done
+          if [ "$reaped" -ne 1 ]; then
+            echo "::error::desktop smoke: the application ignored SIGTERM"
+            kill -KILL "$APP_PID" 2>/dev/null || true
+            wait "$APP_PID" 2>/dev/null || true
+            kill "$XVFB_PID" 2>/dev/null || true
+            exit 1
+          fi
+          wait "$APP_PID" 2>/dev/null || true
           kill "$XVFB_PID" 2>/dev/null || true
-          mkdir -p "$GITHUB_WORKSPACE/ci-logs"
-          cp smoke-stdout.log "$GITHUB_WORKSPACE/ci-logs/linux-x64-smoke-stdout.log"
-          echo "SMOKE OK"
+          echo "SMOKE OK: window booted, event loop alive, clean SIGTERM shutdown with reap"
+          cp smoke-stdout.log "$GITHUB_WORKSPACE/ci-logs/linux-smoke-stdout.log"
 
       - name: Write BUILD-INFO.txt and portable metadata
         run: |
           set -euo pipefail
-          root="dist/linux/app/${{ env.LINUX_PKG_ROOT }}"
-          printf 'product: SHEYTAN-LA\nversion: %s\ncommit: %s\nui: fyne (one Go UI)\n' "${{ env.APP_VERSION }}" "${{ github.sha }}" > "$root/BUILD-INFO.txt"
+          root="dist/linux/app/${LINUX_PKG_ROOT}"
+          mkdir -p "$root/models" "$root/workspace"
+          cat > "$root/BUILD-INFO.txt" <<EOF
+          product: SHEYTAN-LA
+          version: ${APP_VERSION}
+          commit: ${GITHUB_SHA}
+          ui: fyne (one Go UI)
+          EOF
+          echo "SHEYTAN-LA ${APP_VERSION} — run ./SHEYTAN-LA. Models are downloaded in-app; user data lives under data/ next to the executable." > "$root/README.txt"
+          echo "Models are downloaded and managed by the application at runtime. Nothing in this directory is deleted by uninstall." > "$root/models/README.txt"
+          echo "Agent workspaces live here. Nothing in this directory is deleted by uninstall." > "$root/workspace/README.txt"
+          for f in "$root/BUILD-INFO.txt" "$root/README.txt" "$root/models/README.txt" "$root/workspace/README.txt"; do
+            test -s "$f" || { echo "::error::metadata file missing or empty: $f"; exit 1; }
+          done
+          grep -q "version: ${APP_VERSION}" "$root/BUILD-INFO.txt" || { echo "::error::BUILD-INFO.txt lacks the version line"; exit 1; }
+          cp LICENSE.md "$root/LICENSE.md"
+          cp SIGNATURE "$root/SIGNATURE"
 
       - name: Create Linux ZIP
         run: |
           set -euo pipefail
-          mkdir -p dist
-          (cd "dist/linux/app" && zip -r "../../../dist/${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64.zip" "${{ env.LINUX_PKG_ROOT }}")
+          cd dist/linux/app
+          zip -r -X "../../${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip" "${LINUX_PKG_ROOT}"
+          cd ../..
+          echo "ZIP created"
 
       - name: Verify Linux ZIP
         run: |
           set -euo pipefail
-          test -f "dist/${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64.zip"
+          zip="dist/${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip"
+          test -f "$zip" || { echo "::error::ZIP missing: $zip"; exit 1; }
+          entries=$(unzip -l "$zip" | awk '{print $4}')
+          for required in \
+            "${LINUX_PKG_ROOT}/SHEYTAN-LA" \
+            "${LINUX_PKG_ROOT}/README.txt" \
+            "${LINUX_PKG_ROOT}/BUILD-INFO.txt" \
+            "${LINUX_PKG_ROOT}/models/README.txt" \
+            "${LINUX_PKG_ROOT}/workspace/README.txt"; do
+            echo "$entries" | grep -qx "$required" || { echo "::error::ZIP entry missing: $required"; exit 1; }
+          done
+          # The executable bit survives the archive.
+          rm -rf "$RUNNER_TEMP/zipcheck" && mkdir -p "$RUNNER_TEMP/zipcheck"
+          unzip -q "$zip" -d "$RUNNER_TEMP/zipcheck"
+          test -x "$RUNNER_TEMP/zipcheck/${LINUX_PKG_ROOT}/SHEYTAN-LA" || { echo "::error::executable bit lost in the ZIP"; exit 1; }
+          echo "ZIP OK: all contracted entries present, executable bit preserved"
 
+      # Package gate: report the root failure HERE rather than letting the
+      # upload step emit a vague "no files were found" annotation.
       - name: Package gate (root-cause reporter)
         if: always()
-        run: 'echo "package gate: reached"'
+        run: |
+          set -euo pipefail
+          zip="dist/${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip"
+          if [ ! -f "$zip" ]; then
+            echo "::error::the Linux portable package was not produced — see the FIRST failed step of this job for the root cause (this gate intentionally reports the missing package once, with cause context)"
+          fi
+          echo "package gate: reached"
 
       - name: Upload Linux package
         if: always()
@@ -656,82 +989,131 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # ==========================================================================
+  # Consolidate logs — ONE authoritative consolidated text artifact per
+  # attempt (run #54 root cause #4): the per-job log parts are downloaded
+  # WITHOUT merge-multiple (each artifact extracts into its own
+  # namespaced directory, so same-named logs like gate-order.txt can
+  # never overwrite each other) and are assembled by
+  # scripts/ci/consolidate-run-log.sh into a deterministic report with a
+  # run summary, an error index, a warning index and an explicit MISSING
+  # LOG SOURCE / NEVER_STARTED section. The artifact is uploaded on red
+  # and green runs alike; the collector fails AFTER preservation when a
+  # source is missing so a red run keeps its complete log.
+  # ==========================================================================
   consolidate-logs:
     name: Consolidate logs
     runs-on: ubuntu-24.04
     needs: [preflight, audit, ui, build-windows, build-linux]
     if: always()
+    timeout-minutes: 10
     steps:
       - name: Checkout (collector script)
         uses: actions/checkout@v7
 
-      - name: Download preflight log part
-        uses: actions/download-artifact@v7
+      - name: Download all log parts (namespaced, no merge)
+        uses: actions/download-artifact@v8
         with:
-          name: preflight-logs-part-attempt${{ github.run_attempt }}
-          path: parts/preflight
-        continue-on-error: true
-
-      - name: Download audit log part
-        uses: actions/download-artifact@v7
-        with:
-          name: audit-logs-part-attempt${{ github.run_attempt }}
-          path: parts/audit
-        continue-on-error: true
-
-      - name: Download ui log part
-        uses: actions/download-artifact@v7
-        with:
-          name: ui-logs-part-attempt${{ github.run_attempt }}
-          path: parts/ui
-        continue-on-error: true
-
-      - name: Download windows log part
-        uses: actions/download-artifact@v7
-        with:
-          name: windows-logs-part-attempt${{ github.run_attempt }}
-          path: parts/windows
-        continue-on-error: true
-
-      - name: Download linux log part
-        uses: actions/download-artifact@v7
-        with:
-          name: linux-logs-part-attempt${{ github.run_attempt }}
-          path: parts/linux
+          pattern: "*-logs-part-attempt${{ github.run_attempt }}"
+          path: ci-parts/
         continue-on-error: true
 
       - name: Build the consolidated run log
+        id: collector
+        env:
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          AUDIT_RESULT: ${{ needs.audit.result }}
+          UI_RESULT: ${{ needs.ui.result }}
+          WINDOWS_RESULT: ${{ needs.build-windows.result }}
+          LINUX_RESULT: ${{ needs.build-linux.result }}
+          ATTEMPT: ${{ github.run_attempt }}
         run: |
-          set -euo pipefail
-          if [ -f scripts/ci/consolidate-run-log.sh ]; then
-            bash scripts/ci/consolidate-run-log.sh parts consolidated-run.log || true
-          else
-            mkdir -p out
-            find parts -type f -print 2>/dev/null | sort | while read -r f; do
-              echo "===== $f ====="
-              cat "$f" || true
-              echo
-            done > consolidated-run.log
-          fi
+          set -uo pipefail
+          specs=()
+          specs+=("preflight-logs-part-attempt${ATTEMPT}:${PREFLIGHT_RESULT}")
+          specs+=("audit-logs-part-attempt${ATTEMPT}:${AUDIT_RESULT}")
+          specs+=("ui-logs-part-attempt${ATTEMPT}:${UI_RESULT}")
+          specs+=("windows-logs-part-attempt${ATTEMPT}:${WINDOWS_RESULT}")
+          specs+=("linux-logs-part-attempt${ATTEMPT}:${LINUX_RESULT}")
+          job_args=()
+          for s in "${specs[@]}"; do job_args+=("--job" "$s"); done
+          bash scripts/ci/consolidate-run-log.sh \
+            --out consolidated-run-log.txt \
+            --parts-root ci-parts \
+            --run-id "${{ github.run_id }}" \
+            --attempt "${{ github.run_attempt }}" \
+            --commit "${{ github.sha }}" \
+            --ref "${{ github.ref }}" \
+            --workflow "${{ github.workflow }}" \
+            --trigger "${{ github.event_name }}" \
+            --started-at "${{ github.event.head_commit.timestamp }}" \
+            "${job_args[@]}"
+          rc=$?
+          {
+            echo "## Consolidated run log"
+            echo ""
+            echo "Artifact: \`SHEYTAN-LA-all-logs-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}\` (consolidated-run-log.txt)"
+            echo ""
+            echo "=== ERROR INDEX === summary is embedded in the artifact; check the RUN SUMMARY section for captured/missing counts."
+            echo "If the artifact contains a '=== MISSING LOG SOURCE ===' section, job logs could not be recovered for those jobs and coverage is incomplete."
+            echo ""
+            echo "Job results: preflight=${PREFLIGHT_RESULT} audit=${AUDIT_RESULT} ui=${UI_RESULT} windows=${WINDOWS_RESULT} linux=${LINUX_RESULT}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $rc
 
+      # The ONE mandatory user-facing log artifact: if-no-files-found:
+      # error (never ignore — a silently absent log is a contract breach).
       - name: Upload the consolidated log
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: consolidated-run-log-attempt${{ github.run_attempt }}
-          path: consolidated-run.log
+          name: SHEYTAN-LA-all-logs-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: consolidated-run-log.txt
           retention-days: 14
-          if-no-files-found: ignore
+          if-no-files-found: error
 
+  # ==========================================================================
+  # Release — tags only. Publishes the contracted artifacts.
+  # ==========================================================================
   release:
     name: Release (tags only)
     runs-on: ubuntu-24.04
-    needs: [preflight, audit, ui, build-windows, build-linux]
+    needs: [audit, ui, build-windows, build-linux, consolidate-logs]
     if: startsWith(github.ref, 'refs/tags/v')
+    timeout-minutes: 15
     permissions:
       contents: write
+    env:
+      APP_VERSION: "1.11.0"
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - name: Download Windows package
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-x64-package-attempt${{ github.run_attempt }}
+          path: dist/
 
-      - name: Placeholder release step
-        run: echo "Tag release packaging is gated on green package artifacts from the matrix."
+      - name: Download Linux package
+        uses: actions/download-artifact@v8
+        with:
+          name: linux-x64-package-attempt${{ github.run_attempt }}
+          path: dist/
+
+      - name: Verify the artifact set against the release contract
+        run: |
+          set -euo pipefail
+          for want in \
+            "${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64.zip" \
+            "${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64-installer.exe" \
+            "${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip"; do
+            test -f "dist/$want" || { echo "::error::release artifact missing: $want"; exit 1; }
+          done
+          echo "release artifact set OK"
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip
+            dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer.exe
+            dist/${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64.zip
+          generate_release_notes: true

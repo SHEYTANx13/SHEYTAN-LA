@@ -758,15 +758,6 @@ func (s *LlamaServer) startLocked() error {
 		return serr
 	}
 
-	// v1.11.0 evidence freshness: a boot starts a NEW evidence world —
-	// the cached device enumeration (a per-boot fact by contract) is
-	// invalidated so every boot probes the real current hardware state
-	// instead of replaying a memo from before a restart. Binary updates
-	// were already covered by the path+size+mtime cache key.
-	if bin := engineBinPath(cfg); bin != "" {
-		InvalidateDeviceCache(bin)
-	}
-
 	// v1.3.6 (spec §16): claim the cross-process ownership lease BEFORE
 	// any boot/adoption decision. One installation has exactly ONE
 	// managing owner: a second app instance (live, verified through

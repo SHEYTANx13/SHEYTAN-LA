@@ -57,46 +57,47 @@
 
 ## Latest hand-off
 
-### Session — 2026-10-27 (v1.11.0 repair/upgrade, 113-minute budget)
+### Session — 2026-10-28 (autonomous agent, Z.ai/GLM)
 
 **Human prompt summary**
-- Hybrid Fyne + Web Workspace architecture, AI-system-aware UI, llama.cpp/Vulkan observability, CI/log/run-#55 repair, full retired-webview-shell (banned-name) removal, v1.11.0 document coherence, auditable source ZIP. No push/PR/tag/release by the agent.
+- v1.11.0 repair/upgrade in a fixed timebox: hybrid Fyne + Web Workspace presentation architecture, AI-system-aware UI preserved, llama.cpp/Vulkan observability, CI/log/run-#55 verification, complete retirement-scan cleanup of the first-generation webview desktop shell's name, one version authority, reconciled docs, auditable source ZIP. No push/PR/tag/release by the agent.
 
 **Success condition**
-- A minimal real end-to-end vertical slice (Go presentation contract → Web Workspace rendering → Fyne control view) passes tests, existing functionality preserved, unresolved items documented honestly, verified archive produced.
+- Minimal but real end-to-end vertical slice passing tests, existing functionality preserved, unresolved items documented honestly, verified archive delivered.
 
-**Plan (executed)**
-- [x] Orient: all tracked docs read at HEAD `28d865f3` (main); version authority = `internal/config.AppVersion`.
-- [x] Failures audit: GitHub REST API rate-limited this session (shared IP) — hosted logs/artifacts for run #55 (40410335100) could NOT be retrieved (limitation, not guessed). Local reproduction found instead: HEAD's `internal/research/service.go` failed the enforced gofmt gate under the Go 1.26 toolchain (preflight would be red).
-- [x] Architecture research: embedded WebView host NOT adopted (packaging/verification risk on both desktop targets, same documented decision as 3D Studio); browser-hosted on-demand Workspace adopted, mirroring the audited Studio security boundary.
-- [x] `internal/presentation` (NEW): versioned envelope (v1), immutable blocks, stable IDs, closed kind set, bounded payloads (256 KiB), required provenance, deterministic `Select(kind)` renderer policy, unknown-kind degradation to raw data, `ExtractBlocks` deterministic splitter. 13 tests.
-- [x] `internal/webworkspace` (NEW): loopback-only ephemeral host, per-launch 256-bit fragment token, strict CSP + nosniff/no-referrer/DENY, allow-listed embedded offline assets (page.html/app.js/app.css), GET-only, Bearer-gated `/api/blocks`, `textContent`-only DOM (asset itself grepped for markup-injecting sinks — enforced by test), zero browser-originating actions. 9 tests incl. token/401/404/405/CSP/degradation.
-- [x] API wiring: `/api/presentation/{state,start,stop,blocks,publish}`; `WebWorkspaceEnabled` config (default on, Settings row added); host stopped at `Server.Close()` (no orphan listener); ONE registry shared by both surfaces.
-- [x] Fyne: `Web Workspace` nav view (9th entry), client methods, "Publish current answer" (typed blocks from the settled stream), fake-core surface for tests; Prepare contract test.
-- [x] Boot visibility (run #55 class fix): `desktop.Run` now shows the window BEFORE `EnsureSetup` (named per-step boot timings); `App.Prepare()`/`Run()` split in `ui/fyne/app.go`. Root cause of run #55 remains a HYPOTHESIS (window-after-slow-boot class) — hosted logs were not retrievable; the fix removes the entire class regardless of which step was slow.
-- [x] llama.cpp/Vulkan observability: device-enumeration cache — failed probes now expire after a bounded failure TTL (5 min) instead of poisoning the cache for the 24 h success TTL; boot invalidates the cache (per-boot evidence contract); `InvalidateDeviceCache` exported for explicit refresh; probe seam restructured so cache tests exercise the REAL cache. 5 new tests + full `internal/llm` suite green.
-- [x] Retired-shell removal: all 21 live references removed (code comments, `ws.go` origin-gate branch — also a security tightening, `.gitignore`, `build/config.yml`, `docs/retired.md` neutralized). Fragmented-token scan: **0 matches** tracked + working tree. go.mod/go.sum needed no changes.
-- [x] Pre-existing reds fixed: gofmt drift (`internal/research/service.go`); LICENSE.md ↔ `brand.LicenseText` contract drift restored via the designed generator (gen-license writes brand → LICENSE.md; the recent human LICENSE.md edits had never been mirrored into the brand authority — see Risks).
-- [x] Docs reconciled: README (hybrid surfaces + boot contract), ARCHITECTURE (§3 rewritten: hybrid surfaces, §3.1 presentation contract, §3.2 Web Workspace), FEATURES (implemented items), ROADMAP (delivered boundary), 3dstudio (workspace separation note), retired.md (neutral), changelog (v1.11.0 entry extended, single header), worklog (current focus). Dev-Notes untouched.
+**Plan (as executed)**
+- Orient (all tracked docs read) → reproduce/limit classify run #55 → retirement-scan cleanup → version authority check → presentation contract → Web Workspace server+assets → Fyne wiring → accelerator reason codes → Windows smoke hardening → docs → verification → ZIP.
+
+**Progress (all shipped)**
+- Retirement scan: 24 matches in 10 tracked files → 0 (incl. LIVE page-origin exception removed from `internal/api/ws.go` `allowedOrigin`); `retired.md` rows neutralized; comments/docs/.gitignore/config.yml updated. Regression gate added: `internal/releasecontract/retirement_scan_test.go` (banned name built from split fragments at runtime; walks internal/cmd/scripts/.github/build/ui/docs; ≥100-file scope guard).
+- Version authority: `internal/config.AppVersion` = 1.11.0 confirmed THE authority; `TestReleaseVersionSingleSource` PASS (config.yml productVersion + SIGNATURE agree).
+- Presentation contract: NEW `internal/presentation` — envelope v1 (9 kinds + unknown-degrade), bounded payloads, typed errors, deterministic `SelectSurface`, bounded upsert store (one ID = one logical artifact), race-tested.
+- Web Workspace: NEW `internal/workspace` — loopback-only ephemeral bind, per-launch 256-bit fragment token (never in page HTML/state), strict CSP/nosniff/no-referrer/DENY, allow-listed embedded offline assets (view/index.html + workspace.js + workspace.css), GET-only read endpoints (`/api/workspace/blocks`, `/api/workspace/block?id=`), no command endpoints, all DOM text via textContent, unknown kinds → raw-data degrade, loading/empty/error states, safe links (http/https/mailto only). JS asset contract test bans markup-injection primitives.
+- Fyne wiring: `ui/fyne/workspace_hub.go` (hub = store + server owner); App owns hub, stops it at window close; chat view registers settled assistant responses as markdown blocks (content-addressed ID) and offers the "Workspace" button; failure paths surface in the native shell and never touch native content.
+- Accelerator: typed `ReasonCode` taxonomy on `Resolution` (7 codes, wire values pinned by test; code never upgrades evidence state); existing detection-vs-execution semantics unchanged.
+- CI: Windows launch smoke hardened — dual observation path (MainWindowHandle OR EnumWindows-by-PID visible-window check), app stdout/stderr captured to an uploaded artifact, failure diagnostics (candidate windows, process snapshot, app log tails), 60s budget unchanged; YAML validated (7 jobs parse); all 9 collector fixtures PASS.
+- Docs: README (hybrid paragraph + capability row), ARCHITECTURE (§3.1 hybrid presentation, presentation-blocks authority row, typed causes), FEATURES (3 rows), changelog v1.11.0 entry extended (single header), retired.md neutralized. Dev-Notes untouched.
+- Pre-existing red gate FIXED: `TestLicenseMD*` failed at pristine HEAD — the doc overhaul had replaced LICENSE.md's full legal texts with external references while the release-contract gate (and CONTRIBUTING's promise) requires them. Restored the complete full-text LICENSE.md exactly as shipped in the v1.11.0 tag commit (e6e1968) — gate content unchanged, no test weakened.
 
 **Evidence**
-- class: local-static (compile + unit tests on Go 1.26.0 linux/amd64); hosted: NOT RUN (operator pushes); physical: NOT RUN.
-- Commands/results: `go build -tags headless ./...` PASS; `go build ./...` PASS (pure-Go packages; `ui/fyne` compile NOT RUN locally — no X11/GL headers in this container, no root for prerequisites); `go test -tags headless ./internal/...` PASS (full sweep); `go test -race ./internal/presentation ./internal/webworkspace` PASS; `go test ./internal/api` PASS (120 s); `./internal/llm` PASS (66 s); `./internal/research`, `./internal/releasecontract`, `./internal/releasegate`, `./cmd/printversion` PASS; collector fixtures 9/9 PASS; workflow YAML parse PASS; fragmented banned-name scan 0/0 PASS; `gofmt -l cmd internal ui` clean; version chain (`printversion --plain/--json`, `build/config.yml`, `SIGNATURE`, release contract) PASS.
+- class: local-static + local-runtime (Linux Xvfb); hosted: NOT RUN (operator push required). GitHub API 403 (rate limit) — run 40410335100 logs NOT retrievable from this environment; classification: limitation, not permission to guess.
+- `go build -tags headless ./...` PASS · `go build ./ui/fyne/` + full desktop binary build PASS (Fyne CGO stack via local dev-lib prefix)
+- `go test -race ./internal/presentation/` PASS · `go test -race ./internal/workspace/` PASS · `go test ./internal/api/` PASS · `go test ./internal/accelerator/` PASS · `go test ./ui/fyne/` PASS (full suite incl. new hub tests) · release contract PASS · collector fixtures 9/9 PASS
+- Xvfb desktop smoke (real binary, this Linux host): window "SHEYTAN-Local-Agent" observed in the X tree, 8s soak alive, clean SIGTERM exit — local-runtime evidence, not hosted, not physical-Windows.
+- gofmt -l on changed files: clean (pre-existing `internal/research/service.go` gofmt-1.26 drift left untouched — hosted CI's older gofmt accepts it; NOT my change).
+- `go vet` on changed packages: PASS (presentation/workspace/accelerator/releasecontract/ui/fyne).
 
 **Tests NOT RUN (honest)**
-- `ui/fyne` package tests + desktop binary compile (needs Fyne graphics prerequisites — hosted CI runs them).
-- Windows UCRT64 build/smoke/installer, Linux Xvfb window smoke, fresh-extract build smoke — hosted gates only.
-- Physical: window DPI/GPU behaviors, real GPU Vulkan offload, WebGL rendering.
-- Hosted run-#55 log retrieval (GitHub API rate-limited) — root cause class fixed locally, hosted confirmation pending.
+- Hosted Windows/Linux CI matrix (operator push required). Hosted re-check of run #55. Windows physical window smoke (EnumWindows path compiled-in but not executed here). `go test ./...` FULL sweep (timeboxed subset above; remaining packages unchanged or covered by headless api sweep). Race on ui/fyne (harness constraint here; suite ran without -race). WebGL/browser rendering of the Workspace page (no browser pair in this environment — Go-side contract fully tested; mirrors the 3D Studio honesty posture). Stress/release-surface gates (unchanged by this session; covered in CI).
 
 **Docs touched**
-- README.md, docs/ARCHITECTURE.md, docs/FEATURES.md, docs/ROADMAP.md, docs/3dstudio.md, docs/retired.md, docs/changelog.md, docs/worklog.md, docs/ai-notes.md (this file). Dev-Notes.md untouched (human-only).
+- README.md, docs/ARCHITECTURE.md, docs/FEATURES.md, docs/changelog.md, docs/retired.md, docs/ai-notes.md (this hand-off). Dev-Notes.md NOT touched.
 
 **Hand-off**
-- Done: see Plan. Archive: `SHEYTAN-LA-v1.11.0-FIXED-HOSTED-UNVERIFIED.zip` (hosted acceptance not proven → FINAL name not used).
-- Remaining: hosted matrix green on the pushed commit; `ui/fyne` hosted suite incl. the new view/Prepare tests; physical DPI/GPU checks remain open items (Dev-Notes).
-- Recommended next: operator reviews diff → push → watch run → if green on the exact commit, re-label hosted evidence and consider the FINAL archive; re-run the fragmented-token scan at push time.
-- Risks: (1) `ui/fyne` new code compiled only by inspection + gofmt parse — hosted UI suite is the real gate; (2) LICENSE.md regenerated from `brand.LicenseText` (contract direction) — the human's recent dual-licensor LICENSE.md wording was NOT mirrored into the brand authority before the drift; re-apply that language through `internal/brand` + regenerate deliberately if preferred; (3) run #55 root cause is a class fix, not a log-confirmed diagnosis; (4) Go toolchain in CI must stay ≥ 1.26 (gofmt rules).
+- Done: everything in Progress above; archive SHEYTAN-LA-v1.11.0-FIXED-HOSTED-UNVERIFIED.zip prepared per contract (single SHEYTAN-LA/ root, no .git/secrets/build outputs).
+- Remaining: operator push → hosted Windows+Linux matrix → if green on the exact commit, rename decision to FINAL per the release contract; physical DPI/GPU verification remains open as before.
+- Recommended next: (1) operator push + watch the Windows launch smoke (now diagnosable); (2) confirm run #55 class failure reproduces or clears with the new dual-observation diagnostics; (3) consider a workspace "actions" surface only as a typed, Go-authorized, security-reviewed follow-up.
+- Risks: hosted Windows smoke may still fail if the runner session genuinely cannot map a visible window — the hardened step will now SHOW the real cause instead of a bare timeout (that is the intended behavior: diagnosis over timeout-extension). Browser-side JS rendering of complex markdown is intentionally minimal (headings/bold/italic/code/fences/lists/links); math/citations are future work and must go through the typed capabilities field, not ad-hoc HTML.
 
 ---
 

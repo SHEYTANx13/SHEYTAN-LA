@@ -30,9 +30,8 @@ type primaryView struct {
 }
 
 // primaryViews — the 7-layer IA (workspace.ts contract: ids, order, modes)
-// plus the v1.11.0 optional 3D Studio entry (read-only topology viewer)
-// and the v1.11.0 hybrid-UI Web Workspace entry (typed rich-content
-// renderer). Each view honors its own enabling setting.
+// plus the v1.11.0 optional 3D Studio entry (read-only topology viewer;
+// the view itself honors the studioEnabled setting).
 var primaryViews = []primaryView{
 	{"chat", "Chat", theme.HomeIcon, buildChatView},
 	{"agent", "Agent", theme.ComputerIcon, buildAgentView},
@@ -42,7 +41,6 @@ var primaryViews = []primaryView{
 	{"system", "System", theme.InfoIcon, buildSystemView},
 	{"settings", "Settings", theme.SettingsIcon, buildSettingsView},
 	{"studio", "3D Studio", theme.ViewFullScreenIcon, buildStudioView},
-	{"webws", "Web Workspace", theme.GridIcon, buildWebWorkspaceView},
 }
 
 // subPanel is a drawer-style surface opened over the shell (icon lazy —

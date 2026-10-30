@@ -7,25 +7,23 @@ Every release ships with the same invariants: one authority per concern, evidenc
 
 ---
 
-## 1.11.0 — 2026-10-26 (extended 2026-10-27)
+## 1.11.0 — 2026-10-26
 
 **One-Go-UI (Fyne) complete + hybrid Web Workspace + CI hardening + optional 3D Studio**
 
 - Full migration to single Go + Fyne desktop (Qt/QML and React/Vite fully retired).
 - Responsive three-zone shell (wide / medium / narrow).
 - Optional 3D Studio: read-only live topology viewer (loopback-only, per-launch token, strict CSP, embedded Three.js).
-- Hybrid rendering surfaces (v1.11.0 extension): typed presentation contract (`internal/presentation` — versioned immutable blocks, deterministic renderer selection, bounded payloads, required provenance, unknown-kind degradation) and the on-demand Web Workspace (`internal/webworkspace` — loopback read-only rich-content renderer, per-launch fragment token, strict CSP, offline assets, zero browser-originating commands), with the Fyne control view and chat publish path.
-- Boot visibility contract: the desktop window is built and shown before core setup completes; named per-step boot timings (fixes the run #55 "live process, no window" smoke failure class).
+- Hybrid presentation architecture: versioned block contract (`internal/presentation`) + on-demand browser-hosted Web Workspace (`internal/workspace`) — read-only rich viewer with the Studio's security boundary; native shell always renders first; unknown kinds degrade safely.
+- Typed accelerator resolution causes: machine-readable `reasonCode` on every resolution, never upgrading the evidence state.
+- Retirement scan completed: zero references to the first-generation webview desktop shell remain in the live tree (including its page-origin WebSocket exception, removed from the activity transport); a release-contract gate keeps the tree clean.
 - Consolidated one-file CI run-log artifact on every run.
-- Windows pipeline migrated to MSYS2 UCRT64.
+- Windows pipeline migrated to MSYS2 UCRT64; launch smoke hardened with dual window-observation paths and captured application output for diagnosable red runs.
 - Stress gate made headless-safe; CGO-free version resolver (`cmd/printversion`).
 - Launch smokes upgraded to bounded observable readiness + clean shutdown.
 - Fyne threading contract enforced; zero racy UI writes.
-- Last live traces of the retired first-generation webview shell removed from the tracked tree (origin-gate branch, comments, docs); regression scan is zero-match.
-- Device-enumeration evidence freshness: bounded failure window for failed capability probes, boot-time cache invalidation, explicit refresh through the canonical probe.
-- Release-contract hygiene restored: gofmt drift and the LICENSE.md ↔ brand generator drift fixed at the contract's designed direction.
 
-**Regression (local)**: full headless suite green (all `internal/...`), race gates green on the touched concurrent packages, release/version/license contracts green, collector fixtures 9/9, YAML parse green. Hosted verification of the final commit pending operator push.
+**Regression (local)**: full test suite green, stress 47/47, Xvfb desktop smoke clean. Hosted verification of the final commit pending operator push.
 
 ---
 

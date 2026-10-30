@@ -17,13 +17,13 @@
 package desktop
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
-	"time"
 
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/api"
 	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
@@ -62,19 +62,9 @@ func failBoot(step string, err error) int {
 // Run starts the SHEYTAN desktop application and blocks until the Fyne
 // window closes.
 //
-// Launch order (v1.11.0+ boot-visibility + interactive-loading):
-//
-//	core up → IPC bound → WINDOW BUILT AND SHOWN → event loop starts
-//	→ EnsureSetup runs in parallel (dirs, maintenance, prewarm)
-//	→ UI bootstrap (handshake + sessions) proceeds against the live core
-//	→ clean shutdown on window close
-//
-// The window comes BEFORE EnsureSetup deliberately (run #55 class):
-// a live process must never stay windowless. Starting the event loop
-// before EnsureSetup returns additionally means the shell can paint and
-// process OS events while setup/prewarm finish — perceived load time
-// drops without relaxing fail-closed semantics (setup failure still
-// closes the window and returns exit 1).
+// Launch order is deterministic: core up → IPC endpoint bound → Fyne UI
+// attached as the ONE in-process client → run until the window closes →
+// clean core shutdown.
 func Run(cfg *config.Config) int {
 	if cfg == nil {
 		return failBoot("config", errors.New("missing configuration"))
@@ -83,11 +73,6 @@ func Run(cfg *config.Config) int {
 	// Taskbar/notification identity (no-op where the concept does not
 	// exist).
 	_ = platform.SetAppUserModelID(config.AppUserModelID)
-
-	bootAt := time.Now()
-	step := func(name string) {
-		logging.Default().Info("desktop", "boot step %s done (elapsed %s)", name, time.Since(bootAt).Round(time.Millisecond))
-	}
 
 	srv, err := api.New(cfg)
 	if err != nil {
@@ -100,7 +85,10 @@ func Run(cfg *config.Config) int {
 		srv.Close()
 		logging.Default().Info("desktop", "server closed")
 	}()
-	step("core init")
+
+	if err := srv.EnsureSetup(); err != nil {
+		return failBoot("setup", err)
+	}
 
 	// The ONE local channel to the UI client. A transport failure is a
 	// HARD, VISIBLE fault: the desktop exits non-zero instead of launching
@@ -123,7 +111,6 @@ func Run(cfg *config.Config) int {
 		ipc.Stop()
 		logging.Default().Info("desktop", "ipc stopped")
 	}()
-	step("ipc bound")
 
 	logging.Default().Info("desktop", "%s v%s (Fyne desktop, one Go UI)", config.AppName, config.AppVersion)
 	fmt.Printf("%s v%s (Fyne desktop, one Go UI)\n", config.AppName, config.AppVersion)
@@ -131,32 +118,11 @@ func Run(cfg *config.Config) int {
 	fmt.Printf("  core endpoint: %s\n", ipc.Endpoint())
 
 	// The Fyne app is the ONLY UI: it connects to the same authenticated
-	// endpoint in-process. No child binary, no separate UI executable —
-	// the one-Go-UI program removed the second implementation entirely.
+	// endpoint the Qt host used, in-process. No child binary, no
+	// SHEYTAN_UI_EXECUTABLE spawn override — the one-Go-UI program
+	// removed the second implementation entirely.
 	client := fyneui.NewCoreClient(ipc.Endpoint(), key)
 	app := fyneui.NewDesktopApp(client)
-
-	// WINDOW FIRST: build and show the real top-level window now.
-	if err := app.Prepare(); err != nil {
-		return failBoot("window", err)
-	}
-	step("window shown")
-
-	// Core setup IN PARALLEL with the event loop: first-run setup,
-	// installer state, startup maintenance gate and prewarm proceed while
-	// the shell paints. Fail-closed: any setup error closes the window
-	// and forces a non-zero exit after Run returns.
-	setupErr := make(chan error, 1)
-	go func() {
-		err := srv.EnsureSetup()
-		if err != nil {
-			logging.Default().Error("desktop", "boot failed at setup: %v", err)
-			// Close the window so Run() unblocks; the main path returns 1.
-			app.Close()
-		}
-		setupErr <- err
-		step("core setup")
-	}()
 
 	// Termination signals close the window; the deferred shutdowns above
 	// then stop the IPC and the core in order.
@@ -169,27 +135,8 @@ func Run(cfg *config.Config) int {
 		app.Close()
 	}()
 
+	_ = context.Background // context reserved for the app-lifetime scope
 	code := app.Run()
-
-	// If setup failed while the UI was running, surface it and fail closed.
-	select {
-	case err := <-setupErr:
-		if err != nil {
-			return failBoot("setup", err)
-		}
-	default:
-		// Setup still running (user closed the window early) — wait briefly
-		// so the goroutine can finish or we drain on Close via srv.Close.
-		select {
-		case err := <-setupErr:
-			if err != nil {
-				return failBoot("setup", err)
-			}
-		case <-time.After(3 * time.Second):
-			logging.Default().Info("desktop", "setup still in flight at UI exit — srv.Close will join")
-		}
-	}
-
 	logging.Default().Info("desktop", "ui exit: clean close (exit code %d)", code)
 	return code
 }
