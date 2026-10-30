@@ -35,8 +35,11 @@ import (
 // v1.10.1 removed from the workflow when the desktop became the native
 // Qt client — the stress gate failed on every v1.10.1+ hosted run while
 // the workflow itself was correct. The pin now tracks the CURRENT
-// contract: the Qt-era dependency set is REQUIRED, the whole retired
-// GTK/WebKit stack is BANNED.
+// contract (unambiguous as of v1.11.0): the REQUIRED dependency set is
+// today's Fyne-era set (one Go UI — see the v1.11.0 note above); the
+// phrase "Qt-era" above names the era WHEN the GTK pin was dropped, not
+// a requirement on Qt. Qt/CMake/QML and GTK/WebKit stacks are both
+// RETIRED and BANNED.
 
 func stressReleaseSurface() error {
 	// Release-surface floor: 1.1.2. This is a minimum rather than an exact

@@ -130,13 +130,25 @@ jobs:
       - name: gofmt (enforced)
         run: |
           set -euo pipefail
-          unformatted=$(gofmt -l cmd internal ui)
+          echo "RUN gofmt -l cmd internal ui" >> ci-logs/gate-order.txt
+          # The gate's own evidence MUST outlive the step log: on red, the
+          # violation list and the exact formatter version are teed into the
+          # uploaded preflight-logs-part artifact (run #118 root cause: the
+          # file list existed only in the step log, so nobody could retrieve
+          # which files to reformat).
+          {
+            echo "toolchain: $(go version)"
+            echo "files:"
+          } | tee ci-logs/preflight-gofmt.log
+          unformatted=$(gofmt -l cmd internal ui | tee -a ci-logs/preflight-gofmt.log)
           if [ -n "$unformatted" ]; then
             echo "::error::gofmt violations — run gofmt -w on:"
             echo "$unformatted"
+            echo "::error::full list captured in the preflight-logs-part artifact at ci-logs/preflight-gofmt.log"
             exit 1
           fi
-          echo "gofmt OK"
+          echo "gofmt OK" | tee -a ci-logs/preflight-gofmt.log
+          echo "gate OK: gofmt -l cmd internal ui" >> ci-logs/gate-order.txt
 
       - name: go vet ./...
         run: |
@@ -287,7 +299,7 @@ jobs:
       - name: Build the real Linux binary for the smoke
         run: |
           set -euo pipefail
-          go build -o "$RUNNER_TEMP/SHEYTAN-LA" ./cmd/sheytan-local-agent
+          go build -trimpath -ldflags "-s -w" -o "$RUNNER_TEMP/SHEYTAN-LA" ./cmd/sheytan-local-agent
           file "$RUNNER_TEMP/SHEYTAN-LA"
 
       # Smoke contract (run #54 repair): bounded polling of OBSERVABLE
@@ -485,7 +497,10 @@ jobs:
         run: |
           $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
           $env:CGO_ENABLED = "1"
-          go build -ldflags "-H=windowsgui" -o "dist/windows/app/${{ env.WIN_PKG_ROOT }}/SHEYTAN-LA.exe" ./cmd/sheytan-local-agent
+          # -H=windowsgui is the STRESS PIN (3g) — kept. -s -w strips the
+          # symbol tables and DWARF debug info (v1.11.0 size work: ~41%
+          # smaller PE locally, Go 1.27.3, same toolchain).
+          go build -ldflags "-H=windowsgui -s -w" -o "dist/windows/app/${{ env.WIN_PKG_ROOT }}/SHEYTAN-LA.exe" ./cmd/sheytan-local-agent
           if ($LASTEXITCODE -ne 0) { throw "SHEYTAN-LA.exe build failed" }
 
       - name: Verify the PE (x86-64, windowsgui)
@@ -500,6 +515,61 @@ jobs:
           if ($machine -ne 0x8664) { throw ("PE machine = 0x{0:X4}, want x86-64 (0x8664)" -f $machine) }
           Write-Host "PE OK: x86-64"
 
+      # ------------------------------------------------------------------
+      # ZIP purity foundation (run #118 defect): the launch smoke NEVER
+      # runs inside the staging tree. The app's portable data root
+      # (<AppRoot>\data: app.log, crash reports) is written beside the
+      # exe it actually launches — so the smoke launches from a full copy
+      # under RUNNER_TEMP and the staging tree stays pristine for the ZIP
+      # and NSIS steps that follow.
+      # Software GL for the GPU-less hosted runner (run #117 root
+      # hypothesis: windows-latest reports only a Basic Display Adapter,
+      # software GL 1.1 / WARP Direct3D-only, so GLFW cannot create a
+      # usable context and window creation never completes): a pinned
+      # Mesa llvmpipe build's opengl32.dll is placed BESIDE THE COPY's
+      # exe (DLL search order picks it up before the system one). The
+      # shipped ZIP and installer must NEVER contain the Mesa DLL —
+      # enforced by the purity assertions in "Verify Windows ZIP" and the
+      # payload generator guard, not by convention.
+      # Mesa pin (verified 2026-10-30):
+      #   repo/release : pal1000/mesa-dist-win  tag 26.2.5
+      #   asset        : mesa3d-26.2.5-release-msvc.7z (70,248,244 bytes)
+      #   sha256       : 997123ef4ce8896204ab912d5b54f19372c487ff9835bcefafa2fca23b8953c2
+      #   entry        : x64/opengl32.dll
+      # Checksum mismatch => fail closed, no DLL is placed.
+      # ------------------------------------------------------------------
+      - name: Stage smoke copy + pinned Mesa software GL
+        run: |
+          $ErrorActionPreference = "Stop"
+          $src = (Resolve-Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}").Path
+          $smokeRoot = Join-Path $env:RUNNER_TEMP "win-smoke\${{ env.WIN_PKG_ROOT }}"
+          if (Test-Path $smokeRoot) { Remove-Item -Recurse -Force $smokeRoot }
+          New-Item -ItemType Directory -Force -Path (Split-Path $smokeRoot) | Out-Null
+          Copy-Item -Recurse -Force $src $smokeRoot
+          if (-not (Test-Path (Join-Path $smokeRoot "SHEYTAN-LA.exe"))) { throw "smoke copy is missing SHEYTAN-LA.exe" }
+          $stagingData = "dist/windows/app/${{ env.WIN_PKG_ROOT }}/data"
+          if (Test-Path $stagingData) { throw "pristine-staging violation: $stagingData exists BEFORE the smoke — upstream steps leaked residue" }
+
+          $mesaUrl = "https://github.com/pal1000/mesa-dist-win/releases/download/26.2.5/mesa3d-26.2.5-release-msvc.7z"
+          $mesaSha256 = "997123ef4ce8896204ab912d5b54f19372c487ff9835bcefafa2fca23b8953c2"
+          $mesaArchive = Join-Path $env:RUNNER_TEMP "mesa3d-26.2.5-release-msvc.7z"
+          Invoke-WebRequest -Uri $mesaUrl -OutFile $mesaArchive
+          $hash = (Get-FileHash -Algorithm SHA256 $mesaArchive).Hash.ToLowerInvariant()
+          if ($hash -ne $mesaSha256) {
+            throw ("Mesa checksum mismatch: got {0}, want {1} — failing closed, no DLL placed" -f $hash, $mesaSha256)
+          }
+          $mesaExtract = Join-Path $env:RUNNER_TEMP "mesa3d-extract"
+          if (Test-Path $mesaExtract) { Remove-Item -Recurse -Force $mesaExtract }
+          New-Item -ItemType Directory -Force -Path $mesaExtract | Out-Null
+          & "C:\Program Files\7-Zip\7z.exe" e "$mesaArchive" "-o$mesaExtract" "x64/opengl32.dll" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z extraction of x64/opengl32.dll failed (exit $LASTEXITCODE)" }
+          $dll = Join-Path $mesaExtract "opengl32.dll"
+          if (-not (Test-Path $dll)) { throw "extracted Mesa opengl32.dll missing under $mesaExtract" }
+          Copy-Item $dll (Join-Path $smokeRoot "opengl32.dll") -Force
+          $stagingDll = "dist/windows/app/${{ env.WIN_PKG_ROOT }}/opengl32.dll"
+          if (Test-Path $stagingDll) { throw "purity violation: opengl32.dll must never enter the staging tree" }
+          Write-Host "smoke copy staged at $smokeRoot with pinned Mesa llvmpipe opengl32.dll (sha256 OK)"
+
       # Launch smoke (run #54 repair; #55 hardening): bounded polling of
       # observable readiness — process alive + real MainWindowHandle OR a
       # visible top-level window found by PID via EnumWindows (a GUI
@@ -511,7 +581,14 @@ jobs:
       # documented last resort. The 60s boot budget is unchanged.
       - name: Launch smoke (boot, window, bounded, clean close)
         run: |
-          $exe = Join-Path (Resolve-Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}") "SHEYTAN-LA.exe"
+          # Launch target is the RUNNER_TEMP copy (with the pinned Mesa
+          # DLL beside the exe), never the staging tree. Every hardened
+          # behavior from #54/#55 is unchanged: dual observation path,
+          # stdout/stderr redirect, 60s budget, 12s soak,
+          # CloseMainWindow first, force-terminate last resort.
+          $smokeRoot = Join-Path $env:RUNNER_TEMP "win-smoke\${{ env.WIN_PKG_ROOT }}"
+          if (-not (Test-Path (Join-Path $smokeRoot "SHEYTAN-LA.exe"))) { throw "smoke copy missing SHEYTAN-LA.exe under $smokeRoot — the staging step did not run" }
+          $exe = Join-Path (Resolve-Path $smokeRoot) "SHEYTAN-LA.exe"
           $smokeLog = Join-Path (Get-Location) "smoke-app-output.log"
           $p = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru `
                  -RedirectStandardOutput $smokeLog -RedirectStandardError $smokeLog+".err"
@@ -590,6 +667,32 @@ jobs:
           Write-Host "--- application output tail ---"
           if (Test-Path $smokeLog) { Get-Content $smokeLog -Tail 20 }
 
+      # The smoke copy's own diagnostics must land in the windows-logs-part
+      # artifact (run #117: zero diagnostics survived the step log). Red or
+      # green, best-effort collection of the app's portable data residue
+      # from the COPY (never the staging tree).
+      - name: Collect smoke diagnostics into ci-logs (best-effort)
+        if: always()
+        run: |
+          $ErrorActionPreference = "Continue"
+          $smokeRoot = Join-Path $env:RUNNER_TEMP "win-smoke\${{ env.WIN_PKG_ROOT }}"
+          New-Item -ItemType Directory -Force -Path "ci-logs" | Out-Null
+          try {
+            $appLogs = @(Get-ChildItem -Path (Join-Path $smokeRoot "data") -Filter "app.log" -Recurse -ErrorAction SilentlyContinue)
+            if ($appLogs.Count -gt 0) {
+              Copy-Item $appLogs[0].FullName "ci-logs/win-smoke-app.log" -Force
+              Write-Host "collected $($appLogs[0].FullName) -> ci-logs/win-smoke-app.log"
+            } else { Write-Host "smoke copy produced no app.log (no data root created)" }
+            $crashes = @(Get-ChildItem -Path (Join-Path $smokeRoot "data") -Filter "crash-*.log" -Recurse -ErrorAction SilentlyContinue)
+            foreach ($c in $crashes) {
+              Copy-Item $c.FullName ("ci-logs/win-smoke-" + $c.Name) -Force
+              Write-Host "collected $($c.FullName) -> ci-logs/win-smoke-$($c.Name)"
+            }
+            foreach ($f in @("smoke-app-output.log", "smoke-app-output.log.err")) {
+              if (Test-Path $f) { Copy-Item $f ("ci-logs/" + $f) -Force; Write-Host "collected $f -> ci-logs" }
+            }
+          } catch { Write-Host "diagnostic collection (best-effort) failed: $($_.Exception.Message)" }
+
       - name: Upload smoke app output (Windows)
         if: always()
         uses: actions/upload-artifact@v7
@@ -657,7 +760,22 @@ jobs:
             foreach ($entry in $required) {
               if ($names -notcontains $entry) { throw "ZIP entry missing: $entry" }
             }
-            Write-Host "ZIP OK: all contracted entries present"
+            # ZIP purity assertions (run #118 defect): required entries are
+            # not enough — forbidden ones must FAIL the build too.
+            #   1. nothing under the app's portable data root (a smoke run
+            #      inside the staging tree leaves data\app.log residue);
+            #   2. never the smoke-provisioned Mesa opengl32.dll.
+            $forbiddenData = "${env:WIN_PKG_ROOT}/data/"
+            $forbiddenDll = "${env:WIN_PKG_ROOT}/opengl32.dll"
+            foreach ($name in $names) {
+              if ($name.StartsWith($forbiddenData, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw ("ZIP purity violation: data-root residue entry '{0}' — the smoke must run from the RUNNER_TEMP copy, never the staging tree" -f $name)
+              }
+              if ($name.Equals($forbiddenDll, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw ("ZIP purity violation: '{0}' present — the Mesa software-GL DLL is smoke-only and must never ship" -f $name)
+              }
+            }
+            Write-Host "ZIP OK: all contracted entries present; purity assertions passed (no data/ residue, no opengl32.dll)"
           } finally { $archive.Dispose() }
 
       # NSIS installer: ONE Go executable payload — no Qt runtime, no
@@ -672,8 +790,19 @@ jobs:
         run: |
           $root = "dist/windows/app/${{ env.WIN_PKG_ROOT }}"
           $lines = @('!define SHEYTAN_PAYLOAD_UNINSTALL', '!macro SHEYTAN_PAYLOAD_UNINSTALL_FILES')
-          Get-ChildItem -Recurse -File $root | ForEach-Object {
-            $rel = $_.FullName.Substring((Resolve-Path $root).Path.Length + 1)
+          # Uninstall symmetry is generated from the PRISTINE staging tree
+          # (the smoke runs from the RUNNER_TEMP copy). Assert it: data
+          # residue or the Mesa DLL here means the smoke leaked upstream.
+          $payloadFiles = @(Get-ChildItem -Recurse -File $root)
+          if ($payloadFiles.Count -eq 0) { throw "staging root has no files: $root" }
+          foreach ($f in $payloadFiles) {
+            $rel = $f.FullName.Substring((Resolve-Path $root).Path.Length + 1)
+            if ($rel -like "data\*" -or $rel -eq "opengl32.dll") {
+              throw ("pristine-payload violation: staging tree contains '{0}' — the smoke must never write into dist/windows/app" -f $rel)
+            }
+          }
+          foreach ($f in $payloadFiles) {
+            $rel = $f.FullName.Substring((Resolve-Path $root).Path.Length + 1)
             $lines += "  Delete `"`$INSTDIR\$rel`""
           }
           $dirs = Get-ChildItem -Recurse -Directory $root | Sort-Object { $_.FullName.Length } -Descending
@@ -1011,12 +1140,59 @@ jobs:
       - name: Checkout (collector script)
         uses: actions/checkout@v7
 
-      - name: Download all log parts (namespaced, no merge)
+      # ONE download step per expected log part, each with an explicit
+      # name + path. Run #118 root cause: a single pattern-download step
+      # (pattern: "*-logs-part-attemptN") lands its files FLAT into
+      # ci-parts/ whenever the pattern matches EXACTLY ONE artifact
+      # (download-artifact@v8 resolves the destination as
+      # artifacts.length === 1 ? path : path/<artifact.name>) — so the
+      # red-preflight-only shape of run #118 produced ci-parts/
+      # gate-order.txt instead of ci-parts/preflight-logs-part-attempt1/,
+      # the collector counted a missing source, and the job went red on
+      # exit 1 AFTER the report was written. An explicit name: download is
+      # ALWAYS namespaced regardless of how many artifacts exist; skipped
+      # jobs contribute no download attempt (the if: gate) and a ran-but-
+      # silent job keeps the collector as the single red signal
+      # (continue-on-error) that names the coverage gap.
+      - name: Download preflight log part
+        if: needs.preflight.result != 'skipped'
+        continue-on-error: true
         uses: actions/download-artifact@v8
         with:
-          pattern: "*-logs-part-attempt${{ github.run_attempt }}"
-          path: ci-parts/
+          name: preflight-logs-part-attempt${{ github.run_attempt }}
+          path: ci-parts/preflight-logs-part-attempt${{ github.run_attempt }}
+
+      - name: Download audit log part
+        if: needs.audit.result != 'skipped'
         continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: audit-logs-part-attempt${{ github.run_attempt }}
+          path: ci-parts/audit-logs-part-attempt${{ github.run_attempt }}
+
+      - name: Download ui log part
+        if: needs.ui.result != 'skipped'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: ui-logs-part-attempt${{ github.run_attempt }}
+          path: ci-parts/ui-logs-part-attempt${{ github.run_attempt }}
+
+      - name: Download windows log part
+        if: needs.build-windows.result != 'skipped'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-logs-part-attempt${{ github.run_attempt }}
+          path: ci-parts/windows-logs-part-attempt${{ github.run_attempt }}
+
+      - name: Download linux log part
+        if: needs.build-linux.result != 'skipped'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: linux-logs-part-attempt${{ github.run_attempt }}
+          path: ci-parts/linux-logs-part-attempt${{ github.run_attempt }}
 
       - name: Build the consolidated run log
         id: collector
@@ -1049,6 +1225,16 @@ jobs:
             --started-at "${{ github.event.head_commit.timestamp }}" \
             "${job_args[@]}"
           rc=$?
+          # A red collector must NAME the coverage gap (run #118: exit 1
+          # with no retrievable diagnosis). The report's MISSING LOG SOURCE
+          # section is the authority — mirror every missing job as its own
+          # ::error annotation so the run page carries the answer.
+          if [ "$rc" -ne 0 ] && [ -f consolidated-run-log.txt ]; then
+            sed -n '/^=== MISSING LOG SOURCE ===/,/^$/p' consolidated-run-log.txt \
+              | grep -oE "job '[^']*'" | sed "s/^job '//; s/'$//" | while IFS= read -r j; do
+                echo "::error::Consolidate logs: missing log source — job '$j' contributed no log parts (full report in the consolidated-run-log artifact)"
+              done
+          fi
           {
             echo "## Consolidated run log"
             echo ""
@@ -1109,6 +1295,49 @@ jobs:
           done
           echo "release artifact set OK"
 
+      # UPDATE.md contract (drift fixed here): the in-app updater
+      # (internal/updater, AppManifestURL) consumes release-manifest.json —
+      # version + per-platform url/sha256/sizeBytes/kind — and the release
+      # carries a deterministic SHA256SUMS.txt. Both are generated HERE,
+      # from the exact artifact bytes being published (never hand-written),
+      # deterministically: jq -nS emits sorted keys; SHA256SUMS.txt is
+      # LC_ALL=C-sorted by filename with the canonical two-space separator.
+      - name: Generate release-manifest.json and SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          ver="${APP_VERSION}"
+          base="${{ github.server_url }}/${{ github.repository }}/releases/download/v${ver}"
+          win_zip="${WIN_PKG_ROOT}-v${ver}-windows-x64.zip"
+          win_inst="${WIN_PKG_ROOT}-v${ver}-windows-x64-installer.exe"
+          lin_zip="${LINUX_PKG_ROOT}-v${ver}-linux-x64.zip"
+          win_sha="$(sha256sum "dist/${win_zip}" | cut -d' ' -f1)"
+          win_size="$(stat -c%s "dist/${win_zip}")"
+          lin_sha="$(sha256sum "dist/${lin_zip}" | cut -d' ' -f1)"
+          lin_size="$(stat -c%s "dist/${lin_zip}")"
+          jq -nS \
+            --arg ver "$ver" \
+            --arg winurl "${base}/${win_zip}" \
+            --arg winsha "$win_sha" \
+            --arg winsize "$win_size" \
+            --arg linurl "${base}/${lin_zip}" \
+            --arg linsha "$lin_sha" \
+            --arg linsize "$lin_size" \
+            '{version: $ver,
+              platforms: {
+                "linux-x64":   {url: $linurl, sha256: $linsha, sizeBytes: ($linsize|tonumber), kind: "zip"},
+                "windows-x64": {url: $winurl, sha256: $winsha, sizeBytes: ($winsize|tonumber), kind: "zip"}
+              }}' > dist/release-manifest.json
+          {
+            printf '%s  %s\n' "$(sha256sum "dist/${lin_zip}" | cut -d' ' -f1)" "${lin_zip}"
+            printf '%s  %s\n' "$(sha256sum "dist/${win_inst}" | cut -d' ' -f1)" "${win_inst}"
+            printf '%s  %s\n' "$(sha256sum "dist/${win_zip}" | cut -d' ' -f1)" "${win_zip}"
+            printf '%s  %s\n' "$(sha256sum "dist/release-manifest.json" | cut -d' ' -f1)" "release-manifest.json"
+          } | LC_ALL=C sort -k2 > dist/SHA256SUMS.txt
+          jq -e '.version == $ver and (.platforms["windows-x64"].sha256 | length == 64) and (.platforms["linux-x64"].sha256 | length == 64)' --arg ver "$ver" dist/release-manifest.json > /dev/null \
+            || { echo "::error::generated release-manifest.json failed its contract self-check"; exit 1; }
+          test "$(wc -l < dist/SHA256SUMS.txt)" -eq 4 || { echo "::error::SHA256SUMS.txt must list exactly 4 files"; exit 1; }
+          echo "--- SHA256SUMS.txt ---"; cat dist/SHA256SUMS.txt
+
       - name: Publish the release
         uses: softprops/action-gh-release@v3
         with:
@@ -1116,4 +1345,6 @@ jobs:
             dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip
             dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer.exe
             dist/${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64.zip
+            dist/release-manifest.json
+            dist/SHA256SUMS.txt
           generate_release_notes: true

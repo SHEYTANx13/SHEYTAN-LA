@@ -42,9 +42,22 @@ var (
 	deviceCache = map[string]deviceCacheEntry{}
 )
 
-// deviceCacheTTL bounds how long one enumeration stays fresh (the engine
-// binary is keyed by mtime, so a binary swap invalidates immediately).
+// deviceCacheTTL bounds how long one SUCCESSFUL enumeration stays fresh
+// (the engine binary is keyed by mtime, so a binary swap invalidates
+// immediately).
 const deviceCacheTTL = 24 * time.Hour
+
+// deviceFailureTTL bounds how long a FAILED probe may answer for a
+// binary that has no fresh successful enumeration (v1.11.0 observability
+// rule: a failed capability probe must not poison the cache for the full
+// success TTL — a transient loader/driver failure re-probes after the
+// bounded failure window, while a measured success keeps its full TTL).
+// A var (not a const) so tests can tighten it deterministically.
+var deviceFailureTTL = 5 * time.Minute
+
+// timeNow is the clock seam for the cache freshness checks (tests
+// advance it deterministically — no sleep-based correctness).
+var timeNow = time.Now
 
 func deviceCacheKey(binPath string) string {
 	if fi, err := os.Stat(binPath); err == nil {
@@ -59,6 +72,11 @@ func deviceCacheKey(binPath string) string {
 // failures; production always runs the real engine probe).
 var enumerateEngineDevices = EnumerateEngineDevices
 
+// probeEngineDevices is the swappable PROBE (exec + parse + error
+// folding) behind the cache — v1.11.0: cache-behavior tests swap THIS
+// seam so the real cache logic always runs.
+var probeEngineDevices = probeEngineDevicesReal
+
 // EnumerateEngineDevices runs the installed engine's own device listing
 // (llama.cpp --list-devices). supported=false means this build does not
 // implement the flag (older releases) — callers fall back to the documented
@@ -72,14 +90,50 @@ func EnumerateEngineDevices(binPath string) (devices []accelerator.Device, suppo
 
 	deviceMu.Lock()
 
-	if entry, ok := deviceCache[key]; ok && time.Since(entry.at) < deviceCacheTTL {
-		devices, supported, err := entry.devices, entry.supported, entry.err
-		deviceMu.Unlock()
-		return devices, supported, err
+	if entry, ok := deviceCache[key]; ok {
+		// Freshness bound: a SUCCESSFUL probe serves for the full TTL; a
+		// FAILED probe (or a measured unsupported verdict, which is also
+		// re-observed) only for the bounded failure window — a transient
+		// failure must re-probe soon instead of poisoning the cache for
+		// 24h (the regression the v1.11.0 simplification introduced and
+		// this restoration fixes).
+		ttl := deviceCacheTTL
+		if entry.err != nil || (!entry.supported && entry.devices == nil) {
+			ttl = deviceFailureTTL
+		}
+		if timeNow().Sub(entry.at) < ttl {
+			devices, supported, err := entry.devices, entry.supported, entry.err
+			deviceMu.Unlock()
+			return devices, supported, err
+		}
 	}
 
 	deviceMu.Unlock()
 
+	// Probe the real world through the swappable authority (exec + parse
+	// + error folding — the seam cache tests replace).
+	devices, supported, probeErr := probeEngineDevices(binPath)
+
+	deviceMu.Lock()
+	deviceCache[key] = deviceCacheEntry{
+		key:       key,
+		at:        timeNow(),
+		devices:   devices,
+		supported: supported,
+		err:       probeErr,
+	}
+	deviceMu.Unlock()
+
+	return devices, supported, probeErr
+}
+
+// probeEngineDevicesReal runs the engine's --list-devices once and folds
+// the outcome: an unknown-argument refusal means this build does not
+// implement the flag — a MEASURED "unsupported" verdict, not a failure
+// to know. Any OTHER exec failure is a FAILED probe and is returned as
+// the verdict so the cache stores the failure (bounded failure TTL),
+// never a success-shaped entry for a binary that could not be probed.
+func probeEngineDevicesReal(binPath string) (devices []accelerator.Device, supported bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), enumerateTimeout)
 	defer cancel()
 
@@ -90,18 +144,6 @@ func EnumerateEngineDevices(binPath string) (devices []accelerator.Device, suppo
 
 	devices, supported, parseErr := ParseEngineDeviceOutput(string(out))
 
-	deviceMu.Lock()
-	deviceCache[key] = deviceCacheEntry{
-		key:       key,
-		at:        time.Now(),
-		devices:   devices,
-		supported: supported,
-		err:       parseErr,
-	}
-	deviceMu.Unlock()
-
-	// A build that errors on --list-devices does not support enumeration —
-	// that is a MEASURED "unsupported" verdict, not a failure to know.
 	if execErr != nil {
 		if isUnknownArgumentError(string(out)) {
 			return nil, false, nil

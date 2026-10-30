@@ -160,5 +160,50 @@ else
   bad "all-skipped run (rc=$rc)"
 fi
 
+# 10. run #118 regression: EXACT hosted shape — one failed job whose
+# artifact name is the FULL namespaced form ("*-logs-part-attempt1"),
+# four skipped jobs. The hosted red came from the flat single-match
+# download layout, not from the collector; this fixture pins the
+# collector contract: such a run is COMPLETE (1/5 captured, 4
+# never-started) and must exit 0. If the collector ever regresses to
+# treating the skipped jobs or this shape as missing sources, this
+# fixture fails.
+new_case 10
+mkdir -p "$parts/preflight-logs-part-attempt1"
+printf 'RUN go build ./...\ngate OK: go build ./...\n' > "$parts/preflight-logs-part-attempt1/gate-order.txt"
+printf 'EXIT_CODE: 1 FAIL\n' > "$parts/preflight-logs-part-attempt1/preflight-build.log"
+run_collector "$c" \
+  --job "preflight-logs-part-attempt1:failure" \
+  --job "audit-logs-part-attempt1:skipped" \
+  --job "ui-logs-part-attempt1:skipped" \
+  --job "windows-logs-part-attempt1:skipped" \
+  --job "linux-logs-part-attempt1:skipped"
+rc=$?
+if [ $rc -eq 0 ] && grep -q "jobs with captured logs: 1" "$out" \
+  && grep -q "jobs NEVER_STARTED (skipped): 4" "$out" \
+  && ! grep -q "^=== MISSING LOG SOURCE ===" "$out"; then
+  ok "run #118 shape (one failed job with parts + four skipped) is a complete report, exit 0"
+else
+  bad "run #118 shape (rc=$rc)"
+fi
+
+# 11. a job that RAN and FAILED but contributed no parts (artifact upload
+# lost) is a real coverage gap: report first, then exit 1, naming the job.
+new_case 11
+run_collector "$c" \
+  --job "preflight-logs-part-attempt1:failure" \
+  --job "audit-logs-part-attempt1:skipped" \
+  --job "ui-logs-part-attempt1:skipped" \
+  --job "windows-logs-part-attempt1:skipped" \
+  --job "linux-logs-part-attempt1:skipped"
+rc=$?
+if [ $rc -eq 1 ] && grep -q "^=== MISSING LOG SOURCE ===" "$out" \
+  && grep -q "job 'preflight-logs-part-attempt1'" "$out" \
+  && grep -q "jobs NEVER_STARTED (skipped): 4" "$out"; then
+  ok "ran-and-failed without parts → exit 1, job named in MISSING LOG SOURCE"
+else
+  bad "failed job without parts (rc=$rc)"
+fi
+
 printf '\nfixtures: %d pass / %d fail\n' "$pass" "$fail"
 [ $fail -eq 0 ]
