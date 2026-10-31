@@ -36,12 +36,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/calibration"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/hardware"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recommendation"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/calibration"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/hardware"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/recommendation"
 )
 
 // selectionPhase is the backend-authoritative state of the model

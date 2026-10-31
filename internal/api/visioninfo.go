@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/vision"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/vision"
 )
 
 // visionFields extends modelInfo with the ModelPackage vision view: the

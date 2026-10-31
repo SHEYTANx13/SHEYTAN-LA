@@ -16,10 +16,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/vision"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/netcheck"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/vision"
 )
 
 // Message is an OpenAI-style chat message.

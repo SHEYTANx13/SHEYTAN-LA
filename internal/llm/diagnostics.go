@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // AttemptContext describes WHO initiated the failed attempt.

@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/preflight"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/preflight"
 )
 
 func (s *Server) handlePreflight(w http.ResponseWriter, r *http.Request) {

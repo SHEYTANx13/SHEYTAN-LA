@@ -11,8 +11,8 @@ import (
 
 	"encoding/binary"
 	"encoding/json"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recall"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/recall"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"

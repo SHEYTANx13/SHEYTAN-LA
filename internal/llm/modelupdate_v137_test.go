@@ -21,8 +21,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/updater"
 )
 
 // seedCommittedEngine installs and COMMITS a good engine package so the

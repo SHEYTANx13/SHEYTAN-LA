@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/preflight"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/preflight"
 )
 
 // fakeClock is a deterministic clock: Observe and Envelope read the same

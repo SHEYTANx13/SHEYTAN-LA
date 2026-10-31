@@ -33,7 +33,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/localipc"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/localipc"
 )
 
 // CoreClient is the typed client to the ONE core authority. It is safe for

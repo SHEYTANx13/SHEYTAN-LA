@@ -27,7 +27,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // updatenowAdmissionSpy is the same seam double as fakeAdmission plus an

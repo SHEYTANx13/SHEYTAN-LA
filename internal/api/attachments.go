@@ -22,7 +22,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/attachments"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/attachments"
 )
 
 // maxUploadBodyBytes caps the whole multipart body per upload request

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/sessions"
 	"path/filepath"
 )
 

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/accelerator"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/accelerator"
 )
 
 // withEnumerationSeam swaps the swappable PROBE authority (exec + parse

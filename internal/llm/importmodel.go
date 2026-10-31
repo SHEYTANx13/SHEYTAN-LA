@@ -36,7 +36,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
 )
 
 // ImportResult describes one completed import.

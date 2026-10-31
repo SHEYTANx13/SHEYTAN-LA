@@ -25,17 +25,17 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/api"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/localipc"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/platform"
-	fyneui "github.com/Parsaetak/SHEYTAN-local-agent/ui/fyne"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/api"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/localipc"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/platform"
+	fyneui "github.com/SHEYTANx13/SHEYTAN-LA/ui/fyne"
 )
 
 // fyneUIPackagePath pins the ONE UI package the launcher attaches (the
 // architecture test asserts it).
-const fyneUIPackagePath = "github.com/Parsaetak/SHEYTAN-local-agent/ui/fyne"
+const fyneUIPackagePath = "github.com/SHEYTANx13/SHEYTAN-LA/ui/fyne"
 
 // failBoot reports a fatal boot failure through EVERY visibility channel
 // the process has: the named-step ERROR line in app.log (the catcher the

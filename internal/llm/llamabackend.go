@@ -17,9 +17,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/resources"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/resources"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/sysinfo"
 )
 
 // LlamaBackend is the managed llama.cpp engine behind the Backend contract.

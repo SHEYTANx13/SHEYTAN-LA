@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // fakeBackend is a scriptable llm.Backend for selection tests.

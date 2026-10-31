@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // TestStreamOnceEmitsTransportMarks pins the mark ordering + the

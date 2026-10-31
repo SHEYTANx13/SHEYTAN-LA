@@ -3,7 +3,7 @@ package api
 import (
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
 )
 
 // Close stops active agent runs and releases the resources owned by the

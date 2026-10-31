@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/accelerator"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/accelerator"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 func TestParseEngineDeviceOutputVulkan(t *testing.T) {

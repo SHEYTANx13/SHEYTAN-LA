@@ -5,9 +5,9 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/brand"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
 )
 
 // RunWithDefaultFn dispatches to the right subcommand. If no command is

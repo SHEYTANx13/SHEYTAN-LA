@@ -33,10 +33,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/downloader"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/netcheck"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/updater"
 )
 
 // decodeJSON is the shared test decoder for the maintenance surface.

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // BenchmarkSystemMessageSteady measures the per-turn system message build.

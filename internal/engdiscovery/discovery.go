@@ -31,9 +31,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/engcheck"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/engcheck"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
 )
 
 // Candidate is one discovered engine package entry point.

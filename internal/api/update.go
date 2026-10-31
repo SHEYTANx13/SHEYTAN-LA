@@ -21,9 +21,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/downloader"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/updater"
 )
 
 // handleUpdateStatus serves GET /api/update/status — the last-known update

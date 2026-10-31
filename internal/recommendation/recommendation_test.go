@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/hardware"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/vision"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/hardware"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/vision"
 )
 
 func gb(n int) int64 { return int64(n) << 30 }

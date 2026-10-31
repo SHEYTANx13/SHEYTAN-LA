@@ -19,7 +19,7 @@ import (
 	"net/http"
 	"runtime"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/updater"
 )
 
 // handleEngineProvision drives backend-variant provisioning through the

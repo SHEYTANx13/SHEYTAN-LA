@@ -6,9 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/sysinfo"
 )
 
 // v1.1.4: Diagnostics now lives where its name says (it was buried in

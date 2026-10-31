@@ -33,10 +33,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/continuum"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recovery"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/continuum"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/recovery"
 )
 
 // RecoveryCoordinator is the lifecycle seam between the orchestrator and

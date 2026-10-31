@@ -25,8 +25,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recovery"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/recovery"
 )
 
 // GenerationRequest is one native generation request (the wire payload

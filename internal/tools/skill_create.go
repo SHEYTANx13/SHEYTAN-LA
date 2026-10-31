@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/skills"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/skills"
 )
 
 // MarkdownSkills is the store seam the runtime installs.

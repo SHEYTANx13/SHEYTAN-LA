@@ -19,8 +19,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/presentation"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/workspace"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/presentation"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/workspace"
 )
 
 // wsHub owns the presentation store and the workspace server of the app.

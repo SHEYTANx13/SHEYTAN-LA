@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/api"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/api"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // Server is the local IPC endpoint owned by the desktop launcher. It wraps

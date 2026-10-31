@@ -7,12 +7,12 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/brand"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/memory"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/releasecontract"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/resources"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/aicontext"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/memory"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/releasecontract"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/resources"
 )
 
 // --- release-surface scenarios ---

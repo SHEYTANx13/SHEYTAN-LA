@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/brand"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 )
 
 // legacyArtifacts are the pre-consolidation license files. They were

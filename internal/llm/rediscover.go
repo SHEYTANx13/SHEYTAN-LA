@@ -36,10 +36,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/engdiscovery"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/englease"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/engdiscovery"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/englease"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/updater"
 )
 
 // rediscoverScanTimeout bounds the Tier-2 walk for the explicit

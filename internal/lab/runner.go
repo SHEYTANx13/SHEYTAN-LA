@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc"
 )
 
 // Package lab contains the autonomous coding-laboratory runtime.

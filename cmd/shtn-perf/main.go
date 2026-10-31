@@ -39,9 +39,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/api"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/perf"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/api"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/perf"
 )
 
 func main() {

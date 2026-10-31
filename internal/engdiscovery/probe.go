@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc"
 )
 
 // runBounded executes the candidate's --version flag under a hard

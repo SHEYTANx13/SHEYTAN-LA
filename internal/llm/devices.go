@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/accelerator"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/accelerator"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc"
 )
 
 // enumerateTimeout bounds one --list-devices invocation.

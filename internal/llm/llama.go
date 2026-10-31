@@ -18,17 +18,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/accelerator"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/engcheck"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/engdiscovery"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/englease"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/vision"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/accelerator"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/downloader"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/engcheck"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/engdiscovery"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/englease"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/netcheck"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/updater"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/vision"
 )
 
 // Engine lifecycle states (v1.1.3 spec): the backend process state is

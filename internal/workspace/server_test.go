@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/presentation"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/presentation"
 )
 
 // fakeSource is a read-only in-memory Source.

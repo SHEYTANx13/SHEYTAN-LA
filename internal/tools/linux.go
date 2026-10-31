@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/termshell"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/termshell"
 )
 
 // LinuxSim is the v1.0.6 built-in Linux-like environment: a busybox-style

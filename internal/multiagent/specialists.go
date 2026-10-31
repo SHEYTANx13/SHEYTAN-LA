@@ -21,8 +21,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/agent"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
 )
 
 // Role identifies a specialist.

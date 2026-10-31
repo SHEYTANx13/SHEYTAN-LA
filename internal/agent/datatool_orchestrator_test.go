@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/tools"
 )
 
 // TestDataToolRegisteredAndRunnableThroughOrchestrator proves the real

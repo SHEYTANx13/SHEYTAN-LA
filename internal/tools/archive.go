@@ -19,7 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/humanize"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/humanize"
 	"io"
 	"os"
 	"path/filepath"

@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	agentruntime "github.com/Parsaetak/SHEYTAN-local-agent/internal/runtime"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/agent"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/chunking"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
+	agentruntime "github.com/SHEYTANx13/SHEYTAN-LA/internal/runtime"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/sessions"
 )
 
 // Ask runs one headless agent turn. It powers CLI/automation use and the

@@ -35,13 +35,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/accelerator"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/hardware"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/preflight"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/accelerator"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/hardware"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/netcheck"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/preflight"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/updater"
 )
 
 // autoProbeTimeout bounds the whole AUTO candidate attempt (download,

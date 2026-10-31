@@ -22,7 +22,7 @@ package agent
 import (
 	"sync/atomic"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
 )
 
 // ToolPauseState records where the run was when a pause took effect, so a

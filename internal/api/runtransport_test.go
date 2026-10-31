@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"encoding/json"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/agent"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 	"net/http"
 	"net/http/httptest"
 )

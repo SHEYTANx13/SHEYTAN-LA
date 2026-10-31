@@ -16,10 +16,10 @@ import (
 	"sort"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/studio"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/studio"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/sysinfo"
 )
 
 // handleStudioState reports the honest viewer lifecycle.

@@ -24,12 +24,12 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/contextplan"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/continuum"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/agent"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/contextplan"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/continuum"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/sessions"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/sysinfo"
 )
 
 // contextStatus is the resolved context decision for one session.

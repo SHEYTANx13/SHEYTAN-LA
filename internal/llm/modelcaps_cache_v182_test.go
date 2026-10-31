@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // v1.8.2 IDENTITY-BASED CAPABILITY CACHE: the 10-second TTL is gone. An

@@ -16,17 +16,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/contextcache"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/contextplan"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/hardware"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/memory"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recommendation"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/vision"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/agent"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/contextcache"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/contextplan"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/downloader"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/hardware"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/memory"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/recommendation"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/sessions"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/updater"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/vision"
 )
 
 // stressReleaseScenarios covers the v1.2.1 release hardening surface: the

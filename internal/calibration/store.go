@@ -29,8 +29,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/hardware"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recommendation"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/hardware"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/recommendation"
 )
 
 // Record is one retained verified calibration result.

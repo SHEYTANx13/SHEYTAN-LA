@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/research"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/research"
 )
 
 type researchHTTPRequest struct {

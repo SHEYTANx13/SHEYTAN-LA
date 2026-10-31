@@ -13,7 +13,7 @@ package engine
 // measure: pid, restarts, uptime since boot.
 
 import (
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
 )
 
 // MetricsResult is the JSON shape of the C++ "metrics" op result.

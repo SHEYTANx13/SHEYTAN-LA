@@ -22,8 +22,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/accelerator"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/accelerator"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 type engineExecBlock struct {

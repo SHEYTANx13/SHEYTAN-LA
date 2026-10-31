@@ -438,6 +438,91 @@ jobs:
           Write-Host "APP_VERSION = $resolved (matches internal/config.AppVersion)"
           "EXIT_CODE: 0 PASS" | Add-Content -Path ci-logs/win-version-resolution.log -Encoding utf8NoBOM
 
+      # ------------------------------------------------------------------
+      # Mesa acquisition (run #120 fix 3): the archive is acquired EARLY —
+      # immediately after version resolution, BEFORE the ~10-minute CGO
+      # build — so an acquisition failure reds the job at minute 1 with a
+      # named cause instead of minute 13 bare. This step pair owns the
+      # cache restore beside it and the ENTIRE acquisition discipline
+      # (run #120 fix 2B, candidate B):
+      #   - $ProgressPreference = 'SilentlyContinue' before any IWR (the
+      #     default progress rendering throttles large downloads on CI),
+      #   - up to 3 Invoke-WebRequest attempts,
+      #   - a curl.exe fallback (--retry 3, preinstalled on the runner)
+      #     before giving up,
+      #   - the checksum gate re-applied in ALL cases (cache or download —
+      #     a cached file is not a trusted file until re-hashed); the
+      #     checksum remains the only trust anchor,
+      #   - every failure path emits a titled ::error naming the stage,
+      #     the attempt count and the got/want hashes; the step transcript
+      #     (download attempt lines + hash result) tees into
+      #     ci-logs/win-mesa-acquire.log → windows-logs-part artifact.
+      # Mesa pin (verified 2026-10-30 against the real release asset):
+      #   repo/release : pal1000/mesa-dist-win  tag 26.2.5
+      #   asset        : mesa3d-26.2.5-release-msvc.7z (70,248,244 bytes)
+      #   sha256       : 997123ef4ce8896204ab912d5b54f19372c487ff9835bcefafa2fca23b8953c2
+      # ------------------------------------------------------------------
+      - name: Restore pinned Mesa archive (cache, keyed by sha256)
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/mesa3d-26.2.5-release-msvc.7z
+          key: mesa3d-26.2.5-release-msvc-sha256-997123ef4ce8896204ab912d5b54f19372c487ff9835bcefafa2fca23b8953c2
+
+      - name: Acquire pinned Mesa archive (cache-or-download, verify checksum)
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = 'SilentlyContinue'
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+          $mesaLog = "ci-logs/win-mesa-acquire.log"
+          function Log([string]$m) { Write-Host $m; Add-Content -Path $mesaLog -Value $m -Encoding utf8NoBOM }
+          $mesaUrl = "https://github.com/pal1000/mesa-dist-win/releases/download/26.2.5/mesa3d-26.2.5-release-msvc.7z"
+          $mesaSha256 = "997123ef4ce8896204ab912d5b54f19372c487ff9835bcefafa2fca23b8953c2"
+          $mesaArchive = Join-Path $env:RUNNER_TEMP "mesa3d-26.2.5-release-msvc.7z"
+          $stage = "resolve-source"
+          try {
+            if (Test-Path $mesaArchive) {
+              Log "pinned Mesa archive present after cache restore — re-verifying (cached is not trusted until re-hashed)"
+            } else {
+              Log "pinned Mesa archive not restored from cache — downloading $mesaUrl"
+              $stage = "download"
+              $downloaded = $false
+              for ($attempt = 1; $attempt -le 3 -and -not $downloaded; $attempt++) {
+                try {
+                  Log ("download attempt {0}/3 via Invoke-WebRequest (progress rendering disabled)" -f $attempt)
+                  Invoke-WebRequest -Uri $mesaUrl -OutFile $mesaArchive -ErrorAction Stop
+                  $downloaded = $true
+                  Log ("download attempt {0} succeeded ({1} bytes)" -f $attempt, (Get-Item $mesaArchive).Length)
+                } catch {
+                  Log ("download attempt {0} failed: {1}" -f $attempt, $_.Exception.Message)
+                  if (Test-Path $mesaArchive) { Remove-Item $mesaArchive -Force -ErrorAction SilentlyContinue }
+                }
+              }
+              if (-not $downloaded) {
+                $stage = "download-curl-fallback"
+                Log "all 3 Invoke-WebRequest attempts failed — falling back to curl.exe -L --retry 3 (preinstalled on the runner)"
+                & curl.exe -L --retry 3 --fail --show-error --output $mesaArchive $mesaUrl 2>&1 | ForEach-Object { Log ("curl: {0}" -f $_) }
+                if ($LASTEXITCODE -ne 0 -or -not (Test-Path $mesaArchive)) {
+                  Log ("::error::Mesa acquisition failed: 3 Invoke-WebRequest attempts and the curl.exe fallback all failed (curl exit {0}; last IWR error and curl output above) — failing closed" -f $LASTEXITCODE)
+                  throw ("Mesa acquisition failed after 3 Invoke-WebRequest attempts and the curl.exe fallback (curl exit {0})" -f $LASTEXITCODE)
+                }
+                Log ("curl.exe fallback succeeded ({0} bytes)" -f (Get-Item $mesaArchive).Length)
+              }
+            }
+            $stage = "checksum"
+            $hash = (Get-FileHash -Algorithm SHA256 $mesaArchive).Hash.ToLowerInvariant()
+            Log ("sha256 got {0}" -f $hash)
+            Log ("sha256 want {0}" -f $mesaSha256)
+            if ($hash -ne $mesaSha256) {
+              Remove-Item $mesaArchive -Force
+              Log ("::error::Mesa checksum mismatch: got {0}, want {1} — failing closed, archive deleted so a bad copy is never cached" -f $hash, $mesaSha256)
+              throw ("Mesa checksum mismatch: got {0}, want {1}" -f $hash, $mesaSha256)
+            }
+            Log "pinned Mesa archive VERIFIED (sha256 OK) at $mesaArchive — the staging step lists + extracts it after the build"
+          } catch {
+            Log ("::error::Mesa acquisition failed at stage '{0}': {1}" -f $stage, $_.Exception.Message)
+            throw
+          }
+
       # MSYS2 UCRT64 toolchain for Fyne's CGO build (pinned package set per
       # the official Fyne Windows prerequisites). MINGW64 is deprecated per
       # msys2's October 2026 announcement — UCRT64 is the supported CRT.
@@ -469,21 +554,21 @@ jobs:
           $env:CGO_ENABLED = "1"
           New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
           go test -tags headless -count=1 -timeout "${{ env.GO_TEST_TIMEOUT }}" ./internal/... 2>&1 | Tee-Object -FilePath "ci-logs/win-go-test-headless.log"
-          if ($LASTEXITCODE -ne 0) { throw "headless core tests failed (windows/amd64)" }
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::headless core tests failed on windows/amd64 (exit $LASTEXITCODE; failing test names in ci-logs/win-go-test-headless.log)"; throw "headless core tests failed (windows/amd64)" }
 
       - name: Build the Fyne UI tests (windows/amd64 compile gate)
         run: |
           $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
           $env:CGO_ENABLED = "1"
           go vet ./ui/fyne/ 2>&1 | Tee-Object -FilePath "ci-logs/win-ui-vet.log"
-          if ($LASTEXITCODE -ne 0) { throw "ui/fyne vet failed (windows/amd64)" }
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::ui/fyne vet failed on windows/amd64 (exit $LASTEXITCODE; output in ci-logs/win-ui-vet.log)"; throw "ui/fyne vet failed (windows/amd64)" }
 
       - name: "Windows resource pipeline (gen-syso: icon + version + DPI manifest)"
         run: |
           $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
           $env:CGO_ENABLED = "1"
           go run ./scripts/gen-syso
-          if ($LASTEXITCODE -ne 0) { throw "gen-syso failed" }
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::gen-syso failed (exit $LASTEXITCODE) — the Windows resource pipeline (icon + version + DPI manifest) could not be generated"; throw "gen-syso failed" }
 
       - name: Stage the portable application tree
         run: |
@@ -501,18 +586,18 @@ jobs:
           # symbol tables and DWARF debug info (v1.11.0 size work: ~41%
           # smaller PE locally, Go 1.27.3, same toolchain).
           go build -ldflags "-H=windowsgui -s -w" -o "dist/windows/app/${{ env.WIN_PKG_ROOT }}/SHEYTAN-LA.exe" ./cmd/sheytan-local-agent
-          if ($LASTEXITCODE -ne 0) { throw "SHEYTAN-LA.exe build failed" }
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::SHEYTAN-LA.exe build failed (go build exit $LASTEXITCODE, windowsgui subsystem, CGO toolchain above)"; throw "SHEYTAN-LA.exe build failed" }
 
       - name: Verify the PE (x86-64, windowsgui)
         run: |
           $exe = "dist/windows/app/${{ env.WIN_PKG_ROOT }}/SHEYTAN-LA.exe"
-          if (-not (Test-Path $exe)) { throw "built executable missing: $exe" }
+          if (-not (Test-Path $exe)) { Write-Host "::error::PE verify guard: built executable missing at $exe"; throw "built executable missing: $exe" }
           $bytes = [System.IO.File]::ReadAllBytes($exe)
-          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { throw "not a PE binary (missing MZ)" }
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { Write-Host "::error::PE verify guard: $exe is not a PE binary (missing MZ header)"; throw "not a PE binary (missing MZ)" }
           $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
-          if ($bytes[$peOffset] -ne 0x50 -or $bytes[$peOffset + 1] -ne 0x45) { throw "PE signature missing" }
+          if ($bytes[$peOffset] -ne 0x50 -or $bytes[$peOffset + 1] -ne 0x45) { Write-Host "::error::PE verify guard: PE signature missing in $exe (peOffset=$peOffset)"; throw "PE signature missing" }
           $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
-          if ($machine -ne 0x8664) { throw ("PE machine = 0x{0:X4}, want x86-64 (0x8664)" -f $machine) }
+          if ($machine -ne 0x8664) { Write-Host ("::error::PE verify guard: PE machine = 0x{0:X4}, want x86-64 (0x8664) in {1}" -f $machine, $exe); throw ("PE machine = 0x{0:X4}, want x86-64 (0x8664)" -f $machine) }
           Write-Host "PE OK: x86-64"
 
       # ------------------------------------------------------------------
@@ -553,73 +638,108 @@ jobs:
       #                  x64/libgallium_wgl.dll (61,880,320 B)
       # Checksum mismatch or a missing entry => fail closed, nothing placed.
       # ------------------------------------------------------------------
-      # Section-5 speed item: the 70 MB pinned Mesa archive is cached and
-      # keyed by its exact sha256. Restore lands in RUNNER_TEMP; the
-      # staging step below re-verifies the checksum AFTER restore in ALL
-      # cases (a cached file is not a trusted file until re-hashed) — the
-      # checksum gate remains the only trust anchor.
-      - name: Restore pinned Mesa archive (cache, keyed by sha256)
-        uses: actions/cache@v6
-        with:
-          path: ${{ runner.temp }}/mesa3d-26.2.5-release-msvc.7z
-          key: mesa3d-26.2.5-release-msvc-sha256-997123ef4ce8896204ab912d5b54f19372c487ff9835bcefafa2fca23b8953c2
-
-      - name: Stage smoke copy + pinned Mesa software GL
+      # Section-5 speed item + run #120 fix 3: the 70 MB pinned Mesa
+      # archive is cached (keyed by its exact sha256) and acquired EARLY by
+      # the "Acquire pinned Mesa archive" step near the top of the job
+      # (cache restore beside it, checksum gate re-applied in all cases).
+      # The staging step below only CONSUMES the verified archive: smoke
+      # copy, purity guards, listing contract check, two-filter extraction,
+      # two-DLL placement.
+      - name: Stage smoke copy (purity + two-DLL placement)
         run: |
           $ErrorActionPreference = "Stop"
-          $src = (Resolve-Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}").Path
-          $smokeRoot = Join-Path $env:RUNNER_TEMP "win-smoke\${{ env.WIN_PKG_ROOT }}"
-          if (Test-Path $smokeRoot) { Remove-Item -Recurse -Force $smokeRoot }
-          New-Item -ItemType Directory -Force -Path (Split-Path $smokeRoot) | Out-Null
-          Copy-Item -Recurse -Force $src $smokeRoot
-          if (-not (Test-Path (Join-Path $smokeRoot "SHEYTAN-LA.exe"))) { throw "smoke copy is missing SHEYTAN-LA.exe" }
-          $stagingData = "dist/windows/app/${{ env.WIN_PKG_ROOT }}/data"
-          if (Test-Path $stagingData) { throw "pristine-staging violation: $stagingData exists BEFORE the smoke — upstream steps leaked residue" }
-          # Purity guard (two DLLs): neither Mesa DLL may ever enter the
-          # staging tree; they exist only inside the smoke copy.
-          foreach ($banned in @("opengl32.dll", "libgallium_wgl.dll")) {
-            if (Test-Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}/$banned") { throw "purity violation: $banned must never enter the staging tree" }
-          }
-
-          $mesaUrl = "https://github.com/pal1000/mesa-dist-win/releases/download/26.2.5/mesa3d-26.2.5-release-msvc.7z"
-          $mesaSha256 = "997123ef4ce8896204ab912d5b54f19372c487ff9835bcefafa2fca23b8953c2"
-          $mesaArchive = Join-Path $env:RUNNER_TEMP "mesa3d-26.2.5-release-msvc.7z"
-          if (-not (Test-Path $mesaArchive)) {
-            Write-Host "pinned Mesa archive not restored from cache — downloading"
-            Invoke-WebRequest -Uri $mesaUrl -OutFile $mesaArchive
-          } else {
-            Write-Host "pinned Mesa archive restored from actions/cache — re-verifying (cached is not trusted until re-hashed)"
-          }
-          $hash = (Get-FileHash -Algorithm SHA256 $mesaArchive).Hash.ToLowerInvariant()
-          if ($hash -ne $mesaSha256) {
-            Remove-Item $mesaArchive -Force
-            throw ("Mesa checksum mismatch: got {0}, want {1} — failing closed, no DLL placed (archive deleted so a bad copy is not cached)" -f $hash, $mesaSha256)
-          }
-
-          # List before extracting: the two-DLL deployment contract is
-          # checked against the archive's ACTUAL entries, not assumptions.
-          $listing = & "C:\Program Files\7-Zip\7z.exe" l $mesaArchive | Out-String
-          $x64Entries = ($listing -split "`r?`n") | ForEach-Object { ($_ -split '\s+')[-1] } | Where-Object { $_ -like "x64/*.dll" } | Sort-Object -Unique
-          Write-Host "pinned archive x64 DLL entries:"
-          $x64Entries | ForEach-Object { Write-Host "  $_" }
-          foreach ($required in @("x64/opengl32.dll", "x64/libgallium_wgl.dll")) {
-            if ($x64Entries -notcontains $required) {
-              throw ("Mesa archive contract violation: '{0}' absent from the pinned 26.2.5 release-msvc archive — the two-DLL per-app deployment (Gallium megadriver separation since 21.3.0) cannot be satisfied; failing closed" -f $required)
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+          $stageLog = "ci-logs/win-smoke-staging.log"
+          function Log([string]$m) { Write-Host $m; Add-Content -Path $stageLog -Value $m -Encoding utf8NoBOM }
+          $stage = "smoke-copy"
+          try {
+            $src = (Resolve-Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}").Path
+            $smokeRoot = Join-Path $env:RUNNER_TEMP "win-smoke\${{ env.WIN_PKG_ROOT }}"
+            if (Test-Path $smokeRoot) { Remove-Item -Recurse -Force $smokeRoot }
+            New-Item -ItemType Directory -Force -Path (Split-Path $smokeRoot) | Out-Null
+            Copy-Item -Recurse -Force $src $smokeRoot
+            if (-not (Test-Path (Join-Path $smokeRoot "SHEYTAN-LA.exe"))) {
+              Log ("::error::staging guard fired at stage '{0}': smoke copy is missing SHEYTAN-LA.exe under {1} — failing closed" -f $stage, $smokeRoot)
+              throw ("smoke copy is missing SHEYTAN-LA.exe under {0}" -f $smokeRoot)
             }
+            $stage = "purity-guards"
+            $stagingData = "dist/windows/app/${{ env.WIN_PKG_ROOT }}/data"
+            if (Test-Path $stagingData) {
+              Log ("::error::staging guard fired at stage '{0}': pristine-staging violation — {1} exists BEFORE the smoke; upstream steps leaked residue" -f $stage, $stagingData)
+              throw ("pristine-staging violation: {0} exists BEFORE the smoke" -f $stagingData)
+            }
+            # Purity guard (two DLLs): neither Mesa DLL may ever enter the
+            # staging tree; they exist only inside the smoke copy.
+            foreach ($banned in @("opengl32.dll", "libgallium_wgl.dll")) {
+              if (Test-Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}/$banned") {
+                Log ("::error::staging guard fired at stage '{0}': purity violation — {1} must never enter the staging tree" -f $stage, $banned)
+                throw ("purity violation: {0} must never enter the staging tree" -f $banned)
+              }
+            }
+            $stage = "listing-contract"
+            $mesaArchive = Join-Path $env:RUNNER_TEMP "mesa3d-26.2.5-release-msvc.7z"
+            if (-not (Test-Path $mesaArchive)) {
+              Log ("::error::staging guard fired at stage '{0}': pinned Mesa archive absent at {1} — the 'Acquire pinned Mesa archive' step did not run or failed; failing closed" -f $stage, $mesaArchive)
+              throw ("pinned Mesa archive absent: {0}" -f $mesaArchive)
+            }
+            # List before extracting: the two-DLL deployment contract is
+            # checked against the archive's ACTUAL entries, not assumptions.
+            # Run #120 fix 2A (candidate A — listing separator sensitivity):
+            # the RAW 7z listing tail is teed into the staging log (the one
+            # artifact that settles A-vs-B without a hosted step log), every
+            # parsed token is NORMALIZED to forward-slash separators before
+            # filtering and comparing (Windows 7-Zip may render archive entry
+            # paths with backslash separators, which made the previous
+            # literal-string comparison fail the contract), and the required
+            # entry comparison is case-insensitive. The extraction filters
+            # below are NOT separator-sensitive in the same way (7z matches
+            # archive-internal paths), which is why run #119's extraction
+            # worked on the runner while a raw-string listing comparison
+            # could fail.
+            $listing = & "C:\Program Files\7-Zip\7z.exe" l $mesaArchive | Out-String
+            $rawLines = @($listing -split "`r?`n")
+            $rawTail = ($rawLines | Select-Object -Last 12) -join "`n"
+            Log "raw 7z listing tail (last 12 lines):"
+            Log $rawTail
+            $x64Entries = @($rawLines |
+              ForEach-Object { ($_ -split '\s+')[-1] } |
+              Where-Object { $_ -and $_.Trim() -ne "" } |
+              ForEach-Object { $_.Trim() -replace '\\', '/' } |
+              Where-Object { $_ -like "x64/*.dll" } |
+              Sort-Object -Unique)
+            Log ("parsed x64 DLL entries (normalized to forward slashes): {0}" -f ($x64Entries -join ', '))
+            foreach ($required in @("x64/opengl32.dll", "x64/libgallium_wgl.dll")) {
+              $hit = @($x64Entries | Where-Object { $_.ToLowerInvariant() -eq $required.ToLowerInvariant() })
+              if ($hit.Count -eq 0) {
+                Log ("::error::Mesa archive contract violation at stage '{0}': '{1}' absent from the pinned 26.2.5 release-msvc archive — the two-DLL per-app deployment (Gallium megadriver separation since 21.3.0) cannot be satisfied; RAW listing tail follows" -f $stage, $required)
+                Log $rawTail
+                throw ("Mesa archive contract violation: '{0}' absent from the pinned 26.2.5 release-msvc archive" -f $required)
+              }
+            }
+            $stage = "two-dll-extraction"
+            $mesaExtract = Join-Path $env:RUNNER_TEMP "mesa3d-extract"
+            if (Test-Path $mesaExtract) { Remove-Item -Recurse -Force $mesaExtract }
+            New-Item -ItemType Directory -Force -Path $mesaExtract | Out-Null
+            # ONE invocation, BOTH DLLs, same pinned archive, same sha256.
+            & "C:\Program Files\7-Zip\7z.exe" e "$mesaArchive" "-o$mesaExtract" "x64/opengl32.dll" "x64/libgallium_wgl.dll" -y | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              Log ("::error::staging guard fired at stage '{0}': 7z extraction of the Mesa two-DLL set failed with exit {1} — failing closed" -f $stage, $LASTEXITCODE)
+              throw ("7z extraction of the Mesa two-DLL set failed (exit {0})" -f $LASTEXITCODE)
+            }
+            $stage = "two-dll-placement"
+            foreach ($name in @("opengl32.dll", "libgallium_wgl.dll")) {
+              $dll = Join-Path $mesaExtract $name
+              if (-not (Test-Path $dll)) {
+                Log ("::error::staging guard fired at stage '{0}': extracted Mesa {1} missing under {2} — failing closed" -f $stage, $name, $mesaExtract)
+                throw ("extracted Mesa {0} missing under {1}" -f $name, $mesaExtract)
+              }
+              Copy-Item $dll (Join-Path $smokeRoot $name) -Force
+            }
+            Log "smoke copy staged at $smokeRoot with pinned Mesa llvmpipe opengl32.dll + libgallium_wgl.dll (sha256 verified by the acquire step, two-DLL contract satisfied, purity guards passed)"
+          } catch {
+            Log ("::error::smoke staging failed at stage '{0}': {1}" -f $stage, $_.Exception.Message)
+            throw
           }
-
-          $mesaExtract = Join-Path $env:RUNNER_TEMP "mesa3d-extract"
-          if (Test-Path $mesaExtract) { Remove-Item -Recurse -Force $mesaExtract }
-          New-Item -ItemType Directory -Force -Path $mesaExtract | Out-Null
-          # ONE invocation, BOTH DLLs, same pinned archive, same sha256.
-          & "C:\Program Files\7-Zip\7z.exe" e "$mesaArchive" "-o$mesaExtract" "x64/opengl32.dll" "x64/libgallium_wgl.dll" -y | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "7z extraction of the Mesa two-DLL set failed (exit $LASTEXITCODE)" }
-          foreach ($name in @("opengl32.dll", "libgallium_wgl.dll")) {
-            $dll = Join-Path $mesaExtract $name
-            if (-not (Test-Path $dll)) { throw "extracted Mesa $name missing under $mesaExtract — failing closed" }
-            Copy-Item $dll (Join-Path $smokeRoot $name) -Force
-          }
-          Write-Host "smoke copy staged at $smokeRoot with pinned Mesa llvmpipe opengl32.dll + libgallium_wgl.dll (sha256 OK, two-DLL contract satisfied)"
 
       # Pre-launch dependency audit (run #119): 0xC0000135 is raised by
       # the Windows loader while resolving the STATIC import chain at
@@ -638,8 +758,30 @@ jobs:
         run: |
           $smokeRoot = Join-Path $env:RUNNER_TEMP "win-smoke\${{ env.WIN_PKG_ROOT }}"
           New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
-          & ./scripts/ci/ImportAudit.ps1 -ExeDir $smokeRoot -Modules @("SHEYTAN-LA.exe", "opengl32.dll", "libgallium_wgl.dll") 2>&1 | Tee-Object -FilePath "ci-logs/win-smoke-dep-audit.log"
-          if ($LASTEXITCODE -eq 2) { throw "smoke dependency audit: unresolvable static import — the launch would die with 0xC0000135 (named DLL in ci-logs/win-smoke-dep-audit.log)" }
+          # Fail-open enforced AT THE WRAPPER (run #120 fix 4): a script-level
+          # crash in ImportAudit.ps1 (parse error, unhandled terminating
+          # error) is caught here, emits a ::warning with the exception
+          # message and CONTINUES to the launch — the audit adds signal, it
+          # never blocks a healthy smoke, even if the script itself is
+          # broken. Only the script's OWN exit 2 (a named missing DLL) fails
+          # the step, via a titled ::error. Verified under pwsh 7.4.6: an
+          # 'exit 2' inside a child script invoked through a piped try/catch
+          # does NOT raise a catchable exception — $LASTEXITCODE carries it —
+          # while parse errors and unhandled throws ARE caught (ParseException
+          # / RuntimeException). The tee to ci-logs/win-smoke-dep-audit.log is
+          # unchanged.
+          $auditExit = 0
+          try {
+            & ./scripts/ci/ImportAudit.ps1 -ExeDir $smokeRoot -Modules @("SHEYTAN-LA.exe", "opengl32.dll", "libgallium_wgl.dll") 2>&1 | Tee-Object -FilePath "ci-logs/win-smoke-dep-audit.log"
+            $auditExit = $LASTEXITCODE
+          } catch {
+            Write-Host ("::warning::smoke dependency audit wrapper: ImportAudit.ps1 crashed before producing an exit code ({0}) — continuing to launch (the audit is fail-open even when the script itself is broken)" -f $_.Exception.Message)
+            $auditExit = 0
+          }
+          if ($auditExit -eq 2) {
+            Write-Host "::error::smoke dependency audit: unresolvable static import — the launch would die with 0xC0000135 (named DLL in ci-logs/win-smoke-dep-audit.log)"
+            throw "smoke dependency audit failed: unresolvable static import (exit 2)"
+          }
 
       # Launch smoke (run #54 repair; #55 hardening): bounded polling of
       # observable readiness — process alive + real MainWindowHandle OR a
@@ -658,14 +800,17 @@ jobs:
           # stdout/stderr redirect, 60s budget, 12s soak,
           # CloseMainWindow first, force-terminate last resort.
           $smokeRoot = Join-Path $env:RUNNER_TEMP "win-smoke\${{ env.WIN_PKG_ROOT }}"
-          if (-not (Test-Path (Join-Path $smokeRoot "SHEYTAN-LA.exe"))) { throw "smoke copy missing SHEYTAN-LA.exe under $smokeRoot — the staging step did not run" }
+          if (-not (Test-Path (Join-Path $smokeRoot "SHEYTAN-LA.exe"))) {
+            Write-Host "::error::launch smoke guard: smoke copy missing SHEYTAN-LA.exe under $smokeRoot — the staging step did not run or failed"
+            throw "smoke copy missing SHEYTAN-LA.exe under $smokeRoot — the staging step did not run"
+          }
           $exe = Join-Path (Resolve-Path $smokeRoot) "SHEYTAN-LA.exe"
           $smokeLog = Join-Path (Get-Location) "smoke-app-output.log"
           # Explicit, deterministic software-GL driver choice (the proven
           # GPU-less runner pattern); Start-Process inherits this env.
           $env:GALLIUM_DRIVER = "llvmpipe"
           $p = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru `
-                 -RedirectStandardOutput $smokeLog -RedirectStandardError $smokeLog+".err"
+                 -RedirectStandardOutput $smokeLog -RedirectStandardError ($smokeLog + ".err")
           $bootDeadline = (Get-Date).AddSeconds(60)
           $booted = $false
           $windowSeen = $false
@@ -712,6 +857,7 @@ jobs:
             # The application's own catcher lives next to the exe (data\app.log).
             $appLog = Join-Path (Split-Path $exe) "data\app.log"
             if (Test-Path $appLog) { Write-Host "--- data\app.log tail ---"; Get-Content $appLog -Tail 40 }
+            Write-Host "::error::launch smoke: Windows launch smoke failed — no observable window within the 60s budget (HasExited=$($p.HasExited), ExitCode=$($p.ExitCode); diagnostics above)"
             throw "Windows launch smoke failed: no observable window"
           }
           Write-Host "window observed (MainWindowHandle: $($p.MainWindowHandle), enumPath: $enumSeen)"
@@ -783,9 +929,9 @@ jobs:
       - name: Write BUILD-INFO.txt and package metadata
         run: |
           $root = "dist/windows/app/${{ env.WIN_PKG_ROOT }}"
-          if (-not (Test-Path $root)) { throw "staging root missing: $root" }
+          if (-not (Test-Path $root)) { Write-Host "::error::BUILD-INFO guard: staging root missing at $root"; throw "staging root missing: $root" }
           foreach ($dir in @("models", "workspace")) {
-            if (-not (Test-Path (Join-Path $root $dir))) { throw "staging directory missing: $root\$dir" }
+            if (-not (Test-Path (Join-Path $root $dir))) { Write-Host "::error::BUILD-INFO guard: staging directory missing at $root\$dir"; throw "staging directory missing: $root\$dir" }
           }
           $files = @(
             @{ Path = "$root/BUILD-INFO.txt";    Marker = "version: ${{ env.APP_VERSION }}";
@@ -801,25 +947,31 @@ jobs:
             try {
               Set-Content -Path $f.Path -Value $f.Lines -Encoding utf8NoBOM
             } catch {
+              Write-Host ("::error::BUILD-INFO guard: writing {0} failed: {1} ({2})" -f $f.Path, $_.Exception.Message, $_.Exception.GetType().FullName)
               throw ("writing {0} failed: {1} ({2})" -f $f.Path, $_.Exception.Message, $_.Exception.GetType().FullName)
             }
-            if (-not (Test-Path $f.Path)) { throw "write reported success but the file is missing: $($f.Path)" }
+            if (-not (Test-Path $f.Path)) { Write-Host "::error::BUILD-INFO guard: write reported success but the file is missing: $($f.Path)"; throw "write reported success but the file is missing: $($f.Path)" }
             $size = (Get-Item $f.Path).Length
-            if ($size -le 0) { throw "written file is empty: $($f.Path)" }
+            if ($size -le 0) { Write-Host "::error::BUILD-INFO guard: written file is empty: $($f.Path) (size=$size)"; throw "written file is empty: $($f.Path)" }
             $content = Get-Content -Raw -Path $f.Path
-            if (-not $content.Contains($f.Marker)) { throw "written file lacks the expected content marker '$($f.Marker)': $($f.Path)" }
+            if (-not $content.Contains($f.Marker)) { Write-Host "::error::BUILD-INFO guard: written file lacks the expected content marker '$($f.Marker)': $($f.Path)"; throw "written file lacks the expected content marker '$($f.Marker)': $($f.Path)" }
             Write-Host "wrote $($f.Path) ($size bytes, marker OK)"
           }
 
       - name: Create Windows ZIP
         run: |
-          Compress-Archive -Path "dist/windows/app/${env:WIN_PKG_ROOT}" -DestinationPath "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip" -Force
-          Write-Host "ZIP created"
+          try {
+            Compress-Archive -Path "dist/windows/app/${env:WIN_PKG_ROOT}" -DestinationPath "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip" -Force -ErrorAction Stop
+            Write-Host "ZIP created"
+          } catch {
+            Write-Host ("::error::Create Windows ZIP failed: source dist/windows/app/${env:WIN_PKG_ROOT}, destination dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip — {0}" -f $_.Exception.Message)
+            throw
+          }
 
       - name: Verify Windows ZIP
         run: |
           $zip = "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip"
-          if (-not (Test-Path $zip)) { throw "ZIP missing: $zip" }
+          if (-not (Test-Path $zip)) { Write-Host "::error::Verify Windows ZIP guard: ZIP missing at $zip"; throw "ZIP missing: $zip" }
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip))
           try {
@@ -832,7 +984,7 @@ jobs:
             )
             $names = $archive.Entries.FullName
             foreach ($entry in $required) {
-              if ($names -notcontains $entry) { throw "ZIP entry missing: $entry" }
+              if ($names -notcontains $entry) { Write-Host "::error::Verify Windows ZIP guard: contracted ZIP entry missing: $entry (entries present: $($names.Count))"; throw "ZIP entry missing: $entry" }
             }
             # ZIP purity assertions (run #118 defect, extended for run
             # #119's two-DLL Mesa contract): required entries are not
@@ -847,11 +999,13 @@ jobs:
             $forbiddenDlls = @("${env:WIN_PKG_ROOT}/opengl32.dll", "${env:WIN_PKG_ROOT}/libgallium_wgl.dll")
             foreach ($name in $names) {
               if ($name.StartsWith($forbiddenData, [System.StringComparison]::OrdinalIgnoreCase)) {
-                throw ("ZIP purity violation: data-root residue entry '{0}' — the smoke must run from the RUNNER_TEMP copy, never the staging tree" -f $name)
+                Write-Host ("::error::Verify Windows ZIP purity violation: data-root residue entry '{0}' — the smoke must run from the RUNNER_TEMP copy, never the staging tree" -f $name)
+                throw ("ZIP purity violation: data-root residue entry '{0}'" -f $name)
               }
               foreach ($forbiddenDll in $forbiddenDlls) {
                 if ($name.Equals($forbiddenDll, [System.StringComparison]::OrdinalIgnoreCase)) {
-                  throw ("ZIP purity violation: '{0}' present — the Mesa software-GL DLLs are smoke-only and must never ship" -f $name)
+                  Write-Host ("::error::Verify Windows ZIP purity violation: '{0}' present — the Mesa software-GL DLLs are smoke-only and must never ship" -f $name)
+                  throw ("ZIP purity violation: '{0}' present" -f $name)
                 }
               }
             }
@@ -864,7 +1018,7 @@ jobs:
       - name: Install NSIS
         run: |
           choco install nsis -y --no-progress
-          if ($LASTEXITCODE -ne 0) { throw "NSIS install failed" }
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::NSIS install failed (choco exit $LASTEXITCODE) — the installer job cannot build"; throw "NSIS install failed" }
 
       - name: Generate payload-uninstall.nsh (uninstall symmetry)
         run: |
@@ -874,11 +1028,12 @@ jobs:
           # (the smoke runs from the RUNNER_TEMP copy). Assert it: data
           # residue or either Mesa DLL here means the smoke leaked upstream.
           $payloadFiles = @(Get-ChildItem -Recurse -File $root)
-          if ($payloadFiles.Count -eq 0) { throw "staging root has no files: $root" }
+          if ($payloadFiles.Count -eq 0) { Write-Host "::error::payload generator guard: staging root has no files at $root"; throw "staging root has no files: $root" }
           foreach ($f in $payloadFiles) {
             $rel = $f.FullName.Substring((Resolve-Path $root).Path.Length + 1)
             if ($rel -like "data\*" -or $rel -eq "opengl32.dll" -or $rel -eq "libgallium_wgl.dll") {
-              throw ("pristine-payload violation: staging tree contains '{0}' — the smoke must never write into dist/windows/app" -f $rel)
+              Write-Host ("::error::payload generator guard: pristine-payload violation — staging tree contains '{0}'; the smoke must never write into dist/windows/app" -f $rel)
+              throw ("pristine-payload violation: staging tree contains '{0}'" -f $rel)
             }
           }
           foreach ($f in $payloadFiles) {
@@ -902,14 +1057,14 @@ jobs:
           $nsi = "packaging/nsis/installer.nsi"
           $stage = Join-Path (Resolve-Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}") ""
           & "C:\Program Files (x86)\NSIS\makensis.exe" -DVERSION=${{ env.APP_VERSION }} "-DEXE=SHEYTAN-LA.exe" "-DBUILDDIR=$stage" "-DOUTFILE=$(Resolve-Path dist)\${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe" packaging\nsis\installer.nsi
-          if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::makensis failed (exit $LASTEXITCODE) — packaging/nsis/installer.nsi build log above"; throw "makensis failed" }
 
       - name: Verify the installer exists
         run: |
           $inst = "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe"
-          if (-not (Test-Path $inst)) { throw "installer missing: $inst" }
+          if (-not (Test-Path $inst)) { Write-Host "::error::installer guard: installer missing at $inst (makensis reported success)"; throw "installer missing: $inst" }
           $size = (Get-Item $inst).Length
-          if ($size -lt 1MB) { throw "installer suspiciously small: $size bytes" }
+          if ($size -lt 1MB) { Write-Host "::error::installer guard: installer suspiciously small: $size bytes at $inst"; throw "installer suspiciously small: $size bytes" }
           Write-Host "installer OK ($size bytes)"
 
       # Package gate: the root failure is reported HERE (not by a vague
@@ -919,7 +1074,7 @@ jobs:
         run: |
           $zip = "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip"
           $inst = "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe"
-          if (-not (Test-Path $zip) -and (Test-Path $inst)) { throw "portable ZIP missing while the installer exists — packaging drifted" }
+          if (-not (Test-Path $zip) -and (Test-Path $inst)) { Write-Host "::error::package gate: portable ZIP missing at $zip while the installer exists at $inst — packaging drifted"; throw "portable ZIP missing while the installer exists — packaging drifted" }
           Write-Host "package gate: reached"
 
       - name: Upload Windows package

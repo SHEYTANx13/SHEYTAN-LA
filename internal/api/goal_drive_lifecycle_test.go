@@ -32,8 +32,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aisystem"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/goal"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/aisystem"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/goal"
 )
 
 // blockingDriveEngine is an OpenAI-compatible SSE engine whose

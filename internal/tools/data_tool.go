@@ -37,8 +37,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
 )
 
 // DataTool is the data-analysis tool: loads CSV/TSV/JSON datasets and runs

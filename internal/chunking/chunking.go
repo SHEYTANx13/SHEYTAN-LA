@@ -25,9 +25,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/humanize"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/vision"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/humanize"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/vision"
 )
 
 // DefaultAttachmentBudgetBytes is the per-message attachment budget when the

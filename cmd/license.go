@@ -3,8 +3,8 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/brand"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // License prints the SHEYTAN™ trademark + the consolidated license text.

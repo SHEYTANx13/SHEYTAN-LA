@@ -30,7 +30,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/projectintel"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/projectintel"
 )
 
 // maxRecentFiles bounds the "recent files" scan of the workspace root.

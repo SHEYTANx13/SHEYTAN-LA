@@ -14,7 +14,7 @@
 package llm
 
 import (
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // BackendCapabilities is what one serving alternative reports about

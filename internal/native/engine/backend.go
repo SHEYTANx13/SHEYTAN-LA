@@ -25,8 +25,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/chunking"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
 )
 
 // ABIVersionExpected is the C ABI version the Go core expects from the

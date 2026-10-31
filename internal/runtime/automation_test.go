@@ -23,12 +23,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/scheduler"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/skills"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/agent"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/scheduler"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/skills"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/tools"
 )
 
 func TestTaskRunCreatesRegisteredArtifactThroughTheRealLoop(t *testing.T) {

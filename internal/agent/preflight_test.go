@@ -6,10 +6,10 @@ import (
 	"testing"
 
 	"encoding/json"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/ctxtelemetry"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/chunking"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/ctxtelemetry"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
 )
 
 // preflight_test.go — Phase 7 regression tests for the preflight budget

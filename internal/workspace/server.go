@@ -34,7 +34,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/presentation"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/presentation"
 )
 
 // securityHeaders is applied to EVERY workspace response.

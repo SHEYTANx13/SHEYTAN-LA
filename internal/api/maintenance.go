@@ -40,12 +40,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/engcheck"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/downloader"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/engcheck"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/netcheck"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/updater"
 )
 
 // MaintenancePhase is the explicit, UI/telemetry-ready state of the

@@ -31,7 +31,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
 )
 
 // Summary caps — the summary is a CONTEXT COMPONENT, so unbounded growth

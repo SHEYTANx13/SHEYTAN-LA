@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/testfakes"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/testfakes"
 )
 
 // TestMain arms the re-exec helper: when the clone machinery spawns

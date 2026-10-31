@@ -36,7 +36,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // ErrNotImplemented reports a backend operation that exists in the contract

@@ -31,11 +31,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/engcheck"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/englease"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/downloader"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/engcheck"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/englease"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
 )
 
 // installMu serializes every provisioning operation process-wide: two

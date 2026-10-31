@@ -20,7 +20,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/repoindex"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/repoindex"
 )
 
 // repoIndexRefreshTimeout bounds the refresh endpoint.

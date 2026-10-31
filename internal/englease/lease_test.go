@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc"
 )
 
 // TestMain doubles as the helper-process host used to obtain a REAL

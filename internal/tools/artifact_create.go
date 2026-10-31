@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/artifacts"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/artifacts"
 )
 
 // ArtifactRegistry is the registry seam the runtime installs (the ONE

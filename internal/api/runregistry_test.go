@@ -25,7 +25,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // remoteFakeEngine spins an OpenAI-compatible SSE endpoint for one run.

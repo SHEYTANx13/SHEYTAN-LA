@@ -28,10 +28,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aisystem"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/goal"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/agent"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/aisystem"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/goal"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
 )
 
 // goalRunFunc binds the goal engine's executor seam to the ONE

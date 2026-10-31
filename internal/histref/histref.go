@@ -32,9 +32,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sessions"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/chunking"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/sessions"
 )
 
 // MaxRefsPerRun bounds how many sessions one turn may attach (a picker

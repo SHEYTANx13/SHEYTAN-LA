@@ -17,7 +17,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
 )
 
 // withLogManager installs a temporary log manager writing to a temp

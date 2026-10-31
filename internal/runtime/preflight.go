@@ -15,11 +15,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/hardware"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/preflight"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/resources"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/hardware"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/preflight"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/resources"
 )
 
 // PreflightReport evaluates the current model/backend/device/resource

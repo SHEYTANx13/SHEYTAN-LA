@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/aicontext"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // AICtx manages SHEYTAN's AI instruction file (AI-CONTEXT.md) — the complete

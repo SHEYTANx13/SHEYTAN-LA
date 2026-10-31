@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/lab"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/lab"
 )
 
 type labActionResponse struct {

@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/preflight"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/preflight"
 )
 
 func footprintGovernor(t *testing.T, inf InferenceSource, availFrac float64) *Governor {

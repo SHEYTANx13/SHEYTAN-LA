@@ -6,7 +6,7 @@ package llm
 import (
 	"testing"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 func TestCapabilitiesOfReportsUnknownWithoutReporter(t *testing.T) {

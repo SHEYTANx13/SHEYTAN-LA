@@ -38,7 +38,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/brand"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 )
 
 // repoRoot resolves the repository root from THIS package's location

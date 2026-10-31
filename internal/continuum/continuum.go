@@ -31,8 +31,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/chunking"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
 )
 
 // BriefingHeader prefixes every rendered Framework briefing message so the

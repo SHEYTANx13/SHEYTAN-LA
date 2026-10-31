@@ -67,7 +67,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/downloader"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/downloader"
 )
 
 // AppManifestURL is the authoritative release source: the latest GitHub

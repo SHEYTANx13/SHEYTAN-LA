@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/artifacts"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/customtools"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/scheduler"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/artifacts"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/customtools"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/scheduler"
 )
 
 // automationPayloadBounds — every input is bounded.

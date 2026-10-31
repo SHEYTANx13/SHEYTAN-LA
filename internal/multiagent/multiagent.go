@@ -32,10 +32,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/memory"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/netcheck"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/agent"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/memory"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/netcheck"
 )
 
 // PlannerSchema / CriticSchema are the JSON shapes each role expects.

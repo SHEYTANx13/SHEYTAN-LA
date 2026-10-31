@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/agent"
 )
 
 // TestTaskStateRidesRunSnapshot pins the reconnect contract for the agent

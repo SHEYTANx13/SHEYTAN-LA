@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recovery"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/recovery"
 )
 
 func TestIsContextExhaustionTextEvidence(t *testing.T) {

@@ -16,9 +16,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/customtools"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/customtools"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
 )
 
 func customEchoDef() *customtools.Definition {

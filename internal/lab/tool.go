@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // Tool exposes the Coding Lab through the orchestrator's generic tool system.

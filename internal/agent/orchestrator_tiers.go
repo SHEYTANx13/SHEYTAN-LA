@@ -25,14 +25,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aicontext"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/hardware"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/skills"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/taskclassify"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/toolsets"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/aicontext"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/chunking"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/hardware"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/skills"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/taskclassify"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/toolsets"
 )
 
 // ThinkingControl values (composer → backend request).

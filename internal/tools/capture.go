@@ -19,7 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/humanize"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/humanize"
 )
 
 // toolOutputCap bounds how much combined stdout+stderr one tool invocation

@@ -23,9 +23,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/engcheck"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/engcheck"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc"
 )
 
 // preflightProbeTimeout bounds the --version identity probe.

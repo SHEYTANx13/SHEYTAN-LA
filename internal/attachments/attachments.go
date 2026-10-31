@@ -42,10 +42,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/chunking"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/contextcache"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/humanize"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/vision"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/chunking"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/contextcache"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/humanize"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/vision"
 )
 
 // Hard limits (all enforced; overridable via Options for tests).

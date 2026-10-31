@@ -37,8 +37,8 @@ import (
 	"github.com/tc-hib/winres"
 	"github.com/tc-hib/winres/version"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/brand"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // logoPNG carries the pre-rendered brand flame. The PNG is generated once

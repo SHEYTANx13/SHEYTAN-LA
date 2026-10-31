@@ -12,8 +12,8 @@ package runtime
 import (
 	"testing"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/preflight"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/preflight"
 )
 
 func TestPreflightRejectionStartsZeroModelProcesses(t *testing.T) {

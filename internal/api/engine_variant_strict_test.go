@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/updater"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/updater"
 )
 
 func TestEngineProvisionInvalidVariantIsDeterministic400(t *testing.T) {

@@ -9,7 +9,7 @@ package main
 import (
 	"os"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/cmd"
+	"github.com/SHEYTANx13/SHEYTAN-LA/cmd"
 )
 
 func main() {

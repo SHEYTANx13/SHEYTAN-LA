@@ -31,7 +31,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
 )
 
 // Severity is the pre-run verdict class.

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/customtools"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/customtools"
 )
 
 func autoPost(t *testing.T, url string, body any) (int, map[string]any) {

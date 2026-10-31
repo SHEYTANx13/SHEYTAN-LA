@@ -18,7 +18,7 @@ package multiagent
 import (
 	"fmt"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
 )
 
 // ContextPolicy is one role's context request plus its hard bounds.

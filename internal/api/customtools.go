@@ -24,8 +24,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/customtools"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/customtools"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
 )
 
 // customToolView is the deterministic API shape for one definition.

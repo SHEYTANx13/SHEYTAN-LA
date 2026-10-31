@@ -38,7 +38,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc"
 )
 
 // Well-known lease names. Both live under <DataDir>/run/.

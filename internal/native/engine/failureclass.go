@@ -24,7 +24,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/recovery"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/recovery"
 )
 
 // FailureKind is the shared runtime category of one native failure.

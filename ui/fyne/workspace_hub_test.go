@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/presentation"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/presentation"
 )
 
 func TestWorkspaceHubRegistersChatResponse(t *testing.T) {

@@ -28,7 +28,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/proc"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc"
 )
 
 // defaultSandboxMemMB / defaultSandboxCPUPct are the fallback caps when a

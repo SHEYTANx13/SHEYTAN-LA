@@ -15,8 +15,8 @@ package engine
 //     representing them, it does not invent them.
 
 import (
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/sysinfo"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/sysinfo"
 )
 
 // HardwareResult is the JSON shape of the C++ "hwinfo" op result.

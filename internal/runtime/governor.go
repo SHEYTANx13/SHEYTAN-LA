@@ -25,10 +25,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/governor"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/llm"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/preflight"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/governor"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/preflight"
 )
 
 // StartGovernor builds the ONE runtime policy authority over the existing

@@ -18,7 +18,7 @@ import (
 // the fyneui import exists in desktop.go; the assertion keeps the intent
 // explicit and greppable.
 func TestDesktopPackageBuildsPinsTheOneUIImport(t *testing.T) {
-	if fyneUIPackagePath != "github.com/Parsaetak/SHEYTAN-local-agent/ui/fyne" {
+	if fyneUIPackagePath != "github.com/SHEYTANx13/SHEYTAN-LA/ui/fyne" {
 		t.Fatalf("the desktop launcher must launch the ONE Fyne UI package, got %q", fyneUIPackagePath)
 	}
 }

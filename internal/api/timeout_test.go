@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // TestRunBudgetTimerSurvivesRunStart pins the v1.1.4 self-audit fix: the

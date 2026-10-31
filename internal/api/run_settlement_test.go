@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"encoding/json"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/agent"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"

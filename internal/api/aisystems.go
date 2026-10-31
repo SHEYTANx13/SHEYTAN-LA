@@ -24,7 +24,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/aisystem"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/aisystem"
 )
 
 // systemsStore returns the runtime's AI System store (nil-safe).

@@ -34,14 +34,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/agent"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/artifacts"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/customtools"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/lab"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/logging"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/scheduler"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/skills"
-	"github.com/Parsaetak/SHEYTAN-local-agent/internal/tools"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/agent"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/artifacts"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/customtools"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/lab"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/scheduler"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/skills"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/tools"
 )
 
 // wireAutomation installs the v1.7.0 automation stack onto a constructed
