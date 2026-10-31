@@ -34,8 +34,14 @@ const (
 const (
 	AppShortName   = "SHEYTAN-LA"
 	AppDescription = "SHEYTAN Local Agent"
-	AppUserModelID = "Parsaetak.SHEYTAN-LA"
-	AppPublisher   = "Parsaetak"
+	// Identity owner token = the code-repo owner (github.com/SHEYTANx13),
+	// converted from the pre-#122 Parsaetak identity in run #122 (the
+	// installer's PUBLISHER/AUMID/REGKEY and the runtime register the
+	// SAME string; the equality is contract-tested in
+	// internal/releasecontract). Parsaetak remains the copyright/licensor
+	// ATTRIBUTION (internal/brand, LICENSE.md) — untouched.
+	AppUserModelID = "SHEYTANx13.SHEYTAN-LA"
+	AppPublisher   = "SHEYTANx13"
 	ExecutableName = "SHEYTAN-LA.exe"
 )
 

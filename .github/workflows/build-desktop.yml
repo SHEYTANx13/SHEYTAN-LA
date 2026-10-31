@@ -1054,10 +1054,27 @@ jobs:
           # Script: packaging/nsis/installer.nsi (forward-slash spelling
           # kept for the release-contract gate; makensis receives the
           # Windows backslash spelling below).
+          # Run #122 lesson: the red was NAMED but not RETRIEVABLE — the
+          # makensis transcript existed only in the auth-gated step log.
+          # Every makensis line is now teed into ci-logs/win-nsis-build.log
+          # (uploaded by the windows-logs-part artifact), and the
+          # payload-uninstall include marker is asserted in that teed log
+          # after the build, with a titled ::error on absence.
           $nsi = "packaging/nsis/installer.nsi"
           $stage = Join-Path (Resolve-Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}") ""
-          & "C:\Program Files (x86)\NSIS\makensis.exe" -DVERSION=${{ env.APP_VERSION }} "-DEXE=SHEYTAN-LA.exe" "-DBUILDDIR=$stage" "-DOUTFILE=$(Resolve-Path dist)\${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe" packaging\nsis\installer.nsi
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::makensis failed (exit $LASTEXITCODE) — packaging/nsis/installer.nsi build log above"; throw "makensis failed" }
+          New-Item -ItemType Directory -Force -Path "ci-logs" | Out-Null
+          $nsisLog = "ci-logs/win-nsis-build.log"
+          & "C:\Program Files (x86)\NSIS\makensis.exe" -DVERSION=${{ env.APP_VERSION }} "-DEXE=SHEYTAN-LA.exe" "-DBUILDDIR=$stage" "-DOUTFILE=$(Resolve-Path dist)\${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe" packaging\nsis\installer.nsi 2>&1 | Tee-Object -FilePath $nsisLog
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::makensis failed (exit $LASTEXITCODE) — packaging/nsis/installer.nsi build log above; full transcript teed to $nsisLog"; throw "makensis failed" }
+          # Marker contract (documented in installer.nsi itself): when the
+          # generated payload-uninstall list is included, the nsi emits
+          # "sheytan: payload uninstall list included" into the makensis
+          # output. Run #122 shipped without this being enforced. Absent
+          # marker → the uninstaller would silently skip the generated
+          # payload list (uninstall symmetry broken even on a green build).
+          $marker = Select-String -LiteralPath $nsisLog -Pattern 'sheytan: payload uninstall list included' -SimpleMatch
+          if (-not $marker) { Write-Host "::error::NSIS marker contract: 'sheytan: payload uninstall list included' NOT found in $nsisLog — payload-uninstall.nsh was not included; the uninstaller would not remove the staged payload"; throw "NSIS payload-uninstall marker missing from makensis log" }
+          Write-Host "NSIS marker contract: payload uninstall list included (verified in $nsisLog)"
 
       - name: Verify the installer exists
         run: |

@@ -25,12 +25,14 @@ var ErrUnsupportedPlatform = errors.New("not supported on this platform")
 
 // AppUserModelID is the Windows application identity (P1). Taskbar
 // grouping, Start Menu entries, shortcuts, toast notifications and the
-// installer all align on this exact string.
-const AppUserModelID = "Parsaetak.SHEYTAN-LA"
+// installer all align on this exact string. Owner token = the code-repo
+// owner (github.com/SHEYTANx13); converted from Parsaetak in run #122 —
+// see internal/config for the identity/attribution split.
+const AppUserModelID = "SHEYTANx13.SHEYTAN-LA"
 
 // SetAppUserModelID registers the process-level AppUserModelID so the
 // taskbar, jump lists and notifications identify the app as
-// Parsaetak.SHEYTAN-LA instead of an exe-path hash. On non-Windows
+// SHEYTANx13.SHEYTAN-LA instead of an exe-path hash. On non-Windows
 // platforms it returns ErrUnsupportedPlatform.
 func SetAppUserModelID(id string) error {
 	return setAppUserModelID(id)

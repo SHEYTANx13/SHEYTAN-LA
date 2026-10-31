@@ -17,7 +17,7 @@ Licensed under a conservative mixed model — Apache-2.0 for explicitly designat
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
 Executable:       SHEYTAN-LA.exe
-AppUserModelID:   Parsaetak.SHEYTAN-LA
+AppUserModelID:   SHEYTANx13.SHEYTAN-LA
 Branch:           main
 ```
 

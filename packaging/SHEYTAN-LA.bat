@@ -7,7 +7,7 @@ REM SHEYTAN is a trademark of Parsaetak (https://github.com/Parsaetak).
 REM Everything (models, sessions, logs, charts) lives in this folder - portable.
 REM
 REM v1.2.0+: the executable is SHEYTAN-LA.exe (unified product identity:
-REM AppUserModelID Parsaetak.SHEYTAN-LA, ProductName SHEYTAN-LA). The
+REM AppUserModelID SHEYTANx13.SHEYTAN-LA, ProductName SHEYTAN-LA). The
 REM launcher falls back to the legacy sheytan-local-agent.exe name so old
 REM portable folders keep working after an in-place update.
 

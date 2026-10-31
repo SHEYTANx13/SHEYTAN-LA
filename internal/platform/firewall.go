@@ -6,7 +6,7 @@
 // non-loopback bind). When rules ARE requested, they follow the product's
 // security posture:
 //
-//   - one rule per logical purpose, named exactly (Parsaetak.SHEYTAN-LA …)
+//   - one rule per logical purpose, named exactly (SHEYTANx13.SHEYTAN-LA …)
 //     so they are discoverable, idempotent and removable;
 //   - scoped to the EXACT process image path;
 //   - minimum scope: the configured local port, TCP, inbound allow;
@@ -33,10 +33,10 @@ import (
 // Firewall rule naming — stable identities for idempotent re-apply and
 // clean removal.
 const (
-	FirewallRuleApp  = "Parsaetak.SHEYTAN-LA"
-	FirewallRuleAPI  = "Parsaetak.SHEYTAN-LA Local API"
-	FirewallRuleMCP  = "Parsaetak.SHEYTAN-LA MCP"
-	FirewallRulePort = "Parsaetak.SHEYTAN-LA Engine"
+	FirewallRuleApp  = "SHEYTANx13.SHEYTAN-LA"
+	FirewallRuleAPI  = "SHEYTANx13.SHEYTAN-LA Local API"
+	FirewallRuleMCP  = "SHEYTANx13.SHEYTAN-LA MCP"
+	FirewallRulePort = "SHEYTANx13.SHEYTAN-LA Engine"
 )
 
 // FirewallRule is one explicit, minimal firewall rule request.

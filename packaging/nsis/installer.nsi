@@ -1,5 +1,5 @@
 ; ============================================================================
-; SHEYTAN-LA — SHEYTAN Local Agent — Windows installer (NSIS, v1.2.1)
+; SHEYTAN-LA — SHEYTAN Local Agent — Windows installer (NSIS, v1.2.2)
 ; ============================================================================
 ; Built by CI (.github/workflows/build-desktop.yml) on the windows runner:
 ;
@@ -55,6 +55,35 @@
 ;     later (data/, models/, workspace/, sessions/, logs/, any user
 ;     file) is never in that list and survives by construction.
 ;
+; v1.2.2 CONTRACT UPGRADES (run #122 deep-fix):
+;   - PAYLOAD MACRO NAME — ONE convention, mechanically guarded: the
+;     generated payload-uninstall.nsh OPENS with
+;     "!define SHEYTAN_PAYLOAD_UNINSTALL" and declares
+;     "!macro SHEYTAN_PAYLOAD_UNINSTALL_FILES". The !ifdef below tests
+;     the DEFINE (NSIS keeps defines and macros in SEPARATE namespaces)
+;     and the !insertmacro targets the MACRO — WITH the _FILES suffix.
+;     Run #122 (41239634246) failed makensis exactly here: it inserted
+;     the bare define name as a macro name; no macro of that spelling
+;     exists, so the compile aborted (macro not found, exit 1). The
+;     equality of all three names is pinned by
+;     internal/releasecontract installer_contract_test.go — any future
+;     drift on either side fails the Go ladder, not a hosted run.
+;   - LICENSE PAGE: MUI_PAGE_LICENSE renders the single-source
+;     LICENSE.md (CI stages the repo-root LICENSE.md into the package
+;     root before makensis runs; no second license file exists anywhere
+;     — the release contract asserts exactly one). The staged copy is
+;     a REQUIRED payload file; the uninstaller deletes it symmetrically.
+;   - BRAND IDENTITY: PUBLISHER / AUMID / REGKEY carry the code-repo
+;     owner identity (SHEYTANx13, from github.com/SHEYTANx13/SHEYTAN-LA)
+;     — the same <owner>.<product> pattern internal/config and
+;     internal/platform register at runtime. Parsaetak remains the
+;     copyright/licensor ATTRIBUTION (LegalCopyright below, brand.go,
+;     LICENSE.md) and is deliberately untouched. NOTE for upgrades:
+;     pre-v1.2.2 installs remember their InstallDir under the old
+;     Software\Parsaetak\SHEYTAN-LA key; the first upgraded install
+;     re-selects the directory once (the previous install directory is
+;     the default) — user data is never touched by this.
+;
 ; Directory selection is unchanged (MUI_PAGE_DIRECTORY) and the selected
 ; directory is genuinely used: every payload file, shortcut and registry
 ; entry below resolves through $INSTDIR.
@@ -70,7 +99,7 @@
 ;     defect). An explicit user-chosen SHEYTAN_DATA_DIR override stays
 ;     supported and is never rewritten; the runtime migrates old
 ;     AppData data into the canonical root on first run;
-;   - AppUserModelID Parsaetak.SHEYTAN-LA registered under HKCU classes so
+;   - AppUserModelID SHEYTANx13.SHEYTAN-LA registered under HKCU classes so
 ;     taskbar/notifications resolve the identity;
 ;   - version-aware upgrades, clean uninstall, user data untouched;
 ;   - NO Authenticode claim: signing runs later in CI when credentials
@@ -110,6 +139,12 @@ ManifestDPIAware true
 !if ! /FileExists "${BUILDDIR}\${EXE}"
   !error "NSIS: staging executable not found: ${BUILDDIR}\${EXE} (build the portable application first; pass an ABSOLUTE -DBUILDDIR from CI)"
 !endif
+; The license page renders the staged single-source LICENSE.md — it is a
+; REQUIRED payload artifact, so its absence must fail the installer build
+; with the exact missing path (same fail-fast class as the EXE above).
+!if ! /FileExists "${BUILDDIR}\LICENSE.md"
+  !error "NSIS: staged LICENSE.md not found: ${BUILDDIR}\LICENSE.md (CI stages the single-source LICENSE.md into the package root before makensis)"
+!endif
 
 ; v1.10.14 UNINSTALL SYMMETRY: CI generates payload-uninstall.nsh from
 ; the exact payload tree (Delete per file, bottom-up RMDir per directory).
@@ -122,6 +157,9 @@ ManifestDPIAware true
 ; list still compiles (the macro insert is !ifdef-guarded in the
 ; uninstall section); CI always generates it and asserts the
 ; "sheytan: payload uninstall list included" marker in the makensis log.
+; v1.2.2 (run #122): the !insertmacro below targets the generated MACRO
+; name SHEYTAN_PAYLOAD_UNINSTALL_FILES (with the _FILES suffix) — the
+; bare define name is NOT a macro name; inserting it aborts makensis.
 !include /nonfatal "payload-uninstall.nsh"
 
 !include "MUI2.nsh"
@@ -131,9 +169,9 @@ ManifestDPIAware true
 
 !define PRODUCT       "SHEYTAN-LA"
 !define DESCRIPTION   "SHEYTAN Local Agent"
-!define PUBLISHER     "Parsaetak"
-!define AUMID         "Parsaetak.SHEYTAN-LA"
-!define REGKEY        "Software\Parsaetak\SHEYTAN-LA"
+!define PUBLISHER     "SHEYTANx13"
+!define AUMID         "SHEYTANx13.SHEYTAN-LA"
+!define REGKEY        "Software\SHEYTANx13\SHEYTAN-LA"
 !define UNINSTKEY     "Software\Microsoft\Windows\CurrentVersion\Uninstall\SHEYTAN-LA"
 
 ; --- installer options state ------------------------------------------------
@@ -171,6 +209,9 @@ VIAddVersionKey "LegalCopyright" "(c) 2024-2026 Parsaetak. All rights reserved."
 ; the installer stays a two-click experience (directory → install).
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW DirectoryPageShow
 !insertmacro MUI_PAGE_WELCOME
+; License page — the single-source LICENSE.md (staged into the package
+; root by CI; compile-time assertion above refuses to build without it).
+!insertmacro MUI_PAGE_LICENSE "${BUILDDIR}\LICENSE.md"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${EXE}"
@@ -237,7 +278,10 @@ upgrade_replaced:
 
   ; --- application payload (never models) ---------------------------------
   File "${BUILDDIR}\${EXE}"
-  File /nonfatal "${BUILDDIR}\LICENSE.md"
+  ; v1.2.2: REQUIRED — CI stages the single-source LICENSE.md into the
+  ; package root and the license page renders it; /nonfatal would ship
+  ; an installer without its license on any staging drift.
+  File "${BUILDDIR}\LICENSE.md"
   File /nonfatal "${BUILDDIR}\README.md"
   File /nonfatal "${BUILDDIR}\SIGNATURE"
   File "..\..\build\sheytan.ico"
@@ -349,7 +393,12 @@ Section "Uninstall"
   ; any user file) is NOT in the list — it survives this uninstall.
   !ifdef SHEYTAN_PAYLOAD_UNINSTALL
     !echo "sheytan: payload uninstall list included"
-    !insertmacro SHEYTAN_PAYLOAD_UNINSTALL
+    ; v1.2.2 (run #122): the generated MACRO carries the _FILES suffix
+    ; (SHEYTAN_PAYLOAD_UNINSTALL_FILES); the define above is its guard
+    ; symbol. Inserting the bare define name here is exactly the
+    ; macro-not-found abort that killed run #122 — the name equality is
+    ; contract-tested in internal/releasecontract.
+    !insertmacro SHEYTAN_PAYLOAD_UNINSTALL_FILES
   !endif
 
   ; Remove the application — and NOTHING else.

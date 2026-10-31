@@ -27,7 +27,7 @@ func TestFirewallAddArgs_DeterministicAndScoped(t *testing.T) {
 
 	want := []string{
 		"advfirewall", "firewall", "rule", "add",
-		"name=Parsaetak.SHEYTAN-LA Engine",
+		"name=" + FirewallRulePort, // run #122: name derived from the constant — the identity VALUE is pinned by internal/releasecontract
 		"dir=in",
 		"action=allow",
 		"program=C:\\Program Files\\SHEYTAN-LA\\SHEYTAN-LA.exe",
@@ -71,14 +71,14 @@ func TestFirewallDeleteAndShowArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("delete args: %v", err)
 	}
-	if want := []string{"advfirewall", "firewall", "rule", "delete", "name=Parsaetak.SHEYTAN-LA"}; !reflect.DeepEqual(del, want) {
+	if want := []string{"advfirewall", "firewall", "rule", "delete", "name=" + FirewallRuleApp}; !reflect.DeepEqual(del, want) {
 		t.Fatalf("delete args mismatch: got %#v", del)
 	}
 	show, err := FirewallShowArgs(FirewallRuleApp)
 	if err != nil {
 		t.Fatalf("show args: %v", err)
 	}
-	if !reflect.DeepEqual(show, []string{"advfirewall", "firewall", "rule", "show", "name=Parsaetak.SHEYTAN-LA"}) {
+	if !reflect.DeepEqual(show, []string{"advfirewall", "firewall", "rule", "show", "name=" + FirewallRuleApp}) {
 		t.Fatalf("show args mismatch: got %#v", show)
 	}
 	if _, err := FirewallDeleteArgs(""); err == nil {
