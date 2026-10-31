@@ -1,4 +1,4 @@
-module github.com/Parsaetak/SHEYTAN-local-agent
+module github.com/SHEYTANx13/SHEYTAN-LA
 
 go 1.26
 
