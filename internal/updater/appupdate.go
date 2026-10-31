@@ -71,8 +71,16 @@ import (
 )
 
 // AppManifestURL is the authoritative release source: the latest GitHub
-// release of this repository carrying a release-manifest.json asset.
-const AppManifestURL = "https://github.com/Parsaetak/SHEYTAN-local-agent/releases/latest/download/release-manifest.json"
+// release of SHEYTANx13/SHEYTAN-LA carrying a release-manifest.json asset.
+//
+// Host contract (run #119 session): releases live on the CODE repo,
+// github.com/SHEYTANx13/SHEYTAN-LA — the release job derives its manifest
+// base URL from github.repository (that repo). This URL previously pointed
+// at the MODULE-path repo (Parsaetak/SHEYTAN-local-agent), a frozen v1.10.1
+// mirror with zero releases — an in-app update check against it could never
+// find anything. The host is pinned by a test
+// (manifest_host_v1110_test.go) so it cannot drift silently again.
+const AppManifestURL = "https://github.com/SHEYTANx13/SHEYTAN-LA/releases/latest/download/release-manifest.json"
 
 // appDownloadCap bounds any staged update download (installers are tens of
 // MB; this cap exists to bound a hostile manifest, not to constrain real

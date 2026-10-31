@@ -526,18 +526,44 @@ jobs:
       # hypothesis: windows-latest reports only a Basic Display Adapter,
       # software GL 1.1 / WARP Direct3D-only, so GLFW cannot create a
       # usable context and window creation never completes): a pinned
-      # Mesa llvmpipe build's opengl32.dll is placed BESIDE THE COPY's
-      # exe (DLL search order picks it up before the system one). The
-      # shipped ZIP and installer must NEVER contain the Mesa DLL —
-      # enforced by the purity assertions in "Verify Windows ZIP" and the
-      # payload generator guard, not by convention.
-      # Mesa pin (verified 2026-10-30):
+      # Mesa llvmpipe build is placed BESIDE THE COPY's exe (DLL search
+      # order picks it up before the system one).
+      #
+      # TWO-DLL DEPLOYMENT CONTRACT (run #119 root cause — do not
+      # "simplify" back to one DLL): since Mesa 21.3.0 the Gallium
+      # megadriver is SEPARATED from opengl32.dll. The MSVC
+      # x64/opengl32.dll is a thin forwarder (~136 KB) that statically
+      # imports its companion x64/libgallium_wgl.dll (~61.9 MB); a
+      # per-application deployment of opengl32.dll ALONE kills the
+      # process at loader level with 0xC0000135 (STATUS_DLL_NOT_FOUND)
+      # before main() runs — exactly run #119's Windows smoke red. The
+      # smoke copy therefore carries BOTH DLLs, verified in the pinned
+      # archive by listing before extraction, and GALLIUM_DRIVER=llvmpipe
+      # makes the driver choice explicit in the launch step.
+      #
+      # The shipped ZIP and installer must NEVER contain either Mesa DLL
+      # — enforced by the purity assertions in "Verify Windows ZIP" and
+      # the payload generator guard, not by convention.
+      # Mesa pin (verified 2026-10-30: asset sha256 recomputed from the
+      # real release download; both x64 entries confirmed by 7z l):
       #   repo/release : pal1000/mesa-dist-win  tag 26.2.5
       #   asset        : mesa3d-26.2.5-release-msvc.7z (70,248,244 bytes)
       #   sha256       : 997123ef4ce8896204ab912d5b54f19372c487ff9835bcefafa2fca23b8953c2
-      #   entry        : x64/opengl32.dll
-      # Checksum mismatch => fail closed, no DLL is placed.
+      #   entries      : x64/opengl32.dll (139,264 B)
+      #                  x64/libgallium_wgl.dll (61,880,320 B)
+      # Checksum mismatch or a missing entry => fail closed, nothing placed.
       # ------------------------------------------------------------------
+      # Section-5 speed item: the 70 MB pinned Mesa archive is cached and
+      # keyed by its exact sha256. Restore lands in RUNNER_TEMP; the
+      # staging step below re-verifies the checksum AFTER restore in ALL
+      # cases (a cached file is not a trusted file until re-hashed) — the
+      # checksum gate remains the only trust anchor.
+      - name: Restore pinned Mesa archive (cache, keyed by sha256)
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/mesa3d-26.2.5-release-msvc.7z
+          key: mesa3d-26.2.5-release-msvc-sha256-997123ef4ce8896204ab912d5b54f19372c487ff9835bcefafa2fca23b8953c2
+
       - name: Stage smoke copy + pinned Mesa software GL
         run: |
           $ErrorActionPreference = "Stop"
@@ -549,26 +575,71 @@ jobs:
           if (-not (Test-Path (Join-Path $smokeRoot "SHEYTAN-LA.exe"))) { throw "smoke copy is missing SHEYTAN-LA.exe" }
           $stagingData = "dist/windows/app/${{ env.WIN_PKG_ROOT }}/data"
           if (Test-Path $stagingData) { throw "pristine-staging violation: $stagingData exists BEFORE the smoke — upstream steps leaked residue" }
+          # Purity guard (two DLLs): neither Mesa DLL may ever enter the
+          # staging tree; they exist only inside the smoke copy.
+          foreach ($banned in @("opengl32.dll", "libgallium_wgl.dll")) {
+            if (Test-Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}/$banned") { throw "purity violation: $banned must never enter the staging tree" }
+          }
 
           $mesaUrl = "https://github.com/pal1000/mesa-dist-win/releases/download/26.2.5/mesa3d-26.2.5-release-msvc.7z"
           $mesaSha256 = "997123ef4ce8896204ab912d5b54f19372c487ff9835bcefafa2fca23b8953c2"
           $mesaArchive = Join-Path $env:RUNNER_TEMP "mesa3d-26.2.5-release-msvc.7z"
-          Invoke-WebRequest -Uri $mesaUrl -OutFile $mesaArchive
+          if (-not (Test-Path $mesaArchive)) {
+            Write-Host "pinned Mesa archive not restored from cache — downloading"
+            Invoke-WebRequest -Uri $mesaUrl -OutFile $mesaArchive
+          } else {
+            Write-Host "pinned Mesa archive restored from actions/cache — re-verifying (cached is not trusted until re-hashed)"
+          }
           $hash = (Get-FileHash -Algorithm SHA256 $mesaArchive).Hash.ToLowerInvariant()
           if ($hash -ne $mesaSha256) {
-            throw ("Mesa checksum mismatch: got {0}, want {1} — failing closed, no DLL placed" -f $hash, $mesaSha256)
+            Remove-Item $mesaArchive -Force
+            throw ("Mesa checksum mismatch: got {0}, want {1} — failing closed, no DLL placed (archive deleted so a bad copy is not cached)" -f $hash, $mesaSha256)
           }
+
+          # List before extracting: the two-DLL deployment contract is
+          # checked against the archive's ACTUAL entries, not assumptions.
+          $listing = & "C:\Program Files\7-Zip\7z.exe" l $mesaArchive | Out-String
+          $x64Entries = ($listing -split "`r?`n") | ForEach-Object { ($_ -split '\s+')[-1] } | Where-Object { $_ -like "x64/*.dll" } | Sort-Object -Unique
+          Write-Host "pinned archive x64 DLL entries:"
+          $x64Entries | ForEach-Object { Write-Host "  $_" }
+          foreach ($required in @("x64/opengl32.dll", "x64/libgallium_wgl.dll")) {
+            if ($x64Entries -notcontains $required) {
+              throw ("Mesa archive contract violation: '{0}' absent from the pinned 26.2.5 release-msvc archive — the two-DLL per-app deployment (Gallium megadriver separation since 21.3.0) cannot be satisfied; failing closed" -f $required)
+            }
+          }
+
           $mesaExtract = Join-Path $env:RUNNER_TEMP "mesa3d-extract"
           if (Test-Path $mesaExtract) { Remove-Item -Recurse -Force $mesaExtract }
           New-Item -ItemType Directory -Force -Path $mesaExtract | Out-Null
-          & "C:\Program Files\7-Zip\7z.exe" e "$mesaArchive" "-o$mesaExtract" "x64/opengl32.dll" -y | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "7z extraction of x64/opengl32.dll failed (exit $LASTEXITCODE)" }
-          $dll = Join-Path $mesaExtract "opengl32.dll"
-          if (-not (Test-Path $dll)) { throw "extracted Mesa opengl32.dll missing under $mesaExtract" }
-          Copy-Item $dll (Join-Path $smokeRoot "opengl32.dll") -Force
-          $stagingDll = "dist/windows/app/${{ env.WIN_PKG_ROOT }}/opengl32.dll"
-          if (Test-Path $stagingDll) { throw "purity violation: opengl32.dll must never enter the staging tree" }
-          Write-Host "smoke copy staged at $smokeRoot with pinned Mesa llvmpipe opengl32.dll (sha256 OK)"
+          # ONE invocation, BOTH DLLs, same pinned archive, same sha256.
+          & "C:\Program Files\7-Zip\7z.exe" e "$mesaArchive" "-o$mesaExtract" "x64/opengl32.dll" "x64/libgallium_wgl.dll" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7z extraction of the Mesa two-DLL set failed (exit $LASTEXITCODE)" }
+          foreach ($name in @("opengl32.dll", "libgallium_wgl.dll")) {
+            $dll = Join-Path $mesaExtract $name
+            if (-not (Test-Path $dll)) { throw "extracted Mesa $name missing under $mesaExtract — failing closed" }
+            Copy-Item $dll (Join-Path $smokeRoot $name) -Force
+          }
+          Write-Host "smoke copy staged at $smokeRoot with pinned Mesa llvmpipe opengl32.dll + libgallium_wgl.dll (sha256 OK, two-DLL contract satisfied)"
+
+      # Pre-launch dependency audit (run #119): 0xC0000135 is raised by
+      # the Windows loader while resolving the STATIC import chain at
+      # process init — before main() runs, so nothing can log it and a
+      # bare exit code is the only symptom. This step reads the static
+      # import tables of the smoke copy's load-chain modules (app exe +
+      # the two Mesa DLLs) and resolves every imported DLL name in the
+      # real loader order (exe dir, System32, PATH) BEFORE launch. Any
+      # unresolvable name fails the step with a named ::error, so a
+      # future DLL red is diagnosable from the run page alone.
+      # Best-effort contract: the audit's own PE-parse failures are
+      # FAIL-OPEN (log + continue) — it adds signal, it never blocks a
+      # green smoke. Full output tees into
+      # ci-logs/win-smoke-dep-audit.log (windows-logs-part artifact).
+      - name: Pre-launch dependency audit (static imports, fail-open parser)
+        run: |
+          $smokeRoot = Join-Path $env:RUNNER_TEMP "win-smoke\${{ env.WIN_PKG_ROOT }}"
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+          & ./scripts/ci/ImportAudit.ps1 -ExeDir $smokeRoot -Modules @("SHEYTAN-LA.exe", "opengl32.dll", "libgallium_wgl.dll") 2>&1 | Tee-Object -FilePath "ci-logs/win-smoke-dep-audit.log"
+          if ($LASTEXITCODE -eq 2) { throw "smoke dependency audit: unresolvable static import — the launch would die with 0xC0000135 (named DLL in ci-logs/win-smoke-dep-audit.log)" }
 
       # Launch smoke (run #54 repair; #55 hardening): bounded polling of
       # observable readiness — process alive + real MainWindowHandle OR a
@@ -590,6 +661,9 @@ jobs:
           if (-not (Test-Path (Join-Path $smokeRoot "SHEYTAN-LA.exe"))) { throw "smoke copy missing SHEYTAN-LA.exe under $smokeRoot — the staging step did not run" }
           $exe = Join-Path (Resolve-Path $smokeRoot) "SHEYTAN-LA.exe"
           $smokeLog = Join-Path (Get-Location) "smoke-app-output.log"
+          # Explicit, deterministic software-GL driver choice (the proven
+          # GPU-less runner pattern); Start-Process inherits this env.
+          $env:GALLIUM_DRIVER = "llvmpipe"
           $p = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru `
                  -RedirectStandardOutput $smokeLog -RedirectStandardError $smokeLog+".err"
           $bootDeadline = (Get-Date).AddSeconds(60)
@@ -760,22 +834,28 @@ jobs:
             foreach ($entry in $required) {
               if ($names -notcontains $entry) { throw "ZIP entry missing: $entry" }
             }
-            # ZIP purity assertions (run #118 defect): required entries are
-            # not enough — forbidden ones must FAIL the build too.
+            # ZIP purity assertions (run #118 defect, extended for run
+            # #119's two-DLL Mesa contract): required entries are not
+            # enough — forbidden ones must FAIL the build too.
             #   1. nothing under the app's portable data root (a smoke run
             #      inside the staging tree leaves data\app.log residue);
-            #   2. never the smoke-provisioned Mesa opengl32.dll.
+            #   2. never the smoke-provisioned Mesa opengl32.dll;
+            #   3. never its megadriver companion libgallium_wgl.dll —
+            #      since Mesa 21.3.0 opengl32.dll alone is not a valid
+            #      per-app deployment, and NEITHER DLL may ship.
             $forbiddenData = "${env:WIN_PKG_ROOT}/data/"
-            $forbiddenDll = "${env:WIN_PKG_ROOT}/opengl32.dll"
+            $forbiddenDlls = @("${env:WIN_PKG_ROOT}/opengl32.dll", "${env:WIN_PKG_ROOT}/libgallium_wgl.dll")
             foreach ($name in $names) {
               if ($name.StartsWith($forbiddenData, [System.StringComparison]::OrdinalIgnoreCase)) {
                 throw ("ZIP purity violation: data-root residue entry '{0}' — the smoke must run from the RUNNER_TEMP copy, never the staging tree" -f $name)
               }
-              if ($name.Equals($forbiddenDll, [System.StringComparison]::OrdinalIgnoreCase)) {
-                throw ("ZIP purity violation: '{0}' present — the Mesa software-GL DLL is smoke-only and must never ship" -f $name)
+              foreach ($forbiddenDll in $forbiddenDlls) {
+                if ($name.Equals($forbiddenDll, [System.StringComparison]::OrdinalIgnoreCase)) {
+                  throw ("ZIP purity violation: '{0}' present — the Mesa software-GL DLLs are smoke-only and must never ship" -f $name)
+                }
               }
             }
-            Write-Host "ZIP OK: all contracted entries present; purity assertions passed (no data/ residue, no opengl32.dll)"
+            Write-Host "ZIP OK: all contracted entries present; purity assertions passed (no data/ residue, no opengl32.dll, no libgallium_wgl.dll)"
           } finally { $archive.Dispose() }
 
       # NSIS installer: ONE Go executable payload — no Qt runtime, no
@@ -792,12 +872,12 @@ jobs:
           $lines = @('!define SHEYTAN_PAYLOAD_UNINSTALL', '!macro SHEYTAN_PAYLOAD_UNINSTALL_FILES')
           # Uninstall symmetry is generated from the PRISTINE staging tree
           # (the smoke runs from the RUNNER_TEMP copy). Assert it: data
-          # residue or the Mesa DLL here means the smoke leaked upstream.
+          # residue or either Mesa DLL here means the smoke leaked upstream.
           $payloadFiles = @(Get-ChildItem -Recurse -File $root)
           if ($payloadFiles.Count -eq 0) { throw "staging root has no files: $root" }
           foreach ($f in $payloadFiles) {
             $rel = $f.FullName.Substring((Resolve-Path $root).Path.Length + 1)
-            if ($rel -like "data\*" -or $rel -eq "opengl32.dll") {
+            if ($rel -like "data\*" -or $rel -eq "opengl32.dll" -or $rel -eq "libgallium_wgl.dll") {
               throw ("pristine-payload violation: staging tree contains '{0}' — the smoke must never write into dist/windows/app" -f $rel)
             }
           }
