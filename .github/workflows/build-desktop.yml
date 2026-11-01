@@ -1064,7 +1064,7 @@ jobs:
           $stage = Join-Path (Resolve-Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}") ""
           New-Item -ItemType Directory -Force -Path "ci-logs" | Out-Null
           $nsisLog = "ci-logs/win-nsis-build.log"
-          & "C:\Program Files (x86)\NSIS\makensis.exe" -DVERSION=${{ env.APP_VERSION }} "-DEXE=SHEYTAN-LA.exe" "-DBUILDDIR=$stage" "-DOUTFILE=$(Resolve-Path dist)\${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe" packaging\nsis\installer.nsi 2>&1 | Tee-Object -FilePath $nsisLog
+          & "C:\Program Files (x86)\NSIS\makensis.exe" "-DVERSION=${{ env.APP_VERSION }}" "-DEXE=SHEYTAN-LA.exe" "-DBUILDDIR=$stage" "-DOUTFILE=$(Resolve-Path dist)\${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe" packaging\nsis\installer.nsi 2>&1 | Tee-Object -FilePath $nsisLog
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::makensis failed (exit $LASTEXITCODE) — packaging/nsis/installer.nsi build log above; full transcript teed to $nsisLog"; throw "makensis failed" }
           # Marker contract (documented in installer.nsi itself): when the
           # generated payload-uninstall list is included, the nsi emits

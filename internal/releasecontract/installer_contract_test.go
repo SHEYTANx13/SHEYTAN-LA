@@ -19,6 +19,10 @@
 //
 // The same file pins the other installer contracts this session touched:
 //   - the makensis diagnosability contract (tee + marker enforcement);
+//   - the makensis define-quoting contract (run #123: a bare
+//     -DVERSION=1.11.0 split in PowerShell's argument parser into
+//     -DVERSION=1 plus a script path .11.0 — makensis exited 1 before
+//     installer.nsi ever opened);
 //   - the license-page contract (single-source LICENSE.md, required
 //     payload file, symmetric uninstall delete — no second license
 //     artifact anywhere, enforced by license_contract_test.go);
@@ -303,5 +307,96 @@ func TestNSISBrandIdentityContract(t *testing.T) {
 			continue
 		}
 		t.Errorf("installer.nsi line %d carries Parsaetak OUTSIDE attribution/comments: %s", i+1, strings.TrimSpace(line))
+	}
+}
+
+// TestNSISDefinesQuotedByWorkflow is THE run #123 guard: every makensis
+// invocation in the workflow must pass every -D<NAME>= define token as a
+// double-quoted argument, no bare -D<NAME>= token may exist anywhere in
+// the workflow file, and the VERSION define specifically must stay in
+// its quoted form.
+//
+// THE RUN #123 ROOT CAUSE (this test is its permanent guard): GitHub
+// Actions substitutes ${{ ... }} BEFORE pwsh parses the step, so the
+// bare token -DVERSION=1.11.0 reached PowerShell's native-command
+// argument parser without quotes. That parser splits a bare token after
+// the leading numeric literal: makensis received -DVERSION=1 (defining
+// VERSION as "1" — confirmed by the teed line 'Command line defined:
+// "VERSION=1"') and a separate .11.0, which it took for the script path
+// (confirmed by 'Can't open script ".11.0"') — exit 1 before
+// installer.nsi ever opened. The quoted siblings on the same line
+// (-DEXE, -DBUILDDIR, -DOUTFILE) survived intact, which is what isolated
+// the defect to the one bare token. Note that the quoted-sibling control
+// also proves the check below cannot be satisfied by quoting SOME
+// defines: every define token must carry its own quotes.
+//
+// Standing rule made mechanical here: an external-tool argument that
+// carries a substituted value is either quoted or contract-tested —
+// never a bare token. Any future drift of exactly this class reds the
+// local ladder instead of a hosted run.
+func TestNSISDefinesQuotedByWorkflow(t *testing.T) {
+	workflow := readTreeFile(t, workflowRelPath)
+	lines := strings.Split(workflow, "\n")
+
+	// defineTokenRe matches a makensis define argument anywhere in a
+	// line: -D<NAME>= with no space before the '='. A quoted define
+	// still matches (the match sits inside the quotes); the bareness
+	// decision looks at the character BEFORE the match: an opening
+	// double quote means the token is quoted, anything else (space,
+	// line start) means bare.
+	defineTokenRe := regexp.MustCompile(`-D[A-Za-z_][A-Za-z0-9_]*=`)
+	defineName := func(tok string) string {
+		m := regexp.MustCompile(`-D([A-Za-z_][A-Za-z0-9_]*)=`).FindStringSubmatch(tok)
+		if m == nil {
+			return tok
+		}
+		return m[1]
+	}
+	unquoted := func(t *testing.T, lineNo int, line string, loc []int) {
+		t.Helper()
+		name := defineName(line[loc[0]:loc[1]])
+		t.Errorf("workflow line %d passes the makensis define %s UNQUOTED — GitHub Actions substitutes ${{ }} before pwsh parses the line, and a bare token splits after the leading numeric literal (run #123: -DVERSION=1.11.0 reached makensis as -DVERSION=1 plus a script path .11.0, exit 1 before installer.nsi opened). Quote the WHOLE -D<NAME>=... token, exactly like its siblings.", lineNo, name)
+	}
+
+	// 1. Whole-file sweep, fail closed: EVERY -D<NAME>= token on every
+	// non-comment line must be quoted. The rule is not scoped to the
+	// one line that failed run #123 — a second invocation site or a
+	// newly added define gets the same mechanical rule.
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		for _, loc := range defineTokenRe.FindAllStringIndex(line, -1) {
+			if loc[0] > 0 && line[loc[0]-1] == '"' {
+				continue // opening quote: quoted define token
+			}
+			unquoted(t, i+1, line, loc)
+		}
+	}
+
+	// 2. The guard must have a subject: at least one real makensis
+	// invocation (comments mentioning makensis do not count).
+	invocations := 0
+	var invocationLines []int
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, "makensis.exe") && !strings.HasPrefix(trimmed, "#") {
+			invocations++
+			invocationLines = append(invocationLines, i+1)
+		}
+	}
+	if invocations == 0 {
+		t.Fatalf("no makensis invocation found in %s — the define-quoting contract has no subject (was the installer build step removed or renamed?)", workflowRelPath)
+	}
+
+	// 3. Pin the run #123 fix itself: the VERSION define must exist on
+	// a makensis invocation line IN QUOTED FORM (opening AND closing
+	// double quote around the whole token, substituted value inside).
+	versionRe := regexp.MustCompile(`"-DVERSION=[^"]*"`)
+	for _, lineNo := range invocationLines {
+		if !versionRe.MatchString(lines[lineNo-1]) {
+			t.Errorf("workflow line %d does not carry the quoted VERSION define \"-DVERSION=<value>\" — the run #123 quoting fix drifted", lineNo)
+		}
 	}
 }
