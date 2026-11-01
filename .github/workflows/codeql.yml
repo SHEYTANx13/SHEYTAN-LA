@@ -1,6 +1,7 @@
 # SHEYTAN-LA: full CodeQL security + quality analysis.
-# Languages are split into matrix jobs so each database has an independent build.
-# Go and C++ use explicit manual builds to capture the real project build paths.
+# Each language gets an independent CodeQL database and analysis category.
+# Go and C++ use explicit manual builds so CodeQL observes the real compilers.
+# All external actions are pinned to verified immutable commit SHAs.
 
 name: CodeQL Security & Quality
 
@@ -12,7 +13,7 @@ on:
     branches:
       - main
   schedule:
-    # Weekly full analysis also catches newly added CodeQL queries.
+    # Weekly analysis also picks up newly released CodeQL queries.
     - cron: "17 4 * * 1"
   workflow_dispatch:
 
@@ -41,31 +42,29 @@ jobs:
           - language: actions
             build-mode: none
 
-          # The repository's portable C++17 engine has a real CMake build.
+          # Portable C++17 native inference engine.
           - language: cpp
             build-mode: manual
 
-          # Build every Go package with the same Linux CGO prerequisites as CI.
+          # Go application core and Fyne desktop UI.
           - language: go
             build-mode: manual
 
-          # JavaScript assets and embedded HTML views; no JS build manifest exists.
+          # Tracked JavaScript and HTML assets; repository has no JS build manifest.
           - language: javascript-typescript
             build-mode: none
 
-          # The checked-in Python reference-fixture generator.
+          # Python reference-fixture generator.
           - language: python
             build-mode: none
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # Fyne's Linux desktop packages require CGO and the same system headers
-      # used by the repository's normal Linux build. Install them before the
-      # CodeQL initialization/manual build so the Go extractor sees a real build.
+      # Fyne's Linux desktop packages require CGO and native development headers.
       - name: Install Go/Fyne Linux build dependencies
         if: matrix.language == 'go'
         shell: bash
@@ -89,25 +88,16 @@ jobs:
 
       - name: Set up Go
         if: matrix.language == 'go'
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Matches .github/workflows/build-desktop.yml. The go.mod toolchain
-          # directive selects Go 1.27.3 through GOTOOLCHAIN=auto when needed.
+          # Matches build-desktop.yml; go.mod's toolchain directive selects 1.27.3.
           go-version: "1.27"
           cache: false
 
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
-        with:
-          languages: ${{ matrix.language }}
-          build-mode: ${{ matrix.build-mode }}
-          # security-and-quality includes security-extended plus additional
-          # maintainability and reliability queries. Do not disable defaults.
-          queries: security-and-quality
-
-      # Manual Go build: this is the same complete package build used by the
-      # project's Linux preflight, with CGO enabled for the Fyne desktop code.
-      - name: Build and vet all Go packages
+      # Run vet before CodeQL initialization. It is a useful quality check, but
+      # it is not a compiler build that contributes to the CodeQL database.
+      # Keeping it outside the traced build avoids wasting extraction time.
+      - name: Vet all Go packages
         if: matrix.language == 'go'
         shell: bash
         env:
@@ -116,12 +106,31 @@ jobs:
         run: |
           set -euo pipefail
           go version
-          go env CGO_ENABLED GOTOOLCHAIN
-          go build ./...
           go vet ./...
 
-      # Manual C++ build: CMake compiles the engine, IPC host, and every native
-      # test target while CodeQL's compiler tracing is active.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-and-quality includes default + security-extended + quality queries.
+          queries: security-and-quality
+
+      # Manual Go build: compile every Linux/CGO-enabled package so the Go
+      # extractor observes the actual application and Fyne native build path.
+      - name: Build all Go packages for CodeQL
+        if: matrix.language == 'go'
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+          GOTOOLCHAIN: auto
+        run: |
+          set -euo pipefail
+          go env CGO_ENABLED GOTOOLCHAIN
+          go build ./...
+
+      # Manual C++ build: compile the engine, IPC host, and all native test
+      # targets while CodeQL's compiler tracing is active.
       - name: Configure native C++ engine
         if: matrix.language == 'cpp'
         shell: bash
@@ -147,13 +156,13 @@ jobs:
           ctest --test-dir "$RUNNER_TEMP/shtn-native-codeql" --output-on-failure
 
       - name: Analyze and upload CodeQL results
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           category: "/language:${{ matrix.language }}"
 
-  # This job runs only after every language analysis has uploaded successfully.
-  # The REST API request deliberately omits `state`, so open, fixed, dismissed,
-  # and closed alerts are all included. Pagination is mandatory (100/page max).
+  # This report runs only after every language analysis has uploaded successfully.
+  # The Code Scanning API returns alert states (open/fixed/dismissed/closed)
+  # without a state filter; pagination ensures that no later pages are omitted.
   export-alert-report:
     name: Export complete CodeQL alert report
     needs: analyze
@@ -184,7 +193,7 @@ jobs:
           fi
 
           echo "Exporting CodeQL alerts for ${GITHUB_REPOSITORY} at ${report_ref}"
-          gh api --paginate --slurp \
+          gh api --paginate --slurp --method GET \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2026-03-10" \
             -f per_page=100 \
@@ -289,7 +298,7 @@ jobs:
               f"{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}",
               f"Generated UTC: {generated}",
               "CodeQL query suite: security-and-quality",
-              "API filter: tool_name=CodeQL; all alert states (state filter omitted)",
+              "API filter: tool_name=CodeQL; all returned alert states (state filter omitted)",
               f"API pages received: {len(pages)}",
               f"Total alert records: {len(alerts)}",
               f"Distinct alert IDs: {len(set(alert_ids))}",
@@ -321,9 +330,7 @@ jobs:
               instance = alert.get("most_recent_instance") or {}
               location = instance.get("location") or {}
               message = instance.get("message") or {}
-              security_severity = rule.get("security_severity_level")
-              severity = rule.get("severity")
-              path = location.get("path")
+              tool = alert.get("tool") or {}
               start_line = location.get("start_line")
               end_line = location.get("end_line")
               line_range = "(not provided)"
@@ -337,23 +344,28 @@ jobs:
                   f"State: {value_text(alert.get('state'))}",
                   f"Rule ID: {value_text(rule.get('id'))}",
                   f"Rule name: {value_text(rule.get('name'))}",
-                  f"Severity: {value_text(severity)}",
-                  f"Security severity: {value_text(security_severity)}",
-                  f"Tool: {value_text((alert.get('tool') or {}).get('name'))}",
-                  f"Location: {value_text(path)}:{line_range}",
+                  f"Severity: {value_text(rule.get('severity'))}",
+                  f"Security severity: {value_text(rule.get('security_severity_level'))}",
+                  f"Tool: {value_text(tool.get('name'))}",
+                  f"Tool version: {value_text(tool.get('version'))}",
+                  f"Location: {value_text(location.get('path'))}:{line_range}",
                   f"Columns: {value_text(location.get('start_column'))}-{value_text(location.get('end_column'))}",
+                  f"Classifications: {value_text(instance.get('classifications'))}",
                   f"Instance ref: {value_text(instance.get('ref'))}",
                   f"Instance commit: {value_text(instance.get('commit_sha'))}",
                   f"Analysis category: {value_text(instance.get('category'))}",
                   f"Created: {value_text(alert.get('created_at'))}",
                   f"Updated: {value_text(alert.get('updated_at'))}",
+                  f"Fixed at: {value_text(alert.get('fixed_at'))}",
                   f"GitHub alert: {value_text(alert.get('html_url') or alert.get('url'))}",
               ])
 
               add_field(lines, "Rule description", rule.get("description"))
+              add_field(lines, "Full rule description", rule.get("full_description"))
               add_field(lines, "Finding message", message.get("text") or message.get("markdown"))
               add_field(lines, "Rule tags", rule.get("tags"))
               add_field(lines, "CodeQL remediation guidance", rule.get("help"))
+              add_field(lines, "CodeQL help URL", rule.get("help_uri"))
 
               related = instance.get("related_locations") or []
               lines.append("Related data-flow locations:")
@@ -398,7 +410,7 @@ jobs:
           PY
 
       - name: Upload plain-text report (not ZIP-compressed)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: reports/code-scanning-alerts.txt
           archive: false
