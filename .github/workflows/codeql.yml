@@ -1,0 +1,406 @@
+# SHEYTAN-LA: full CodeQL security + quality analysis.
+# Languages are split into matrix jobs so each database has an independent build.
+# Go and C++ use explicit manual builds to capture the real project build paths.
+
+name: CodeQL Security & Quality
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    # Weekly full analysis also catches newly added CodeQL queries.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        include:
+          # GitHub Actions workflow security.
+          - language: actions
+            build-mode: none
+
+          # The repository's portable C++17 engine has a real CMake build.
+          - language: cpp
+            build-mode: manual
+
+          # Build every Go package with the same Linux CGO prerequisites as CI.
+          - language: go
+            build-mode: manual
+
+          # JavaScript assets and embedded HTML views; no JS build manifest exists.
+          - language: javascript-typescript
+            build-mode: none
+
+          # The checked-in Python reference-fixture generator.
+          - language: python
+            build-mode: none
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Fyne's Linux desktop packages require CGO and the same system headers
+      # used by the repository's normal Linux build. Install them before the
+      # CodeQL initialization/manual build so the Go extractor sees a real build.
+      - name: Install Go/Fyne Linux build dependencies
+        if: matrix.language == 'go'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
+            gcc \
+            pkg-config \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxi-dev \
+            libxxf86vm-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            xorg-dev
+
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v7
+        with:
+          # Matches .github/workflows/build-desktop.yml. The go.mod toolchain
+          # directive selects Go 1.27.3 through GOTOOLCHAIN=auto when needed.
+          go-version: "1.27"
+          cache: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-and-quality includes security-extended plus additional
+          # maintainability and reliability queries. Do not disable defaults.
+          queries: security-and-quality
+
+      # Manual Go build: this is the same complete package build used by the
+      # project's Linux preflight, with CGO enabled for the Fyne desktop code.
+      - name: Build and vet all Go packages
+        if: matrix.language == 'go'
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+          GOTOOLCHAIN: auto
+        run: |
+          set -euo pipefail
+          go version
+          go env CGO_ENABLED GOTOOLCHAIN
+          go build ./...
+          go vet ./...
+
+      # Manual C++ build: CMake compiles the engine, IPC host, and every native
+      # test target while CodeQL's compiler tracing is active.
+      - name: Configure native C++ engine
+        if: matrix.language == 'cpp'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S native/engine -B "$RUNNER_TEMP/shtn-native-codeql" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSHTN_BUILD_TESTS=ON \
+            -DSHTN_BUILD_SHARED=OFF
+
+      - name: Build native C++ engine and tests
+        if: matrix.language == 'cpp'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build "$RUNNER_TEMP/shtn-native-codeql" --parallel 2
+
+      - name: Run native C++ test suite
+        if: matrix.language == 'cpp'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --test-dir "$RUNNER_TEMP/shtn-native-codeql" --output-on-failure
+
+      - name: Analyze and upload CodeQL results
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  # This job runs only after every language analysis has uploaded successfully.
+  # The REST API request deliberately omits `state`, so open, fixed, dismissed,
+  # and closed alerts are all included. Pagination is mandatory (100/page max).
+  export-alert-report:
+    name: Export complete CodeQL alert report
+    needs: analyze
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: read
+    steps:
+      - name: Fetch all CodeQL alert pages and generate plain-text report
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          command -v gh
+          command -v python3
+
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            if [[ -z "${PULL_REQUEST_NUMBER:-}" ]]; then
+              echo "::error::Pull request number is unavailable; cannot select the analyzed ref."
+              exit 1
+            fi
+            report_ref="refs/pull/${PULL_REQUEST_NUMBER}/merge"
+          else
+            report_ref="$GITHUB_REF"
+          fi
+
+          echo "Exporting CodeQL alerts for ${GITHUB_REPOSITORY} at ${report_ref}"
+          gh api --paginate --slurp \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            -f per_page=100 \
+            -f tool_name=CodeQL \
+            -f ref="$report_ref" \
+            "repos/${GITHUB_REPOSITORY}/code-scanning/alerts" \
+            > "$RUNNER_TEMP/code-scanning-alerts-pages.json"
+
+          mkdir -p reports
+          export CODEQL_REPORT_REF="$report_ref"
+          python3 - "$RUNNER_TEMP/code-scanning-alerts-pages.json" "reports/code-scanning-alerts.txt" <<'PY'
+          import json
+          import os
+          import sys
+          from collections import Counter
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          source = Path(sys.argv[1])
+          destination = Path(sys.argv[2])
+
+          try:
+              pages = json.loads(source.read_text(encoding="utf-8"))
+          except Exception as exc:
+              raise SystemExit(f"Could not parse paginated CodeQL API response: {exc}")
+
+          if not isinstance(pages, list):
+              raise SystemExit("Unexpected CodeQL API pagination shape: expected a page array")
+
+          alerts = []
+          for page_number, page in enumerate(pages, start=1):
+              if page is None:
+                  continue
+              if not isinstance(page, list):
+                  raise SystemExit(f"Unexpected response for API page {page_number}: expected an array")
+              alerts.extend(page)
+
+          alert_ids = [alert.get("number") for alert in alerts]
+          if any(not isinstance(alert_id, int) for alert_id in alert_ids):
+              raise SystemExit("At least one returned alert has no valid numeric alert number")
+          if len(alert_ids) != len(set(alert_ids)):
+              raise SystemExit("Duplicate alert IDs were returned across pages; refusing an ambiguous report")
+
+          def value_text(value):
+              if value is None:
+                  return "(not provided)"
+              if isinstance(value, (dict, list)):
+                  return json.dumps(value, ensure_ascii=False, sort_keys=True)
+              text = str(value).strip()
+              return text if text else "(not provided)"
+
+          def add_field(lines, label, value):
+              text = value_text(value)
+              lines.append(f"{label}:")
+              for item in text.splitlines() or ["(not provided)"]:
+                  lines.append(f"  {item}")
+
+          severity_order = {
+              "critical": 0,
+              "high": 1,
+              "error": 2,
+              "medium": 3,
+              "warning": 4,
+              "low": 5,
+              "note": 6,
+              "unknown": 7,
+          }
+          state_order = {"open": 0, "fixed": 1, "dismissed": 2, "closed": 3}
+
+          def sort_key(alert):
+              rule = alert.get("rule") or {}
+              instance = alert.get("most_recent_instance") or {}
+              location = instance.get("location") or {}
+              severity = (rule.get("security_severity_level") or rule.get("severity") or "unknown").lower()
+              state = (alert.get("state") or "unknown").lower()
+              return (
+                  state_order.get(state, 9),
+                  severity_order.get(severity, 8),
+                  str(location.get("path") or ""),
+                  int(location.get("start_line") or 0),
+                  str(rule.get("id") or ""),
+                  alert["number"],
+              )
+
+          alerts.sort(key=sort_key)
+          states = Counter((alert.get("state") or "unknown").lower() for alert in alerts)
+          severities = Counter(
+              (alert.get("rule") or {}).get("security_severity_level")
+              or (alert.get("rule") or {}).get("severity")
+              or "unknown"
+              for alert in alerts
+          )
+
+          generated = datetime.now(timezone.utc).isoformat(timespec="seconds")
+          lines = [
+              "SHEYTAN-LA — GITHUB CODEQL SECURITY & QUALITY ALERT REPORT",
+              "=" * 72,
+              f"Repository: {os.environ.get('GITHUB_REPOSITORY', '(unknown)')}",
+              f"Analyzed ref: {os.environ.get('CODEQL_REPORT_REF', '(unknown)')}",
+              f"Workflow commit: {os.environ.get('GITHUB_SHA', '(unknown)')}",
+              f"Workflow run: {os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/"
+              f"{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}",
+              f"Generated UTC: {generated}",
+              "CodeQL query suite: security-and-quality",
+              "API filter: tool_name=CodeQL; all alert states (state filter omitted)",
+              f"API pages received: {len(pages)}",
+              f"Total alert records: {len(alerts)}",
+              f"Distinct alert IDs: {len(set(alert_ids))}",
+              "",
+              "SUMMARY BY STATE",
+              "----------------",
+          ]
+          for state in ("open", "fixed", "dismissed", "closed"):
+              lines.append(f"{state}: {states.get(state, 0)}")
+          for state, count in sorted(states.items()):
+              if state not in {"open", "fixed", "dismissed", "closed"}:
+                  lines.append(f"{state}: {count}")
+
+          lines.extend(["", "SUMMARY BY SEVERITY", "-------------------"])
+          for severity, count in sorted(severities.items(), key=lambda item: (severity_order.get(item[0].lower(), 8), item[0])):
+              lines.append(f"{severity}: {count}")
+
+          lines.extend([
+              "",
+              "ALERT INVENTORY",
+              "================",
+              "Each GitHub CodeQL alert is listed once. Distinct alert IDs are preserved.",
+              "The report includes every severity and every API-returned alert state.",
+              "",
+          ])
+
+          for alert in alerts:
+              rule = alert.get("rule") or {}
+              instance = alert.get("most_recent_instance") or {}
+              location = instance.get("location") or {}
+              message = instance.get("message") or {}
+              security_severity = rule.get("security_severity_level")
+              severity = rule.get("severity")
+              path = location.get("path")
+              start_line = location.get("start_line")
+              end_line = location.get("end_line")
+              line_range = "(not provided)"
+              if start_line is not None:
+                  line_range = str(start_line) if end_line in (None, start_line) else f"{start_line}-{end_line}"
+
+              lines.extend([
+                  "-" * 72,
+                  f"ALERT #{alert['number']}",
+                  "-" * 72,
+                  f"State: {value_text(alert.get('state'))}",
+                  f"Rule ID: {value_text(rule.get('id'))}",
+                  f"Rule name: {value_text(rule.get('name'))}",
+                  f"Severity: {value_text(severity)}",
+                  f"Security severity: {value_text(security_severity)}",
+                  f"Tool: {value_text((alert.get('tool') or {}).get('name'))}",
+                  f"Location: {value_text(path)}:{line_range}",
+                  f"Columns: {value_text(location.get('start_column'))}-{value_text(location.get('end_column'))}",
+                  f"Instance ref: {value_text(instance.get('ref'))}",
+                  f"Instance commit: {value_text(instance.get('commit_sha'))}",
+                  f"Analysis category: {value_text(instance.get('category'))}",
+                  f"Created: {value_text(alert.get('created_at'))}",
+                  f"Updated: {value_text(alert.get('updated_at'))}",
+                  f"GitHub alert: {value_text(alert.get('html_url') or alert.get('url'))}",
+              ])
+
+              add_field(lines, "Rule description", rule.get("description"))
+              add_field(lines, "Finding message", message.get("text") or message.get("markdown"))
+              add_field(lines, "Rule tags", rule.get("tags"))
+              add_field(lines, "CodeQL remediation guidance", rule.get("help"))
+
+              related = instance.get("related_locations") or []
+              lines.append("Related data-flow locations:")
+              if not related:
+                  lines.append("  (none provided)")
+              else:
+                  for index, item in enumerate(related, start=1):
+                      rel_location = item.get("location") or {}
+                      rel_message = item.get("message") or {}
+                      rel_line = rel_location.get("start_line")
+                      rel_end = rel_location.get("end_line")
+                      rel_range = "(line unavailable)"
+                      if rel_line is not None:
+                          rel_range = str(rel_line) if rel_end in (None, rel_line) else f"{rel_line}-{rel_end}"
+                      lines.append(
+                          f"  {index}. {rel_location.get('path', '(path unavailable)')}:{rel_range}"
+                      )
+                      if rel_message.get("text"):
+                          lines.append(f"     {rel_message['text']}")
+
+              if alert.get("dismissed_reason") or alert.get("dismissed_comment") or alert.get("dismissed_by"):
+                  lines.append("Dismissal details:")
+                  lines.append(f"  Reason: {value_text(alert.get('dismissed_reason'))}")
+                  lines.append(f"  Comment: {value_text(alert.get('dismissed_comment'))}")
+                  dismissed_by = alert.get("dismissed_by") or {}
+                  if isinstance(dismissed_by, dict):
+                      dismissed_by = dismissed_by.get("login") or dismissed_by.get("name") or dismissed_by
+                  lines.append(f"  By: {value_text(dismissed_by)}")
+                  lines.append(f"  At: {value_text(alert.get('dismissed_at'))}")
+
+              lines.append("")
+
+          if not alerts:
+              lines.extend([
+                  "No CodeQL alerts were returned for this ref by GitHub's Code Scanning API.",
+                  "This is a valid zero-alert report, not evidence that every possible defect is absent.",
+              ])
+
+          destination.parent.mkdir(parents=True, exist_ok=True)
+          destination.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8", newline="\n")
+          print(f"Generated {destination} with {len(alerts)} distinct CodeQL alerts from {len(pages)} API page(s).")
+          PY
+
+      - name: Upload plain-text report (not ZIP-compressed)
+        uses: actions/upload-artifact@v7
+        with:
+          path: reports/code-scanning-alerts.txt
+          archive: false
+          retention-days: 30
+          if-no-files-found: error
