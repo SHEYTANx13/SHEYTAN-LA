@@ -28,11 +28,11 @@ type agentView struct {
 	maint      *widget.Label
 	download   *widget.Label
 	cancelDl   *widget.Button
-	input      *widget.Entry
-	sendBtn    *widget.Button
-	stopBtn    *widget.Button
+	input      *composerEntry
+	slot       *primaryActionSlot
 	netSearch  *widget.Check
 	errLabel   *widget.Label
+	emptyBox   *fyne.Container
 	newGoal    *widget.Entry
 	addGoal    *widget.Button
 }
@@ -53,7 +53,9 @@ func buildAgentView(ap *App) fyne.CanvasObject {
 	v.transcript = widget.NewList(
 		func() int { return len(v.messages) },
 		func() fyne.CanvasObject {
+			// Conversation hierarchy (Phase 1): role line secondary (muted).
 			role := widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+			role.Importance = widget.LowImportance
 			body := widget.NewLabel("")
 			body.Wrapping = fyne.TextWrapWord
 			return container.NewVBox(role, body)
@@ -69,9 +71,10 @@ func buildAgentView(ap *App) fyne.CanvasObject {
 	v.live = widget.NewLabel("")
 	v.live.Wrapping = fyne.TextWrapWord
 	v.live.TextStyle = fyne.TextStyle{Italic: true}
-	liveStop := widget.NewButtonWithIcon("Stop", theme.MediaStopIcon(), v.stop)
-	liveStop.Importance = widget.DangerImportance
-	liveBox := container.NewVBox(widget.NewLabel("Live"), container.NewHBox(v.live, liveStop))
+	// The live surface is PROVISIONAL (settlement rule); its Stop lives in
+	// the composer's single primary slot.
+	liveBox := container.NewVBox(widget.NewLabelWithStyle("Live — provisional, settled below on completion", fyne.TextAlignLeading, fyne.TextStyle{Bold: true, Italic: true}), v.live)
+	var emptyBox *fyne.Container
 
 	v.activity = widget.NewLabel("")
 	v.activity.Wrapping = fyne.TextWrapWord
@@ -96,13 +99,13 @@ func buildAgentView(ap *App) fyne.CanvasObject {
 	})
 	v.cancelDl.Hide()
 
-	v.input = widget.NewMultiLineEntry()
-	v.input.SetPlaceHolder("Describe the agent task…")
-	v.input.OnSubmitted = func(string) { v.send() }
-	v.sendBtn = widget.NewButtonWithIcon("Send", theme.MediaPlayIcon(), v.send)
-	v.sendBtn.Importance = widget.HighImportance
-	v.stopBtn = widget.NewButtonWithIcon("Stop", theme.MediaStopIcon(), v.stop)
-	v.stopBtn.Importance = widget.DangerImportance
+	v.input = newComposerEntry("Describe the agent task… (Enter to send, Shift+Enter for newline)", v.send)
+	// Capability-priming empty state (agent mode): samples fill the draft
+	// only; zero-session Send stays the composer's contract.
+	emptyBox = container.NewVBox(emptyStateSurface("agent", v.input, ap.Window()))
+	emptyBox.Hide()
+	v.emptyBox = emptyBox
+	v.slot = newPrimaryActionSlot(v.send, v.stop)
 	v.netSearch = widget.NewCheck("Net search", nil)
 
 	v.newGoal = widget.NewEntry()
@@ -115,7 +118,7 @@ func buildAgentView(ap *App) fyne.CanvasObject {
 	v.errLabel.Hide()
 
 	composer := container.NewVBox(
-		container.NewHBox(v.netSearch, layoutSpacer(), v.sendBtn, v.stopBtn),
+		container.NewHBox(v.netSearch, layoutSpacer(), v.slot.canvas()),
 		v.input,
 	)
 
@@ -125,7 +128,7 @@ func buildAgentView(ap *App) fyne.CanvasObject {
 	)
 
 	center := container.NewAppTabs(
-		container.NewTabItem("Transcript", container.NewScroll(container.NewVBox(v.transcript, liveBox))),
+		container.NewTabItem("Transcript", container.NewScroll(container.NewVBox(v.emptyBox, v.transcript, liveBox))),
 		container.NewTabItem("Activity", container.NewScroll(activityBox)),
 		container.NewTabItem("Task", container.NewScroll(v.taskPanel)),
 	)
@@ -277,12 +280,15 @@ func (v *agentView) send() {
 	ap := v.ap
 	net := v.netSearch.Checked
 	v.input.SetText("")
-	v.sendBtn.Disable()
+	v.slot.setBusy(true)
+	// Focus return after send (docs/ui-contract.md §2 #2) — never stealing
+	// focus from a dialog or another deliberate target.
+	focusComposerIfSafe(ap.Window(), v.input)
 	go func() {
 		if _, err := ap.rt.Send(ap.Ctx(), text, net, "mid"); err != nil {
 			uiDo(func() {
 				v.showErr("send", err)
-				v.sendBtn.Enable()
+				v.slot.setBusy(false)
 			})
 		}
 	}()
@@ -308,13 +314,8 @@ func (v *agentView) onStream() {
 	if len(acts) > 0 {
 		v.activity.SetText(strings.Join(acts, "\n"))
 	}
-	if v.ap.rt.Busy() {
-		v.stopBtn.Enable()
-		v.sendBtn.Disable()
-	} else {
-		v.sendBtn.Enable()
-		v.stopBtn.Disable()
-	}
+	v.slot.setBusy(v.ap.rt.Busy())
+	v.updateEmptyState()
 }
 
 func (v *agentView) onSettled() {
@@ -323,9 +324,19 @@ func (v *agentView) onSettled() {
 		v.transcript.Refresh()
 	}
 	v.live.SetText("")
-	v.sendBtn.Enable()
-	v.stopBtn.Disable()
+	v.slot.setBusy(false)
+	v.updateEmptyState()
 	v.refreshGoals() // plan steps may have advanced
+}
+
+// updateEmptyState shows the capability-priming surface only while the
+// transcript is empty and no run is live (zero-session Send stays intact).
+func (v *agentView) updateEmptyState() {
+	if len(v.messages) == 0 && !v.ap.rt.Busy() {
+		v.emptyBox.Show()
+		return
+	}
+	v.emptyBox.Hide()
 }
 
 func (v *agentView) showErr(what string, err error) {

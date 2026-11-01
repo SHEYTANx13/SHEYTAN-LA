@@ -7,6 +7,7 @@
 package fyneui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -107,15 +108,16 @@ func (p *historyPanel) showErr(what string, err error) {
 // --- Models ---
 
 type modelsPanel struct {
-	ap       *App
-	list     *widget.List
-	models   ModelsPayload
-	sel      *widget.Label
-	importIn *widget.Entry
-	importB  *widget.Button
-	openFldr *widget.Button
-	task     *widget.Select
-	err      *widget.Label
+	ap         *App
+	list       *widget.List
+	models     ModelsPayload
+	sel        *widget.Label
+	engineCard *widget.Label
+	importIn   *widget.Entry
+	importB    *widget.Button
+	openFldr   *widget.Button
+	task       *widget.Select
+	err        *widget.Label
 }
 
 func buildModelsPanel(ap *App) fyne.CanvasObject {
@@ -146,6 +148,11 @@ func buildModelsPanel(ap *App) fyne.CanvasObject {
 	p.list.OnSelected = func(i widget.ListItemID) { p.selectModel(i) }
 
 	p.sel = wrappedLabel("")
+	// Engine & backend status row (Phase 1 scope: narrow, truthful
+	// llama.cpp/Vulkan lifecycle presentation fed ONLY by core-owned
+	// facts — the Go core stays the single state authority).
+	p.engineCard = wrappedLabel("Loading engine state…")
+	p.engineCard.TextStyle = fyne.TextStyle{Monospace: true}
 	p.importIn = widget.NewEntry()
 	p.importIn.SetPlaceHolder("Absolute path to a .gguf model on disk")
 	p.importB = widget.NewButton("Import", func() { p.importModel() })
@@ -165,6 +172,7 @@ func buildModelsPanel(ap *App) fyne.CanvasObject {
 	root := container.NewBorder(
 		container.NewVBox(
 			PageHeader("Models", "Discovery and the REAL selection state machine"),
+			widget.NewCard("Engine & backend", "Requested ≠ available ≠ selected ≠ executed ≠ verified — strongest PROVEN state only", p.engineCard),
 			container.NewHBox(p.importIn, p.importB, p.task),
 			p.sel,
 		),
@@ -220,6 +228,99 @@ func (p *modelsPanel) refresh() {
 			}
 			p.err.Hide()
 		})
+	}()
+	p.refreshEngineCard()
+}
+
+// refreshEngineCard renders the truthful engine/backend lifecycle from
+// three core surfaces (/api/engine, /api/maintenance, /api/perf
+// .accelerator). It only renders what the core authoritatively provides —
+// no derivation, no evidence upgrade, unavailable stays unavailable.
+func (p *modelsPanel) refreshEngineCard() {
+	go func() {
+		c := p.ap.Client()
+		ctx := p.ap.Ctx()
+		var b strings.Builder
+
+		if e, err := c.Engine(ctx); err == nil {
+			state, backend := e.State, e.Backend
+			if state == "" {
+				state = "unknown"
+			}
+			if backend == "" {
+				backend = "unknown"
+			}
+			b.WriteString("Engine: " + state + " · backend: " + backend)
+			if e.Diagnostics != nil && e.Diagnostics.BinaryTag != "" {
+				b.WriteString(" · engine: " + e.Diagnostics.BinaryTag)
+			}
+			b.WriteString("\n")
+			model := e.Model
+			if model == "" {
+				model = "—"
+			}
+			verdict := "not verified yet"
+			if e.Verified {
+				verdict = "verified"
+			}
+			b.WriteString("Model: " + model + " (" + verdict + ")\n")
+			if e.SelectionRequired {
+				b.WriteString("Model selection required — pick a model above; the engine never loads one on its own.\n")
+			}
+		}
+
+		if raw, err := c.Maintenance(ctx); err == nil {
+			var m struct {
+				Phase     string `json:"phase"`
+				Reason    string `json:"reason"`
+				TargetTag string `json:"targetTag"`
+			}
+			if json.Unmarshal(raw, &m) == nil && m.Phase != "" {
+				txt := "Engine update: " + m.Phase
+				if m.TargetTag != "" {
+					txt += " → " + m.TargetTag
+				}
+				if m.Reason != "" {
+					txt += " (" + m.Reason + ")"
+				}
+				b.WriteString(txt + "\n")
+			}
+		}
+
+		if a, err := c.Accelerator(ctx); err == nil {
+			device := a.Device
+			if device == "" {
+				device = "unknown"
+			}
+			b.WriteString(fmt.Sprintf("Accelerator: requested %s → selected %s · device: %s", a.Requested, a.Selected, device))
+			switch {
+			case a.GPULayers < 0:
+				b.WriteString(" · layers: all")
+			case a.GPULayers > 0:
+				b.WriteString(fmt.Sprintf(" · layers: %d", a.GPULayers))
+			}
+			b.WriteString("\n")
+			ev := "not verified"
+			if a.ExecutionVerified {
+				ev = "execution verified"
+			} else if a.Verification != "" {
+				ev += " — " + a.Verification
+			}
+			b.WriteString("Evidence: " + ev)
+			if a.ReasonCode != "" {
+				b.WriteString(" (" + a.ReasonCode + ")")
+			}
+			b.WriteString("\n")
+			if len(a.Available) > 0 {
+				b.WriteString("Available backends: " + strings.Join(a.Available, ", ") + "\n")
+			}
+		}
+
+		card := b.String()
+		if strings.TrimSpace(card) == "" {
+			card = "Engine state unavailable — the core has not reported it yet."
+		}
+		uiDo(func() { p.engineCard.SetText(card) })
 	}()
 }
 

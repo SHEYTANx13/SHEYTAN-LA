@@ -1045,8 +1045,52 @@ jobs:
             $rel = $d.FullName.Substring((Resolve-Path $root).Path.Length + 1)
             $lines += "  RMDir `"`$INSTDIR\$rel`""
           }
-          $lines += '!endmacro'
+          # Run #124 root cause: the terminator emitted here was the
+          # non-NSIS endmacro token, so the generated macro opened and was
+          # never closed — makensis aborted on the include with
+          # "unterminated (no !macroend found in file)". NSIS closes macros
+          # with exactly '!macroend'.
+          $lines += '!macroend'
           Set-Content -Path "packaging/nsis/payload-uninstall.nsh" -Value ($lines -join "`r`n")
+
+          # Run #124 post-write validation: that failure was fully
+          # deterministic at generation time, so validate the actual file
+          # HERE — before makensis reads it — with a titled ::error per
+          # failed invariant (one-look diagnosability, same class as every
+          # other custom Windows step).
+          $gen = "packaging/nsis/payload-uninstall.nsh"
+          if (-not (Test-Path -LiteralPath $gen) -or ((Get-Item -LiteralPath $gen).Length -eq 0)) {
+            Write-Host "::error::payload-uninstall validation: generated include missing or empty at $gen — the uninstall-symmetry macro cannot be included"
+            throw "payload-uninstall validation failed: missing or empty generated include: $gen"
+          }
+          $genLines = @(Get-Content -LiteralPath $gen | Where-Object { $_.Trim().Length -gt 0 })
+          if ($genLines.Count -lt 4) {
+            Write-Host "::error::payload-uninstall validation: only $($genLines.Count) non-empty directives in $gen — the guard-define + macro + Delete body + closing macroend structure is incomplete"
+            throw "payload-uninstall validation failed: incomplete generated include: $gen"
+          }
+          $first = $genLines[0].Trim()
+          $second = $genLines[1].Trim()
+          if ($first -ne '!define SHEYTAN_PAYLOAD_UNINSTALL' -or $second -ne '!macro SHEYTAN_PAYLOAD_UNINSTALL_FILES') {
+            Write-Host "::error::payload-uninstall validation: opening directives are '$first' / '$second' in $gen — expected the guard define '!define SHEYTAN_PAYLOAD_UNINSTALL' then the macro '!macro SHEYTAN_PAYLOAD_UNINSTALL_FILES'"
+            throw "payload-uninstall validation failed: unexpected opening directives in $gen"
+          }
+          $last = $genLines[-1].Trim()
+          if ($last -ne '!macroend') {
+            Write-Host "::error::payload-uninstall validation: final non-empty directive is '$last' in $gen — NSIS closes macros with exactly '!macroend'; any other terminator leaves the macro unterminated (run #124 failed hosted with 'unterminated (no !macroend found in file)')"
+            throw "payload-uninstall validation failed: macro not closed by the macroend directive in $gen"
+          }
+          $macroOpens = @($genLines | Where-Object { $_.Trim() -like '!macro *' }).Count
+          $macroCloses = @($genLines | Where-Object { $_.Trim() -eq '!macroend' }).Count
+          if ($macroOpens -ne 1 -or $macroCloses -ne 1) {
+            Write-Host "::error::payload-uninstall validation: macro directives unbalanced (open=$macroOpens close=$macroCloses) in $gen — exactly one !macro and one closing macroend are expected"
+            throw "payload-uninstall validation failed: unbalanced macro directives in $gen"
+          }
+          $deleteCount = @($genLines | Where-Object { $_.Trim() -like 'Delete *' }).Count
+          if ($deleteCount -lt 1) {
+            Write-Host "::error::payload-uninstall validation: no generated Delete commands in $gen — the uninstaller would remove nothing"
+            throw "payload-uninstall validation failed: no Delete commands in $gen"
+          }
+          Write-Host "payload-uninstall.nsh validated: guard define + macro open, $deleteCount Delete lines, exactly one closing macroend"
           Write-Host "payload-uninstall.nsh generated"
 
       - name: Build the NSIS installer

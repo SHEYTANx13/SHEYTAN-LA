@@ -413,19 +413,63 @@ type LogEntry struct {
 	Msg   string `json:"msg,omitempty"`
 }
 
+// engineDiagnosticsSubset mirrors llm.EngineDiagnostics (only the fields
+// the engine status card renders — core-owned truth, never derived).
+type engineDiagnosticsSubset struct {
+	BinaryPath string `json:"binaryPath,omitempty"`
+	BinaryTag  string `json:"binaryTag,omitempty"`
+	ProbedVer  string `json:"probedVersion,omitempty"`
+}
+
 // EngineSnapshot mirrors GET /api/engine (subset the UI renders).
 type EngineSnapshot struct {
-	State             string          `json:"state,omitempty"`
-	Detail            string          `json:"detail,omitempty"`
-	Model             string          `json:"model,omitempty"`
-	Backend           string          `json:"backend,omitempty"`
-	Provider          string          `json:"provider,omitempty"`
-	SelectionRequired bool            `json:"selectionRequired,omitempty"`
-	Verified          bool            `json:"verified,omitempty"`
-	VerifiedModel     string          `json:"verifiedModel,omitempty"`
-	Download          json.RawMessage `json:"download,omitempty"`
-	Selection         json.RawMessage `json:"selection,omitempty"`
-	Raw               json.RawMessage `json:"-"`
+	State             string                   `json:"state,omitempty"`
+	Detail            string                   `json:"detail,omitempty"`
+	Model             string                   `json:"model,omitempty"`
+	Backend           string                   `json:"backend,omitempty"`
+	Provider          string                   `json:"provider,omitempty"`
+	SelectionRequired bool                     `json:"selectionRequired,omitempty"`
+	Verified          bool                     `json:"verified,omitempty"`
+	VerifiedModel     string                   `json:"verifiedModel,omitempty"`
+	Diagnostics       *engineDiagnosticsSubset `json:"diagnostics,omitempty"`
+	Download          json.RawMessage          `json:"download,omitempty"`
+	Selection         json.RawMessage          `json:"selection,omitempty"`
+	Raw               json.RawMessage          `json:"-"`
+}
+
+// AcceleratorResolution mirrors /api/perf.accelerator — the explainable
+// accelerator resolution subset the engine status card renders. Evidence
+// states map 1:1 to the core contract: requested ≠ available ≠ selected ≠
+// executed ≠ verified (a code never upgrades the evidence state).
+type AcceleratorResolution struct {
+	Requested         string   `json:"requested"`
+	Selected          string   `json:"selected,omitempty"`
+	Backend           string   `json:"backend,omitempty"`
+	Device            string   `json:"device,omitempty"`
+	Available         []string `json:"available,omitempty"`
+	Reason            string   `json:"reason,omitempty"`
+	ReasonCode        string   `json:"reasonCode,omitempty"`
+	ExecutionVerified bool     `json:"executionVerified"`
+	Verification      string   `json:"verification,omitempty"`
+	GPULayers         int      `json:"gpuLayers"`
+}
+
+// Accelerator fetches the current accelerator resolution from /api/perf.
+func (c *CoreClient) Accelerator(ctx context.Context) (*AcceleratorResolution, error) {
+	raw, err := c.Perf(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var p struct {
+		Accelerator *AcceleratorResolution `json:"accelerator"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	if p.Accelerator == nil {
+		return nil, fmt.Errorf("no accelerator resolution in /api/perf")
+	}
+	return p.Accelerator, nil
 }
 
 // --- Typed operations (every visible UI action maps to one) ---

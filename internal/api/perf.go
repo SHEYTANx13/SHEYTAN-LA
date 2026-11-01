@@ -23,6 +23,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -481,8 +483,13 @@ func (s *Server) gatherAcceleratorEvidence(cfg *config.Config, loadedModelPath s
 	// per-poll chatter. An UNCHANGED warning is demoted to DEBUG
 	// (still visible in Advanced diagnostics); only a CHANGED one
 	// warns at INFO/WARN level once.
+	// Run #124: a MISSING-ENGINE failure during the active startup
+	// maintenance window is the EXPECTED pending state and is
+	// reported as "engine install/update pending" — never as a
+	// misleading engine-execution warning. After the gate releases
+	// (and for every other failure class) the existing warn applies.
 	if enumErr != nil {
-		s.logAcceleratorEnumWarn(enumErr.Error())
+		s.reportEngineEnumFailure(enumErr)
 	}
 
 	hw := hardware.Snapshot(cfg)
@@ -700,6 +707,85 @@ func (s *Server) logAcceleratorEnumWarn(msg string) {
 	}
 
 	logging.Default().Warn("perf", "engine device enumeration: %s", msg)
+}
+
+// engineEnumDisposition is the truthful classification of an engine
+// device-enumeration failure.
+type engineEnumDisposition int
+
+const (
+	// enumWarnGeneric: a genuine failure — keep the existing warning.
+	enumWarnGeneric engineEnumDisposition = iota
+	// enumReportPending: the engine artifact is mid-install/update
+	// (startup maintenance gate still active) — the expected pending
+	// state, reported as such, never as an engine-fault warning.
+	enumReportPending
+)
+
+// classifyEngineEnumFailure maps an enumeration failure onto the truthful
+// disposition (pure — unit-tested). A typed missing-engine error is only
+// "pending" while the startup maintenance gate is armed AND mid-decision
+// (install/update in flight); after the gate reaches any terminal phase —
+// including BLOCKED and FAILED, which are outcomes, not work in progress —
+// the same failure is a genuine fault. Everything else warns unchanged.
+// Never suppresses: both dispositions log.
+func classifyEngineEnumFailure(enumErr error, gateArmed bool, phase MaintenancePhase) engineEnumDisposition {
+	if !errors.Is(enumErr, llm.ErrEngineBinaryMissing) {
+		return enumWarnGeneric
+	}
+	if !gateArmed || !maintenanceInFlight(phase) {
+		return enumWarnGeneric
+	}
+	return enumReportPending
+}
+
+// maintenanceInFlight reports whether the startup maintenance gate is
+// mid-decision (install/update work in flight) — the window in which a
+// missing engine artifact is the EXPECTED pending state. BLOCKED and
+// FAILED are terminal outcomes (the gate finished deciding; a missing
+// engine afterwards is a genuine fault), even though BLOCKED also
+// refuses prewarm — prewarmPermitted answers a different question and
+// must not be reused here.
+func maintenanceInFlight(p MaintenancePhase) bool {
+	switch p {
+	case PhaseChecking, PhaseMaintenanceRequired, PhaseDownloading, PhaseVerifying, PhaseInstalling:
+		return true
+	}
+	return false
+}
+
+// reportEngineEnumFailure applies the classification to the log surface.
+func (s *Server) reportEngineEnumFailure(enumErr error) {
+	g := s.gateValue()
+	phase := PhaseDeferred
+	armed := false
+	if g != nil {
+		armed = true
+		phase = g.Snapshot().Phase
+	}
+	if classifyEngineEnumFailure(enumErr, armed, phase) == enumReportPending {
+		s.logAcceleratorEnumPending(phase)
+		return
+	}
+	s.logAcceleratorEnumWarn(enumErr.Error())
+}
+
+// logAcceleratorEnumPending reports the engine install/update pending
+// state with the same per-poll chatter discipline as the warn path:
+// unchanged messages demote to DEBUG, a changed one logs once at INFO.
+func (s *Server) logAcceleratorEnumPending(phase MaintenancePhase) {
+	msg := fmt.Sprintf("engine install/update pending (startup maintenance %s): device enumeration deferred until the engine artifact is committed", phase)
+	s.accelMu.Lock()
+	unchanged := s.lastAccelEnumWarn == msg
+	s.lastAccelEnumWarn = msg
+	s.accelMu.Unlock()
+
+	if unchanged {
+		logging.Default().Debug("perf", "engine enumeration pending (unchanged): %s", msg)
+		return
+	}
+
+	logging.Default().Info("perf", "%s", msg)
 }
 
 // buildMemoryStats assembles the runtime memory-policy snapshot plus the

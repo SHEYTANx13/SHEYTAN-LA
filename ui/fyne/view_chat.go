@@ -33,9 +33,9 @@ type chatView struct {
 	transcript  *widget.List
 	live        *widget.Label
 	liveBox     *fyne.Container
-	input       *widget.Entry
-	sendBtn     *widget.Button
-	stopBtn     *widget.Button
+	emptyBox    *fyne.Container
+	input       *composerEntry
+	slot        *primaryActionSlot
 	regenBtn    *widget.Button
 	thinking    *widget.Select
 	netSearch   *widget.Check
@@ -57,15 +57,14 @@ func buildChatView(ap *App) fyne.CanvasObject {
 		func() fyne.CanvasObject { return widget.NewLabel("template") },
 		func(i widget.ListItemID, o fyne.CanvasObject) {
 			l := o.(*widget.Label)
-			s := v.sessions[i]
-			title := s.Title
-			if title == "" {
-				title = "Session " + shortID(s.ID)
+			l.TextStyle = fyne.TextStyle{}
+			l.Importance = widget.MediumImportance
+			active := v.sessions[i].ID == v.ap.rt.ActiveID()
+			l.SetText(sessionRowText(v.sessions[i], active))
+			if active {
+				l.TextStyle = fyne.TextStyle{Bold: true}
+				l.Importance = widget.HighImportance
 			}
-			if c := s.MsgCount; c != nil {
-				title += fmt.Sprintf("  (%d)", *c)
-			}
-			l.SetText(title)
 		},
 	)
 	v.sessionList.OnSelected = func(i widget.ListItemID) {
@@ -78,7 +77,11 @@ func buildChatView(ap *App) fyne.CanvasObject {
 	v.transcript = widget.NewList(
 		func() int { return len(v.messages) },
 		func() fyne.CanvasObject {
+			// Conversation hierarchy (Phase 1): the role line is secondary
+			// (muted via LowImportance → the theme's Muted role); the
+			// content carries the visual priority.
 			role := widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+			role.Importance = widget.LowImportance
 			body := widget.NewLabel("")
 			body.Wrapping = fyne.TextWrapWord
 			return container.NewVBox(role, body)
@@ -97,27 +100,29 @@ func buildChatView(ap *App) fyne.CanvasObject {
 	v.live.Wrapping = fyne.TextWrapWord
 	v.live.TextStyle = fyne.TextStyle{Italic: true}
 	v.live.Hide()
-	stopInline := widget.NewButtonWithIcon("Stop", theme.MediaStopIcon(), v.stop)
-	stopInline.Importance = widget.DangerImportance
+	// The live surface is PROVISIONAL (settlement rule): it renders the
+	// stream accumulator only. Its Stop lives in the composer's single
+	// primary slot — no second competing Stop button here.
 	v.liveBox = container.NewVBox(
-		widget.NewLabelWithStyle("Live", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		container.NewHBox(v.live, stopInline),
+		widget.NewLabelWithStyle("Live — provisional, settled below on completion", fyne.TextAlignLeading, fyne.TextStyle{Bold: true, Italic: true}),
+		v.live,
 	)
 	v.liveBox.Hide()
 
-	v.input = widget.NewMultiLineEntry()
-	v.input.SetPlaceHolder("Message SHEYTAN… (Enter to send, Shift+Enter for newline)")
-	v.input.OnSubmitted = func(string) { v.send() }
+	v.input = newComposerEntry("Message SHEYTAN… (Enter to send, Shift+Enter for newline)", v.send)
+
+	// Capability-priming empty state (mode-aware). Sample prompts fill
+	// the draft only; zero-session Send stays the composer's contract.
+	empty := emptyStateSurface("chat", v.input, ap.Window())
+	v.emptyBox = container.NewVBox(empty)
+	v.emptyBox.Hide()
 
 	v.thinking = widget.NewSelect(ThinkingLevels, nil)
 	v.thinking.PlaceHolder = "Thinking: mid"
 	v.thinking.SetSelected("mid")
 	v.netSearch = widget.NewCheck("Net search", nil)
 
-	v.sendBtn = widget.NewButtonWithIcon("Send", theme.MediaPlayIcon(), v.send)
-	v.sendBtn.Importance = widget.HighImportance
-	v.stopBtn = widget.NewButtonWithIcon("Stop", theme.MediaStopIcon(), v.stop)
-	v.stopBtn.Importance = widget.DangerImportance
+	v.slot = newPrimaryActionSlot(v.send, v.stop)
 	v.regenBtn = widget.NewButtonWithIcon("Regenerate", theme.MediaReplayIcon(), v.regenerate)
 	// Web Workspace (on-demand): opens the browser-hosted rich surface for
 	// the settled rich blocks. The native transcript stays the source of
@@ -142,9 +147,10 @@ func buildChatView(ap *App) fyne.CanvasObject {
 	v.errLabel.Hide()
 
 	// Composer: gated ONLY while a run is live (zero-session send is the
-	// contract — an empty session list must not wedge the composer).
+	// contract — an empty session list must not wedge the composer). The
+	// primary action is ONE slot: Send while idle, Stop while busy.
 	composer := container.NewVBox(
-		container.NewHBox(v.thinking, v.netSearch, layoutSpacer(), v.wsBtn, v.sendBtn, v.stopBtn, v.regenBtn),
+		container.NewHBox(v.thinking, v.netSearch, layoutSpacer(), v.wsBtn, v.regenBtn, v.slot.canvas()),
 		v.input,
 	)
 	controls := container.NewHBox(v.newBtn, v.renBtn, v.delBtn)
@@ -157,7 +163,7 @@ func buildChatView(ap *App) fyne.CanvasObject {
 		sessionsScroll,
 	)
 
-	liveColumn := container.NewBorder(nil, composer, nil, nil, container.NewScroll(container.NewVBox(v.transcript, v.liveBox)))
+	liveColumn := container.NewBorder(nil, composer, nil, nil, container.NewScroll(container.NewVBox(v.emptyBox, v.transcript, v.liveBox)))
 
 	split := container.NewHSplit(sessionsPane, liveColumn)
 	split.Offset = 0.28
@@ -256,6 +262,7 @@ func (v *chatView) openSession(id string) {
 			v.transcript.Refresh()
 			v.liveBox.Hide()
 			v.live.SetText("")
+			v.updateEmptyState()
 		})
 		_ = ap.rt.AttachActivity(ap.Ctx(), id)
 	}()
@@ -274,12 +281,16 @@ func (v *chatView) send() {
 	net := v.netSearch.Checked
 	v.input.SetText("")
 	v.errLabel.Hide()
-	v.sendBtn.Disable()
+	v.slot.setBusy(true)
+	// Focus return (docs/ui-contract.md §2 #2): after initiating the send
+	// the composer regains focus unless another deliberate target (a
+	// dialog, an approval prompt) holds it.
+	focusComposerIfSafe(ap.Window(), v.input)
 	go func() {
 		if _, err := ap.rt.Send(ap.Ctx(), text, net, think); err != nil {
 			uiDo(func() {
 				v.showErr("send", err)
-				v.sendBtn.Enable()
+				v.slot.setBusy(false)
 			})
 		}
 	}()
@@ -295,12 +306,12 @@ func (v *chatView) stop() {
 
 func (v *chatView) regenerate() {
 	ap := v.ap
-	v.sendBtn.Disable()
+	v.slot.setBusy(true)
 	go func() {
 		if _, err := ap.rt.Regenerate(ap.Ctx()); err != nil {
 			uiDo(func() {
 				v.showErr("regenerate", err)
-				v.sendBtn.Enable()
+				v.slot.setBusy(false)
 			})
 		}
 	}()
@@ -320,13 +331,8 @@ func (v *chatView) onStream() {
 	} else if acc.Status != "" {
 		v.live.SetText(acc.Status)
 	}
-	if busy {
-		v.stopBtn.Enable()
-		v.sendBtn.Disable()
-	} else {
-		v.sendBtn.Enable()
-		v.stopBtn.Disable()
-	}
+	v.slot.setBusy(busy)
+	v.updateEmptyState()
 }
 
 // onSettled swaps the live bubble out and the persisted transcript in.
@@ -350,8 +356,7 @@ func (v *chatView) onSettled() {
 	}
 	v.liveBox.Hide()
 	v.live.SetText("")
-	v.sendBtn.Enable()
-	v.stopBtn.Disable()
+	v.slot.setBusy(false)
 	v.errLabel.Hide()
 	_ = acc
 	v.updateButtons()
@@ -393,6 +398,7 @@ func (v *chatView) confirmDelete() {
 					v.refreshSessions(v.ap.rt.Sessions())
 					v.messages = nil
 					v.transcript.Refresh()
+					v.updateEmptyState()
 				})
 			}()
 		}, v.ap.Window()).Show()
@@ -424,13 +430,35 @@ func (v *chatView) rename() {
 
 func (v *chatView) updateButtons() {
 	busy := v.ap.rt.Busy()
-	if busy {
-		v.sendBtn.Disable()
-		v.stopBtn.Enable()
-	} else {
-		v.sendBtn.Enable()
-		v.stopBtn.Disable()
+	v.slot.setBusy(busy)
+	v.updateEmptyState()
+}
+
+// updateEmptyState shows the capability-priming surface ONLY while the
+// conversation is genuinely empty and no run is live — never over live
+// content, never wedging the composer (zero-session Send stays usable).
+func (v *chatView) updateEmptyState() {
+	if len(v.messages) == 0 && !v.ap.rt.Busy() {
+		v.emptyBox.Show()
+		return
 	}
+	v.emptyBox.Hide()
+}
+
+// sessionRowText renders one sidebar row: active marker, title, and the
+// structured message count the core already provides (never UI-parsed).
+func sessionRowText(s Session, active bool) string {
+	title := s.Title
+	if title == "" {
+		title = "Session " + shortID(s.ID)
+	}
+	if active {
+		title = "● " + title
+	}
+	if c := s.MsgCount; c != nil {
+		title += fmt.Sprintf("  ·  %d", *c)
+	}
+	return title
 }
 
 // ensure version import used (honest status line carries the core version).

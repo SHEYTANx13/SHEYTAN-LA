@@ -14,8 +14,11 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +30,32 @@ import (
 
 // enumerateTimeout bounds one --list-devices invocation.
 const enumerateTimeout = 20 * time.Second
+
+// ErrEngineBinaryMissing is returned (wrapped) by the device probe when
+// the managed engine executable is ABSENT at probe time — the expected
+// state while the startup maintenance gate is still installing/updating
+// the engine artifact (fresh install, engine update in flight), and a
+// genuine fault once that gate has released. Callers classify with
+// errors.Is and report the distinction truthfully (run #124: the early
+// "executable not found" enumeration warning fired during exactly that
+// pending window and read like an engine failure).
+var ErrEngineBinaryMissing = errors.New("engine binary missing")
+
+// isEngineBinaryMissingError folds the per-OS exec failures that mean
+// "the executable is not there" into the typed class. It never claims
+// missing for an existing-but-failing binary: exit-status failures keep
+// their generic error.
+func isEngineBinaryMissingError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, fs.ErrNotExist) {
+		return true
+	}
+	// Belt-and-braces for the Windows CreateProcess failure rendered
+	// textually by some exec wrappers (ERROR_FILE_NOT_FOUND).
+	return strings.Contains(strings.ToLower(err.Error()), "the system cannot find the file specified")
+}
 
 // deviceCache is the per-binary enumeration cache.
 type deviceCacheEntry struct {
@@ -148,7 +177,9 @@ func probeEngineDevicesReal(binPath string) (devices []accelerator.Device, suppo
 		if isUnknownArgumentError(string(out)) {
 			return nil, false, nil
 		}
-
+		if isEngineBinaryMissingError(execErr) {
+			return nil, false, fmt.Errorf("engine device enumeration: %w: %s: %v", ErrEngineBinaryMissing, binPath, execErr)
+		}
 		return devices, supported, fmt.Errorf("engine device enumeration: %w (output: %s)", execErr, truncateOut(string(out), 200))
 	}
 
