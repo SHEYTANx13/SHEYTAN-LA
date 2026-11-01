@@ -28,6 +28,7 @@ Hardware claims use five distinct classes everywhere: hardware **detected** (a p
 - Optional 3D Studio — read-only live system topology map (loopback-only, per-launch token, strict CSP, embedded Three.js)
 - Hybrid presentation contract — versioned, bounded, kind-validated block envelopes (`internal/presentation`) with deterministic surface selection and safe degradation of unknown kinds
 - On-demand Web Workspace — browser-hosted read-only rich viewer (`internal/workspace`: markdown/code/diff/table/chart-spec), loopback-only bind, per-launch fragment token, strict CSP, offline embedded assets, zero command endpoints
+- Native settled-artifact card (Chat + Agent) — the latest settled rich block surfaces in the native shell with a short excerpt, the truthful Workspace state, and an Open-in-Workspace action; stale references degrade visibly and the entry stays non-actionable until a settled artifact exists
 
 ### Inference & hardware truth
 - Managed llama.cpp inference with modern CLI contract and strict numeric-argument validation before spawn

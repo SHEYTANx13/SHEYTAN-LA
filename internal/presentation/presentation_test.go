@@ -133,6 +133,8 @@ func TestSelectSurfaceDeterministic(t *testing.T) {
 		KindChart:    SurfaceWorkspace,
 		Kind3D:       SurfaceStudio,
 		Kind("??"):   SurfaceNative,
+		Kind(""):     SurfaceNative,
+		Kind("\n"):   SurfaceNative,
 	}
 	for k, s := range want {
 		for i := 0; i < 3; i++ {

@@ -720,6 +720,15 @@ const (
 	// (startup maintenance gate still active) — the expected pending
 	// state, reported as such, never as an engine-fault warning.
 	enumReportPending
+	// enumReportPreGate: the HTTP surface is already serving but the
+	// startup maintenance gate has not armed/announced a phase yet (run
+	// #125: the first UI accelerator poll raced ~0.9s ahead of the gate's
+	// "engine update required" log). The probe itself is poll-driven and
+	// intentional; the missing binary is genuinely absent, the gate owns
+	// the next step, and NO pending phase exists yet — so the event is
+	// reported as an expected PRE-MAINTENANCE check with precise
+	// diagnostics, never labeled pending and never a fault warning.
+	enumReportPreGate
 )
 
 // classifyEngineEnumFailure maps an enumeration failure onto the truthful
@@ -733,7 +742,15 @@ func classifyEngineEnumFailure(enumErr error, gateArmed bool, phase MaintenanceP
 	if !errors.Is(enumErr, llm.ErrEngineBinaryMissing) {
 		return enumWarnGeneric
 	}
-	if !gateArmed || !maintenanceInFlight(phase) {
+	if !gateArmed {
+		// Pre-gate boot window (run #125): the surface serves before
+		// EnsureSetup arms the gate, so the first poll can probe while NO
+		// maintenance phase exists. Expected pre-maintenance check with
+		// precise diagnostics — not pending (that phase does not exist
+		// yet), not a fault warning (the gate owns the next step).
+		return enumReportPreGate
+	}
+	if !maintenanceInFlight(phase) {
 		return enumWarnGeneric
 	}
 	return enumReportPending
@@ -763,11 +780,16 @@ func (s *Server) reportEngineEnumFailure(enumErr error) {
 		armed = true
 		phase = g.Snapshot().Phase
 	}
-	if classifyEngineEnumFailure(enumErr, armed, phase) == enumReportPending {
+	switch classifyEngineEnumFailure(enumErr, armed, phase) {
+	case enumReportPending:
 		s.logAcceleratorEnumPending(phase)
 		return
+	case enumReportPreGate:
+		s.logAcceleratorEnumPreGate()
+		return
+	default:
+		s.logAcceleratorEnumWarn(enumErr.Error())
 	}
-	s.logAcceleratorEnumWarn(enumErr.Error())
 }
 
 // logAcceleratorEnumPending reports the engine install/update pending
@@ -782,6 +804,26 @@ func (s *Server) logAcceleratorEnumPending(phase MaintenancePhase) {
 
 	if unchanged {
 		logging.Default().Debug("perf", "engine enumeration pending (unchanged): %s", msg)
+		return
+	}
+
+	logging.Default().Info("perf", "%s", msg)
+}
+
+// logAcceleratorEnumPreGate reports the pre-maintenance window probe with
+// the same per-poll chatter discipline as the other dispositions: an
+// UNCHANGED message demotes to DEBUG; a changed one logs once at INFO.
+// The wording is precise about timing: the gate has NOT announced a phase
+// yet, so nothing here may claim a pending install/update.
+func (s *Server) logAcceleratorEnumPreGate() {
+	msg := "startup engine probe: engine binary not present yet (pre-maintenance window: the startup gate has not announced a phase) — the startup gate owns the next step"
+	s.accelMu.Lock()
+	unchanged := s.lastAccelEnumWarn == msg
+	s.lastAccelEnumWarn = msg
+	s.accelMu.Unlock()
+
+	if unchanged {
+		logging.Default().Debug("perf", "startup engine probe (unchanged): %s", msg)
 		return
 	}
 

@@ -145,6 +145,19 @@ ManifestDPIAware true
 !if ! /FileExists "${BUILDDIR}\LICENSE.md"
   !error "NSIS: staged LICENSE.md not found: ${BUILDDIR}\LICENSE.md (CI stages the single-source LICENSE.md into the package root before makensis)"
 !endif
+; v1.2.3 (run #125 payload audit): the canonical install README and the
+; build-info manifest are REQUIRED staged payload files. The workflow's
+; BUILD-INFO step writes both into the staging root before makensis runs
+; (and the ZIP guard requires both), the File /r pass below installs
+; both, and the generated uninstall manifest enumerates both — so a
+; staging drift must fail the installer build with the exact missing
+; path, the same fail-fast class as the EXE and LICENSE.md above.
+!if ! /FileExists "${BUILDDIR}\README.txt"
+  !error "NSIS: staged README.txt not found: ${BUILDDIR}\README.txt (CI's BUILD-INFO step writes the canonical install README; the installer payload requires it)"
+!endif
+!if ! /FileExists "${BUILDDIR}\BUILD-INFO.txt"
+  !error "NSIS: staged BUILD-INFO.txt not found: ${BUILDDIR}\BUILD-INFO.txt (CI's BUILD-INFO step writes the build manifest; the installer payload requires it)"
+!endif
 
 ; v1.10.14 UNINSTALL SYMMETRY: CI generates payload-uninstall.nsh from
 ; the exact payload tree (Delete per file, bottom-up RMDir per directory).
@@ -160,7 +173,20 @@ ManifestDPIAware true
 ; v1.2.2 (run #122): the !insertmacro below targets the generated MACRO
 ; name SHEYTAN_PAYLOAD_UNINSTALL_FILES (with the _FILES suffix) — the
 ; bare define name is NOT a macro name; inserting it aborts makensis.
-!include /nonfatal "payload-uninstall.nsh"
+; v1.2.3 (run #125): THE INCLUDE PATH IS SCRIPT-RELATIVE BY CONSTRUCTION.
+; A bare `!include /nonfatal "payload-uninstall.nsh"` resolves against
+; the COMPILER'S working directory (plus the NSIS include dirs), NOT the
+; directory of this .nsi file. CI invokes makensis from the repository
+; root, so the miss was silent: with /nonfatal the unresolved include is
+; not even a warning, the define never became active, the !ifdef block
+; below was skipped, the marker never appeared, and the fail-closed
+; marker gate correctly red-flagged an uninstaller that would have
+; shipped without its payload list (run #125, 41304350626). Reproduced
+; and fixed locally on makensis 3.11: ${__FILEDIR__} is the NSIS 3
+; predefine holding the directory of the script currently being
+; processed, so this path is correct from ANY invoking directory and
+; with ANY script-path spelling (absolute or relative).
+!include /nonfatal "${__FILEDIR__}\payload-uninstall.nsh"
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
@@ -277,21 +303,45 @@ upgrade_retry_sleep:
 upgrade_replaced:
 
   ; --- application payload (never models) ---------------------------------
+  ; REQUIRED staged payload files. These explicit non-/nonfatal File lines
+  ; are the second guard layer after the /FileExists assertions above: a
+  ; missing required file aborts the build before the recursive pass. The
+  ; recursive pass below re-copies identical bytes to the same $INSTDIR
+  ; destinations, so the installed result is exactly the staged tree.
   File "${BUILDDIR}\${EXE}"
   ; v1.2.2: REQUIRED — CI stages the single-source LICENSE.md into the
   ; package root and the license page renders it; /nonfatal would ship
   ; an installer without its license on any staging drift.
   File "${BUILDDIR}\LICENSE.md"
-  File /nonfatal "${BUILDDIR}\README.md"
+  ; SIGNATURE stays OPTIONAL: it is staged only when release credentials
+  ; produce it, and an unsigned release is a valid artifact.
   File /nonfatal "${BUILDDIR}\SIGNATURE"
   File "..\..\build\sheytan.ico"
-  ; v1.11.0 PAYLOAD: everything else the staged application carries
-  ; (license, readme, signature, icon). The CI payload-staging step
-  ; excludes portable-only files (README.txt, BUILD-INFO.txt,
-  ; AI-CONTEXT.md, SHEYTAN-LA.bat, models/, workspace/) before makensis
-  ; runs, so what lands in $INSTDIR is the installed application. The
-  ; hosted silent-install smoke asserts the executable in the INSTALLED
-  ; tree — the executable proof of this line.
+  ; v1.11.0 PAYLOAD (one-Go-UI migration) — v1.2.3 comment correction
+  ; (run #125 audit; the old text described the OPPOSITE of the actual
+  ; workflow behavior):
+  ;
+  ;   The staging tree that reaches makensis contains EXACTLY:
+  ;     SHEYTAN-LA.exe, SHEYTAN-LA.bat, LICENSE.md, SIGNATURE,
+  ;     README.txt, BUILD-INFO.txt, models\README.txt,
+  ;     workspace\README.txt (+ the models\ and workspace\ dirs).
+  ;   NOTHING is excluded before makensis: the smoke runs from the
+  ;   RUNNER_TEMP copy (the staging tree stays pristine), the ZIP is
+  ;   compressed from this same tree, and this File /r installs the SAME
+  ;   tree — one payload root, three consumers (ZIP, manifest, installer).
+  ;   The generated payload-uninstall.nsh enumerates exactly this tree,
+  ;   so the uninstaller removes exactly what this line installs.
+  ;
+  ;   (History: this File line previously carried a stale
+  ;   `File /nonfatal "${BUILDDIR}\README.md"` — the repo-root README.md
+  ;   is NEVER staged, so every hosted build emitted NSIS warning 7010
+  ;   for a file the payload contract never contained. Removed in the
+  ;   run #125 payload audit; the canonical install README is README.txt
+  ;   (required via /FileExists above + installed by /r). The
+  ;   uninstaller's hardcoded `Delete "$INSTDIR\README.md"` below is
+  ;   deliberately RETAINED as legacy fallback: pre-audit installs may
+  ;   still carry a README.md, and a Delete on a missing file is a
+  ;   harmless no-op.)
   File /r "${BUILDDIR}\*.*"
 
   ; Version-aware upgrade bookkeeping.

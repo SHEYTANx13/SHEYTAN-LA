@@ -279,8 +279,16 @@ func (l *responsiveLayout) MinSize(objs []fyne.CanvasObject) fyne.Size {
 // show switches to a primary view (rebuilt on demand; one instance per id
 // so state survives navigation without shadowing the runtime).
 func (s *shell) show(id string) {
+	// Build OUTSIDE the mutex: a lazy build calls ap.shell.register(),
+	// which takes s.mu itself — building under the lock self-deadlocks the
+	// UI thread on the FIRST navigation to a not-yet-built view (a latent
+	// freeze exposed by the Phase 2 navigation tests; CI's view tests
+	// built views detached from a shell, and the Xvfb smoke never clicks
+	// navigation). Navigation callbacks run on the single UI event loop,
+	// so the unlocked build cannot double-build one view.
 	s.mu.Lock()
 	v, ok := s.views[id]
+	s.mu.Unlock()
 	if !ok {
 		for _, pv := range primaryViews {
 			if pv.id == id {
@@ -288,8 +296,11 @@ func (s *shell) show(id string) {
 				break
 			}
 		}
+		s.mu.Lock()
 		s.views[id] = v
+		s.mu.Unlock()
 	}
+	s.mu.Lock()
 	s.active = id
 	s.mu.Unlock()
 	s.body.Objects = []fyne.CanvasObject{container.NewMax(v)}

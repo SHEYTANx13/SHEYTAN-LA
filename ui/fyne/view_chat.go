@@ -24,6 +24,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/presentation"
 )
 
 // chatView is the Chat surface state.
@@ -43,6 +44,7 @@ type chatView struct {
 	messages    []Message
 	errLabel    *widget.Label
 	wsBtn       *widget.Button
+	artCard     *artifactCard
 	newBtn      *widget.Button
 	delBtn      *widget.Button
 	renBtn      *widget.Button
@@ -127,7 +129,19 @@ func buildChatView(ap *App) fyne.CanvasObject {
 	// Web Workspace (on-demand): opens the browser-hosted rich surface for
 	// the settled rich blocks. The native transcript stays the source of
 	// truth; a browser/server failure only disables this extra surface.
+	// Phase 2: the entry is actionable ONLY once a settled artifact exists
+	// (an empty Workspace surface is never a click target); the contextual
+	// settled-artifact card below carries the prominent affordance.
 	v.wsBtn = widget.NewButtonWithIcon("Workspace", theme.ComputerIcon(), v.openWorkspace)
+	syncWorkspaceAffordance(v.wsBtn, ap)
+	// Phase 2 native artifact card: starts hidden (no settled artifact yet);
+	// re-seeded from the hub so a rebuilt view keeps a truthful reference.
+	v.artCard = newArtifactCard(ap)
+	if m, ok := ap.ws.Latest(); ok {
+		if b, found := ap.ws.WorkspaceBlock(m.ID); found {
+			v.artCard.setBlock(m, string(b.Payload))
+		}
+	}
 
 	v.newBtn = widget.NewButtonWithIcon("New", theme.ContentAddIcon(), func() {
 		go func() {
@@ -163,7 +177,7 @@ func buildChatView(ap *App) fyne.CanvasObject {
 		sessionsScroll,
 	)
 
-	liveColumn := container.NewBorder(nil, composer, nil, nil, container.NewScroll(container.NewVBox(v.emptyBox, v.transcript, v.liveBox)))
+	liveColumn := container.NewBorder(nil, composer, nil, nil, container.NewScroll(container.NewVBox(v.emptyBox, v.transcript, v.liveBox, v.artCard.canvas())))
 
 	split := container.NewHSplit(sessionsPane, liveColumn)
 	split.Offset = 0.28
@@ -180,6 +194,8 @@ func buildChatView(ap *App) fyne.CanvasObject {
 		func() { v.onSettled() },
 		func() { v.refreshSessions(ap.rt.Sessions()) },
 	)
+	// Phase 2 test/wiring seam: the shell-owned instance of this view.
+	ap.chat = v
 
 	// Presentation seed only — widget Refresh is deferred until the
 	// event loop runs (the bootstrap onSessions callback refreshes).
@@ -342,16 +358,7 @@ func (v *chatView) onSettled() {
 		if s, ok := v.ap.rt.ActiveSession(); ok {
 			v.messages = s.Messages
 			v.transcript.Refresh()
-			// Issue the settled assistant response as a workspace block
-			// (markdown kind). Registration is additive: it can only fail
-			// by refusing invalid content, and the native rendering above
-			// is untouched either way.
-			if len(s.Messages) > 0 {
-				last := s.Messages[len(s.Messages)-1]
-				if last.Role == "assistant" && strings.TrimSpace(last.Content) != "" {
-					_, _ = v.ap.Workspace().RegisterChatResponse(s.ID, last.Content)
-				}
-			}
+			v.promoteSettledAssistant(s)
 		}
 	}
 	v.liveBox.Hide()
@@ -360,6 +367,30 @@ func (v *chatView) onSettled() {
 	v.errLabel.Hide()
 	_ = acc
 	v.updateButtons()
+}
+
+// promoteSettledAssistant is the Phase 2 settle-path promotion: the settled
+// assistant response is issued as a workspace block (markdown kind) and a
+// SUCCESSFUL registration is promoted onto the native artifact card — the
+// contextual affordance refers to the settled block, never to the
+// provisional live bubble. Registration is additive: it can only fail by
+// refusing invalid content, and the native rendering above is untouched
+// either way. Empty or non-assistant content registers nothing.
+func (v *chatView) promoteSettledAssistant(s Session) {
+	if len(s.Messages) == 0 {
+		return
+	}
+	last := s.Messages[len(s.Messages)-1]
+	if last.Role != "assistant" || strings.TrimSpace(last.Content) == "" {
+		return
+	}
+	if b, err := v.ap.Workspace().RegisterChatResponse(s.ID, last.Content); err == nil && b.ID != "" {
+		meta := presentation.MetaOf(b)
+		uiDo(func() {
+			v.artCard.setBlock(meta, last.Content)
+			syncWorkspaceAffordance(v.wsBtn, v.ap)
+		})
+	}
 }
 
 func (v *chatView) showErr(what string, err error) {

@@ -28,6 +28,11 @@ type App struct {
 	ws      *wsHub
 	cancel  context.CancelFunc
 	rootCtx context.Context
+
+	// Shell-owned conversation view instances (Phase 2 wiring/test seam;
+	// set by the view builders, never a second authority).
+	chat  *chatView
+	agent *agentView
 }
 
 // NewApp builds the product application over an existing core client

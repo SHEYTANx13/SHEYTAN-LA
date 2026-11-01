@@ -46,8 +46,18 @@ func TestClassifyEngineEnumFailure(t *testing.T) {
 		}
 	}
 
-	if got := classifyEngineEnumFailure(missing, false, PhaseChecking); got != enumWarnGeneric {
-		t.Fatalf("no gate armed: missing engine must warn generically, got %v", got)
+	// Run #125 reclassification: gate==nil is the PRE-GATE boot window
+	// (the HTTP surface serves before EnsureSetup arms the gate; the
+	// first UI poll raced ~0.9s ahead of the gate's decision log). A typed
+	// missing-engine there is the expected pre-maintenance probe with
+	// precise diagnostics — NOT a pending claim (no phase exists yet) and
+	// NOT a generic fault warning.
+	if got := classifyEngineEnumFailure(missing, false, PhaseChecking); got != enumReportPreGate {
+		t.Fatalf("no gate armed: missing engine is the expected pre-maintenance probe, got %v", got)
+	}
+	// A non-missing failure stays a genuine warning even pre-gate.
+	if got := classifyEngineEnumFailure(other, false, PhaseChecking); got != enumWarnGeneric {
+		t.Fatalf("non-missing failures must always warn generically, got %v", got)
 	}
 	if got := classifyEngineEnumFailure(other, true, PhaseDownloading); got != enumWarnGeneric {
 		t.Fatalf("non-missing failures must always warn generically, got %v", got)

@@ -14,6 +14,8 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/presentation"
 )
 
 type agentView struct {
@@ -35,6 +37,8 @@ type agentView struct {
 	emptyBox   *fyne.Container
 	newGoal    *widget.Entry
 	addGoal    *widget.Button
+	wsBtn      *widget.Button
+	artCard    *artifactCard
 }
 
 func buildAgentView(ap *App) fyne.CanvasObject {
@@ -107,6 +111,19 @@ func buildAgentView(ap *App) fyne.CanvasObject {
 	v.emptyBox = emptyBox
 	v.slot = newPrimaryActionSlot(v.send, v.stop)
 	v.netSearch = widget.NewCheck("Net search", nil)
+	// Phase 2: the Agent surface gets the same contextual artifact
+	// affordance as Chat — one truthful Workspace entry (actionable only
+	// once a settled artifact exists) plus the native settled-artifact
+	// card. Chat and Agent stay separate conversation spaces; the block
+	// Source field records which surface produced it.
+	v.wsBtn = widget.NewButtonWithIcon("Workspace", theme.ComputerIcon(), v.openWorkspace)
+	syncWorkspaceAffordance(v.wsBtn, ap)
+	v.artCard = newArtifactCard(ap)
+	if m, ok := ap.ws.Latest(); ok {
+		if b, found := ap.ws.WorkspaceBlock(m.ID); found {
+			v.artCard.setBlock(m, string(b.Payload))
+		}
+	}
 
 	v.newGoal = widget.NewEntry()
 	v.newGoal.SetPlaceHolder("New goal…")
@@ -118,7 +135,7 @@ func buildAgentView(ap *App) fyne.CanvasObject {
 	v.errLabel.Hide()
 
 	composer := container.NewVBox(
-		container.NewHBox(v.netSearch, layoutSpacer(), v.slot.canvas()),
+		container.NewHBox(v.netSearch, layoutSpacer(), v.wsBtn, v.slot.canvas()),
 		v.input,
 	)
 
@@ -128,7 +145,7 @@ func buildAgentView(ap *App) fyne.CanvasObject {
 	)
 
 	center := container.NewAppTabs(
-		container.NewTabItem("Transcript", container.NewScroll(container.NewVBox(v.emptyBox, v.transcript, liveBox))),
+		container.NewTabItem("Transcript", container.NewScroll(container.NewVBox(v.emptyBox, v.transcript, liveBox, v.artCard.canvas()))),
 		container.NewTabItem("Activity", container.NewScroll(activityBox)),
 		container.NewTabItem("Task", container.NewScroll(v.taskPanel)),
 	)
@@ -148,6 +165,8 @@ func buildAgentView(ap *App) fyne.CanvasObject {
 		func() { v.onSettled() },
 		nil,
 	)
+	// Phase 2 test/wiring seam: the shell-owned instance of this view.
+	ap.agent = v
 	v.refreshGoals()
 	v.refreshBackend()
 	v.attachIfActive()
@@ -322,11 +341,42 @@ func (v *agentView) onSettled() {
 	if s, ok := v.ap.rt.ActiveSession(); ok {
 		v.messages = s.Messages
 		v.transcript.Refresh()
+		v.promoteSettledAssistant(s)
 	}
 	v.live.SetText("")
 	v.slot.setBusy(false)
 	v.updateEmptyState()
 	v.refreshGoals() // plan steps may have advanced
+}
+
+// promoteSettledAssistant is the Phase 2 settle-path promotion for the
+// Agent surface: the settled AGENT response is issued as a workspace block
+// (additive; refusals leave the native rendering untouched) and a
+// successful registration is promoted onto the native artifact card — the
+// settled block, never the provisional live bubble.
+func (v *agentView) promoteSettledAssistant(s Session) {
+	if len(s.Messages) == 0 {
+		return
+	}
+	last := s.Messages[len(s.Messages)-1]
+	if last.Role != "assistant" || strings.TrimSpace(last.Content) == "" {
+		return
+	}
+	if b, err := v.ap.Workspace().RegisterAgentResponse(s.ID, last.Content); err == nil && b.ID != "" {
+		meta := presentation.MetaOf(b)
+		uiDo(func() {
+			v.artCard.setBlock(meta, last.Content)
+			syncWorkspaceAffordance(v.wsBtn, v.ap)
+		})
+	}
+}
+
+// openWorkspace starts (if needed) the loopback workspace server and hands
+// the per-launch URL to the default browser (mirror of the chat action).
+func (v *agentView) openWorkspace() {
+	if err := v.ap.openWorkspace(); err != nil {
+		v.showErr("open workspace", err)
+	}
 }
 
 // updateEmptyState shows the capability-priming surface only while the

@@ -1095,9 +1095,18 @@ jobs:
 
       - name: Build the NSIS installer
         run: |
-          # Script: packaging/nsis/installer.nsi (forward-slash spelling
-          # kept for the release-contract gate; makensis receives the
-          # Windows backslash spelling below).
+          # Script: packaging/nsis/installer.nsi — makensis receives the
+          # ABSOLUTE resolved script path. Run #125 lesson (reproduced and
+          # fixed on real makensis 3.11): a relative script path makes NSIS's
+          # ${__FILEDIR__} predefine RELATIVE too, and the script-directory
+          # generated include in installer.nsi then misses (warning 7000) —
+          # so the script path gets the same absolute-path discipline the
+          # v1.2.0 path contract already applies to BUILDDIR/OUTFILE.
+          # -V4: the payload-uninstall marker is emitted with !echo, and
+          # makensis prints !echo output ONLY at verbosity 4 ("all output").
+          # At the default verbosity the marker NEVER reaches this tee'd
+          # log and the assertion below could never pass — the second
+          # stacked run #125 defect, found by the local 3.11 reproduction.
           # Run #122 lesson: the red was NAMED but not RETRIEVABLE — the
           # makensis transcript existed only in the auth-gated step log.
           # Every makensis line is now teed into ci-logs/win-nsis-build.log
@@ -1105,11 +1114,17 @@ jobs:
           # payload-uninstall include marker is asserted in that teed log
           # after the build, with a titled ::error on absence.
           $nsi = "packaging/nsis/installer.nsi"
+          $nsiAbs = (Resolve-Path $nsi).Path
           $stage = Join-Path (Resolve-Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}") ""
           New-Item -ItemType Directory -Force -Path "ci-logs" | Out-Null
           $nsisLog = "ci-logs/win-nsis-build.log"
-          & "C:\Program Files (x86)\NSIS\makensis.exe" "-DVERSION=${{ env.APP_VERSION }}" "-DEXE=SHEYTAN-LA.exe" "-DBUILDDIR=$stage" "-DOUTFILE=$(Resolve-Path dist)\${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe" packaging\nsis\installer.nsi 2>&1 | Tee-Object -FilePath $nsisLog
+          & "C:\Program Files (x86)\NSIS\makensis.exe" "-V4" "-DVERSION=${{ env.APP_VERSION }}" "-DEXE=SHEYTAN-LA.exe" "-DBUILDDIR=$stage" "-DOUTFILE=$(Resolve-Path dist)\${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe" "$nsiAbs" 2>&1 | Tee-Object -FilePath $nsisLog
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::makensis failed (exit $LASTEXITCODE) — packaging/nsis/installer.nsi build log above; full transcript teed to $nsisLog"; throw "makensis failed" }
+          # Transcript contract (run #125): the teed log must show the
+          # script was actually processed, the payload-uninstall marker
+          # was emitted, and the installer was written — three greps, one
+          # look, each with a titled ::error.
+          if (-not (Select-String -LiteralPath $nsisLog -Pattern 'Processing script file' -SimpleMatch)) { Write-Host "::error::NSIS transcript contract: 'Processing script file' NOT found in $nsisLog — makensis never opened the installer script"; throw "NSIS transcript contract: installer script never processed" }
           # Marker contract (documented in installer.nsi itself): when the
           # generated payload-uninstall list is included, the nsi emits
           # "sheytan: payload uninstall list included" into the makensis
@@ -1118,6 +1133,7 @@ jobs:
           # payload list (uninstall symmetry broken even on a green build).
           $marker = Select-String -LiteralPath $nsisLog -Pattern 'sheytan: payload uninstall list included' -SimpleMatch
           if (-not $marker) { Write-Host "::error::NSIS marker contract: 'sheytan: payload uninstall list included' NOT found in $nsisLog — payload-uninstall.nsh was not included; the uninstaller would not remove the staged payload"; throw "NSIS payload-uninstall marker missing from makensis log" }
+          if (-not (Select-String -LiteralPath $nsisLog -Pattern 'Output:' -SimpleMatch)) { Write-Host "::error::NSIS transcript contract: 'Output:' NOT found in $nsisLog — makensis reported success but never wrote the installer"; throw "NSIS transcript contract: installer output not written" }
           Write-Host "NSIS marker contract: payload uninstall list included (verified in $nsisLog)"
 
       - name: Verify the installer exists
@@ -1127,6 +1143,141 @@ jobs:
           $size = (Get-Item $inst).Length
           if ($size -lt 1MB) { Write-Host "::error::installer guard: installer suspiciously small: $size bytes at $inst"; throw "installer suspiciously small: $size bytes" }
           Write-Host "installer OK ($size bytes)"
+
+      # ----------------------------------------------------------------------
+      # REAL installer round-trip proof (run #125 mandate — the portable
+      # launch smoke never proved installation): silently install the
+      # ACTUAL compiled installer into a unique isolated path under
+      # RUNNER_TEMP, verify the installed payload + registration, seed
+      # user-data sentinels, silently uninstall, then prove BOTH payload
+      # removal AND data preservation. NSIS silent CLI (Chapter 3 docs):
+      # /S with a FINAL /D=<path> (last parameter, unquoted, no spaces);
+      # silent uninstall: Uninstall.exe /S with a FINAL _?=<path> (runs in
+      # place, does not self-delete, lets the caller wait for the exit
+      # code). https://nsis.sourceforge.io/Docs/Chapter3.html
+      # Every failure emits a titled ::error naming the stage and the
+      # transcript; the transcript reaches windows-logs-part on red AND
+      # green (Start-Transcript + the always() upload). Cleanup is strictly
+      # bounded to the unique GUID-named directory under RUNNER_TEMP.
+      # ----------------------------------------------------------------------
+      - name: "NSIS install/uninstall smoke (payload symmetry + data preservation)"
+        run: |
+          $ErrorActionPreference = "Stop"
+          $log = "ci-logs/win-nsis-install-uninstall-smoke.log"
+          New-Item -ItemType Directory -Force -Path "ci-logs" | Out-Null
+          Start-Transcript -Path $log -Force | Out-Null
+          $base = Join-Path $env:RUNNER_TEMP ("nsis-smoke-" + [guid]::NewGuid().ToString("N"))
+          $instDir = Join-Path $base "app"
+          $externalData = Join-Path $base "external-data"
+          $installer = (Resolve-Path "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe").Path
+          $stage = "dist/windows/app/${env:WIN_PKG_ROOT}"
+          $stageRoot = (Resolve-Path $stage).Path
+          function Fail([string]$Stage, [string]$Msg) {
+            Write-Host ("::error::NSIS install/uninstall smoke ({0}): {1} — full transcript teed to ci-logs/win-nsis-install-uninstall-smoke.log" -f $Stage, $Msg)
+            throw ("[{0}] {1}" -f $Stage, $Msg)
+          }
+          try {
+            Write-Host "smoke root: $base"
+            Write-Host "installer: $installer"
+            # Purity snapshot: the smoke must not touch the staging tree.
+            $stageFilesBefore = @(Get-ChildItem -Recurse -File $stageRoot | ForEach-Object { $_.FullName.Substring($stageRoot.Length + 1) } | Sort-Object)
+
+            # --- 1. silent install into the isolated path (/D last, unquoted, no spaces) ---
+            $proc = Start-Process -FilePath $installer -ArgumentList @("/S", "/D=$instDir") -PassThru
+            if (-not $proc.WaitForExit(180000)) { Fail "install" "installer did not exit within 180s" }
+            if ($proc.ExitCode -ne 0) { Fail "install" "installer exit code $($proc.ExitCode) (expected 0)" }
+
+            # --- 2. installed payload = the staged tree (+ the icon + Uninstall.exe) ---
+            $required = @("SHEYTAN-LA.exe", "SHEYTAN-LA.bat", "LICENSE.md", "README.txt", "BUILD-INFO.txt", "models/README.txt", "workspace/README.txt", "sheytan.ico", "Uninstall.exe")
+            if (Test-Path (Join-Path $stageRoot "SIGNATURE")) { $required += "SIGNATURE" }
+            foreach ($rel in $required) {
+              $p = Join-Path $instDir ($rel -replace '/', '\')
+              if (-not (Test-Path -LiteralPath $p)) { Fail "install-payload" "installed payload missing: $rel" }
+              if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { Fail "install-payload" "installed payload is not a file: $rel" }
+              if ((Get-Item -LiteralPath $p).Length -le 0) { Fail "install-payload" "installed payload file is empty: $rel" }
+              Write-Host "installed OK: $rel"
+            }
+
+            # --- 3. registration: ARP entry (either registry view), AUMID, Start Menu + desktop shortcuts ---
+            $arpViews = @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\SHEYTAN-LA", "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\SHEYTAN-LA")
+            $arp = @($arpViews | Where-Object { Test-Path $_ })
+            if ($arp.Count -eq 0) { Fail "install-registration" "Add/Remove Programs entry not found in any registry view: $($arpViews -join ' | ')" }
+            foreach ($k in $arp) {
+              $v = Get-ItemProperty -Path $k
+              if (-not $v.UninstallString) { Fail "install-registration" "ARP entry lacks UninstallString: $k" }
+              if (-not $v.DisplayName) { Fail "install-registration" "ARP entry lacks DisplayName: $k" }
+              Write-Host "ARP OK: $k -> $($v.DisplayName)"
+            }
+            $aumid = "HKCU:\Software\Classes\AppUserModelId\SHEYTANx13.SHEYTAN-LA"
+            if (-not (Test-Path $aumid)) { Fail "install-registration" "AppUserModelID key missing: $aumid" }
+            $smDir = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\SHEYTAN-LA"
+            if (-not (Test-Path (Join-Path $smDir "SHEYTAN Local Agent.lnk"))) { Fail "install-shortcuts" "Start Menu shortcut missing under $smDir" }
+            $deskLnk = Join-Path $env:PUBLIC "Desktop\SHEYTAN Local Agent.lnk"
+            if (-not (Test-Path $deskLnk)) { Fail "install-shortcuts" "desktop shortcut missing at $deskLnk (silent install keeps the default CHECKED option)" }
+            Write-Host "registration + shortcuts OK"
+
+            # --- 4. seed user-data sentinels (runtime data + payload dirs + external root + legacy README.md) ---
+            $sentinels = [ordered]@{
+              "data\user-preservation-sentinel.txt"      = "sheytan uninstall-smoke sentinel: canonical data root"
+              "data\models\user-model-sentinel.gguf"     = "sheytan uninstall-smoke sentinel: runtime model placeholder (plain text, not a model)"
+              "data\sessions\user-session-sentinel.txt"  = "sheytan uninstall-smoke sentinel: sessions"
+              "data\logs\user-log-sentinel.txt"          = "sheytan uninstall-smoke sentinel: logs"
+              "data\workspace\user-workspace-sentinel.txt" = "sheytan uninstall-smoke sentinel: install-local workspace"
+              "models\user-model-sentinel.gguf"          = "sheytan uninstall-smoke sentinel: top-level models dir (installed payload dir)"
+              "workspace\user-workspace-sentinel.txt"    = "sheytan uninstall-smoke sentinel: top-level workspace dir (installed payload dir)"
+            }
+            foreach ($rel in $sentinels.Keys) {
+              $p = Join-Path $instDir ($rel -replace '/', '\')
+              New-Item -ItemType Directory -Force -Path (Split-Path -Parent $p) | Out-Null
+              Set-Content -LiteralPath $p -Value $sentinels[$rel] -Encoding utf8NoBOM
+            }
+            New-Item -ItemType Directory -Force -Path $externalData | Out-Null
+            $extSentinel = Join-Path $externalData "user-external-sentinel.txt"
+            Set-Content -LiteralPath $extSentinel -Value "sheytan uninstall-smoke sentinel: external user-chosen data dir" -Encoding utf8NoBOM
+            $legacyReadme = Join-Path $instDir "README.md"
+            Set-Content -LiteralPath $legacyReadme -Value "legacy install README from an older version; the uninstaller's hardcoded fallback delete must remove it" -Encoding utf8NoBOM
+            $hashes = @{}
+            foreach ($p in @($sentinels.Keys | ForEach-Object { Join-Path $instDir ($_ -replace '/', '\') }) + @($extSentinel)) {
+              $hashes[$p] = (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash
+            }
+            Write-Host "sentinels seeded: $($hashes.Count) hashed (install-local + external)"
+
+            # --- 5. silent uninstall (/S, _?= last unquoted — in place, waits, does not self-delete) ---
+            $up = Start-Process -FilePath (Join-Path $instDir "Uninstall.exe") -ArgumentList @("/S", "_?=$instDir") -PassThru
+            if (-not $up.WaitForExit(120000)) { Fail "uninstall" "uninstaller did not exit within 120s" }
+            if ($up.ExitCode -ne 0) { Fail "uninstall" "uninstaller exit code $($up.ExitCode) (expected 0)" }
+
+            # --- 6. payload removed EXACTLY (documented _?= exception: Uninstall.exe stays) ---
+            foreach ($rel in ($required | Where-Object { $_ -ne "Uninstall.exe" })) {
+              $p = Join-Path $instDir ($rel -replace '/', '\')
+              if (Test-Path -LiteralPath $p) { Fail "uninstall-payload" "payload file survived uninstall: $rel" }
+              Write-Host "removed OK: $rel"
+            }
+            if (Test-Path -LiteralPath $legacyReadme) { Fail "uninstall-payload" "legacy README.md survived uninstall — the hardcoded fallback delete regressed" }
+            if (-not (Test-Path -LiteralPath (Join-Path $instDir "Uninstall.exe"))) { Fail "uninstall-payload" "Uninstall.exe vanished — with _?= NSIS documents that it stays in place; if this fires the uninstaller contract drifted" }
+            foreach ($k in $arpViews) { if (Test-Path $k) { Fail "uninstall-registration" "ARP entry survived uninstall: $k" } }
+            if (Test-Path $aumid) { Fail "uninstall-registration" "AppUserModelID key survived uninstall: $aumid" }
+            if (Test-Path (Join-Path $smDir "SHEYTAN Local Agent.lnk")) { Fail "uninstall-shortcuts" "Start Menu shortcut survived uninstall" }
+            if (Test-Path $deskLnk) { Fail "uninstall-shortcuts" "desktop shortcut survived uninstall" }
+            Write-Host "payload removal + registration/shortcut removal OK"
+
+            # --- 7. data preservation: every sentinel intact, byte-identical ---
+            foreach ($p in $hashes.Keys) {
+              if (-not (Test-Path -LiteralPath $p)) { Fail "data-preservation" "user sentinel MISSING after uninstall: $p" }
+              if ((Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash -ne $hashes[$p]) { Fail "data-preservation" "user sentinel content CHANGED after uninstall: $p" }
+              Write-Host "preserved OK: $p"
+            }
+            Write-Host "data preservation OK: non-empty user directories were left in place by the non-recursive RMDir contract (expected residue: $instDir, data\*, models\*, workspace\* containing sentinels)"
+
+            # --- 8. staging tree untouched (the smoke never writes into dist/windows/app) ---
+            $stageFilesAfter = @(Get-ChildItem -Recurse -File $stageRoot | ForEach-Object { $_.FullName.Substring($stageRoot.Length + 1) } | Sort-Object)
+            if ((Compare-Object -ReferenceObject $stageFilesBefore -DifferenceObject $stageFilesAfter).Count -ne 0) { Fail "staging-purity" "staging tree changed during the smoke run" }
+            Write-Host ("staging purity OK ({0} staged files unchanged)" -f $stageFilesAfter.Count)
+            Write-Host "NSIS install/uninstall smoke: PASS (payload symmetry + data preservation)"
+          } finally {
+            try { Stop-Transcript | Out-Null } catch {}
+            if (Test-Path $base) { Remove-Item -Recurse -Force $base -ErrorAction SilentlyContinue }
+          }
 
       # Package gate: the root failure is reported HERE (not by a vague
       # "no files found" upload error that buries the cause).
