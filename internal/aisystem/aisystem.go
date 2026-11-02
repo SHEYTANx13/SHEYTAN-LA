@@ -40,6 +40,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/recommendation"
 )
 
 // ---------------------------------------------------------------------------
@@ -141,6 +143,13 @@ type System struct {
 // Snapshot is the FROZEN per-run binding. Every run resolves its system
 // once, at start; later edits to the System object never mutate an
 // in-flight run's snapshot.
+//
+// v1.11.1 (Model Studio, run #41415240891 §5.2): the binding now freezes
+// the resource-posture and context-policy preferences too — a mid-run
+// profile edit can never mutate a running request. The three fields are
+// advisory inputs to the EXISTING authorities (Governor envelope,
+// context/continuum compaction, memory policy); freezing them here makes
+// the per-run binding complete without creating a second policy layer.
 type Snapshot struct {
 	SystemID           string   `json:"systemId"`
 	SystemRevision     int      `json:"systemRevision"`
@@ -148,6 +157,9 @@ type Snapshot struct {
 	Instructions       string   `json:"instructions"`
 	Model              string   `json:"model,omitempty"`
 	Reasoning          string   `json:"reasoning,omitempty"`
+	RuntimeProfile     string   `json:"runtimeProfile,omitempty"`
+	CompactionPolicy   string   `json:"compactionPolicy,omitempty"`
+	MemoryPolicy       string   `json:"memoryPolicy,omitempty"`
 	AllowedTools       []string `json:"allowedTools,omitempty"`
 	ApprovalPolicy     string   `json:"approvalPolicy,omitempty"`
 	EnabledSkills      []string `json:"enabledSkills,omitempty"`
@@ -165,6 +177,9 @@ func (s System) Snapshot() Snapshot {
 		Instructions:       s.Instructions,
 		Model:              s.Model,
 		Reasoning:          s.Reasoning,
+		RuntimeProfile:     s.RuntimeProfile,
+		CompactionPolicy:   s.CompactionPolicy,
+		MemoryPolicy:       s.MemoryPolicy,
 		ApprovalPolicy:     s.ApprovalPolicy,
 		VerificationPolicy: s.VerificationPolicy,
 	}
@@ -433,6 +448,25 @@ func Validate(sys *System) error {
 	case "", "default", "conservative", "aggressive":
 	default:
 		return fmt.Errorf("%w: unknown compaction policy %q", ErrInvalid, sys.CompactionPolicy)
+	}
+	// v1.11.1 (Model Studio): the per-system model override is a
+	// MODEL NAME, never a path or a prompt-side directive. The empty
+	// value means "inherit the runtime's selected model" (the default
+	// state); a value must name a concrete local model and travels
+	// through runEffectiveModel → the engine lifecycle, never
+	// around it. The runtime validates that the named model is
+	// installed when the run starts (a model downloaded later is a
+	// valid override today).
+	sys.Model = strings.TrimSpace(sys.Model)
+	if strings.ContainsAny(sys.Model, "/\\") || strings.Contains(sys.Model, "..") || strings.ContainsAny(sys.Model, " \t\n") {
+		return fmt.Errorf("%w: model override %q must be a bare local model name (no paths, no whitespace)", ErrInvalid, sys.Model)
+	}
+	// The per-system runtime profile reuses the ONE task vocabulary
+	// (recommendation.Task) — "" inherits the global profile; a value
+	// must name a supported profile. No second preset list exists.
+	sys.RuntimeProfile = strings.TrimSpace(sys.RuntimeProfile)
+	if sys.RuntimeProfile != "" && !recommendation.IsValidTask(sys.RuntimeProfile) {
+		return fmt.Errorf("%w: unknown runtime profile %q (must be empty or a supported task profile)", ErrInvalid, sys.RuntimeProfile)
 	}
 	cleaned := make([]string, 0, len(sys.AllowedTools))
 	for _, t := range sys.AllowedTools {

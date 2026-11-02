@@ -335,8 +335,21 @@ func runFakeLlamaServer() {
 		}
 	}
 
+	// v1.11.1 (run #41415240891 Failure B): --port 0 = EPHEMERAL mode —
+	// the child selects its own OS-assigned port atomically (no TOCTOU
+	// window exists when the binder and the assigner are the same bind
+	// call) and reports the actual port to SHEYTAN_FAKE_ADDR_FILE. The
+	// parent learns the port from the child itself — the
+	// child-selects-and-reports ownership-aware handoff. Validation
+	// happens here; the bind itself happens after the handlers below
+	// are built, then the listener is served directly.
+	ephemeralAddrFile := ""
 	if port == 0 {
-		os.Exit(2)
+		ephemeralAddrFile = os.Getenv("SHEYTAN_FAKE_ADDR_FILE")
+		if ephemeralAddrFile == "" {
+			fmt.Fprintln(os.Stderr, "fake engine: --port 0 requires SHEYTAN_FAKE_ADDR_FILE")
+			os.Exit(2)
+		}
 	}
 
 	// v1.7.2: the GPU-offload evidence line — mode "vulkan-offload"
@@ -373,6 +386,22 @@ func runFakeLlamaServer() {
 		_, _ = w.Write([]byte(`{"default_generation_settings":{"n_ctx":16384}}`))
 	})
 
+	if ephemeralAddrFile != "" {
+		l, lerr := net.Listen("tcp", "127.0.0.1:0")
+		if lerr != nil {
+			fmt.Fprintf(os.Stderr, "fake engine: ephemeral listen: %v\n", lerr)
+			os.Exit(2)
+		}
+
+		if werr := os.WriteFile(ephemeralAddrFile, []byte(strconv.Itoa(l.Addr().(*net.TCPAddr).Port)), 0o644); werr != nil {
+			fmt.Fprintf(os.Stderr, "fake engine: report address: %v\n", werr)
+			os.Exit(2)
+		}
+
+		serveFakeEngineOn(mux, l, mode)
+		return
+	}
+
 	server := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", port), Handler: mux}
 
 	if mode == "crash" {
@@ -390,17 +419,122 @@ func runFakeLlamaServer() {
 	os.Exit(0)
 }
 
-func freePort(t *testing.T) int {
+// serveFakeEngineOn serves the fake-engine handlers on an ALREADY-BOUND
+// listener (the ephemeral self-selected port) with the same crash-mode
+// contract as the fixed-port path: healthy, then die when mode=crash;
+// exit when the server closes or the parent kills us.
+func serveFakeEngineOn(mux *http.ServeMux, l net.Listener, mode string) {
+	server := &http.Server{Handler: mux}
+
+	if mode == "crash" {
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			_ = server.Close()
+			os.Exit(1)
+		}()
+	}
+
+	_ = server.Serve(l)
+
+	os.Exit(0)
+}
+
+// ---------------------------------------------------------------------------
+// Test port ownership (run #41415240891, Failure B)
+// ---------------------------------------------------------------------------
+// The retired freePort helper — bind :0, read the port, CLOSE the
+// listener, return — left the port UNOWNED for the entire fixture/setup
+// window. Under package-parallel CI the OS could hand that exact port to
+// another process's bind in the gap; the fake engine child later failed
+// to bind it ("port N is already in use"), failing the provisioning
+// transaction AND its last-known-good rollback restart (the observed
+// core-audit red on TestVariantTransactionHonestWhenNoVulkanDeviceOnMachine).
+// A reservation instead BINDS at allocation time and keeps the listener
+// open — possession, not hope — and every handoff is revalidated with an
+// actionable fixture failure. No sleeps, no retry storms, no -p 1.
+
+type portReservation struct {
+	port     int
+	listener net.Listener
+	t        *testing.T
+	released bool
+}
+
+// reservePort allocates an owned port: the listener stays bound (so the
+// OS cannot reassign the port while this test holds it) until Release.
+// A t.Cleanup release is registered as the safety net; fixtures release
+// explicitly at the last instant before the code under test may spawn
+// the engine.
+func reservePort(t *testing.T) *portReservation {
 	t.Helper()
 
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("free port: %v", err)
+		t.Fatalf("reserve port: %v", err)
 	}
 
-	defer l.Close()
+	res := &portReservation{
+		port:     l.Addr().(*net.TCPAddr).Port,
+		listener: l,
+		t:        t,
+	}
+	t.Cleanup(res.Release)
 
-	return l.Addr().(*net.TCPAddr).Port
+	return res
+}
+
+// reReservePort re-takes possession of a port handed off by an earlier
+// fixture stage (e.g. fakeManagedEngineConfig re-reserving the port
+// fakeEngineConfig released, for the managed-copy staging that follows).
+// If anything else took the port in the gap, the fixture fails HERE —
+// at the handoff — instead of minutes later as a confusing engine-boot
+// "port in use" failure.
+func reReservePort(t *testing.T, port int) *portReservation {
+	t.Helper()
+
+	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatalf("engine port %d was lost between fixture stages (%v) — the ownership handoff failed; this is the run #41415240891 fixture-port class, not a product failure", port, err)
+	}
+
+	res := &portReservation{
+		port:     port,
+		listener: l,
+		t:        t,
+	}
+	t.Cleanup(res.Release)
+
+	return res
+}
+
+// Port returns the owned port number.
+func (r *portReservation) Port() int { return r.port }
+
+// Listener hands the raw listener out for continuous-possession
+// handoffs: serving ON the reservation means the port is never unowned,
+// not even for a microsecond.
+func (r *portReservation) Listener() net.Listener { return r.listener }
+
+// Release closes the held listener and immediately revalidates the
+// handoff with a fresh bind of the exact port. Idempotent; safe from
+// t.Cleanup after an explicit release.
+func (r *portReservation) Release() {
+	if r == nil || r.released {
+		return
+	}
+
+	r.released = true
+
+	port := r.port
+	_ = r.listener.Close()
+
+	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		r.t.Errorf("engine port %d was lost at the reservation handoff (%v) — another listener took it in the closing window; run #41415240891 fixture-port class, not a product failure", port, err)
+		return
+	}
+
+	_ = l.Close()
 }
 
 func fakeEngineConfig(t *testing.T, mode string) (*config.Config, string) {
@@ -412,6 +546,13 @@ func fakeEngineConfig(t *testing.T, mode string) (*config.Config, string) {
 	}
 
 	dir := t.TempDir()
+
+	// v1.11.1 (run #41415240891 Failure B): OWN the engine port through
+	// the whole fixture — the held listener makes reassignment by a
+	// concurrent package impossible — and release it, revalidated, at
+	// the last instant this fixture controls (right before returning to
+	// the code under test, which may spawn the engine).
+	res := reservePort(t)
 
 	// A fake but structurally valid model file: ResolveModelPath only
 	// requires an existing .gguf file in the models dir.
@@ -435,7 +576,7 @@ func fakeEngineConfig(t *testing.T, mode string) (*config.Config, string) {
 	cfg.Provider = "local"
 	cfg.LlamaBinPath = testBin
 	cfg.LlamaHost = "127.0.0.1"
-	cfg.LlamaPort = freePort(t)
+	cfg.LlamaPort = res.Port()
 	cfg.EngineCompat = 3 // bare flags: the fake engine ignores all tuning
 	cfg.Model = "fake-model.gguf"
 	cfg.VisionEnabled = false
@@ -445,6 +586,10 @@ func fakeEngineConfig(t *testing.T, mode string) (*config.Config, string) {
 	if mode != "" {
 		t.Setenv("GO_FAKE_LLAMA_MODE", mode)
 	}
+
+	// The ownership handoff: release (with the fresh-bind revalidation)
+	// as the fixture's final action.
+	res.Release()
 
 	return cfg, modelFile
 }

@@ -403,7 +403,7 @@ jobs:
     needs: [preflight]
     timeout-minutes: 45
     env:
-      APP_VERSION: "1.11.0"
+      APP_VERSION: "1.11.1"
     defaults:
       run:
         shell: pwsh
@@ -1385,7 +1385,7 @@ jobs:
     needs: [preflight]
     timeout-minutes: 45
     env:
-      APP_VERSION: "1.11.0"
+      APP_VERSION: "1.11.1"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1459,20 +1459,37 @@ jobs:
 
       # The COMPILED desktop binary must agree with the workflow APP_VERSION
       # (the compiled Go authority), not only the resolver.
+      #
+      # v1.11.1 (run #41415240891 Failure A): the probe runs from an
+      # ISOLATED working directory, never beside the staged tree — extra
+      # defense on top of the read-only version dispatch in cmd/root.go.
+      # A version query that regains filesystem side effects would then
+      # drop its residue here instead of inside the release ZIP, and the
+      # purity verifier below still rejects any data/ entry fail-closed.
       - name: Cross-check the compiled binary's version
         run: |
           set -euo pipefail
-          bin="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA"
+          repoDir="$(pwd)"
+          bin="${repoDir}/dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA"
+          probeDir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/version-probe.XXXXXX")"
+          trap 'rm -rf "$probeDir"' EXIT
+          cd "$probeDir"
           set +e
           resolved="$("$bin" version 2>/dev/null | grep -m1 -oE 'v[0-9]+\.[0-9]+\.[0-9]+')"
           rc=$?
           set -e
-          printf 'compiled binary reports: %s (grep rc=%s)\n' "${resolved:-<none>}" "$rc" | tee ci-logs/linux-compiled-version.log
+          printf 'compiled binary reports: %s (grep rc=%s)\n' "${resolved:-<none>}" "$rc" | tee "${repoDir}/ci-logs/linux-compiled-version.log"
           if [ "$resolved" != "v${APP_VERSION}" ]; then
             echo "::error::compiled SHEYTAN-LA reports '${resolved:-<none>}', want v${APP_VERSION} — the compiled authority drifted"
             exit 1
           fi
           echo "compiled version OK: $resolved"
+          residue="$(ls -A "$probeDir" || true)"
+          if [ -n "$residue" ]; then
+            echo "::error::version probe created filesystem residue in the isolated probe dir: $residue — the version dispatch must stay read-only (run #41415240891 Failure A)"
+            exit 1
+          fi
+          echo "version probe left the probe directory clean"
 
       - name: Verify the ELF (x86-64, executable bit)
         run: |
@@ -1800,7 +1817,7 @@ jobs:
     permissions:
       contents: write
     env:
-      APP_VERSION: "1.11.0"
+      APP_VERSION: "1.11.1"
     steps:
       - name: Download Windows package
         uses: actions/download-artifact@v8

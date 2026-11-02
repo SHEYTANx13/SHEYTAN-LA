@@ -386,13 +386,22 @@ type CustomTool struct {
 }
 
 // AISystem mirrors /api/systems entries (editable surface subset).
+// v1.11.1 (Model Studio, run #41415240891 §5.2): the mirror now carries
+// the per-system model assignment and posture fields so the UI can edit
+// them through the EXISTING store PUT — never a second agent-profile
+// authority. Missing fields on an older core decode as "" (inherit).
 type AISystem struct {
-	SystemID       string `json:"systemId,omitempty"`
-	Name           string `json:"name,omitempty"`
-	Revision       int    `json:"revision,omitempty"`
-	Instructions   string `json:"instructions,omitempty"`
-	ApprovalPolicy string `json:"approvalPolicy,omitempty"`
-	Active         bool   `json:"-"`
+	SystemID         string `json:"systemId,omitempty"`
+	Name             string `json:"name,omitempty"`
+	Revision         int    `json:"revision,omitempty"`
+	Instructions     string `json:"instructions,omitempty"`
+	Model            string `json:"model,omitempty"`
+	Reasoning        string `json:"reasoning,omitempty"`
+	RuntimeProfile   string `json:"runtimeProfile,omitempty"`
+	CompactionPolicy string `json:"compactionPolicy,omitempty"`
+	MemoryPolicy     string `json:"memoryPolicy,omitempty"`
+	ApprovalPolicy   string `json:"approvalPolicy,omitempty"`
+	Active           bool   `json:"-"`
 }
 
 // WorkspaceSummary mirrors GET /api/workspace.
@@ -751,6 +760,20 @@ func (c *CoreClient) Systems(ctx context.Context) ([]AISystem, string, error) {
 // ActivateSystem activates an AI system.
 func (c *CoreClient) ActivateSystem(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodPost, "/api/systems/"+url.PathEscape(id)+"/activate", nil, nil)
+}
+
+// UpdateSystem PUTs the FULL editable surface of one AI system back to
+// the store (the PUT replaces the editable surface wholesale, so the
+// caller must send the record it fetched with only the intended fields
+// changed — the UI never constructs a partial system here). The store
+// validates server-side; the returned document is the authoritative
+// updated record.
+func (c *CoreClient) UpdateSystem(ctx context.Context, sys AISystem) (AISystem, error) {
+	var out AISystem
+	if err := c.do(ctx, http.MethodPut, "/api/systems/"+url.PathEscape(sys.SystemID), sys, &out); err != nil {
+		return AISystem{}, err
+	}
+	return out, nil
 }
 
 // Goals lists goals.

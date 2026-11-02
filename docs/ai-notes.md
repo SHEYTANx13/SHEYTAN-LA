@@ -20,6 +20,90 @@
 
 ---
 
+## Session — 2026-11-03 (run #41415240891 remediation + Model Studio §5.2) — FINAL HAND-OFF
+
+**Summary and success condition**
+- Baseline: verified live clone of origin/main at the EXACT observed run commit 4e8c2b8150e192f997b610cd82bf07851fbc859b (title v1.11.1); worktree clean; branch `work/v1.11.1-model-studio` created locally from it. No remote mutation of any kind; no tag; no push.
+- P0 executed: (A) the version dispatch is genuinely read-only — the Linux ZIP can no longer carry probe-created runtime data; (B) the fake-engine port fixtures are ownership-aware — the freePort TOCTOU class is retired without serializing CI; (C) the version lineage is REAL — the Go authority, packaging metadata, SIGNATURE, workflow declarations and the fail-closed contract suite all say 1.11.1. Model Studio §5.2 landed at the store/API/UI seams that already own the problem. Full local verification ladder green at the final tree for every package that compiles on a GL-less host (ui/fyne is the hosted Fyne gate's class, below). **Hosted verification of THIS candidate is PENDING — no push was authorized; NO green-run claim is made for the new changes.**
+
+**Prior-request ledger (audited in the CURRENT tree, evidence per line)**
+
+| Request | Status | Evidence |
+|---|---|---|
+| v1.11.1 version sync (Failure C) | LANDED this session | internal/config/config.go (AppVersion "1.11.1"); build/config.yml productVersion; SIGNATURE regenerated via `go run scripts/gen-signature.go` (1 line diff); workflow APP_VERSION literals ×2; cmd/printversion doc contract; new `internal/releasecontract/version_v1111_contract_test.go` (3 tests, fail-closed proven); `TestReleaseVersionSingleSource` still green |
+| Read-only version dispatch (Failure A) | LANDED this session | cmd/root.go earlyVersionDispatch before config.Load (version case REMOVED from dispatch); cmd/version_purity_test.go (4 tests incl. zero-residue proof); hosted probe isolated + residue-asserted in build-desktop.yml |
+| Fake-engine port race (Failure B) | LANDED this session | internal/llm/llama_test.go portReservation/reservePort/reReservePort (freePort retired); fakeEngineConfig + fakeManagedEngineConfig hold+revalidate; lifecycle_v136_test.go startBareHealthServer serves ON the held listener; adoption fixture child selects+reports its own port (--port 0 + SHEYTAN_FAKE_ADDR_FILE); internal/runtime/prewarm_model_first_test.go same discipline |
+| CodeQL advanced workflow + alert report (§8.4) | LANDED (prior sessions; verified, untouched) | .github/workflows/codeql.yml at this commit carries `gh api --paginate --slurp --method GET`, security-events: read, tool filter, unarchived .txt upload — verified by inspection this session; NOT modified (no regression, no missing part) |
+| Navigation ownership (§8.2) | LANDED (prior session; preserved) | ui/fyne/shell.go single-owner root + nav_ownership_test.go present at this commit; untouched |
+| Model-selection smoothness + truthful markers (§8.1) | LANDED (prior session; preserved) | ui/fyne/panels.go highlight-only rows + Use action + phase poll present; extended this session ONLY by the additive Model Studio card |
+| preferFastest default ON (§8.1) | LANDED (prior session; preserved) | internal/config + internal/recommendation + tests present at this commit; untouched (no duplication) |
+| Minimal install root / data preservation (§8.3) | LANDED (prior session; preserved) | installer.nsi + releasecontract suites present; ZIP purity verifiers present in build-desktop.yml (they caught Failure A — retained untouched) |
+| Stable CI artifact names (§8.3) | LANDED (prior session; preserved) | artifact_naming_contract_test.go green in this session's ladder |
+| Engine update-check / user-controlled install (§8.3) | LANDED (prior session; preserved) | internal/api/engine_update.go + engine_update_test.go present; untouched |
+| Per-agent model selection (§5.2) | LANDED this session (store/API/UI subset) | aisystem.Snapshot freezes Model+RuntimeProfile+Compaction+Memory (modelstudio_v1111_test.go); Validate rejects path-like model overrides + unknown profiles against recommendation.Tasks (ONE vocabulary); API PUT validated server-side (modelstudio_systems_v1111_test.go, 3 tests); Fyne binding card (panels.go + client.go UpdateSystem + model_studio_ui_test.go — HOSTED-CLASS: compiled/tests only in the Fyne CI gate, this host has no GL) |
+| Fastest Safe default (§5.2) | LANDED (prior session; preserved) | preferFastest rides the ONE recommendation authority; the Model Studio profile picker maps to recommendation.Task ids, not new presets |
+| Resource estimates + admission (§6) | PARTIAL — pre-existing honesty surface reused, no new estimator | perf/governor/recommendation untouched (no second sampler); the estimate-before-load expander is NOT built this session — deferred below with reason |
+| Adaptive context (§6.3) | PARTIAL — existing ladder verified, expansion engine deferred | ResolveEffectiveContext/ResolveSessionContext + per-session ContextTokens clamps + contextplan pressure + continuum compaction all present and untouched; automatic discrete expansion between runs NOT built this session — deferred below with reason |
+| Dev-Notes byte-identical (§8.5) | LANDED | git diff --exit-code -- docs/Dev-Notes.md clean at the final tree |
+| No remote mutations (§4.20) | LANDED | local branch only; `git branch -a` shows no new remote ref; no push/tag/PR/dispatch |
+
+**Fail-closed proofs run this session**
+- workflow APP_VERSION forced back to "1.11.0" → `TestWorkflowAppVersionTracksAuthority` FAILED with the exact drift message; restored → green.
+- Compiled headless binary `SHEYTAN-LA version` executed in an empty probe dir: prints `SHEYTAN-Local-Agent v1.11.1`, exit 0, directory byte-unchanged (the run #41415240891 probe shape, reproduced and proven clean).
+
+**Full local verification ladder at the final tree (class local-build/local-runtime, go1.27.3 linux/amd64; this host has NO OpenGL/Wayland headers, no root)**
+| Gate | Command | Result |
+|---|---|---|
+| formatting | `gofmt -l cmd internal ui` | EMPTY |
+| build | `go build ./...` | GREEN |
+| vet (headless-compilable pkgs) | `go vet ./internal/llm ./internal/runtime ./cmd ./internal/releasecontract ./internal/config ./cmd/printversion ./internal/aisystem ./internal/api …` | CLEAN |
+| cmd + printversion + config + releasecontract | `go test … -count=1` | ok (incl. 4 purity + 3 version-contract tests) |
+| llm (full engine lifecycle/transactions/adoption) | `go test ./internal/llm/ -count=1` | ok (60s) |
+| runtime (prewarm model-first) | `go test ./internal/runtime/ -count=1` | ok |
+| aisystem (Model Studio store) | `go test ./internal/aisystem/ -count=1` | ok (5 new tests) |
+| api (Model Studio systems contract) | `go test ./internal/api/ -run 'TestSystemModelStudio|TestSystemModelOverride|TestSystemProfileValidated' -count=1` | ok (3 new tests) |
+| ui/fyne suite | go test ./ui/fyne/ | **HOSTED-CLASS** — GL/Wayland headers absent on this host; the Fyne CI gate owns it. New code API-verified against the pinned fyne v2.8.2 module source (Select.Options/ClearSelected/SetSelected/SelectedIndex) and gofmt -e parse-clean |
+| stress / NSIS / collector fixtures | not re-run this session | untouched surfaces; prior-session evidence stands |
+
+**Deferred (honest, with reason)**
+- Resource estimate-before-load expander (§6.1/§6.2): the existing perf/governor/model-card authorities render measured + predicted values today; a NEW load-preview estimate panel needs its own admission-path integration and test ladder. Blocked by scope, not by architecture: it must extend internal/perf + the engine mutation seam without duplicating them — deliberately not rushed inside this pass (work order §6: the estimator is a safety authority, not a decoration; half an estimator is worse than none).
+- Adaptive context expansion engine (§6.3): the ceilings/budget/clamps exist (ResolveEffectiveContext → per-session ContextTokens → contextplan → continuum); the automatic discrete between-run expansion with hysteresis + Governor re-admission is a governor-adjacent behavioral change that deserves its own session with the full stress matrix (rapid growth, concurrent agents, low RAM, unknown VRAM). Not faked with a UI-only knob (work order §6.3: compaction is not expansion; a silent global change is forbidden).
+- Advanced/Manual low-level engine settings editor (§5.4): the classification table and manual editor require the capability-verified argument surface (Caps/EngineCaps) to be exposed per-option with support evidence; deferred as a coherent unit.
+- ui/fyne hosted gate: every UI change this session (client.go mirror+method, panels.go card, fakecore routes, 4 new UI tests) compiles and runs only where GL exists — the hosted Fyne gates are the definitive class, same as the prior session's canvas-only discipline.
+
+**File-by-file change list (20 files; +6 new)**
+- cmd/root.go — read-only early version dispatch (Failure A).
+- cmd/version_purity_test.go (NEW) — zero-side-effect version contract ×4.
+- internal/config/config.go — AppVersion 1.11.1 + authority comment.
+- build/config.yml, SIGNATURE — synchronized identity consumers.
+- cmd/printversion/main.go — doc contract updated.
+- .github/workflows/build-desktop.yml — APP_VERSION ×2 → 1.11.1; Linux version probe isolated (RUNNER_TEMP probe dir + zero-residue assertion, log teed to the repo ci-logs by absolute path).
+- internal/releasecontract/version_v1111_contract_test.go (NEW) — exact-identity + workflow-derivation contracts.
+- internal/llm/llama_test.go — portReservation/reservePort/reReservePort (freePort retired), fixture handoffs revalidated, child ephemeral mode (+serveFakeEngineOn).
+- internal/llm/lifecycle_v136_test.go — fakeManagedEngineConfig re-reserves; startBareHealthServer serves ON the held listener; adoption uses the reported ephemeral port.
+- internal/llm/rediscover_v137_test.go — reservation discipline.
+- internal/runtime/prewarm_model_first_test.go — same reservation discipline.
+- internal/aisystem/aisystem.go — Snapshot freezes Model/RuntimeProfile/Compaction/Memory; Validate: bare-name model override + ONE-vocabulary profile validation.
+- internal/aisystem/modelstudio_v1111_test.go (NEW) — 5 store tests.
+- internal/api/modelstudio_systems_v1111_test.go (NEW) — 3 API contract tests.
+- ui/fyne/client.go — AISystem mirror extended; UpdateSystem PUT.
+- ui/fyne/panels.go — Model Studio binding card (inherit-first selects, single-flight Apply, full-record PUT, store-truth label).
+- ui/fyne/fakecore_test.go — /api/systems GET+PUT fakes (round-trip, fail-path).
+- ui/fyne/model_studio_ui_test.go (NEW) — 4 UI tests (hosted class).
+- docs/changelog.md — concise 1.11.1 entry (convention: per-release entries exist).
+- docs/ai-notes.md — this hand-off. NOT touched: docs/Dev-Notes.md (verified byte-identical), README, ROADMAP, LICENSE, internal/updater, internal/workspace, CodeQL workflow.
+
+**Hand-off — what the operator should do next**
+1. Review the diff 4e8c2b8 → this branch HEAD (20 files, all listed above). The deliverable ZIP beside this note carries the exact tree.
+2. Push authorization is the operator's alone. On the next hosted run watch: Linux x64 (the isolated version probe prints "version probe left the probe directory clean"; ZIP verify must stay green), preflight (gofmt/vet), core audit (the llm suite with the owned-port fixtures), Fyne UI gates (the new model-studio tests run THERE for the first time), Windows x64 (PE/installer identities now 1.11.1 via gen-syso + -DVERSION chain).
+3. The two deferred authorities (estimate-before-load, adaptive expansion) are the recommended NEXT session scope; the store/API/UI seams they need are exactly the ones this pass verified.
+
+**Deliverables (this session, placed beside the tree by the work-order agent)**
+- SHEYTAN-LA-v1.11.1-run41415240891-remediation-source.zip — source-only archive of the committed tree (single SHEYTAN-LA/ root; excludes .git/, dist/, runtime data, generated payload-uninstall.nsh); unzip -t verified; byte size + entry count in the note.
+- SHEYTAN-LA-v1.11.1-run41415240891-UPDATE-NOTE.md — this session's operator-facing summary (evidence classes, ladder, deferred list). No patch file this session (work order: "No patch file").
+
+---
+
 ## Session — 2026-11-02 (post-v1.11.0 operator-feedback pass) — FINAL HAND-OFF
 
 **Summary and success condition**

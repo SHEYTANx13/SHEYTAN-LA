@@ -17,13 +17,12 @@ import (
 	"archive/zip"
 	"context"
 	"errors"
-	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -166,15 +165,12 @@ func TestLoaderFailureSkipsCompatLadder(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // startBareHealthServer starts a FOREIGN process-equivalent: a plain
-// HTTP server answering /health with 200 on the given port, owned by
-// this test binary but NOT at the managed engine path.
-func startBareHealthServer(t *testing.T, port int) {
+// HTTP server answering /health with 200, owned by this test binary but
+// NOT at the managed engine path. v1.11.1 (run #41415240891 Failure B):
+// it serves ON the reservation's already-bound listener — continuous
+// possession, the port is never unowned between allocation and serving.
+func startBareHealthServer(t *testing.T, res *portReservation) {
 	t.Helper()
-
-	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		t.Fatalf("foreign listener: %v", err)
-	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
@@ -184,7 +180,7 @@ func startBareHealthServer(t *testing.T, port int) {
 
 	srv := &http.Server{Handler: mux}
 
-	go func() { _ = srv.Serve(l) }()
+	go func() { _ = srv.Serve(res.Listener()) }()
 
 	t.Cleanup(func() {
 		_ = srv.Close()
@@ -197,9 +193,13 @@ func TestAdoptionRefusesForeignProcess(t *testing.T) {
 	// Point the managed engine path at a location that is NOT the
 	// process actually listening — the identity proof must fail.
 	cfg.LlamaBinPath = filepath.Join(cfg.DataDir, "bin", "somewhere-else", "llama-server")
-	cfg.LlamaPort = freePort(t)
 
-	startBareHealthServer(t, cfg.LlamaPort)
+	// v1.11.1: the foreign listener serves ON the reservation's held
+	// listener — no unowned port gap exists in this test.
+	res := reservePort(t)
+	cfg.LlamaPort = res.Port()
+
+	startBareHealthServer(t, res)
 
 	srv := NewLlamaServer(config.NewSource(cfg))
 	defer func() { _ = srv.Stop() }()
@@ -221,10 +221,10 @@ func TestAdoptionAcceptsManagedEngine(t *testing.T) {
 	// Launch the REAL fake engine out-of-band: same binary as the
 	// managed engine path (fakeEngineConfig sets LlamaBinPath to the
 	// test binary), same port — a genuine "previous SHEYTAN instance".
-	port := freePort(t)
-	cfg.LlamaPort = port
-
-	execTestBinaryAsFakeEngine(t, port)
+	// v1.11.1 (run #41415240891 Failure B): the child selects its own
+	// ephemeral port and reports it — the allocation-to-bind gap that
+	// freePort used to leave open no longer exists.
+	cfg.LlamaPort = execFakeEngineOnEphemeralPort(t)
 
 	srv := NewLlamaServer(config.NewSource(cfg))
 	defer func() { _ = srv.Stop() }()
@@ -246,7 +246,13 @@ func TestAdoptionAcceptsManagedEngine(t *testing.T) {
 	}
 }
 
-func execTestBinaryAsFakeEngine(t *testing.T, port int) *exec.Cmd {
+// execFakeEngineOnEphemeralPort spawns the fake engine child with
+// --port 0: the child binds an OS-assigned port atomically and reports
+// it to SHEYTAN_FAKE_ADDR_FILE (the child-selects-and-reports handoff,
+// run #41415240891 Failure B). Returns the reported port once the child
+// is healthy-bound. The bounded wait is a readiness wait on the child's
+// own report — not a sleep-as-correctness.
+func execFakeEngineOnEphemeralPort(t *testing.T) int {
 	t.Helper()
 
 	testBin, err := os.Executable()
@@ -254,8 +260,13 @@ func execTestBinaryAsFakeEngine(t *testing.T, port int) *exec.Cmd {
 		t.Fatalf("test binary: %v", err)
 	}
 
-	cmd := execCmd(testBin, "--port", fmt.Sprintf("%d", port))
-	cmd.Env = append(os.Environ(), "SHEYTAN_FAKE_LLAMA=1")
+	addrFile := filepath.Join(t.TempDir(), "fake-engine.addr")
+
+	cmd := execCmd(testBin, "--port", "0")
+	cmd.Env = append(os.Environ(),
+		"SHEYTAN_FAKE_LLAMA=1",
+		"SHEYTAN_FAKE_ADDR_FILE="+addrFile,
+	)
 
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start fake engine: %v", err)
@@ -266,7 +277,21 @@ func execTestBinaryAsFakeEngine(t *testing.T, port int) *exec.Cmd {
 		_, _ = cmd.Process.Wait()
 	})
 
-	return cmd
+	deadline := time.Now().Add(10 * time.Second)
+
+	for {
+		if data, rerr := os.ReadFile(addrFile); rerr == nil {
+			if port, perr := strconv.Atoi(strings.TrimSpace(string(data))); perr == nil && port > 0 {
+				return port
+			}
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("fake engine never reported its ephemeral port (addr file %s) — child startup failed; see its stderr in the test log", addrFile)
+		}
+
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +439,11 @@ func fakeServerBinaryName() string {
 // path resolution derives the managed location. The engine-directory
 // swap therefore operates on the managed dir only — never on the
 // running test binary's own directory.
+//
+// v1.11.1 (run #41415240891 Failure B): the port handed over by
+// fakeEngineConfig is RE-RESERVED for the managed staging below — the
+// engine copy is exactly the long stage the old freePort left unowned —
+// and released again, revalidated, at the final handoff.
 func fakeManagedEngineConfig(t *testing.T, mode string) (*config.Config, string) {
 	t.Helper()
 
@@ -423,6 +453,8 @@ func fakeManagedEngineConfig(t *testing.T, mode string) (*config.Config, string)
 	if err != nil {
 		t.Fatalf("test binary: %v", err)
 	}
+
+	res := reReservePort(t, cfg.LlamaPort)
 
 	binDir := filepath.Join(cfg.DataDir, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
@@ -436,6 +468,8 @@ func fakeManagedEngineConfig(t *testing.T, mode string) (*config.Config, string)
 	}
 
 	cfg.LlamaBinPath = ""
+
+	res.Release()
 
 	return cfg, modelFile
 }

@@ -19,13 +19,14 @@ import (
 
 const (
 	AppName    = "SHEYTAN-Local-Agent"
-	AppVersion = "1.11.0"
+	AppVersion = "1.11.1"
 )
 
-// The product identity is version-only: AppName + AppVersion (synchronized
-// from package.json by scripts/release-version.mjs). There is deliberately
-// no codename constant — every release surface derives from these two
-// values and package.json is the single source of truth.
+// The product identity is version-only: AppName + AppVersion. There is
+// deliberately no codename constant — every release surface derives from
+// these two values and internal/config is the single source of truth
+// (pinned by internal/releasecontract; the workflow resolves its own
+// APP_VERSION through cmd/printversion, never a second literal).
 
 // v1.2.0 product identity: the short product name (SHEYTAN-LA) used on
 // window titles, taskbars, notifications, installers and update artifacts.

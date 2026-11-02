@@ -13,6 +13,17 @@ import (
 // RunWithDefaultFn dispatches to the right subcommand. If no command is
 // given, runs `defaultFn()`.
 //
+// v1.11.1 (run #41415240891, Failure A): `version` / `-v` / `--version`
+// dispatch BEFORE any boot work — config load, path migrations, runtime
+// directory creation and the file log sinks are all side effects, and the
+// CI version probe (`"$bin" version`) runs the STAGED executable beside
+// which the packaging tree is zipped, so a probe that touches the
+// filesystem ships runtime state (data/app.log, llm.jsonl, tools.jsonl)
+// inside the release ZIP. The version path is now genuinely read-only:
+// constants and runtime facts only, zero config/dirs/logs. Output, exit
+// code and branding are byte-identical to the old dispatch branch.
+// Pinned by TestVersionDispatchIsReadOnly.
+//
 // v1.7.4 boot order: the runtime-data migrations run BEFORE the canonical
 // log sinks open. Under v1.7.3 the sinks (app.log/tools.jsonl/llm.jsonl —
 // O_APPEND handles held for the whole process lifetime) were opened
@@ -22,6 +33,13 @@ import (
 // opened) records every migration decision meanwhile; its lines are
 // replayed into app.log right after the session banner.
 func RunWithDefaultFn(defaultFn func() int) int {
+	// v1.11.1: the read-only early path answers and exits before
+	// ANY filesystem access — including config.DefaultPath(), which
+	// resolves (but does not create) the data root.
+	if code, handled := earlyVersionDispatch(os.Args[1:]); handled {
+		return code
+	}
+
 	cfg, err := config.Load(configPath())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config load:", err)
@@ -204,6 +222,12 @@ func dispatch(cfg *config.Config, defaultFn func() int) int {
 		return Sysinfo(cfg)
 	}
 
+	// v1.11.1: `version` / `-v` / `--version` never reach dispatch —
+	// the read-only early path in RunWithDefaultFn answers them before
+	// config loading (run #41415240891 Failure A). The case is
+	// intentionally absent here so a future boot-order change cannot
+	// silently reintroduce side effects on the version path.
+
 	switch args[0] {
 	case "ask", "a":
 		return Ask(cfg, args[1:])
@@ -215,13 +239,6 @@ func dispatch(cfg *config.Config, defaultFn func() int) int {
 		if defaultFn != nil {
 			return defaultFn()
 		}
-		return 0
-
-	case "version", "-v", "--version":
-		fmt.Printf("%s v%s\n", config.AppName, config.AppVersion)
-		fmt.Printf("  %s\n", brand.Notice())
-		fmt.Printf("  go: %s\n", goVersion())
-		fmt.Printf("  os: %s/%s\n", osName(), osArch())
 		return 0
 
 	case "doctor":
@@ -263,6 +280,35 @@ func dispatch(cfg *config.Config, defaultFn func() int) int {
 		printHelp()
 		return 2
 	}
+}
+
+// earlyVersionDispatch answers version queries with ZERO filesystem
+// side effects and reports whether it handled the invocation. It must be
+// called before config.Load / migrations / EnsureDirs / logging.New — the
+// exact run #41415240891 Failure A contract (the Linux ZIP verifier
+// rejected the archive for data/ residue created by the old
+// config-first boot order answering `version`).
+func earlyVersionDispatch(args []string) (int, bool) {
+	if len(args) == 0 {
+		return 0, false
+	}
+
+	switch args[0] {
+	case "version", "-v", "--version":
+		printVersionInfo()
+		return 0, true
+	default:
+		return 0, false
+	}
+}
+
+// printVersionInfo is the ONE version printer — branding, output shape
+// and exit code identical to the pre-v1.11.1 dispatch branch.
+func printVersionInfo() {
+	fmt.Printf("%s v%s\n", config.AppName, config.AppVersion)
+	fmt.Printf("  %s\n", brand.Notice())
+	fmt.Printf("  go: %s\n", goVersion())
+	fmt.Printf("  os: %s/%s\n", osName(), osArch())
 }
 
 func configPath() string {

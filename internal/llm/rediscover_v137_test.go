@@ -53,12 +53,17 @@ func rediscoverFixtureConfig(t *testing.T) *config.Config {
 	cfg.Provider = "local"
 	cfg.LlamaBinPath = "" // the managed default: <DataDir>/bin/llama-server
 	cfg.LlamaHost = "127.0.0.1"
-	cfg.LlamaPort = freePort(t)
+	// v1.11.1 (run #41415240891 Failure B): own the port through the
+	// fixture staging and release it, revalidated, at the handoff.
+	portRes := reservePort(t)
+	cfg.LlamaPort = portRes.Port()
 	cfg.EngineCompat = 3
 	cfg.Model = "fake-model.gguf"
 	cfg.VisionEnabled = false
 
 	t.Setenv("SHEYTAN_FAKE_LLAMA", "1")
+
+	portRes.Release()
 
 	return cfg
 }

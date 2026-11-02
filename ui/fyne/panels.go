@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -152,6 +153,21 @@ type modelsPanel struct {
 	updPolling  bool   // the bounded install poll is running
 	updTag      string // the resolved update target tag
 
+	// v1.11.1 Model Studio (run #41415240891 §5.2/§7): per-AI-System
+	// model assignment + runtime profile, edited through the EXISTING
+	// systems store PUT (the Go core validates and persists; the run
+	// freezes the binding). Inherit is the explicit first option — it is
+	// DISTINCT from a missing/unreadable model. One Apply action;
+	// single-flight; all network work off the UI thread.
+	studioSys     *widget.Select
+	studioModel   *widget.Select
+	studioProfile *widget.Select
+	studioApply   *widget.Button
+	studioLabel   *widget.Label
+	systems       []AISystem // fetched mirror (full editable surface)
+	studioSel     int        // index into systems (-1 = none)
+	studioBusy    bool       // single-flight Apply
+
 	current SelectionState // last authoritative selection (GET state)
 
 	// Single-flight + generation guards. inFlight admits exactly one
@@ -233,6 +249,20 @@ func buildModelsPanelFor(ap *App) (fyne.CanvasObject, *modelsPanel) {
 	})
 	p.updCancelB.Hide() // visible only while an install download runs
 
+	// Model Studio (v1.11.1): the per-system binding card. The
+	// selects SHOW facts; the Apply button is the one mutator; the
+	// label renders what the STORE holds, never what the form holds.
+	p.studioSys = widget.NewSelect(nil, func(string) { p.studioSystemChanged() })
+	p.studioSys.PlaceHolder = "choose an AI System…"
+	p.studioModel = widget.NewSelect(nil, nil)
+	p.studioModel.PlaceHolder = "model assignment…"
+	p.studioProfile = widget.NewSelect(nil, nil)
+	p.studioProfile.PlaceHolder = "runtime profile…"
+	p.studioApply = widget.NewButton("Apply binding", func() { p.applyStudio() })
+	p.studioApply.Disable()
+	p.studioLabel = wrappedLabel("Inherit is the default state: a system without its own model serves the globally selected model.")
+	p.studioLabel.TextStyle = fyne.TextStyle{Monospace: true}
+
 	root := container.NewBorder(
 		container.NewVBox(
 			PageHeader("Models", "Discovery and the REAL selection state machine"),
@@ -240,6 +270,13 @@ func buildModelsPanelFor(ap *App) (fyne.CanvasObject, *modelsPanel) {
 			widget.NewCard("Engine updates", "Official ggml-org/llama.cpp releases · check is read-only · install is user-controlled", container.NewVBox(
 				container.NewHBox(p.updCheckB, p.updInstallB, p.updCancelB),
 				p.updLabel,
+			)),
+			widget.NewCard("Model Studio", "Per-AI-System model binding · one Apply action · the core validates and freezes it per run", container.NewVBox(
+				p.studioSys,
+				p.studioModel,
+				p.studioProfile,
+				p.studioLabel,
+				p.studioApply,
 			)),
 			container.NewHBox(p.importIn, p.importB, p.task),
 			container.NewBorder(nil, nil, p.useB, nil, p.detail),
@@ -558,9 +595,11 @@ func (p *modelsPanel) refresh() {
 			p.list.Refresh()
 			p.syncUseButton()
 			p.err.Hide()
+			p.refreshStudioOptions()
 		})
 	}()
 	p.refreshEngineCard()
+	p.refreshStudio()
 }
 
 // refreshEngineCard renders the truthful engine/backend lifecycle from
@@ -846,6 +885,161 @@ func (p *modelsPanel) importModel() {
 			}
 		})
 		p.refresh()
+	}()
+}
+
+// studioInheritModel / studioInheritProfile are the explicit INHERIT
+// options — distinguishable from a missing/unreadable model by
+// construction (they are real options, never blank placeholders).
+const (
+	studioInheritModel   = "(inherit the global default)"
+	studioInheritProfile = "(inherit the global profile)"
+)
+
+// refreshStudio fetches the AI Systems mirror off the UI thread and
+// populates the binding card. One bounded fetch per panel refresh — no
+// polling loop, no unbounded growth.
+func (p *modelsPanel) refreshStudio() {
+	go func() {
+		systems, _, err := p.ap.Client().Systems(p.ap.Ctx())
+		uiDo(func() {
+			if err != nil {
+				p.studioLabel.SetText("AI Systems unavailable: " + err.Error())
+				return
+			}
+			p.systems = systems
+			p.studioSel = -1
+
+			names := make([]string, 0, len(systems))
+			for _, s := range systems {
+				name := s.Name
+				if name == "" {
+					name = s.SystemID
+				}
+				if s.Active {
+					name += "  ● active"
+				}
+				names = append(names, name)
+			}
+			p.studioSys.Options = names
+			p.studioSys.ClearSelected()
+			p.studioModel.Options = nil
+			p.studioProfile.Options = nil
+			p.studioApply.Disable()
+			p.studioSys.Refresh()
+		})
+	}()
+}
+
+// refreshStudioOptions rebuilds the model option list after the local
+// model list changed — the picker shows REAL local model facts (the
+// same list the models panel renders).
+func (p *modelsPanel) refreshStudioOptions() {
+	opts := make([]string, 0, len(p.models.Local)+1)
+	opts = append(opts, studioInheritModel)
+	for _, m := range p.models.Local {
+		if m.Name != "" {
+			opts = append(opts, m.Name)
+		}
+	}
+	p.studioModel.Options = opts
+	p.studioModel.Refresh()
+}
+
+// studioSystemChanged re-renders the current binding of the chosen
+// system (choosing a system only SHOWS its facts — the Apply action is
+// the one mutator; other systems are never touched).
+func (p *modelsPanel) studioSystemChanged() {
+	i := p.studioSys.SelectedIndex()
+	if i < 0 || i >= len(p.systems) {
+		return
+	}
+	p.studioSel = i
+	sys := p.systems[i]
+
+	p.refreshStudioOptions()
+	if sys.Model == "" {
+		p.studioModel.SetSelected(studioInheritModel)
+	} else {
+		p.studioModel.SetSelected(sys.Model)
+	}
+
+	p.studioProfile.Options = []string{studioInheritProfile,
+		"chat", "coding", "research", "vision", "agent", "low-power", "maximum"}
+	if sys.RuntimeProfile == "" {
+		p.studioProfile.SetSelected(studioInheritProfile)
+	} else {
+		p.studioProfile.SetSelected(sys.RuntimeProfile)
+	}
+	p.studioProfile.Refresh()
+
+	p.studioLabel.SetText(studioBindingText(sys))
+	p.studioApply.Enable()
+}
+
+// studioBindingText renders the fetched binding truthfully — what the
+// STORE holds, not what the form holds.
+func studioBindingText(sys AISystem) string {
+	model := sys.Model
+	if model == "" {
+		model = "inherit (the globally selected model)"
+	}
+	profile := sys.RuntimeProfile
+	if profile == "" {
+		profile = "inherit (the global runtime profile)"
+	}
+	return "Binding: model=" + model + " · profile=" + profile +
+		" · rev " + strconv.Itoa(sys.Revision)
+}
+
+// applyStudio persists the binding through the ONE store PUT. The FULL
+// fetched record is sent back with only the two binding fields changed —
+// never a partial payload that could wipe fields edited elsewhere
+// (instructions, approval policy, …). Single-flight: one Apply at a
+// time; the button re-arms on every terminal path.
+func (p *modelsPanel) applyStudio() {
+	p.mu.Lock()
+	if p.studioBusy || p.studioSel < 0 || p.studioSel >= len(p.systems) {
+		p.mu.Unlock()
+		return
+	}
+	p.studioBusy = true
+	sys := p.systems[p.studioSel]
+	p.mu.Unlock()
+
+	p.studioApply.Disable()
+
+	model := p.studioModel.Selected
+	if model == studioInheritModel || model == "" {
+		model = ""
+	}
+	profile := p.studioProfile.Selected
+	if profile == studioInheritProfile || profile == "" {
+		profile = ""
+	}
+
+	go func() {
+		sys.Model = model
+		sys.RuntimeProfile = profile
+
+		updated, err := p.ap.Client().UpdateSystem(p.ap.Ctx(), sys)
+
+		p.mu.Lock()
+		p.studioBusy = false
+		p.mu.Unlock()
+
+		uiDo(func() {
+			if err != nil {
+				p.showErr("apply model binding", err)
+				p.studioApply.Enable()
+				return
+			}
+			if p.studioSel >= 0 && p.studioSel < len(p.systems) {
+				p.systems[p.studioSel] = updated
+			}
+			p.studioLabel.SetText("Applied. " + studioBindingText(updated))
+			p.studioApply.Enable()
+		})
 	}()
 }
 

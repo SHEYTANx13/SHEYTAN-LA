@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // contextBackground is a test-local alias (keeps call sites tidy).
@@ -64,6 +66,15 @@ type fakeCore struct {
 	engineUpdPosts     int            // number of POST /api/engine/update handled
 	engineUpdBlock     chan struct{}  // non-nil: POST blocks until closed
 
+	// v1.11.1 Model Studio test surface: the AI Systems store mirror the
+	// binding card edits (PUT /api/systems/<id> round-trips the full
+	// editable surface; systemsPuts counts the store writes).
+	systemsMux    sync.Mutex
+	systems       []AISystem
+	systemsActive string
+	systemsPuts   int
+	systemsFail   bool // GET /api/systems fails with 503 (degradation path)
+
 	cfg map[string]any
 }
 
@@ -93,6 +104,8 @@ func newFakeCore(t *testing.T) *fakeCore {
 	mux.HandleFunc("/api/models/select", f.handleSelect)
 	mux.HandleFunc("/api/engine/update/check", f.handleEngineUpdateCheck)
 	mux.HandleFunc("/api/engine/update", f.handleEngineUpdate)
+	mux.HandleFunc("/api/systems", f.handleSystems)
+	mux.HandleFunc("/api/systems/", f.handleSystemItem)
 	mux.HandleFunc("/api/studio/state", f.handleStudioState)
 	f.srv = httptest.NewServer(mux)
 	// Point the unix-socket dialer at the TCP test server (test seam).
@@ -142,7 +155,11 @@ func (f *fakeCore) handleHandshake(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{
 		"protocol": "sheytan-ipc", "protocolVersion": 1,
-		"coreVersion": "1.11.0", "api": "v1", "authenticated": true,
+		// The fake mirrors the REAL core's handshake, which reports
+		// internal/config.AppVersion — the fake must track the same
+		// authority so the UI's version display can never pass
+		// against a stale hand-written literal.
+		"coreVersion": config.AppVersion, "api": "v1", "authenticated": true,
 	})
 }
 
@@ -313,6 +330,82 @@ func (f *fakeCore) selectPOSTs() int {
 	f.selectMux.Lock()
 	defer f.selectMux.Unlock()
 	return f.selectPosts
+}
+
+// setSystemsFail toggles the AI Systems store degradation (typed 503).
+func (f *fakeCore) setSystemsFail(fail bool) {
+	f.systemsMux.Lock()
+	defer f.systemsMux.Unlock()
+	f.systemsFail = fail
+}
+
+// handleSystems serves the fake AI Systems store (v1.11.1 Model Studio
+// test surface): GET returns the mirror + active id; PUT /api/systems/<id>
+// replaces the editable surface and echoes the updated document.
+func (f *fakeCore) handleSystems(w http.ResponseWriter, r *http.Request) {
+	if !f.authed(w, r) {
+		return
+	}
+
+	f.systemsMux.Lock()
+	defer f.systemsMux.Unlock()
+
+	switch r.Method {
+	case http.MethodGet:
+		if f.systemsFail {
+			writeJSON(w, 503, map[string]string{"error": "ai systems store unavailable"})
+			return
+		}
+		writeJSON(w, 200, map[string]any{
+			"systems":        f.systems,
+			"activeSystemId": f.systemsActive,
+		})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
+func (f *fakeCore) handleSystemItem(w http.ResponseWriter, r *http.Request) {
+	if !f.authed(w, r) {
+		return
+	}
+
+	id := strings.TrimPrefix(r.URL.Path, "/api/systems/")
+	if id == "" {
+		f.handleSystems(w, r)
+		return
+	}
+
+	f.systemsMux.Lock()
+	defer f.systemsMux.Unlock()
+
+	if f.systemsFail {
+		// Degradation covers the whole store surface (GET and PUT).
+		writeJSON(w, 503, map[string]string{"error": "ai systems store unavailable"})
+		return
+	}
+
+	if r.Method != http.MethodPut {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	var updated AISystem
+	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	for i := range f.systems {
+		if f.systems[i].SystemID == id {
+			updated.SystemID = id
+			updated.Revision = f.systems[i].Revision + 1
+			f.systems[i] = updated
+			f.systemsPuts++
+			writeJSON(w, 200, updated)
+			return
+		}
+	}
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "ai system not found"})
 }
 
 // handleModels serves the fake /api/models payload (two local models; the

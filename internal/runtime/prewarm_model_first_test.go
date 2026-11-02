@@ -83,7 +83,10 @@ func modelFirstStack(t *testing.T, model string) (*Stack, string) {
 	cfg.ModelsDir = filepath.Join(cfg.DataDir, "models")
 	cfg.SessionsDir = filepath.Join(cfg.DataDir, "sessions")
 	cfg.LlamaHost = "127.0.0.1"
-	cfg.LlamaPort = freePortForTest(t)
+	// v1.11.1 (run #41415240891 Failure B): own the port through the
+	// fixture staging and release it, revalidated, at the handoff.
+	portRes := reservePortForTest(t)
+	cfg.LlamaPort = portRes.Port()
 	cfg.LlamaAutoStart = true
 	cfg.UpdateSchedule = "off"
 	cfg.EngineCompat = 3 // bare flags: the fake engine serves no options
@@ -113,6 +116,10 @@ func modelFirstStack(t *testing.T, model string) (*Stack, string) {
 	t.Setenv(launchLogEnv, launchLog)
 	cfg.LlamaBinPath = self
 
+	// The ownership handoff: the stack is returned to the test, whose
+	// first engine-spawning action is PrewarmLLM/EnsureLLM.
+	portRes.Release()
+
 	stack := NewStack(cfg)
 	t.Cleanup(stack.Close)
 
@@ -138,6 +145,59 @@ func freePortForTest(t *testing.T) int {
 	defer l.Close()
 
 	return l.Addr().(*net.TCPAddr).Port
+}
+
+// reservePortForTest is the run #41415240891 Failure B ownership-aware
+// port: the listener stays BOUND from allocation until Release, so no
+// package-parallel process can receive the port from the OS in the
+// fixture window. Release closes the listener and revalidates the
+// handoff with a fresh bind — a lost port fails AT the handoff with an
+// actionable fixture message, never later as a confusing engine-boot
+// "port in use" failure.
+type portReservationForTest struct {
+	port     int
+	listener net.Listener
+	t        *testing.T
+	released bool
+}
+
+func reservePortForTest(t *testing.T) *portReservationForTest {
+	t.Helper()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve port: %v", err)
+	}
+
+	res := &portReservationForTest{
+		port:     l.Addr().(*net.TCPAddr).Port,
+		listener: l,
+		t:        t,
+	}
+	t.Cleanup(res.Release)
+
+	return res
+}
+
+func (r *portReservationForTest) Port() int { return r.port }
+
+func (r *portReservationForTest) Release() {
+	if r == nil || r.released {
+		return
+	}
+
+	r.released = true
+
+	port := r.port
+	_ = r.listener.Close()
+
+	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		r.t.Errorf("engine port %d was lost at the reservation handoff (%v) — run #41415240891 fixture-port class, not a product failure", port, err)
+		return
+	}
+
+	_ = l.Close()
 }
 
 // TestPrewarmWithoutSelectionNeverBoots: Model="" + models present +

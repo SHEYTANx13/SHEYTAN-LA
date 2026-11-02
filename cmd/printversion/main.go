@@ -15,8 +15,8 @@
 //
 // Output contracts (both deterministic, documented, fail-closed):
 //
-//	printversion --plain   → "1.11.0" exactly (no prefix, no padding)
-//	printversion --json    → {"app":"SHEYTAN-Local-Agent","version":"1.11.0"}
+//	printversion --plain   → "1.11.1" exactly (no prefix, no padding)
+//	printversion --json    → {"app":"SHEYTAN-Local-Agent","version":"1.11.1"}
 //
 // Any malformed version (not MAJOR.MINOR.PATCH with numeric components)
 // exits 2 — the caller must never fall back to a hardcoded version, and
