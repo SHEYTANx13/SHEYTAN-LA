@@ -19,7 +19,11 @@ Hardware claims use five distinct classes everywhere: hardware **detected** (a p
 
 ### Desktop (one-Go-UI)
 - Single Go + Fyne desktop application running in-process over secured local IPC
-- Responsive three-zone navigation (wide rail / medium compact rail / narrow scrollable strip)
+- Responsive three-zone navigation (wide rail / medium compact rail / narrow scrollable strip) with ONE-parent object ownership — every navigation destination renders exactly once per viewport width (v1.11.1; tree-identity regression tests)
+- Grouped utility navigation — History / Models / My Tools / Logs render as a visually subordinate Utilities section in the rail and through the compact strip's More menu (v1.11.1; reachable at every width 360–1920)
+- Non-destructive model browsing + explicit "Use this model" action — row selection only renders facts; the engine transaction is single-flight, generation-guarded, and renders the backend's LIVE selection phases while the POST runs (v1.11.1)
+- Truthful model row markers — SERVING (engine-loaded) and SELECTED (authoritative selection) are separate badges, never merged (v1.11.1)
+- Engine updates surface — Check now against the official ggml-org/llama.cpp releases (read-only, exact-asset resolution, honest offline / no-asset / error classes) with a USER-CONTROLLED install through the core's engine-update transaction and live progress (v1.11.1)
 - Zero-session Send — deleting the final session leaves a usable zero-session state; Send creates and activates a session
 - Session-list generation guard — every list write goes through one monotonic generation
 - Live streaming that cannot wedge (triple-boundary flush + server-side conflation-aware queue)
@@ -36,6 +40,8 @@ Hardware claims use five distinct classes everywhere: hardware **detected** (a p
 - Execution/evidence ladder: `detected → backend-available → device-selected → model-loaded → generation-executed → execution-evidence → verified`
 - Typed resolution causes — every accelerator resolution reports a stable machine-readable `reasonCode` alongside the human-readable reason; a code never upgrades the evidence state
 - AUTO GPU posture contract with honest separation of detection from execution
+- Fastest-safe inference preference (default ON, one Settings opt-out) — speed-priority weighting INSIDE the ONE recommendation authority, always within measured memory/GPU limits; MANUAL mode is never overwritten (v1.11.1)
+- Engine variant matrix reconciled against official upstream evidence — Windows x64+ARM64 Vulkan ZIP provisioning; Linux/darwin stay honestly CPU-tag-only (upstream .tar.gz not consumed by the ZIP transaction) (v1.11.1)
 - Runtime Governor policy loop with resource state, envelope, admission, and self-model
 
 ### Data, tools & memory
@@ -48,8 +54,9 @@ Hardware claims use five distinct classes everywhere: hardware **detected** (a p
 ### CI & packaging
 - Full Go build/test/smoke gates on Windows (MSYS2 UCRT64 CGO) and Linux
 - Fyne UI suite + real-window Xvfb smoke on Linux
-- Consolidated one-file run-log artifact on every CI run
+- Consolidated one-file run-log artifact on every CI run (stable artifact names — run-attempt suffixes retired; reruns replace the same name via overwrite; attempt stays report-internal metadata) (v1.11.1)
 - Portable ZIPs and NSIS installer (Windows)
+- Minimal installed root — executable + launcher + Uninstall.exe at the root, static package content consolidated under resources/docs and resources/brand, mutable user data under data/; real install/uninstall round-trip smoke with user-data sentinel preservation (v1.11.1)
 
 ---
 

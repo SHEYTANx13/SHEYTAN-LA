@@ -113,8 +113,8 @@ func TestSupportedVariantsMatrix(t *testing.T) {
 		want         []AssetVariant
 	}{
 		{"windows", "amd64", []AssetVariant{VariantCPU, VariantVulkan}},
-		{"windows", "arm64", []AssetVariant{VariantCPU}}, // b11191: no win-arm64 Vulkan prebuilt
-		{"linux", "amd64", []AssetVariant{VariantCPU}},   // tar.gz-only upstream; zip installer
+		{"windows", "arm64", []AssetVariant{VariantCPU, VariantVulkan}}, // b12032: official win-vulkan-arm64.zip
+		{"linux", "amd64", []AssetVariant{VariantCPU}},                  // tar.gz-only upstream; zip installer
 		{"linux", "arm64", []AssetVariant{VariantCPU}},
 		{"darwin", "amd64", []AssetVariant{VariantCPU}},
 		{"darwin", "arm64", []AssetVariant{VariantCPU}},
@@ -164,20 +164,26 @@ func TestAssetNameMatrixAgreesWithSupportMatrix(t *testing.T) {
 	}
 }
 
-// The verified upstream evidence at b11191: Windows x64 Vulkan asset
-// name exists; Windows ARM64 Vulkan asset name does not.
+// The verified upstream evidence at b12032 (2026-11-01): Windows x64
+// AND ARM64 Vulkan asset names exist (the b11191-era matrix carried no
+// win-vulkan-arm64 asset — reconciled in v1.11.1).
 func TestAssetNameForVariantUpstreamEvidence(t *testing.T) {
-	if got := assetNameForVariant("windows", "amd64", "b11191", VariantVulkan); got != "llama-b11191-bin-win-vulkan-x64.zip" {
+	if got := assetNameForVariant("windows", "amd64", "b12032", VariantVulkan); got != "llama-b12032-bin-win-vulkan-x64.zip" {
 		t.Fatalf("windows/amd64 vulkan asset = %q", got)
 	}
-	if got := assetNameForVariant("windows", "amd64", "b11191", VariantCPU); got != "llama-b11191-bin-win-cpu-x64.zip" {
+	if got := assetNameForVariant("windows", "amd64", "b12032", VariantCPU); got != "llama-b12032-bin-win-cpu-x64.zip" {
 		t.Fatalf("windows/amd64 cpu asset = %q", got)
 	}
-	if got := assetNameForVariant("windows", "arm64", "b11191", VariantVulkan); got != "" {
-		t.Fatalf("windows/arm64 vulkan asset = %q, want \"\" (upstream serves none at b11191)", got)
+	if got := assetNameForVariant("windows", "arm64", "b12032", VariantVulkan); got != "llama-b12032-bin-win-vulkan-arm64.zip" {
+		t.Fatalf("windows/arm64 vulkan asset = %q, want the official b12032 win-vulkan-arm64.zip", got)
 	}
-	if got := assetNameForVariant("windows", "arm64", "b11191", VariantCPU); got != "llama-b11191-bin-win-cpu-arm64.zip" {
+	if got := assetNameForVariant("windows", "arm64", "b12032", VariantCPU); got != "llama-b12032-bin-win-cpu-arm64.zip" {
 		t.Fatalf("windows/arm64 cpu asset = %q", got)
+	}
+	// 386: no upstream prebuits — the naming layer stays honest ("")
+	// and the support matrix above stays CPU-only (never cosmetic).
+	if got := assetNameForVariant("windows", "386", "b12032", VariantVulkan); got != "" {
+		t.Fatalf("windows/386 vulkan asset = %q, want the honest empty name (no upstream prebuilt)", got)
 	}
 }
 

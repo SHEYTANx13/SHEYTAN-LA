@@ -1,11 +1,24 @@
 //go:build !headless
 
 // shell.go — the responsive application shell. Wide windows show a left
-// navigation rail with the 7-view IA; narrow windows collapse navigation
-// to a top strip. A status line reports only real state: connection,
-// core version, active model and live-stream progress (no fabricated
-// telemetry). The content area hosts the active view; sub-surfaces
-// (History / Models / My Tools / Logs) open as panels with a back affordance.
+// navigation rail with the 8-view IA; narrow windows collapse navigation
+// to a top strip (primary destinations + a “More” utilities menu). A
+// status line reports only real state: connection, core version, active
+// model and live-stream progress (no fabricated telemetry). The content
+// area hosts the active view; the secondary utility surfaces
+// (History / Models / My Tools / Logs) live in a grouped Utilities
+// section of the rail and in the compact strip’s More menu.
+//
+// v1.11.1 OWNERSHIP CONTRACT (operator-reported duplication fix): a Fyne
+// CanvasObject has exactly ONE parent. The shell tree is built so the
+// rail, the compact top strip and the content border each appear exactly
+// once — as DIRECT children of the responsive container — and nothing is
+// additionally nested inside another container that also lays it out.
+// (The pre-fix tree inserted s.rail BOTH as the content border’s left
+// object and as a direct child of the responsive container, so the rail
+// was laid out by two parents and painted twice at wide widths — the
+// concrete cause of the duplicated/cluttered navigation the operator
+// observed on a real Windows PC.)
 package fyneui
 
 import (
@@ -29,9 +42,11 @@ type primaryView struct {
 	build func(*App) fyne.CanvasObject
 }
 
-// primaryViews — the 7-layer IA (workspace.ts contract: ids, order, modes)
+// primaryViews — the 8-layer IA (workspace.ts contract: ids, order, modes)
 // plus the v1.11.0 optional 3D Studio entry (read-only topology viewer;
-// the view itself honors the studioEnabled setting).
+// the view itself honors the studioEnabled setting). This is the ONE
+// canonical registry for primary destinations: the rail, the compact top
+// strip and the Ctrl+number shortcut map all derive from it.
 var primaryViews = []primaryView{
 	{"chat", "Chat", theme.HomeIcon, buildChatView},
 	{"agent", "Agent", theme.ComputerIcon, buildAgentView},
@@ -43,6 +58,32 @@ var primaryViews = []primaryView{
 	{"studio", "3D Studio", theme.ViewFullScreenIcon, buildStudioView},
 }
 
+// subPanels — the secondary UTILITY surfaces. They are deliberately NOT
+// peers of the primary destinations: the rail renders them in a grouped,
+// visually subordinate Utilities section, and the compact strip reaches
+// them through the “More” menu. One canonical registry, one grouping.
+var subPanels = []subPanel{
+	{"history", "History", theme.SearchIcon, buildHistoryPanel},
+	{"models", "Models", theme.ListIcon, buildModelsPanel},
+	{"tools", "My Tools", theme.CheckButtonIcon, buildToolsPanel},
+	{"logs", "Logs", theme.FileTextIcon, buildLogsPanel},
+}
+
+// utilitiesGroupLabel is the rail’s muted section heading for the utility
+// routes — the visual subordination cue that separates secondary surfaces
+// from the primary destinations. Rendered as a RichText segment so the
+// caption-size theme token (not a hardcoded point size) applies.
+func utilitiesGroupLabel() fyne.CanvasObject {
+	rt := widget.NewRichTextWithText("Utilities")
+	if len(rt.Segments) > 0 {
+		if seg, ok := rt.Segments[0].(*widget.TextSegment); ok {
+			seg.Style.SizeName = theme.SizeNameCaptionText
+			seg.Style.ColorName = theme.ColorNameDisabled
+		}
+	}
+	return rt
+}
+
 // subPanel is a drawer-style surface opened over the shell (icon lazy —
 // see primaryView).
 type subPanel struct {
@@ -50,13 +91,6 @@ type subPanel struct {
 	label string
 	icon  func() fyne.Resource
 	build func(*App) fyne.CanvasObject
-}
-
-var subPanels = []subPanel{
-	{"history", "History", theme.SearchIcon, buildHistoryPanel},
-	{"models", "Models", theme.ListIcon, buildModelsPanel},
-	{"tools", "My Tools", theme.CheckButtonIcon, buildToolsPanel},
-	{"logs", "Logs", theme.FileTextIcon, buildLogsPanel},
 }
 
 // shell owns navigation + content + status.
@@ -135,8 +169,20 @@ func newShell(ap *App) *shell {
 
 // root assembles the full shell widget tree. Layout is responsive: the
 // navPolicy resolves the navigation presentation from the canvas width —
-// wide rail, compact rail, or a top navigation strip — and navigation is
-// reachable in EVERY zone (compact mode never silently hides it).
+// wide rail, compact rail, or a top navigation strip (with a More menu
+// for the utility routes) — and navigation is reachable in EVERY zone
+// (compact mode never silently hides it).
+//
+// OWNERSHIP (v1.11.1): the returned responsive container is the SINGLE
+// owner of exactly three children — the rail, the compact top strip and
+// the content border. The rail is NOT also the content border’s left
+// object (the historical double-parent defect: the border laid it out
+// AND the responsive container laid it out again, painting it twice at
+// wide widths — the concrete cause of the operator’s duplicated
+// navigation). The responsive layout is now the ONLY thing that sizes and
+// positions the rail, and the content border’s geometry already accounts
+// for it. Every destination is therefore rendered exactly once per
+// viewport width.
 func (s *shell) root() fyne.CanvasObject {
 	s.body = container.NewStack()
 	s.rail = container.NewVBox()
@@ -144,14 +190,19 @@ func (s *shell) root() fyne.CanvasObject {
 	s.status.TextStyle = fyne.TextStyle{Monospace: true}
 	s.status.Truncation = fyne.TextTruncateEllipsis
 
-	// Primary rail buttons + sub-panel buttons.
+	// Primary destinations in the rail.
 	for _, v := range primaryViews {
 		vv := v
 		b := widget.NewButton(v.label, func() { s.show(vv.id) })
 		b.Importance = widget.LowImportance
 		s.rail.Add(b)
 	}
+
+	// Utilities — grouped, visually subordinate routes (History,
+	// Models, My Tools, Logs) below a section heading, never a flat
+	// undifferentiated list mixed with the primary destinations.
 	s.rail.Add(widget.NewSeparator())
+	s.rail.Add(utilitiesGroupLabel())
 	for _, p := range subPanels {
 		pp := p
 		b := widget.NewButton(pp.label, func() { s.showSub(pp.id) })
@@ -160,7 +211,9 @@ func (s *shell) root() fyne.CanvasObject {
 	}
 
 	// Compact top navigation: one button per primary view, horizontally
-	// scrollable, so narrow windows keep every destination reachable.
+	// scrollable, plus a “More” button that opens the utilities menu —
+	// so narrow windows keep every destination (primary AND utility)
+	// reachable without duplicating any destination in the strip.
 	strip := container.NewHBox()
 	for _, v := range primaryViews {
 		vv := v
@@ -168,11 +221,50 @@ func (s *shell) root() fyne.CanvasObject {
 		b.Importance = widget.LowImportance
 		strip.Add(b)
 	}
+	more := widget.NewButtonWithIcon("More", theme.MoreVerticalIcon(), nil)
+	more.Importance = widget.LowImportance
+	more.OnTapped = func() { s.showUtilityMenu(more) }
+	strip.Add(more)
 	s.topNav = container.NewHScroll(strip)
 
 	statusBar := container.NewVBox(widget.NewSeparator(), s.status)
-	content := container.NewBorder(nil, statusBar, s.rail, nil, s.body)
+	// ONE parent per object: the border owns ONLY the body + status
+	// bar — the rail is owned by the responsive container below.
+	content := container.NewBorder(nil, statusBar, nil, nil, s.body)
+	// ONE parent per object: the responsive container is the sole
+	// owner of the rail, the top strip and the content border.
 	return container.New(&responsiveLayout{rail: s.rail, topNav: s.topNav, inner: content}, s.rail, s.topNav, content)
+}
+
+// buildUtilityMenu builds the grouped utilities menu (one item per
+// secondary route, dispatching through the same showSub path as the rail
+// buttons). Extracted so the menu content itself is directly testable.
+func (s *shell) buildUtilityMenu() *fyne.Menu {
+	items := make([]*fyne.MenuItem, 0, len(subPanels))
+	for _, p := range subPanels {
+		pp := p
+		items = append(items, fyne.NewMenuItem(pp.label, func() { s.showSub(pp.id) }))
+	}
+	return fyne.NewMenu("Utilities", items...)
+}
+
+// showUtilityMenu opens the grouped utilities menu below the compact
+// strip’s “More” button. The menu is a transient canvas OVERLAY — it adds
+// no second navigation tree and owns no durable state; its items dispatch
+// through the same showSub path as the rail buttons.
+func (s *shell) showUtilityMenu(anchor fyne.CanvasObject) {
+	if anchor == nil {
+		return
+	}
+	app := fyne.CurrentApp()
+	if app == nil || app.Driver() == nil {
+		return
+	}
+	c := app.Driver().CanvasForObject(anchor)
+	if c == nil {
+		return // detached composition (tests) — nothing to anchor on
+	}
+	widget.ShowPopUpMenuAtRelativePosition(s.buildUtilityMenu(), c, fyne.NewPos(0, anchor.Size().Height), anchor)
 }
 
 // navZone is the resolved navigation presentation for one available width.
@@ -364,12 +456,12 @@ func (s *shell) updateStatus() {
 	s.status.SetText(fmt.Sprintf("%s · %s · mode %s%s", conn, ver, mode, model))
 }
 
-// registerShortcuts wires desktop keyboard navigation (Ctrl+1..N views in
-// order, Ctrl+N new session). Views beyond the mapped number row simply
-// have no shortcut — never a broken binding on an empty key.
+// registerShortcuts wires desktop keyboard navigation (Ctrl+1..8 for the
+// primary views in registry order — the number row exactly covers the
+// eight-entry registry — and Ctrl+N new session).
 func (ap *App) registerShortcuts() {
 	c := ap.w.Canvas()
-	keyByIndex := []fyne.KeyName{fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4, fyne.Key5, fyne.Key6, fyne.Key7}
+	keyByIndex := []fyne.KeyName{fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4, fyne.Key5, fyne.Key6, fyne.Key7, fyne.Key8}
 	for i, v := range primaryViews {
 		if i >= len(keyByIndex) {
 			break // number row exhausted; the view stays reachable by pointer

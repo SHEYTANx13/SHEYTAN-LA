@@ -396,3 +396,52 @@ func TestNoPanicOnMalformedFrames(t *testing.T) {
 		}
 	}
 }
+
+// TestPreferFastestSettingsFieldPinned (v1.11.1): the speed-priority
+// preference is a FIRST-CLASS Performance toggle — registered once, read
+// from the real config mirror, patched top-level (never nested), and
+// labeled so "fastest" reads as fastest SAFE, not guaranteed maximum
+// throughput or GPU execution.
+func TestPreferFastestSettingsFieldPinned(t *testing.T) {
+	var field *SettingsField
+	for i := range SettingsFields {
+		if SettingsFields[i].Key == "preferFastest" {
+			field = &SettingsFields[i]
+			break
+		}
+	}
+	if field == nil {
+		t.Fatal("preferFastest must be a registered Settings field")
+	}
+	if field.Section != "performance" {
+		t.Fatalf("preferFastest must live in the Performance section, got %q", field.Section)
+	}
+	if field.Kind != FieldBool {
+		t.Fatalf("preferFastest must be a bool toggle, got %v", field.Kind)
+	}
+	if !strings.Contains(field.Label, "fastest") || !strings.Contains(field.Hint, "safe") {
+		t.Fatalf("the label/hint must say fastest SAFE — label=%q hint=%q", field.Label, field.Hint)
+	}
+	if !strings.Contains(field.Hint, "Manual") {
+		t.Fatalf("the hint must state MANUAL mode is never overwritten — hint=%q", field.Hint)
+	}
+
+	// The wire patch is top-level (the config field is not nested under llm).
+	patch := BuildPatch(*field, false)
+	if patch["preferFastest"] != false {
+		t.Fatalf("top-level patch wrong: %+v", patch)
+	}
+	if _, hasLLM := patch["llm"]; hasLLM {
+		t.Fatal("preferFastest must not nest under llm")
+	}
+
+	// The value reader reads the real config mirror.
+	v := &settingsView{config: &Config{PreferFastest: true}}
+	if !v.boolValue(*field) {
+		t.Fatal("boolValue(preferFastest) must read the mirrored config value")
+	}
+	v.config.PreferFastest = false
+	if v.boolValue(*field) {
+		t.Fatal("boolValue(preferFastest) must reflect an explicit opt-out")
+	}
+}

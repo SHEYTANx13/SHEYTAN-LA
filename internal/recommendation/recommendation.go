@@ -95,6 +95,14 @@ type Input struct {
 	ConfiguredContext  int    // current effective context setting
 	EngineContextLimit int    // verified engine window (0 = unknown)
 	KVQuant            string // current KV quant ("", f16, q8_0, ...)
+
+	// PreferFastest (v1.11.1) — the user's speed-priority preference for
+	// the AUTO posture. It biases THIS engine toward the fastest SAFE
+	// profile (speed-oriented choices at every genuine decision point,
+	// always inside the measured memory/GPU limits, model fit, hardware
+	// evidence and safety admission — never forced maxima beyond them).
+	// false = the balanced/normal AUTO policy.
+	PreferFastest bool
 }
 
 // Recommendation is the output contract consumed by /api/recommendation.
@@ -240,7 +248,17 @@ func Recommend(in Input) Recommendation {
 		rec.KVCacheQuant = "f16"
 	}
 	if rec.FlashAttention {
-		if task == TaskLowPower || task == TaskMaximum || gpuVRAM > 0 {
+		// v1.11.1 speed-priority branch (PreferFastest, default ON): q8_0
+		// halves KV memory at negligible quality cost — more headroom for
+		// offload/fit INSIDE the same measured limits (the resource verdict
+		// ladder below still clamps the context). This is the one genuine
+		// speed-vs-balanced decision point in the profile; the rest of the
+		// posture is already speed-oriented (physical-core threads,
+		// task-sized ubatch, automatic offload).
+		if in.PreferFastest {
+			rec.KVCacheQuant = "q8_0"
+			rec.Reasons = append(rec.Reasons, "fastest-safe preference: q8_0 KV cache — halves KV memory for more offload headroom within the measured limits")
+		} else if task == TaskLowPower || task == TaskMaximum || gpuVRAM > 0 {
 			rec.KVCacheQuant = "q8_0"
 			if task == TaskLowPower {
 				rec.Reasons = append(rec.Reasons, "low-power profile: q8_0 KV cache halves KV memory for free capacity")

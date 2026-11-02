@@ -16,6 +16,111 @@
 - **#123 (41245854150)**: quoted `"-DVERSION=…"` fix + `TestNSISDefinesQuotedByWorkflow`; Dev-Notes UI/UX research append (operator-authorized); Phase 0 executed (theme tokens + docs/ui-contract.md).
 - **#124 (41256606070)**: quoting fix HELD; the NEXT stacked defect fired — the generator's `!endmacro` terminator; `!macroend` fix + post-write validation + fail-closed Go guard; typed missing-engine state + gate-aware pending diagnostics; UI Phase 1 (composer contract, primary slot, focus return, empty states); all pre-makensis surfaces GREEN.
 - **#125 (41304350626, commit c8bad23f7e3e6c052538ad18b16dadc952648d14)**: all pre-makensis surfaces GREEN; the ONE red step was the post-compile marker assertion — makensis compiled the installer but the marker never appeared. #124's `!macroend` and quoted `-DVERSION` fixes HELD.
+- **#126 (41338124787, commit db9c816dc272673f124e30713766b8c9e3a4d2d2)**: v1.11.0 FULLY GREEN — preflight/core-audit/Fyne-UI/Windows-x64/Linux-x64/consolidated-logs all succeeded; NSIS compile + REAL silent install/uninstall round-trip smoke PASS with 8 SHA-256 user-data sentinels preserved byte-for-byte; core/headless + race gates green; stress 47/0/0/0; release/tag-only job correctly skipped. This is the baseline for the post-v1.11.0 session below.
+
+---
+
+## Session — 2026-11-02 (post-v1.11.0 operator-feedback pass) — FINAL HAND-OFF
+
+**Summary and success condition**
+- Operator scope: fix the real-PC reported UX/packaging issues on top of the FULLY GREEN run #126 v1.11.0 baseline (db9c816): (A) duplicated/cluttered main navigation, (B) unsmooth model selection, (C) Smooth+Fastest safe defaults with opt-out, (D) complicated installed directory, (E) official llama.cpp/Vulkan update-check with user-controlled install, (F) CI artifact `attempt1` naming noise. ALL SIX landed as one local-only commit; the full local verification ladder is green at the final tree. **Hosted verification of THIS candidate is PENDING — no push was authorized; NO green-run claim is made for the new changes.** The run #126 baseline green (41338124787) is the operator's own observed evidence, not proof of this tree.
+
+**Branch/commit identity (LOCAL ONLY — never pushed)**
+- Work branch: `agent/post-v1110-ux-20261102`, created from the EXACT baseline db9c816dc272673f124e30713766b8c9e3a4d2d2. HEAD: the single ordinary commit on this branch, 33 files (25 modified + 8 new) — the exact SHA is recorded in the UPDATE-NOTE deliverable beside the archive (a byte-exact self-reference inside the committed tree is unstable by construction); verify with `git rev-parse agent/post-v1110-ux-20261102`. No remote branch/ref was created (verified: `git branch -a` shows no `remotes/origin/agent/*`); local `main` untouched; `origin/main` had advanced 2 operator commits (CodeQL workflow only — NOT mixed in).
+- `git diff --exit-code -- docs/Dev-Notes.md` — UNCHANGED (human-only file).
+
+**A. Navigation ownership (P0) — the operator's duplication, reproduced and fixed**
+- Root cause (concrete, in tree): `shell.root()` inserted `s.rail` BOTH as the content border's left object AND as a direct child of the responsive container — one CanvasObject, two layout parents, two paint passes at wide widths. Fail-closed proof: reintroducing the defect makes `TestShellSingleParentOwnership` FAIL with the exact root-cause message; restoring makes it pass.
+- Rebuild: single-owner tree (responsive container owns exactly rail/topNav/content); utilities (History/Models/My Tools/Logs) grouped under a muted "Utilities" rail section + the compact strip's More menu (pop-up overlay — no second tree); Ctrl+1..8 covers all eight primary views; navigation IDs/order/lazy-cache/back-behavior and the #125 deadlock fix (`TestShellShowLazyBuildDoesNotDeadlock`) preserved.
+- Tests: `ui/fyne/nav_ownership_test.go` — single-parent tree identity, one visible destination per zone swept at 360/500/640/800/999/1000/1280/1440/1920 (+ re-layout after resize), utilities reachable in every zone, one-invocation lazy-cache discipline, documented shortcut map.
+
+**B. Model selection (P1)**
+- Row selection now only HIGHLIGHTS (facts summary + armed action — never an engine transaction); the ONE explicit "Use this model" action is single-flight with a monotonic generation token and a settled-generation guard (a trailing poll tick can never repaint an intermediate phase over the terminal state). While the POST walks the backend state machine, the AUTHORITATIVE GET `/api/models/select` is polled at a bounded cadence off the UI thread (2 ms in tests, 500 ms in production; stops at terminal/cancel/error). Truthful separate markers: `● ACTIVE` = serving, `○ SELECTED` = authoritative selection (the previously DISCARDED `active` local is now the real badge source). Failure keeps the previous model active; every terminal path re-enables controls; already-serving selection offers no redundant action (the core's short-circuit mirrored in the UI). Tests: `ui/fyne/models_panel_test.go` (6) + the extended fake core's controllable selection state machine; `App.Ctx()` made nil-safe (Background fallback before Run()).
+
+**C. Smooth + Fastest defaults (P1)**
+- SmoothStream=true + TargetFPS=120 confirmed unchanged (already the v1.11.0 defaults; no fabricated "hidden Fastest toggle" was claimed — none existed). NEW `preferFastest` (config/API/UI, default ON): legacy configs without the field load ON (default-primed unmarshal); an explicit stored false SURVIVES reloads (pinned); round-trips through Save. It rides `recommendation.Input` — the ONE authority: ON takes the speed-oriented q8_0 KV choice under VERIFIED flash attention on any task (halved KV memory → more offload headroom INSIDE the measured limits); OFF = the balanced policy; the resource ladder still clamps context, GPU posture stays evidence-gated, MANUAL mode is never touched (applies only under AUTO — existing selection tests). Settings/Performance toggle labeled "fastest SAFE" with the honest caveat. Tests: `internal/config/preferfastest_v1111_test.go` (4), `internal/recommendation/preferfastest_v1111_test.go` (5), `TestPreferFastestPatchPersists` (api), `TestPreferFastestSettingsFieldPinned` (ui).
+
+**D. Minimal installed root (P1)**
+- New payload shape (one authority — staging tree feeds ZIP, NSIS `File /r`, and the generated uninstall manifest): root carries SHEYTAN-LA.exe, SHEYTAN-LA.bat (+ Uninstall.exe); ALL static content under `resources/docs` (README.txt, BUILD-INFO.txt, LICENSE.md, optional SIGNATURE) and `resources/brand` (sheytan.ico — now STAGED, one payload authority; shortcuts/AUMID/ARP icons point at `$INSTDIR\resources\brand\sheytan.ico`); the RETIRED root-level models/ + workspace/ placeholder directories no longer ship (the runtime's one-time `MigrateAppRootDirectData` fold of REAL legacy roots is untouched; user-created roots are never deleted).
+- NSIS: /FileExists assertions follow the staged tree; license page reads `resources\docs\LICENSE.md`; the uninstaller keeps the legacy hardcoded root Deletes as no-op fallbacks and removes the v1.11.1 payload through the generated manifest (bottom-up RMDir covers resources/docs, resources/brand, resources). No RMDir /r anywhere (contract re-verified green).
+- Workflow: Windows + Linux staging/BUILD-INFO/ZIP-verify rewritten (required entries include the resources tree; purity now also REJECTS retired root-level placeholder entries); install/uninstall smoke extended — installed-payload assertions on the resources tree, a NEW proof that the installer does NOT create root-level models/workspace, and the 8 SHA-256 sentinels retained with the top-level pair now explicitly USER-CREATED legacy roots (the preservation contract itself). **Class local-static for the .nsi + workflow text (no makensis on this host); the hosted Windows job remains the definitive compiler + smoke gate.**
+- Contracts: `releasecontract.go` required ZIP entries (Windows+Linux+workflow spellings) + `BrandIconName`; installer_contract license/smoke contracts updated to the new paths. The stress surface re-verifies agreement (47/0/0/0 below).
+
+**E. Engine update-check + variant reconciliation (P1/P2)**
+- NEW `GET /api/engine/update/check` (read-only): official `ggml-org/llama.cpp` resolution through the ONE variant-aware resolver (`updater.LatestTagForVariant`, new read-only wrapper) — installed tag/variant/platform, latest tag whose release ACTUALLY carries the exact variant asset (exact asset name reported; releases without it are SKIPPED — pinned), honest classes: current | update-available | offline | no-asset | error (a network failure is NEVER "no asset" — pinned) | installing | installed | install-failed.
+- NEW `POST /api/engine/update` (user-controlled install): gated exactly like variant provisioning (run-active 409, calibration 409, remote 400) + single-flight; resolves the exact-asset tag first; ALREADY-CURRENT = a no-op (no engine restart — pinned); otherwise drives the engine-owned `UpdateEngineNow` transaction (stop → stage → verify → restart → commit | rollback) in one background goroutine with live download progress on the check surface and cancellation through the existing cancel action + Close(). The scheduled updater's policy semantics are untouched (check ≠ install).
+- UI: Models panel "Engine updates" card (Check for updates / Install update (restarts engine) / Cancel download + truthful monospace status incl. progress); all network off the UI thread; the interim-label write happens on the UI-event-loop path directly (the uiDo-from-UI-thread self-deadlock was found by the tests and fixed). Tests: `internal/api/engine_update_test.go` (8; HOST-AGNOSTIC fixtures — no SetPlatformForTest in api tests: that seam writes package globals and raced the AUTO Vulkan probe goroutines earlier tests leave behind under -race; the fixtures instead derive the host's own exact asset names) + `ui/fyne/engine_update_ui_test.go` (6).
+- Variant matrix reconciled against the OFFICIAL b12032 release (2026-11-01, asset list verified live this session): `llama-b12032-bin-win-vulkan-arm64.zip` EXISTS — Windows ARM64 now advertises + names the Vulkan ZIP (same transaction as x64); `llama-b12032-bin-ubuntu-vulkan-x64.tar.gz` / all ubuntu+macos assets are `.tar.gz` — Linux/darwin stay HONESTLY not-provisionable via this build's ZIP transaction (comments corrected to cite b12032; no support boolean was flipped without a transaction). Vulkan system diagnostics/driver guidance: NOT built this session (explicitly deferred — see Remaining); no GPU/Vulkan execution claim is made anywhere in this pass.
+
+**F. Stable CI artifact names (P2)**
+- Every upload/download artifact name is stable (preflight/audit/ui/windows/linux `-logs-part`, windows/linux `-x64-package`, `SHEYTAN-LA-all-logs-run-<run_id>`); `overwrite: true` on EVERY upload (verified against the pinned actions/upload-artifact@v7 action.yml — the input exists, default false); download paths keep the per-job namespace `ci-parts/<stable-name>/` (anti-flatten rule from run #118 preserved); the attempt number survives ONLY inside the consolidated report as `--attempt` metadata. `windows-smoke-app-output` keeps run-id uniqueness, drops the attempt. Fail-closed proven: re-adding an attempt suffix fails `TestWorkflowArtifactNamesCarryNoAttemptSuffix` with the exact message.
+- Collector fixtures: cases 10/11 moved to stable names; NEW case 12 (five stable parts captured, same filename in five namespaces, zero collisions) and case 13 (rerun/overwrite shape — same names, replaced content, 5/5 coverage, no attempt-shaped directories): **13 pass / 0 fail**. New contracts: `internal/releasecontract/artifact_naming_contract_test.go` (5 tests).
+
+**Full local verification ladder at the final tree (class local-build/local-runtime, go1.27.3 linux/amd64, GOTOOLCHAIN=local, user-space CGO sysroot)**
+| Gate | Command | Result |
+|---|---|---|
+| formatting | `gofmt -l cmd internal ui` | EMPTY |
+| build | `go build ./...` | GREEN |
+| vet | `go vet ./...` | CLEAN |
+| headless core | `go test ./internal/... -tags headless -count=1` | 67 ok / 0 FAIL |
+| release contracts | `go test ./internal/releasecontract/ -count=1` | ok (incl. 5 new artifact-naming + updated installer contracts) |
+| race (7 critical pkgs) | `go test -race -tags headless -count=1 …` | 7/7 ok (api run 3× after fixing the test-seam race found by the detector) |
+| stress | `go run -tags headless ./cmd/sheytan-local-agent stress` | `STRESS-RESULT pass=47 fail=0 hangs=0 crashes=0` |
+| collector fixtures | `bash scripts/ci/consolidate-run-log-fixtures.sh` | 13 pass / 0 fail |
+| Fyne UI suite | `go test ./ui/fyne/ -count=1` | ok (incl. 6 nav-ownership, 6 model-selection, 6 engine-update tests) |
+| desktop sweep | `go test ./... -count=1` | **70 packages ok / 0 FAIL** (same count as the #126 baseline) |
+| NSIS compile | makensis NOT AVAILABLE on this host | **local Windows proof unavailable** — class local-static over the .nsi/workflow text; hosted Windows job is the definitive gate |
+| Dev-Notes | `git diff --exit-code -- docs/Dev-Notes.md` | UNCHANGED |
+
+**Fail-closed proofs run this session**: reintroduced the rail double-parent → `TestShellSingleParentOwnership` FAILED with the exact message; re-added an attempt-suffixed artifact name → `TestWorkflowArtifactNamesCarryNoAttemptSuffix` FAILED with the exact message; both restored to green.
+
+**File-by-file change list (33 files; +8 new)**
+- `ui/fyne/shell.go` — single-owner root(), Utilities grouping, More menu, Ctrl+1..8 (P0-A).
+- `ui/fyne/nav_ownership_test.go` (NEW) — tree identity/zone/reachability/invocation/shortcut tests (P0-A).
+- `ui/fyne/panels.go` — models panel rebuild (non-destructive selection controller, live phase poll, truthful markers, modelSummary) + Engine updates card (P1-B, P1/P2-E).
+- `ui/fyne/models_panel_test.go` (NEW), `ui/fyne/engine_update_ui_test.go` (NEW) — the two UI suites.
+- `ui/fyne/fakecore_test.go` — /api/models route + controllable selection state machine + engine update-check/install fakes (test-only).
+- `ui/fyne/client.go` — Config mirror `preferFastest`; EngineUpdateCheck wire type + CheckNow/Install methods.
+- `ui/fyne/app.go` — Ctx() nil-safe fallback (tests/composition probes).
+- `ui/fyne/settings_schema.go`, `ui/fyne/view_settings.go`, `ui/fyne/logic_test.go` — the Performance toggle + its pinned test.
+- `internal/config/config.go` — PreferFastest field + default.
+- `internal/config/preferfastest_v1111_test.go` (NEW) — defaults/legacy/false/round-trip.
+- `internal/recommendation/recommendation.go` — Input.PreferFastest + the speed-priority KV branch inside the ONE authority.
+- `internal/recommendation/preferfastest_v1111_test.go` (NEW) — on/off/evidence-gates/memory-clamp.
+- `internal/api/recommendation.go` — buildRecommendationInput passes cfg.PreferFastest.
+- `internal/api/engine_update.go` (NEW) — GET check + POST install handlers (gated, single-flight, no-op-when-current).
+- `internal/api/engine_update_test.go` (NEW) — 8 host-agnostic tests.
+- `internal/api/server.go` — routes + the four engine-update state fields.
+- `internal/api/lifecycle.go` — Close cancels an in-flight user-triggered engine update.
+- `internal/api/config_patch_test.go` — preferFastest patch persistence test.
+- `internal/updater/variant.go` — win/arm64 Vulkan reconciliation (b12032 evidence), honest linux/darwin comments, LatestTagForVariant read-only wrapper, test-facing release-list seams.
+- `internal/updater/variant_test.go`, `internal/updater/variant_strict_test.go` — matrix/evidence tests updated + 3 new.
+- `internal/releasecontract/releasecontract.go` — resources/ ZIP entries + BrandIconName.
+- `internal/releasecontract/installer_contract_test.go` — license-page/smoke contracts follow the new paths.
+- `internal/releasecontract/artifact_naming_contract_test.go` (NEW) — the stable-name contract suite.
+- `packaging/nsis/installer.nsi` — minimal-root payload contract (assertions, license path, staged icon, icon references, payload comment, legacy-fallback deletes).
+- `.github/workflows/build-desktop.yml` — staging/BUILD-INFO/ZIP-verify/smoke (Windows+Linux) minimal-root rework + stable artifact names + overwrite + consolidated-log naming.
+- `scripts/ci/consolidate-run-log-fixtures.sh` — stable-name cases + rerun/overwrite fixtures 12/13.
+- `docs/ui-contract.md` — contracts #9/#10/#11 recorded as LANDED (v1.11.1 remediation; Phases 3–5 explicitly still deferred).
+- `docs/FEATURES.md` — the genuinely new user-visible capabilities only.
+- `docs/ai-notes.md` — this hand-off.
+
+**Deliverables (mechanically verified at placement)**
+- `SHEYTAN-LA-v1.11.1-agent-post-v1110-ux-20261102-source.zip` — source-only archive of the committed tree (single `SHEYTAN-LA/` root; excludes .git/, dist/, runtime data, generated payload-uninstall.nsh); `unzip -t` clean; byte size + entry count recorded in the update note.
+- `SHEYTAN-LA-v1.11.1-UPDATE-NOTE.md` — this hand-off's operator-facing summary.
+- `SHEYTAN-LA-v1.11.1-agent.patch` — `git format-patch` bundle (applies with `git am` onto db9c816) for the operator's review/push.
+
+**Hand-off — what the operator should do next**
+1. Review the diff db9c816 → this branch HEAD (33 files, all listed above; patch bundle provided).
+2. Decide whether to authorize a push of `agent/post-v1110-ux-20261102` (or a cherry-pick onto main) — NOTHING was pushed by this session; hosted verification of this candidate is PENDING by construction.
+3. On the next hosted run, watch: Windows x64 job (makensis -V4 transcript + marker, the REWRITTEN install/uninstall smoke with the resources/ layout + no-placeholder proof + 8 sentinels, the package gate), the consolidated five-part log with STABLE names (a rerun must REPLACE, not collide), and the Fyne UI gates (the new suites run there).
+4. Physical GPU/Vulkan execution remains the standing external hardware gate — nothing in this pass claims it (the engine-update check is a release-list resolution, not an execution claim).
+
+**Remaining (honest, deferred with reason)**
+- Secure tar.gz transaction for Linux/darwin engine packages (upstream is .tar.gz there) — requires the full safe-extractor + transaction tests; deliberately NOT claimed (documented in variant.go).
+- Vulkan system diagnostics (loader/ICD enumeration, vendor driver guidance) in the UI — the truthful accelerator/evidence surfaces already render; the dedicated diagnostics card is future work. No driver/SDK downloads or ICD writes were added (by design).
+- UI Phases 3–5 of the formal roadmap — untouched, still deferred (operator's phase order).
+- The engine update-check surface is API+UI complete and locally tested; its first HOSTED execution (and the smoke's first hosted run with the new layout) lands with the operator's push.
 
 ---
 

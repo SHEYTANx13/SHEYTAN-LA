@@ -125,6 +125,16 @@ type Server struct {
 	cloneRunning atomic.Bool
 	cloneStatus  atomic.Pointer[cloneStatusEnvelope]
 
+	// v1.11.1: the official llama.cpp engine update-check / user-triggered
+	// update surface (engine_update.go) — the same single-slot pattern:
+	// one user-triggered engine-update transaction at a time, the cached
+	// read-only check outcome for the poll surfaces, live download progress
+	// and a cancellation handle released on every exit path.
+	lastEngineUpdateCheck atomic.Value
+	engineUpdateRunning   atomic.Bool
+	engineUpdateProgress  atomic.Pointer[downloader.Progress]
+	engineUpdateCancel    atomic.Pointer[context.CancelFunc]
+
 	// v1.11.0: the optional 3D Studio viewer (internal/studio). The
 	// server owns the lifecycle — started on demand via /api/studio/start,
 	// stopped via /api/studio/stop AND at Close time (no orphaned
@@ -861,6 +871,8 @@ func (s *Server) Handler() http.Handler {
 	// v1.6.1: backend-variant provisioning (real Vulkan engine
 	// packages — never a silent CPU fallback for explicit requests).
 	mux.HandleFunc("/api/engine/provision", s.handleEngineProvision)
+	mux.HandleFunc("/api/engine/update/check", s.handleEngineUpdateCheck)
+	mux.HandleFunc("/api/engine/update", s.handleEngineUpdate)
 	mux.HandleFunc("/api/attachments", s.handleAttachments)
 	mux.HandleFunc("/api/attachments/", s.handleAttachments)
 	mux.HandleFunc("/api/run", s.handleRun)

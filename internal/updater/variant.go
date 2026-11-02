@@ -147,20 +147,40 @@ func NormalizeAssetVariant(s string) AssetVariant {
 }
 
 // supportedVariantsFor lists the variants a platform can provision (in
-// preference order), as verified against the upstream release evidence
-// recorded at b11191 (2026-09):
+// preference order), reconciled against the OFFICIAL upstream release
+// evidence at b12032 (2026-11-01, verified against the actual release
+// asset list):
 //
 //	Windows amd64: cpu + vulkan  (llama-<tag>-bin-win-vulkan-x64.zip served)
-//	Windows arm64: cpu only      (no win-vulkan-arm64 asset in the release)
-//	other OSes:    cpu only      (upstream serves .tar.gz packages there —
-//	                              the zip-based installer does not consume
-//	                              them; see ROADMAP.md)
+//	Windows arm64: cpu + vulkan  (llama-<tag>-bin-win-vulkan-arm64.zip —
+//	                              NEW upstream evidence at b12032; the
+//	                              pre-b12032 matrix (b11191, 2026-09)
+//	                              carried no win-vulkan-arm64 asset)
+//	other OSes:    cpu only      (every ubuntu/macos asset upstream is a
+//	                              .tar.gz archive the zip-based
+//	                              transactional installer does not
+//	                              consume — see below)
+//
+//	Windows 386:    cpu only      (no 386 prebuits upstream — the naming
+//	                              layer honestly returns "" and the
+//	                              matrix must not be cosmetic)
 //
 // "Provisionable" still means the EXACT release asset must resolve —
 // VariantExists/ResolveDownloadURLForVariant verify it per tag. The
 // matrix only states which variant families this build will ATTEMPT.
+//
+// Linux/darwin truth (unchanged by the v1.11.1 reconciliation): upstream
+// publishes ONLY .tar.gz packages there (llama-b12032-bin-ubuntu-x64.tar.gz,
+// ...-ubuntu-vulkan-x64.tar.gz, ...-bin-macos-arm64.tar.gz), and this
+// build's transactional installer is ZIP-based. Supporting those
+// platforms requires a secure tar.gz extractor (rejecting absolute
+// paths, .. traversal, symlinks/hardlinks, special files, duplicate
+// entries and oversized expansion, with the same stage → launch →
+// health → commit/rollback discipline) — deliberately NOT claimed here
+// until that implementation and its tests exist. The strict resolver
+// therefore reports the honest no-asset result for those platforms.
 func supportedVariantsFor(goos, goarch string) []AssetVariant {
-	if goos == "windows" && goarch == "amd64" {
+	if goos == "windows" && (goarch == "amd64" || goarch == "arm64") {
 		return []AssetVariant{VariantCPU, VariantVulkan}
 	}
 	return []AssetVariant{VariantCPU}
@@ -187,7 +207,7 @@ func VariantSupported(v AssetVariant) bool {
 
 // assetNameForVariant returns the prebuilt llama.cpp asset name for the
 // given OS/arch at the given tag carrying the requested backend variant,
-// or "" when no prebuilt asset exists (e.g. Vulkan outside Windows x64,
+// or "" when no prebuilt asset exists (e.g. Vulkan outside Windows,
 // or an INVALID variant value — the naming layer is fail-closed and
 // never hands out a CPU asset for an unknown variant request).
 func assetNameForVariant(goos, goarch, tag string, v AssetVariant) string {
@@ -211,12 +231,10 @@ func assetNameForVariant(goos, goarch, tag string, v AssetVariant) string {
 	switch goos {
 	case "windows":
 		if v == VariantVulkan {
-			// Upstream evidence (b11191): the Windows Vulkan
-			// prebuilt is published for x64 only — arm64 never
-			// gets a Vulkan asset name to probe.
-			if arch != "x64" {
-				return ""
-			}
+			// Official upstream evidence (b12032, 2026-11-01):
+			// the Windows Vulkan prebuilt is published for BOTH
+			// x64 and arm64 (llama-<tag>-bin-win-vulkan-<arch>.zip).
+			// (b11191-era evidence carried x64 only — reconciled.)
 			return fmt.Sprintf("llama-%s-bin-win-vulkan-%s.zip", tag, arch)
 		}
 		return fmt.Sprintf("llama-%s-bin-win-cpu-%s.zip", tag, arch)
@@ -224,11 +242,17 @@ func assetNameForVariant(goos, goarch, tag string, v AssetVariant) string {
 		if v == VariantVulkan {
 			return "" // no Vulkan prebuilt upstream — never claim one
 		}
+		// Upstream publishes macos packages as .tar.gz (b12032
+		// evidence) — the historical .zip spelling never resolves;
+		// kept only as the legacy manifest-compatibility name.
 		return fmt.Sprintf("llama-%s-bin-macos-%s.zip", tag, arch)
 	case "linux":
 		if v == VariantVulkan {
-			return "" // see supportedVariantsFor: tar.gz-only upstream
+			return "" // ubuntu-vulkan is .tar.gz upstream — see supportedVariantsFor
 		}
+		// Upstream publishes ubuntu packages as .tar.gz (b12032
+		// evidence) — the historical .zip spelling never resolves;
+		// kept only as the legacy manifest-compatibility name.
 		return fmt.Sprintf("llama-%s-bin-ubuntu-%s.zip", tag, arch)
 	}
 	return ""
@@ -236,7 +260,7 @@ func assetNameForVariant(goos, goarch, tag string, v AssetVariant) string {
 
 // AssetNameForVariant returns the prebuilt llama.cpp asset name for this
 // OS/arch at the given tag carrying the requested backend variant, or ""
-// when no prebuilt asset exists (e.g. Vulkan outside Windows x64, or an
+// when no prebuilt asset exists (e.g. Vulkan outside Windows, or an
 // invalid variant value).
 func AssetNameForVariant(tag string, v AssetVariant) string {
 	return assetNameForVariant(runtimeGOOS, runtimeGOARCH, tag, v)
@@ -288,6 +312,19 @@ func VariantExists(ctx context.Context, tag string, v AssetVariant) bool {
 	_ = resp.Body.Close()
 
 	return resp.StatusCode >= 200 && resp.StatusCode < 400
+}
+
+// LatestTagForVariant resolves the newest release tag whose payload
+// ACTUALLY carries the exact variant asset for this platform — a
+// READ-ONLY resolution (no download, no install): the engine
+// update-check surface reports it without mutating anything. Error
+// semantics match the provisioning resolver: errNoAsset only after a
+// SUCCESSFUL official release lookup (never a network failure).
+func LatestTagForVariant(ctx context.Context, v AssetVariant) (string, error) {
+	if err := ValidateAssetVariant(v); err != nil {
+		return "", err
+	}
+	return resolveNewestTagWithVariant(ctx, v)
 }
 
 // ResolveDownloadURLForVariant resolves (url, tag) for a fresh engine
@@ -523,4 +560,44 @@ func EnsureEngineVariant(
 	staged.Commit()
 
 	return nil
+}
+
+// ReleaseListEntryForTest is the test-facing shape of one official
+// release with its asset names (the production ghRelease/ghAsset shapes
+// stay unexported). Used with SetReleaseListEntriesForTest.
+type ReleaseListEntryForTest struct {
+	Tag    string
+	Assets []string
+}
+
+// SetReleaseListEntriesForTest installs a release-list probe from
+// test-facing entries (tests only): the probe answers with releases
+// carrying EXACTLY the named assets, so cross-package tests can drive the
+// strict variant resolution deterministically. The returned restore
+// function reinstates the previous probe.
+func SetReleaseListEntriesForTest(entries []ReleaseListEntryForTest) (restore func()) {
+	prev := releaseListProbe
+	releaseListProbe = func(ctx context.Context) ([]ghRelease, error) {
+		out := make([]ghRelease, 0, len(entries))
+		for _, e := range entries {
+			assets := make([]ghAsset, 0, len(e.Assets))
+			for _, a := range e.Assets {
+				assets = append(assets, ghAsset{Name: a})
+			}
+			out = append(out, ghRelease{TagName: e.Tag, Assets: assets})
+		}
+		return out, nil
+	}
+	return func() { releaseListProbe = prev }
+}
+
+// SetReleaseListErrorForTest installs a release-list probe that always
+// fails with the given error (tests only — the network-failure class).
+// The returned restore function reinstates the previous probe.
+func SetReleaseListErrorForTest(err error) (restore func()) {
+	prev := releaseListProbe
+	releaseListProbe = func(ctx context.Context) ([]ghRelease, error) {
+		return nil, err
+	}
+	return func() { releaseListProbe = prev }
 }

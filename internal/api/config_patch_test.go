@@ -179,3 +179,50 @@ func TestBlankAPIKeyRoundTripDoesNotEraseSecret(t *testing.T) {
 		t.Fatalf("API key visible in GET response: %v", live["remoteApiKey"])
 	}
 }
+
+// TestPreferFastestPatchPersists (v1.11.1): the speed-priority preference
+// is a normal top-level config field on the patch surface — a Settings
+// save round-trips it verbatim (both ON and an explicit OFF), and a later
+// unrelated save never resurrects the default over the stored opt-out.
+func TestPreferFastestPatchPersists(t *testing.T) {
+	server, cfg := newTestServer(t)
+
+	if !cfg.PreferFastest {
+		t.Fatal("fresh default: preferFastest must be ON")
+	}
+
+	// Explicit opt-out through the ordinary patch surface.
+	code, out := patchConfig(t, server, map[string]any{"preferFastest": false})
+	if code != http.StatusOK {
+		t.Fatalf("patch preferFastest=false -> %d", code)
+	}
+	if out["preferFastest"] != false {
+		t.Fatalf("patched response must carry preferFastest=false, got %v", out["preferFastest"])
+	}
+
+	// An unrelated ordinary save must not resurrect the default.
+	code2, out2 := patchConfig(t, server, map[string]any{"thinkingMode": true})
+	if code2 != http.StatusOK {
+		t.Fatalf("unrelated save -> %d", code2)
+	}
+	if out2["preferFastest"] != false {
+		t.Fatalf("unrelated save must preserve the explicit preferFastest=false, got %v", out2["preferFastest"])
+	}
+
+	persisted, err := config.Load(cfg.ConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.PreferFastest {
+		t.Fatal("persisted config must keep the explicit preferFastest=false")
+	}
+
+	// Opt back in through the same surface.
+	code3, out3 := patchConfig(t, server, map[string]any{"preferFastest": true})
+	if code3 != http.StatusOK {
+		t.Fatalf("patch preferFastest=true -> %d", code3)
+	}
+	if out3["preferFastest"] != true {
+		t.Fatalf("patched response must carry preferFastest=true, got %v", out3["preferFastest"])
+	}
+}

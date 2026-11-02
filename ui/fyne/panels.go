@@ -7,9 +7,12 @@
 package fyneui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -107,6 +110,17 @@ func (p *historyPanel) showErr(what string, err error) {
 
 // --- Models ---
 
+// selectionPollInterval is the bounded cadence of the live phase poll
+// that runs while a POST selection is in flight (v1.11.1). Tests tighten
+// it for determinism.
+var selectionPollInterval = 500 * time.Millisecond
+
+// modelsPanel — the Models utility surface. Browsing is NON-DESTRUCTIVE
+// (v1.11.1 operator UX fix): highlighting a row only renders its facts;
+// the engine transaction starts exclusively from the explicit "Use this
+// model" action — single-flight, generation-guarded, with the backend's
+// LIVE selection phase rendered while it runs. The Go core stays the one
+// selection authority: the panel only calls the real selection API.
 type modelsPanel struct {
 	ap         *App
 	list       *widget.List
@@ -118,10 +132,47 @@ type modelsPanel struct {
 	openFldr   *widget.Button
 	task       *widget.Select
 	err        *widget.Label
+
+	// v1.11.1 non-destructive selection flow.
+	row    int            // highlighted row (-1 = none)
+	useB   *widget.Button // the ONE explicit selection action
+	detail *widget.Label  // highlighted-row fact summary
+
+	// v1.11.1 engine-updates surface (operator request): a visible Check
+	// now action against the official llama.cpp release source, the
+	// truthful result line, and a USER-CONTROLLED install through the
+	// core's engine-update API. All network work stays off the UI thread;
+	// the bounded install poll runs only while a transaction is in flight.
+	updCheckB   *widget.Button
+	updInstallB *widget.Button
+	updCancelB  *widget.Button
+	updLabel    *widget.Label
+	updMu       sync.Mutex
+	updBusy     bool   // single-flight: one check/install interaction at a time
+	updPolling  bool   // the bounded install poll is running
+	updTag      string // the resolved update target tag
+
+	current SelectionState // last authoritative selection (GET state)
+
+	// Single-flight + generation guards. inFlight admits exactly one
+	// engine transaction; opGen makes a late poll/response from an OLD
+	// operation unable to overwrite newer state; settledGen marks the
+	// operation whose terminal render already landed (a trailing poll
+	// tick can never repaint an intermediate phase over it).
+	mu         sync.Mutex
+	inFlight   bool
+	opGen      uint64
+	settledGen uint64
+	pollCancel context.CancelFunc
 }
 
 func buildModelsPanel(ap *App) fyne.CanvasObject {
-	p := &modelsPanel{ap: ap}
+	obj, _ := buildModelsPanelFor(ap)
+	return obj
+}
+
+func buildModelsPanelFor(ap *App) (fyne.CanvasObject, *modelsPanel) {
+	p := &modelsPanel{ap: ap, row: -1}
 	p.list = widget.NewList(
 		func() int { return len(p.models.Local) },
 		func() fyne.CanvasObject {
@@ -129,25 +180,17 @@ func buildModelsPanel(ap *App) fyne.CanvasObject {
 			detail := widget.NewLabel("")
 			return container.NewVBox(name, detail)
 		},
-		func(i widget.ListItemID, o fyne.CanvasObject) {
-			box := o.(*fyne.Container)
-			m := p.models.Local[i]
-			name := m.Name
-			if name == "" {
-				name = m.ID
-			}
-			active := m.ID == ap.rt.currentModel()
-			if m.Serving {
-				name += "  ● ACTIVE"
-			}
-			box.Objects[0].(*widget.Label).SetText(name)
-			box.Objects[1].(*widget.Label).SetText(modelDetail(m))
-			_ = active
-		},
+		func(i widget.ListItemID, o fyne.CanvasObject) { p.renderModelRow(i, o) },
 	)
-	p.list.OnSelected = func(i widget.ListItemID) { p.selectModel(i) }
+	// v1.11.1: a row selection only HIGHLIGHTS — it never starts an
+	// engine transaction. The explicit action below does.
+	p.list.OnSelected = func(i widget.ListItemID) { p.highlightRow(i) }
 
 	p.sel = wrappedLabel("")
+	p.detail = wrappedLabel("")
+	p.detail.Hide() // no row highlighted yet
+	p.useB = widget.NewButton("Use this model", func() { p.useModel() })
+	p.useB.Disable()
 	// Engine & backend status row (Phase 1 scope: narrow, truthful
 	// llama.cpp/Vulkan lifecycle presentation fed ONLY by core-owned
 	// facts — the Go core stays the single state authority).
@@ -169,17 +212,251 @@ func buildModelsPanel(ap *App) fyne.CanvasObject {
 	p.err.Importance = widget.DangerImportance
 	p.err.Hide()
 
+	// Engine updates (v1.11.1): Check now against the OFFICIAL
+	// ggml-org/llama.cpp releases; the install is USER-CONTROLLED and
+	// driven only through the core's engine-update API (the same
+	// transactional authority as the scheduled updater — never a second
+	// updater in the UI).
+	p.updLabel = wrappedLabel("Engine updates: not checked yet — run Check for updates.")
+	p.updLabel.TextStyle = fyne.TextStyle{Monospace: true}
+	p.updCheckB = widget.NewButton("Check for updates", func() { p.checkEngineUpdate() })
+	p.updCheckB.Importance = widget.LowImportance
+	p.updInstallB = widget.NewButton("Install update (restarts engine)", func() { p.installEngineUpdate() })
+	p.updInstallB.Importance = widget.HighImportance
+	p.updInstallB.Disable() // armed only by an update-available check
+	p.updCancelB = widget.NewButton("Cancel download", func() {
+		go func() {
+			if err := ap.Client().CancelEngineDownload(ap.Ctx()); err != nil {
+				uiDo(func() { p.showErr("cancel engine update download", err) })
+			}
+		}()
+	})
+	p.updCancelB.Hide() // visible only while an install download runs
+
 	root := container.NewBorder(
 		container.NewVBox(
 			PageHeader("Models", "Discovery and the REAL selection state machine"),
 			widget.NewCard("Engine & backend", "Requested ≠ available ≠ selected ≠ executed ≠ verified — strongest PROVEN state only", p.engineCard),
+			widget.NewCard("Engine updates", "Official ggml-org/llama.cpp releases · check is read-only · install is user-controlled", container.NewVBox(
+				container.NewHBox(p.updCheckB, p.updInstallB, p.updCancelB),
+				p.updLabel,
+			)),
 			container.NewHBox(p.importIn, p.importB, p.task),
+			container.NewBorder(nil, nil, p.useB, nil, p.detail),
 			p.sel,
 		),
 		p.err, nil, nil, p.list,
 	)
 	p.refresh()
-	return root
+	return root, p
+}
+
+// engineUpdatePollInterval is the bounded cadence of the install-progress
+// poll (tests tighten it for determinism).
+var engineUpdatePollInterval = 500 * time.Millisecond
+
+// engineUpdateTerminal reports check statuses that end the install poll.
+func engineUpdateTerminal(status string) bool {
+	return status != "installing"
+}
+
+// renderEngineUpdate renders the truthful check/install state. The
+// install action is armed ONLY by an update-available resolution; the
+// cancel affordance appears only while an install download runs.
+func (p *modelsPanel) renderEngineUpdate(st *EngineUpdateCheck, err error) {
+	if err != nil {
+		p.updLabel.SetText("Engine updates: check failed — " + err.Error())
+		p.updInstallB.Disable()
+		p.updCancelB.Hide()
+		return
+	}
+	var b strings.Builder
+	b.WriteString("Engine: " + st.InstalledTag)
+	if st.InstalledVariant != "" {
+		b.WriteString(" (" + st.InstalledVariant + ")")
+	}
+	b.WriteString(" · " + st.Platform + " · source " + st.Source + "\n")
+	if st.LatestTag != "" && st.LatestTag != st.InstalledTag {
+		b.WriteString("Latest official release: " + st.LatestTag)
+		if st.AssetName != "" {
+			b.WriteString(" · exact asset " + st.AssetName)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("Status: " + st.Status)
+	if st.Message != "" {
+		b.WriteString(" — " + st.Message)
+	}
+	if st.Progress != nil && st.Progress.Total > 0 {
+		b.WriteString(fmt.Sprintf("\nProgress: %s (%s / %s)", st.Progress.Phase,
+			humanBytes(st.Progress.Bytes), humanBytes(st.Progress.Total)))
+	}
+	p.updLabel.SetText(b.String())
+
+	if st.Status == "update-available" {
+		p.updTag = st.LatestTag
+		p.updInstallB.Enable()
+	} else {
+		p.updInstallB.Disable()
+	}
+	if st.Status == "installing" && st.Progress != nil {
+		p.updCancelB.Show()
+	} else {
+		p.updCancelB.Hide()
+	}
+}
+
+// checkEngineUpdate runs the READ-ONLY official-release check off the UI
+// thread and renders its truthful result.
+func (p *modelsPanel) checkEngineUpdate() {
+	p.updMu.Lock()
+	if p.updBusy {
+		p.updMu.Unlock()
+		return
+	}
+	p.updBusy = true
+	p.updMu.Unlock()
+
+	ap := p.ap
+	// The action runs on the UI event loop (button OnTapped): the interim
+	// label write is a direct widget mutation; every write from the
+	// goroutine below goes through uiDo.
+	p.updLabel.SetText("Engine updates: checking the official release source…")
+	go func() {
+		defer func() {
+			p.updMu.Lock()
+			p.updBusy = false
+			p.updMu.Unlock()
+		}()
+		st, err := ap.Client().EngineUpdateCheckNow(ap.Ctx())
+		uiDo(func() {
+			p.renderEngineUpdate(st, err)
+			if err == nil {
+				p.err.Hide()
+			}
+		})
+	}()
+}
+
+// installEngineUpdate starts the USER-TRIGGERED engine update through the
+// core API, then polls the bounded check surface while the transaction
+// runs — real phases only, no fabricated progress, no UI-thread network.
+func (p *modelsPanel) installEngineUpdate() {
+	p.updMu.Lock()
+	if p.updBusy || p.updPolling {
+		p.updMu.Unlock()
+		return
+	}
+	tag := p.updTag
+	p.updBusy = true
+	p.updMu.Unlock()
+
+	ap := p.ap
+	// UI-thread path: direct widget mutations; the goroutine below owns
+	// every uiDo write.
+	p.updInstallB.Disable()
+	p.updLabel.SetText("Engine updates: starting the engine update transaction…")
+
+	go func() {
+		st, err := ap.Client().EngineUpdateInstall(ap.Ctx(), tag)
+		if err != nil {
+			uiDo(func() {
+				p.showErr("engine update", err)
+				p.renderEngineUpdate(nil, err)
+			})
+			p.updMu.Lock()
+			p.updBusy = false
+			p.updMu.Unlock()
+			return
+		}
+		p.updMu.Lock()
+		p.updBusy = false
+		p.updPolling = true
+		p.updMu.Unlock()
+		uiDo(func() { p.renderEngineUpdate(st, nil) })
+		p.pollEngineUpdate()
+	}()
+}
+
+// pollEngineUpdate renders the live install state at a bounded cadence
+// while the core transaction runs; stops at every terminal status, on
+// app close, or on a poll error (a Check now re-arms the surface).
+func (p *modelsPanel) pollEngineUpdate() {
+	ticker := time.NewTicker(engineUpdatePollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-p.ap.Ctx().Done():
+			return
+		case <-ticker.C:
+		}
+		p.updMu.Lock()
+		polling := p.updPolling
+		p.updMu.Unlock()
+		if !polling {
+			return
+		}
+		st, err := p.ap.Client().EngineUpdateCheckNow(p.ap.Ctx())
+		if err != nil {
+			return // poll transport error: stop polling; a Check now re-arms
+		}
+		terminal := engineUpdateTerminal(st.Status)
+		uiDo(func() { p.renderEngineUpdate(st, nil) })
+		if terminal {
+			p.updMu.Lock()
+			p.updPolling = false
+			p.updMu.Unlock()
+			p.refresh()
+			return
+		}
+	}
+}
+
+// renderModelRow renders one model row into a template cell — the exact
+// code path the widget list's UpdateItem drives (extracted so tests drive
+// the identical renderer). Truthful, SEPARATE markers (v1.11.1): SERVING
+// is the engine-loaded fact; SELECTED is the authoritative selection
+// state — one never implies the other.
+func (p *modelsPanel) renderModelRow(i widget.ListItemID, o fyne.CanvasObject) {
+	box := o.(*fyne.Container)
+	m := p.models.Local[i]
+	name := m.Name
+	if name == "" {
+		name = m.ID
+	}
+	switch {
+	case m.Serving:
+		name += "  ● ACTIVE"
+	case p.isCurrentSelection(m):
+		name += "  ○ SELECTED"
+	}
+	box.Objects[0].(*widget.Label).SetText(name)
+	box.Objects[1].(*widget.Label).SetText(modelDetail(m))
+}
+
+// modelSummary renders the highlighted row's already-available facts —
+// name, architecture, quantization, file size, vision capability,
+// context/metadata — with NO analysis on any thread (the GGUF facts were
+// gathered by the core's discovery pass).
+func modelSummary(m ModelInfo) string {
+	parts := []string{}
+	if m.ParameterInfo != "" {
+		parts = append(parts, m.ParameterInfo)
+	}
+	if d := modelDetail(m); d != "" {
+		parts = append(parts, d)
+	}
+	if m.ContextLength > 0 {
+		s := fmt.Sprintf("context limit %d", m.ContextLength)
+		if m.RecContext > 0 {
+			s += fmt.Sprintf(" (recommended %d)", m.RecContext)
+		}
+		parts = append(parts, s)
+	}
+	if m.Path != "" {
+		parts = append(parts, m.Path)
+	}
+	return strings.Join(parts, " · ")
 }
 
 func modelDetail(m ModelInfo) string {
@@ -212,6 +489,56 @@ func humanBytes(n int64) string {
 	return fmt.Sprintf("%d B", n)
 }
 
+// highlightRow is the NON-DESTRUCTIVE browse step (v1.11.1): selecting a
+// list row renders its facts and arms the explicit selection action — it
+// never starts an engine transaction.
+func (p *modelsPanel) highlightRow(i widget.ListItemID) {
+	if i < 0 || i >= len(p.models.Local) {
+		return
+	}
+	p.row = int(i)
+	m := p.models.Local[i]
+	p.detail.SetText(modelSummary(m))
+	p.detail.Show()
+	p.syncUseButton()
+}
+
+// isCurrentSelection reports whether m is the AUTHORITATIVE current
+// selection (the GET selection state's model — the core's config
+// selection), independent of serving.
+func (p *modelsPanel) isCurrentSelection(m ModelInfo) bool {
+	cur := p.current.Model
+	if cur == "" {
+		return false
+	}
+	return m.ID == cur || m.Name == cur
+}
+
+// syncUseButton enables the explicit selection action exactly when a row
+// is highlighted, no selection is in flight, and the highlighted model is
+// not already the SERVING selection (the core short-circuits that case —
+// the button simply avoids a pointless round-trip; a selected-but-not-
+// serving model stays actionable so the engine can be started).
+func (p *modelsPanel) syncUseButton() {
+	if p.row < 0 || p.row >= len(p.models.Local) {
+		p.useB.Disable()
+		return
+	}
+	p.mu.Lock()
+	busy := p.inFlight
+	p.mu.Unlock()
+	if busy {
+		p.useB.Disable()
+		return
+	}
+	m := p.models.Local[p.row]
+	if m.Serving && p.isCurrentSelection(m) {
+		p.useB.Disable()
+		return
+	}
+	p.useB.Enable()
+}
+
 func (p *modelsPanel) refresh() {
 	go func() {
 		got, err := p.ap.Client().Models(p.ap.Ctx())
@@ -222,10 +549,14 @@ func (p *modelsPanel) refresh() {
 		sel, selErr := p.ap.Client().Selection(p.ap.Ctx())
 		uiDo(func() {
 			p.models = got
-			p.list.Refresh()
 			if selErr == nil {
+				// The authoritative selection feeds both the
+				// status line and the truthful SELECTED marker.
+				p.current = sel
 				p.sel.SetText(selectionText(sel))
 			}
+			p.list.Refresh()
+			p.syncUseButton()
 			p.err.Hide()
 		})
 	}()
@@ -324,6 +655,7 @@ func (p *modelsPanel) refreshEngineCard() {
 	}()
 }
 
+// selectionText renders the authoritative selection state.
 func selectionText(s SelectionState) string {
 	txt := "Selection phase: " + s.Phase
 	if s.Model != "" {
@@ -335,13 +667,48 @@ func selectionText(s SelectionState) string {
 	return txt
 }
 
-// selectModel runs the REAL selection path (POST /api/models/select) —
-// never patchConfig({model}).
-func (p *modelsPanel) selectModel(i widget.ListItemID) {
-	if i < 0 || i >= len(p.models.Local) {
+// terminalSelectionPhase reports backend phases that end a selection
+// flow (the poll stops there — the POST response is the terminal truth).
+func terminalSelectionPhase(phase string) bool {
+	switch phase {
+	case "ready", "failed", "idle":
+		return true
+	}
+	return false
+}
+
+// staleOp reports whether gen no longer names the live operation.
+func (p *modelsPanel) staleOp(gen uint64) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return gen != p.opGen
+}
+
+// settledAtOrAfter reports whether gen's terminal render already landed
+// (a trailing poll tick can never repaint an intermediate phase over it).
+func (p *modelsPanel) settledAtOrAfter(gen uint64) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.settledGen >= gen
+}
+
+// useModel runs the REAL selection path (POST /api/models/select) — never
+// patchConfig({model}). v1.11.1 contract:
+//   - single-flight: exactly one engine transaction at a time; a second
+//     action while one is in flight is a no-op (the button is disabled,
+//     and the guard holds even for direct invocations);
+//   - generation token: a late poll or response from an OLD operation can
+//     never overwrite newer state;
+//   - live phases: while the synchronous POST walks the backend state
+//     machine (select → analyzing → configuring → loading → calibrating),
+//     the AUTHORITATIVE GET state is polled at a bounded cadence and
+//     rendered — the UI thread never performs network work;
+//   - every terminal path (success, failure) re-enables the controls.
+func (p *modelsPanel) useModel() {
+	if p.row < 0 || p.row >= len(p.models.Local) {
 		return
 	}
-	m := p.models.Local[i]
+	m := p.models.Local[p.row]
 	id := m.ID
 	if id == "" {
 		id = m.Name
@@ -349,24 +716,114 @@ func (p *modelsPanel) selectModel(i widget.ListItemID) {
 	if id == "" {
 		return
 	}
+
+	p.mu.Lock()
+	if p.inFlight {
+		p.mu.Unlock()
+		return // single-flight: one engine transaction at a time
+	}
+	p.inFlight = true
+	p.opGen++
+	gen := p.opGen
+	p.mu.Unlock()
+
 	ap := p.ap
 	task := p.task.Selected
-	p.sel.SetText("Selecting " + id + "… (analyzing → configuring → loading)")
+	ctx := ap.Ctx()
+	p.useB.Disable()
+	p.sel.SetText("Selecting " + id + "… — live phase: (starting)")
+
+	// Bounded, cancellation-aware phase polling — only while this
+	// selection is in progress.
+	pollCtx, cancelPoll := context.WithCancel(ctx)
+	p.mu.Lock()
+	p.pollCancel = cancelPoll
+	p.mu.Unlock()
+	go p.pollSelectionPhases(gen, id, pollCtx)
+
 	go func() {
-		sel, err := ap.Client().SelectModel(ap.Ctx(), id, task)
+		sel, err := ap.Client().SelectModel(ctx, id, task)
+
+		// The POST returned: stop the poll, detach its cancel.
+		cancelPoll()
+		p.mu.Lock()
+		p.pollCancel = nil
+		stale := gen != p.opGen
+		p.settledGen = gen
+		p.mu.Unlock()
+		if stale {
+			// A newer operation owns the UI state; leave it alone.
+			p.mu.Lock()
+			p.inFlight = false
+			p.mu.Unlock()
+			return
+		}
+
 		if err != nil {
 			uiDo(func() {
 				p.showErr("model selection", err)
 				p.sel.SetText("Selection failed — see the reason above. The previous model stays active.")
 			})
-			return
+		} else {
+			uiDo(func() {
+				p.sel.SetText(selectionText(sel))
+				p.err.Hide()
+				p.current = sel
+			})
 		}
+
+		p.mu.Lock()
+		p.inFlight = false
+		p.mu.Unlock()
 		uiDo(func() {
-			p.sel.SetText(selectionText(sel))
-			p.err.Hide()
+			p.list.Refresh()
+			p.syncUseButton()
 		})
 		p.refresh()
 	}()
+}
+
+// pollSelectionPhases renders the backend's LIVE selection phases while
+// the POST runs: bounded cadence, cancellation-aware (app close stops
+// it), stops on terminal state, network error, cancellation, or a
+// superseded operation. All widget writes go through uiDo with a final
+// staleness/settled re-check inside the callback (a queued render can
+// never land out of order over a terminal state).
+func (p *modelsPanel) pollSelectionPhases(gen uint64, id string, ctx context.Context) {
+	ticker := time.NewTicker(selectionPollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if p.staleOp(gen) {
+			return
+		}
+		sel, err := p.ap.Client().Selection(ctx)
+		if err != nil {
+			return // network error: stop polling; the POST result still lands
+		}
+		if p.staleOp(gen) || p.settledAtOrAfter(gen) {
+			return
+		}
+		phase := sel.Phase
+		model := sel.Model
+		uiDo(func() {
+			if p.staleOp(gen) || p.settledAtOrAfter(gen) {
+				return
+			}
+			txt := "Selecting " + id + "… — live phase: " + phase
+			if model != "" {
+				txt += " (" + model + ")"
+			}
+			p.sel.SetText(txt)
+		})
+		if terminalSelectionPhase(phase) {
+			return
+		}
+	}
 }
 
 func (p *modelsPanel) importModel() {

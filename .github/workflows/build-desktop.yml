@@ -160,10 +160,16 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: preflight-logs-part-attempt${{ github.run_attempt }}
+          # v1.11.1 STABLE NAME CONTRACT: no run-attempt suffix — a rerun
+          # REPLACES the same artifact (upload-artifact overwrite: true,
+          # verified against the pinned v7 action.yml) instead of
+          # colliding. Run id / commit / attempt live INSIDE the
+          # consolidated report as structured metadata.
+          name: preflight-logs-part
           path: ci-logs/
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
 
   # ==========================================================================
   # Audit — the headless core suite, race gates and release-surface gates.
@@ -235,10 +241,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: audit-logs-part-attempt${{ github.run_attempt }}
+          name: audit-logs-part
           path: ci-logs/
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
 
   # ==========================================================================
   # UI — the Fyne suite (real widget trees over a fake core), the full
@@ -380,10 +387,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ui-logs-part-attempt${{ github.run_attempt }}
+          name: ui-logs-part
           path: ci-logs/
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
 
   # ==========================================================================
   # Windows x64 — the native build of SHEYTAN-LA.exe (MSYS2 UCRT64 CGO for
@@ -570,13 +578,27 @@ jobs:
           go run ./scripts/gen-syso
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::gen-syso failed (exit $LASTEXITCODE) — the Windows resource pipeline (icon + version + DPI manifest) could not be generated"; throw "gen-syso failed" }
 
+      # v1.11.1 MINIMAL INSTALLED ROOT (operator request): the installed
+      # application directory carries ONLY the runtime-required items —
+      # the executable, the launcher, Uninstall.exe (installer-managed)
+      # and the canonical data/ tree. Every STATIC file (license, install
+      # README, build manifest, signature, brand icon) is consolidated
+      # under resources/docs and resources/brand — one obvious folder per
+      # class, one payload authority (the ZIP, the installer and the
+      # generated uninstall manifest all consume THIS staging tree).
+      # The historical root-level models/ and workspace/ placeholder
+      # directories are RETIRED from the shipped payload: the canonical
+      # data root is <AppRoot>\data (the runtime's one-time
+      # MigrateAppRootDirectData fold still accepts REAL legacy roots and
+      # never deletes user-created ones).
       - name: Stage the portable application tree
         run: |
-          New-Item -ItemType Directory -Force -Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}/models" | Out-Null
-          New-Item -ItemType Directory -Force -Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}/workspace" | Out-Null
+          New-Item -ItemType Directory -Force -Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}/resources/docs" | Out-Null
+          New-Item -ItemType Directory -Force -Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}/resources/brand" | Out-Null
           Copy-Item "packaging/SHEYTAN-LA.bat" "dist/windows/app/${{ env.WIN_PKG_ROOT }}/SHEYTAN-LA.bat"
-          Copy-Item "LICENSE.md" "dist/windows/app/${{ env.WIN_PKG_ROOT }}/LICENSE.md"
-          Copy-Item "SIGNATURE" "dist/windows/app/${{ env.WIN_PKG_ROOT }}/SIGNATURE"
+          Copy-Item "LICENSE.md" "dist/windows/app/${{ env.WIN_PKG_ROOT }}/resources/docs/LICENSE.md"
+          Copy-Item "SIGNATURE" "dist/windows/app/${{ env.WIN_PKG_ROOT }}/resources/docs/SIGNATURE"
+          Copy-Item "build/sheytan.ico" "dist/windows/app/${{ env.WIN_PKG_ROOT }}/resources/brand/sheytan.ico"
 
       - name: Build SHEYTAN-LA.exe (windowsgui subsystem)
         run: |
@@ -917,10 +939,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: windows-smoke-app-output-${{ github.run_id }}-${{ github.run_attempt }}
+          # v1.11.1: run id keeps this diagnostic artifact unique per run;
+          # the attempt suffix is gone (a rerun replaces the same name).
+          name: windows-smoke-app-output-${{ github.run_id }}
           path: smoke-app-output.log*
           if-no-files-found: ignore
           retention-days: 7
+          overwrite: true
 
       # BUILD-INFO and package metadata (run #54 root cause #3): explicit
       # writes — no here-string indentation traps — each file validated
@@ -930,18 +955,14 @@ jobs:
         run: |
           $root = "dist/windows/app/${{ env.WIN_PKG_ROOT }}"
           if (-not (Test-Path $root)) { Write-Host "::error::BUILD-INFO guard: staging root missing at $root"; throw "staging root missing: $root" }
-          foreach ($dir in @("models", "workspace")) {
+          foreach ($dir in @("resources/docs", "resources/brand")) {
             if (-not (Test-Path (Join-Path $root $dir))) { Write-Host "::error::BUILD-INFO guard: staging directory missing at $root\$dir"; throw "staging directory missing: $root\$dir" }
           }
           $files = @(
-            @{ Path = "$root/BUILD-INFO.txt";    Marker = "version: ${{ env.APP_VERSION }}";
+            @{ Path = "$root/resources/docs/BUILD-INFO.txt"; Marker = "version: ${{ env.APP_VERSION }}";
                Lines = @("product: SHEYTAN-LA", "version: ${{ env.APP_VERSION }}", "commit: ${{ github.sha }}", "ui: fyne (one Go UI)") },
-            @{ Path = "$root/models/README.txt"; Marker = "downloaded and managed";
-               Lines = @("Models are downloaded and managed by the application at runtime. Nothing in this directory is deleted by uninstall.") },
-            @{ Path = "$root/workspace/README.txt"; Marker = "Agent workspaces";
-               Lines = @("Agent workspaces live here. Nothing in this directory is deleted by uninstall.") },
-            @{ Path = "$root/README.txt"; Marker = "run SHEYTAN-LA.exe";
-               Lines = @("SHEYTAN-LA ${{ env.APP_VERSION }} — run SHEYTAN-LA.exe. Models are downloaded in-app; user data lives under data\ next to the executable.") }
+            @{ Path = "$root/resources/docs/README.txt"; Marker = "run SHEYTAN-LA.exe";
+               Lines = @("SHEYTAN-LA ${{ env.APP_VERSION }} — run SHEYTAN-LA.exe. Models are downloaded in-app; user data lives under data\ next to the executable. Static package content lives under resources\.") }
           )
           foreach ($f in $files) {
             try {
@@ -977,26 +998,34 @@ jobs:
           try {
             $required = @(
               "${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe",
-              "${env:WIN_PKG_ROOT}/README.txt",
-              "${env:WIN_PKG_ROOT}/BUILD-INFO.txt",
-              "${env:WIN_PKG_ROOT}/models/README.txt",
-              "${env:WIN_PKG_ROOT}/workspace/README.txt"
+              "${env:WIN_PKG_ROOT}/SHEYTAN-LA.bat",
+              "${env:WIN_PKG_ROOT}/resources/docs/README.txt",
+              "${env:WIN_PKG_ROOT}/resources/docs/BUILD-INFO.txt",
+              "${env:WIN_PKG_ROOT}/resources/docs/LICENSE.md",
+              "${env:WIN_PKG_ROOT}/resources/brand/sheytan.ico"
             )
             $names = $archive.Entries.FullName
             foreach ($entry in $required) {
               if ($names -notcontains $entry) { Write-Host "::error::Verify Windows ZIP guard: contracted ZIP entry missing: $entry (entries present: $($names.Count))"; throw "ZIP entry missing: $entry" }
             }
             # ZIP purity assertions (run #118 defect, extended for run
-            # #119's two-DLL Mesa contract): required entries are not
-            # enough — forbidden ones must FAIL the build too.
+            # #119's two-DLL Mesa contract, extended v1.11.1 for the
+            # minimal-root payload): required entries are not enough —
+            # forbidden ones must FAIL the build too.
             #   1. nothing under the app's portable data root (a smoke run
             #      inside the staging tree leaves data\app.log residue);
             #   2. never the smoke-provisioned Mesa opengl32.dll;
             #   3. never its megadriver companion libgallium_wgl.dll —
             #      since Mesa 21.3.0 opengl32.dll alone is not a valid
-            #      per-app deployment, and NEITHER DLL may ship.
+            #      per-app deployment, and NEITHER DLL may ship;
+            #   4. never the RETIRED root-level models/ or workspace/
+            #      placeholder directories (v1.11.1 minimal root — the
+            #      canonical data root is data\; legacy user-created roots
+            #      are migrated by the runtime, never shipped as empty
+            #      payload duplicates).
             $forbiddenData = "${env:WIN_PKG_ROOT}/data/"
             $forbiddenDlls = @("${env:WIN_PKG_ROOT}/opengl32.dll", "${env:WIN_PKG_ROOT}/libgallium_wgl.dll")
+            $forbiddenRoots = @("${env:WIN_PKG_ROOT}/models/", "${env:WIN_PKG_ROOT}/workspace/")
             foreach ($name in $names) {
               if ($name.StartsWith($forbiddenData, [System.StringComparison]::OrdinalIgnoreCase)) {
                 Write-Host ("::error::Verify Windows ZIP purity violation: data-root residue entry '{0}' — the smoke must run from the RUNNER_TEMP copy, never the staging tree" -f $name)
@@ -1008,8 +1037,14 @@ jobs:
                   throw ("ZIP purity violation: '{0}' present" -f $name)
                 }
               }
+              foreach ($forbiddenRoot in $forbiddenRoots) {
+                if ($name.StartsWith($forbiddenRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                  Write-Host ("::error::Verify Windows ZIP purity violation: retired root-level placeholder entry '{0}' — v1.11.1 minimal installed root (static content lives under resources/, mutable data under data/)" -f $name)
+                  throw ("ZIP purity violation: retired root-level placeholder '{0}'" -f $name)
+                }
+              }
             }
-            Write-Host "ZIP OK: all contracted entries present; purity assertions passed (no data/ residue, no opengl32.dll, no libgallium_wgl.dll)"
+            Write-Host "ZIP OK: all contracted entries present; purity assertions passed (no data/ residue, no opengl32.dll, no libgallium_wgl.dll, no root-level models/workspace placeholders)"
           } finally { $archive.Dispose() }
 
       # NSIS installer: ONE Go executable payload — no Qt runtime, no
@@ -1187,9 +1222,20 @@ jobs:
             if (-not $proc.WaitForExit(180000)) { Fail "install" "installer did not exit within 180s" }
             if ($proc.ExitCode -ne 0) { Fail "install" "installer exit code $($proc.ExitCode) (expected 0)" }
 
-            # --- 2. installed payload = the staged tree (+ the icon + Uninstall.exe) ---
-            $required = @("SHEYTAN-LA.exe", "SHEYTAN-LA.bat", "LICENSE.md", "README.txt", "BUILD-INFO.txt", "models/README.txt", "workspace/README.txt", "sheytan.ico", "Uninstall.exe")
-            if (Test-Path (Join-Path $stageRoot "SIGNATURE")) { $required += "SIGNATURE" }
+            # --- 2. installed payload = the staged tree (+ Uninstall.exe) ---
+            # v1.11.1 minimal root: the executable + launcher stay at the
+            # root; every static file lives under resources\docs and
+            # resources\brand; Uninstall.exe is written by the installer.
+            $required = @(
+              "SHEYTAN-LA.exe",
+              "SHEYTAN-LA.bat",
+              "resources/docs/README.txt",
+              "resources/docs/BUILD-INFO.txt",
+              "resources/docs/LICENSE.md",
+              "resources/brand/sheytan.ico",
+              "Uninstall.exe"
+            )
+            if (Test-Path (Join-Path $stageRoot "resources/docs/SIGNATURE")) { $required += "resources/docs/SIGNATURE" }
             foreach ($rel in $required) {
               $p = Join-Path $instDir ($rel -replace '/', '\')
               if (-not (Test-Path -LiteralPath $p)) { Fail "install-payload" "installed payload missing: $rel" }
@@ -1197,6 +1243,14 @@ jobs:
               if ((Get-Item -LiteralPath $p).Length -le 0) { Fail "install-payload" "installed payload file is empty: $rel" }
               Write-Host "installed OK: $rel"
             }
+            # v1.11.1 minimal-root proof: the installer must NOT create the
+            # retired root-level placeholder directories (they are no
+            # longer shipped payload; user-created legacy roots are still
+            # preserved on uninstall — proven by the sentinels below).
+            foreach ($retired in @("models", "workspace")) {
+              if (Test-Path -LiteralPath (Join-Path $instDir $retired)) { Fail "install-payload" "retired root-level placeholder directory was created by the installer: $retired" }
+            }
+            Write-Host "minimal installed root OK: no root-level models/workspace placeholders"
 
             # --- 3. registration: ARP entry (either registry view), AUMID, Start Menu + desktop shortcuts ---
             $arpViews = @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\SHEYTAN-LA", "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\SHEYTAN-LA")
@@ -1216,15 +1270,21 @@ jobs:
             if (-not (Test-Path $deskLnk)) { Fail "install-shortcuts" "desktop shortcut missing at $deskLnk (silent install keeps the default CHECKED option)" }
             Write-Host "registration + shortcuts OK"
 
-            # --- 4. seed user-data sentinels (runtime data + payload dirs + external root + legacy README.md) ---
+            # --- 4. seed user-data sentinels (runtime data + USER-CREATED
+            # legacy roots + external root + legacy README.md) ---
+            # v1.11.1: the top-level models\ and workspace\ entries are
+            # USER-CREATED legacy roots now (the installer no longer ships
+            # them) — they exercise exactly the preservation contract the
+            # uninstaller must keep: never in the payload manifest, never
+            # recursively deleted, plain RMDir leaves non-empty dirs alone.
             $sentinels = [ordered]@{
               "data\user-preservation-sentinel.txt"      = "sheytan uninstall-smoke sentinel: canonical data root"
               "data\models\user-model-sentinel.gguf"     = "sheytan uninstall-smoke sentinel: runtime model placeholder (plain text, not a model)"
               "data\sessions\user-session-sentinel.txt"  = "sheytan uninstall-smoke sentinel: sessions"
               "data\logs\user-log-sentinel.txt"          = "sheytan uninstall-smoke sentinel: logs"
               "data\workspace\user-workspace-sentinel.txt" = "sheytan uninstall-smoke sentinel: install-local workspace"
-              "models\user-model-sentinel.gguf"          = "sheytan uninstall-smoke sentinel: top-level models dir (installed payload dir)"
-              "workspace\user-workspace-sentinel.txt"    = "sheytan uninstall-smoke sentinel: top-level workspace dir (installed payload dir)"
+              "models\user-model-sentinel.gguf"          = "sheytan uninstall-smoke sentinel: user-created legacy top-level models dir (pre-v1.11.1 install)"
+              "workspace\user-workspace-sentinel.txt"    = "sheytan uninstall-smoke sentinel: user-created legacy top-level workspace dir (pre-v1.11.1 install)"
             }
             foreach ($rel in $sentinels.Keys) {
               $p = Join-Path $instDir ($rel -replace '/', '\')
@@ -1253,6 +1313,9 @@ jobs:
               if (Test-Path -LiteralPath $p) { Fail "uninstall-payload" "payload file survived uninstall: $rel" }
               Write-Host "removed OK: $rel"
             }
+            # The resources tree itself must be gone (bottom-up RMDir in
+            # the generated manifest removes docs/ and brand/ then resources).
+            if (Test-Path -LiteralPath (Join-Path $instDir "resources")) { Fail "uninstall-payload" "resources directory survived uninstall — the generated manifest must remove the static-resource tree" }
             if (Test-Path -LiteralPath $legacyReadme) { Fail "uninstall-payload" "legacy README.md survived uninstall — the hardcoded fallback delete regressed" }
             if (-not (Test-Path -LiteralPath (Join-Path $instDir "Uninstall.exe"))) { Fail "uninstall-payload" "Uninstall.exe vanished — with _?= NSIS documents that it stays in place; if this fires the uninstaller contract drifted" }
             foreach ($k in $arpViews) { if (Test-Path $k) { Fail "uninstall-registration" "ARP entry survived uninstall: $k" } }
@@ -1293,21 +1356,23 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: windows-x64-package-attempt${{ github.run_attempt }}
+          name: windows-x64-package
           path: |
             dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip
             dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer.exe
           retention-days: 14
           if-no-files-found: ignore
+          overwrite: true
 
       - name: Upload Windows log part
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: windows-logs-part-attempt${{ github.run_attempt }}
+          name: windows-logs-part
           path: ci-logs/
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
 
   # ==========================================================================
   # Linux x64 — the native build of SHEYTAN-LA (executable bit preserved),
@@ -1486,26 +1551,27 @@ jobs:
           echo "SMOKE OK: window booted, event loop alive, clean SIGTERM shutdown with reap"
           cp smoke-stdout.log "$GITHUB_WORKSPACE/ci-logs/linux-smoke-stdout.log"
 
+      # v1.11.1 minimal root (same contract as Windows): static package
+      # content under resources/docs; no root-level models/workspace
+      # placeholders — the canonical data root is <AppRoot>/data.
       - name: Write BUILD-INFO.txt and portable metadata
         run: |
           set -euo pipefail
           root="dist/linux/app/${LINUX_PKG_ROOT}"
-          mkdir -p "$root/models" "$root/workspace"
-          cat > "$root/BUILD-INFO.txt" <<EOF
+          mkdir -p "$root/resources/docs"
+          cat > "$root/resources/docs/BUILD-INFO.txt" <<EOF
           product: SHEYTAN-LA
           version: ${APP_VERSION}
           commit: ${GITHUB_SHA}
           ui: fyne (one Go UI)
           EOF
-          echo "SHEYTAN-LA ${APP_VERSION} — run ./SHEYTAN-LA. Models are downloaded in-app; user data lives under data/ next to the executable." > "$root/README.txt"
-          echo "Models are downloaded and managed by the application at runtime. Nothing in this directory is deleted by uninstall." > "$root/models/README.txt"
-          echo "Agent workspaces live here. Nothing in this directory is deleted by uninstall." > "$root/workspace/README.txt"
-          for f in "$root/BUILD-INFO.txt" "$root/README.txt" "$root/models/README.txt" "$root/workspace/README.txt"; do
+          echo "SHEYTAN-LA ${APP_VERSION} — run ./SHEYTAN-LA. Models are downloaded in-app; user data lives under data/ next to the executable. Static package content lives under resources/." > "$root/resources/docs/README.txt"
+          for f in "$root/resources/docs/BUILD-INFO.txt" "$root/resources/docs/README.txt"; do
             test -s "$f" || { echo "::error::metadata file missing or empty: $f"; exit 1; }
           done
-          grep -q "version: ${APP_VERSION}" "$root/BUILD-INFO.txt" || { echo "::error::BUILD-INFO.txt lacks the version line"; exit 1; }
-          cp LICENSE.md "$root/LICENSE.md"
-          cp SIGNATURE "$root/SIGNATURE"
+          grep -q "version: ${APP_VERSION}" "$root/resources/docs/BUILD-INFO.txt" || { echo "::error::BUILD-INFO.txt lacks the version line"; exit 1; }
+          cp LICENSE.md "$root/resources/docs/LICENSE.md"
+          cp SIGNATURE "$root/resources/docs/SIGNATURE"
 
       - name: Create Linux ZIP
         run: |
@@ -1523,17 +1589,23 @@ jobs:
           entries=$(unzip -l "$zip" | awk '{print $4}')
           for required in \
             "${LINUX_PKG_ROOT}/SHEYTAN-LA" \
-            "${LINUX_PKG_ROOT}/README.txt" \
-            "${LINUX_PKG_ROOT}/BUILD-INFO.txt" \
-            "${LINUX_PKG_ROOT}/models/README.txt" \
-            "${LINUX_PKG_ROOT}/workspace/README.txt"; do
+            "${LINUX_PKG_ROOT}/resources/docs/README.txt" \
+            "${LINUX_PKG_ROOT}/resources/docs/BUILD-INFO.txt" \
+            "${LINUX_PKG_ROOT}/resources/docs/LICENSE.md"; do
             echo "$entries" | grep -qx "$required" || { echo "::error::ZIP entry missing: $required"; exit 1; }
           done
+          # v1.11.1 minimal root: no root-level placeholder directories.
+          if echo "$entries" | grep -qE "^${LINUX_PKG_ROOT}/(models|workspace)/"; then
+            echo "::error::ZIP purity violation: retired root-level models/ or workspace/ placeholder entries present (v1.11.1 minimal root)"; exit 1
+          fi
+          if echo "$entries" | grep -qE "^${LINUX_PKG_ROOT}/data/"; then
+            echo "::error::ZIP purity violation: data-root residue present (the smoke must run from a copy, never the staging tree)"; exit 1
+          fi
           # The executable bit survives the archive.
           rm -rf "$RUNNER_TEMP/zipcheck" && mkdir -p "$RUNNER_TEMP/zipcheck"
           unzip -q "$zip" -d "$RUNNER_TEMP/zipcheck"
           test -x "$RUNNER_TEMP/zipcheck/${LINUX_PKG_ROOT}/SHEYTAN-LA" || { echo "::error::executable bit lost in the ZIP"; exit 1; }
-          echo "ZIP OK: all contracted entries present, executable bit preserved"
+          echo "ZIP OK: all contracted entries present, executable bit preserved, minimal root purity passed"
 
       # Package gate: report the root failure HERE rather than letting the
       # upload step emit a vague "no files were found" annotation.
@@ -1551,23 +1623,27 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: linux-x64-package-attempt${{ github.run_attempt }}
+          name: linux-x64-package
           path: dist/${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64.zip
           retention-days: 14
           if-no-files-found: ignore
+          overwrite: true
 
       - name: Upload Linux log part
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: linux-logs-part-attempt${{ github.run_attempt }}
+          name: linux-logs-part
           path: ci-logs/
           retention-days: 7
           if-no-files-found: ignore
+          overwrite: true
 
   # ==========================================================================
   # Consolidate logs — ONE authoritative consolidated text artifact per
-  # attempt (run #54 root cause #4): the per-job log parts are downloaded
+  # RUN (run #54 root cause #4; v1.11.1: the artifact name is stable —
+  # run id only, no attempt suffix; a rerun REPLACES it): the per-job log
+  # parts are downloaded
   # WITHOUT merge-multiple (each artifact extracts into its own
   # namespaced directory, so same-named logs like gate-order.txt can
   # never overwrite each other) and are assembled by
@@ -1589,57 +1665,62 @@ jobs:
 
       # ONE download step per expected log part, each with an explicit
       # name + path. Run #118 root cause: a single pattern-download step
-      # (pattern: "*-logs-part-attemptN") lands its files FLAT into
-      # ci-parts/ whenever the pattern matches EXACTLY ONE artifact
-      # (download-artifact@v8 resolves the destination as
-      # artifacts.length === 1 ? path : path/<artifact.name>) — so the
+      # lands its files FLAT into ci-parts/ whenever the pattern matches
+      # EXACTLY ONE artifact (download-artifact@v8 resolves the destination
+      # as artifacts.length === 1 ? path : path/<artifact.name>) — so the
       # red-preflight-only shape of run #118 produced ci-parts/
-      # gate-order.txt instead of ci-parts/preflight-logs-part-attempt1/,
-      # the collector counted a missing source, and the job went red on
-      # exit 1 AFTER the report was written. An explicit name: download is
-      # ALWAYS namespaced regardless of how many artifacts exist; skipped
-      # jobs contribute no download attempt (the if: gate) and a ran-but-
-      # silent job keeps the collector as the single red signal
-      # (continue-on-error) that names the coverage gap.
+      # gate-order.txt instead of a namespaced job directory, the collector
+      # counted a missing source, and the job went red on exit 1 AFTER the
+      # report was written. An explicit name: download is ALWAYS namespaced
+      # regardless of how many artifacts exist; skipped jobs contribute no
+      # download attempt (the if: gate) and a ran-but-silent job keeps the
+      # collector as the single red signal (continue-on-error) that names
+      # the coverage gap.
+      #
+      # v1.11.1 STABLE NAMES: the artifact names carry NO run-attempt
+      # suffix (a rerun REPLACES the same stable name via upload
+      # overwrite: true). The download path keeps the per-job namespace —
+      # ci-parts/<stable-artifact-name>/ — so same-named logs from
+      # different jobs still never flatten/collide.
       - name: Download preflight log part
         if: needs.preflight.result != 'skipped'
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
-          name: preflight-logs-part-attempt${{ github.run_attempt }}
-          path: ci-parts/preflight-logs-part-attempt${{ github.run_attempt }}
+          name: preflight-logs-part
+          path: ci-parts/preflight-logs-part
 
       - name: Download audit log part
         if: needs.audit.result != 'skipped'
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
-          name: audit-logs-part-attempt${{ github.run_attempt }}
-          path: ci-parts/audit-logs-part-attempt${{ github.run_attempt }}
+          name: audit-logs-part
+          path: ci-parts/audit-logs-part
 
       - name: Download ui log part
         if: needs.ui.result != 'skipped'
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
-          name: ui-logs-part-attempt${{ github.run_attempt }}
-          path: ci-parts/ui-logs-part-attempt${{ github.run_attempt }}
+          name: ui-logs-part
+          path: ci-parts/ui-logs-part
 
       - name: Download windows log part
         if: needs.build-windows.result != 'skipped'
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
-          name: windows-logs-part-attempt${{ github.run_attempt }}
-          path: ci-parts/windows-logs-part-attempt${{ github.run_attempt }}
+          name: windows-logs-part
+          path: ci-parts/windows-logs-part
 
       - name: Download linux log part
         if: needs.build-linux.result != 'skipped'
         continue-on-error: true
         uses: actions/download-artifact@v8
         with:
-          name: linux-logs-part-attempt${{ github.run_attempt }}
-          path: ci-parts/linux-logs-part-attempt${{ github.run_attempt }}
+          name: linux-logs-part
+          path: ci-parts/linux-logs-part
 
       - name: Build the consolidated run log
         id: collector
@@ -1649,15 +1730,14 @@ jobs:
           UI_RESULT: ${{ needs.ui.result }}
           WINDOWS_RESULT: ${{ needs.build-windows.result }}
           LINUX_RESULT: ${{ needs.build-linux.result }}
-          ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -uo pipefail
           specs=()
-          specs+=("preflight-logs-part-attempt${ATTEMPT}:${PREFLIGHT_RESULT}")
-          specs+=("audit-logs-part-attempt${ATTEMPT}:${AUDIT_RESULT}")
-          specs+=("ui-logs-part-attempt${ATTEMPT}:${UI_RESULT}")
-          specs+=("windows-logs-part-attempt${ATTEMPT}:${WINDOWS_RESULT}")
-          specs+=("linux-logs-part-attempt${ATTEMPT}:${LINUX_RESULT}")
+          specs+=("preflight-logs-part:${PREFLIGHT_RESULT}")
+          specs+=("audit-logs-part:${AUDIT_RESULT}")
+          specs+=("ui-logs-part:${UI_RESULT}")
+          specs+=("windows-logs-part:${WINDOWS_RESULT}")
+          specs+=("linux-logs-part:${LINUX_RESULT}")
           job_args=()
           for s in "${specs[@]}"; do job_args+=("--job" "$s"); done
           bash scripts/ci/consolidate-run-log.sh \
@@ -1685,7 +1765,7 @@ jobs:
           {
             echo "## Consolidated run log"
             echo ""
-            echo "Artifact: \`SHEYTAN-LA-all-logs-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}\` (consolidated-run-log.txt)"
+            echo "Artifact: \`SHEYTAN-LA-all-logs-run-${{ github.run_id }}\` (consolidated-run-log.txt) — attempt ${{ github.run_attempt }} is recorded INSIDE the report as provenance metadata"
             echo ""
             echo "=== ERROR INDEX === summary is embedded in the artifact; check the RUN SUMMARY section for captured/missing counts."
             echo "If the artifact contains a '=== MISSING LOG SOURCE ===' section, job logs could not be recovered for those jobs and coverage is incomplete."
@@ -1696,14 +1776,17 @@ jobs:
 
       # The ONE mandatory user-facing log artifact: if-no-files-found:
       # error (never ignore — a silently absent log is a contract breach).
+      # v1.11.1: stable name (run id only) — a rerun replaces the same
+      # artifact; the attempt number lives inside the report content.
       - name: Upload the consolidated log
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: SHEYTAN-LA-all-logs-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          name: SHEYTAN-LA-all-logs-run-${{ github.run_id }}
           path: consolidated-run-log.txt
           retention-days: 14
           if-no-files-found: error
+          overwrite: true
 
   # ==========================================================================
   # Release — tags only. Publishes the contracted artifacts.
@@ -1722,13 +1805,13 @@ jobs:
       - name: Download Windows package
         uses: actions/download-artifact@v8
         with:
-          name: windows-x64-package-attempt${{ github.run_attempt }}
+          name: windows-x64-package
           path: dist/
 
       - name: Download Linux package
         uses: actions/download-artifact@v8
         with:
-          name: linux-x64-package-attempt${{ github.run_attempt }}
+          name: linux-x64-package
           path: dist/
 
       - name: Verify the artifact set against the release contract

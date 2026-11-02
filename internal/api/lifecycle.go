@@ -26,6 +26,12 @@ func (s *Server) Close() {
 	if fn := s.appUpdateCancel.Load(); fn != nil {
 		(*fn)()
 	}
+
+	// v1.11.1: stop an in-flight USER-TRIGGERED engine update transaction —
+	// the engine-owned flow rolls back to the last-known-good engine.
+	if fn := s.engineUpdateCancel.Load(); fn != nil {
+		(*fn)()
+	}
 	if job := s.appUpdateJob.Load(); job != nil {
 		job.Cancel()
 	}

@@ -234,30 +234,34 @@ func TestNSISLicensePageContract(t *testing.T) {
 	if m == nil {
 		t.Fatalf("MUI_PAGE_LICENSE inserted without a LicenseData path")
 	}
-	if m[1] != `${BUILDDIR}\LICENSE.md` {
-		t.Errorf("license page must render the staged single-source LICENSE.md (${BUILDDIR}\\LICENSE.md), got %q", m[1])
+	// v1.11.1 minimal root: the staged license lives under resources\docs.
+	if m[1] != `${BUILDDIR}\resources\docs\LICENSE.md` {
+		t.Errorf("license page must render the staged single-source LICENSE.md (${BUILDDIR}\\resources\\docs\\LICENSE.md), got %q", m[1])
 	}
 
 	// Compile-time assertion: a missing staged license fails the
 	// installer build with the exact path (same fail-fast class as the
 	// staged EXE assertion).
-	if !strings.Contains(nsi, `!if ! /FileExists "${BUILDDIR}\LICENSE.md"`) {
+	if !strings.Contains(nsi, `!if ! /FileExists "${BUILDDIR}\resources\docs\LICENSE.md"`) {
 		t.Errorf("installer.nsi has no compile-time assertion for the staged LICENSE.md")
 	}
 
 	// The payload file is REQUIRED: /nonfatal would ship an installer
 	// without its license on staging drift.
-	if strings.Contains(nsi, `File /nonfatal "${BUILDDIR}\LICENSE.md"`) {
+	if strings.Contains(nsi, `File /nonfatal "${BUILDDIR}\resources\docs\LICENSE.md"`) {
 		t.Errorf(`payload File for LICENSE.md must be REQUIRED (no /nonfatal) — the license page and the uninstall symmetry depend on it`)
 	}
-	if !strings.Contains(nsi, `File "${BUILDDIR}\LICENSE.md"`) {
-		t.Errorf(`installer payload must stage LICENSE.md (File "${BUILDDIR}\LICENSE.md")`)
+	if !strings.Contains(nsi, `File "${BUILDDIR}\resources\docs\LICENSE.md"`) {
+		t.Errorf(`installer payload must stage LICENSE.md (File "${BUILDDIR}\resources\docs\LICENSE.md")`)
 	}
 
-	// Uninstall symmetry: the installed LICENSE.md is removed again.
+	// Uninstall symmetry: the installed LICENSE.md is removed again — by
+	// the GENERATED payload manifest (resources\docs\LICENSE.md). The
+	// hardcoded root Delete stays as a legacy fallback (pre-v1.11.1
+	// installs) and must remain present.
 	uninstall := nsiUninstallSection(t, nsi)
 	if !strings.Contains(uninstall, `Delete "$INSTDIR\LICENSE.md"`) {
-		t.Errorf(`uninstaller must Delete "$INSTDIR\LICENSE.md" (uninstall symmetry with the required payload File)`)
+		t.Errorf(`uninstaller must keep the legacy Delete "$INSTDIR\LICENSE.md" fallback (uninstall symmetry for pre-v1.11.1 installs)`)
 	}
 }
 
@@ -840,10 +844,14 @@ func TestNSISInstallUninstallSmokeEnforcedByWorkflow(t *testing.T) {
 		{`"/S"`, "the install must be silent"},
 		{`"/D=$instDir"`, "the install directory must be passed as the NSIS-documented FINAL /D= argument (unquoted, no spaces)"},
 		{`$env:RUNNER_TEMP`, "the install must land in an isolated RUNNER_TEMP path — never Program Files, never a real profile"},
-		// Payload, registration, shortcuts.
-		{`"LICENSE.md"`, "the installed payload must include the single-source license"},
-		{`"README.txt"`, "the installed payload must include the canonical install README"},
-		{`"BUILD-INFO.txt"`, "the installed payload must include the build manifest"},
+		// Payload, registration, shortcuts (v1.11.1 minimal root:
+		// static payload under resources\docs and resources\brand).
+		{`"resources/docs/LICENSE.md"`, "the installed payload must include the single-source license under resources\\docs"},
+		{`"resources/docs/README.txt"`, "the installed payload must include the canonical install README under resources\\docs"},
+		{`"resources/docs/BUILD-INFO.txt"`, "the installed payload must include the build manifest under resources\\docs"},
+		{`"resources/brand/sheytan.ico"`, "the installed payload must include the brand icon under resources\\brand (the shortcut/icon authority)"},
+		{`"SHEYTAN-LA.bat"`, "the installed payload must include the portable launcher"},
+		{`retired root-level placeholder`, "the smoke must prove the installer no longer creates the retired root-level placeholder directories"},
 		{`Uninstall\SHEYTAN-LA`, "the Add/Remove Programs registration must be asserted"},
 		{`AppUserModelId\SHEYTANx13.SHEYTAN-LA`, "the AppUserModelID identity must be asserted"},
 		{`Start Menu\Programs\SHEYTAN-LA`, "the Start Menu shortcuts must be asserted"},
@@ -853,8 +861,8 @@ func TestNSISInstallUninstallSmokeEnforcedByWorkflow(t *testing.T) {
 		{`data\sessions\user-session-sentinel.txt`, "sessions must carry a preservation sentinel"},
 		{`data\logs\user-log-sentinel.txt`, "logs must carry a preservation sentinel"},
 		{`data\workspace\user-workspace-sentinel.txt`, "the install-local workspace must carry a preservation sentinel"},
-		{`models\user-model-sentinel.gguf`, "the top-level models directory (installed payload dir) must carry a preservation sentinel"},
-		{`workspace\user-workspace-sentinel.txt`, "the top-level workspace directory (installed payload dir) must carry a preservation sentinel"},
+		{`models\user-model-sentinel.gguf`, "the USER-CREATED legacy top-level models directory must carry a preservation sentinel (never a payload dir anymore — the preservation contract itself)"},
+		{`workspace\user-workspace-sentinel.txt`, "the USER-CREATED legacy top-level workspace directory must carry a preservation sentinel (never a payload dir anymore — the preservation contract itself)"},
 		{`external-data`, "a user-chosen external data location must be represented and preserved"},
 		{`Get-FileHash`, "sentinels must be hash-compared before and after uninstall, not merely checked for existence"},
 		// Real silent uninstall via the documented _?= form.

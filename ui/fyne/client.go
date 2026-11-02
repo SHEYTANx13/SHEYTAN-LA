@@ -248,6 +248,7 @@ type Config struct {
 	ContinuumTokens    int      `json:"continuumFrameworkTokens,omitempty"`
 	SmoothStream       bool     `json:"smoothStream,omitempty"`
 	TargetFPS          int      `json:"targetFps,omitempty"`
+	PreferFastest      bool     `json:"preferFastest,omitempty"`
 	LabEnabled         bool     `json:"labEnabled,omitempty"`
 	LabWorkspaceRoot   string   `json:"labWorkspaceRoot,omitempty"`
 	LabCmdTimeoutSec   int      `json:"labCommandTimeoutSec,omitempty"`
@@ -684,6 +685,52 @@ func (c *CoreClient) Maintenance(ctx context.Context) (json.RawMessage, error) {
 	var out json.RawMessage
 	err := c.do(ctx, http.MethodGet, "/api/maintenance", nil, &out)
 	return out, err
+}
+
+// EngineUpdateCheck mirrors the v1.11.1 read-only official llama.cpp
+// release check: installed tag/variant, the newest tag whose release
+// ACTUALLY carries the exact variant asset, and the honest status class
+// (current | update-available | offline | no-asset | error | installing |
+// installed | install-failed). A network failure is NEVER "no asset", and
+// a check never installs anything.
+type EngineUpdateCheck struct {
+	InstalledTag     string            `json:"installedTag"`
+	InstalledVariant string            `json:"installedVariant"`
+	LatestTag        string            `json:"latestTag,omitempty"`
+	AssetVariant     string            `json:"assetVariant"`
+	AssetName        string            `json:"assetName,omitempty"`
+	Platform         string            `json:"platform"`
+	Source           string            `json:"source"`
+	Status           string            `json:"status"`
+	Message          string            `json:"message,omitempty"`
+	CheckedAt        string            `json:"checkedAt,omitempty"`
+	Progress         *DownloadProgress `json:"progress,omitempty"`
+}
+
+// DownloadProgress is the wire subset the update card renders (mirrors
+// the downloader's live progress envelope).
+type DownloadProgress struct {
+	Phase    string  `json:"phase,omitempty"`
+	Bytes    int64   `json:"bytes,omitempty"`
+	Total    int64   `json:"total,omitempty"`
+	Fraction float64 `json:"fraction,omitempty"`
+	Speed    float64 `json:"bytesPerSecond,omitempty"`
+}
+
+// EngineUpdateCheckNow runs the live read-only official-release check.
+func (c *CoreClient) EngineUpdateCheckNow(ctx context.Context) (*EngineUpdateCheck, error) {
+	var out EngineUpdateCheck
+	err := c.do(ctx, http.MethodGet, "/api/engine/update/check", nil, &out)
+	return &out, err
+}
+
+// EngineUpdateInstall starts the USER-TRIGGERED engine update (empty tag
+// = the newest release carrying the installed variant's exact asset) —
+// the same engine-owned transaction the scheduled updater drives.
+func (c *CoreClient) EngineUpdateInstall(ctx context.Context, tag string) (*EngineUpdateCheck, error) {
+	var out EngineUpdateCheck
+	err := c.do(ctx, http.MethodPost, "/api/engine/update", map[string]string{"tag": tag}, &out)
+	return &out, err
 }
 
 // Systems lists AI systems + the active id.

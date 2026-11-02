@@ -176,6 +176,8 @@ func (v *settingsView) boolValue(f SettingsField) bool {
 		return c.LlamaAutoStart
 	case "smoothStream":
 		return c.SmoothStream
+	case "preferFastest":
+		return c.PreferFastest
 	case "showPerfHud":
 		return c.ShowPerfHUD
 	case "visionEnabled":

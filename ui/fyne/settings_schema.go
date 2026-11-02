@@ -74,6 +74,8 @@ var SettingsFields = []SettingsField{
 	{Key: "historyWindowPct", Label: "History window (%)", Section: "performance", Kind: FieldInt},
 	{Key: "continuumEnabled", Label: "Continuum context carry", Section: "performance", Kind: FieldBool},
 	{Key: "performanceMode", Label: "Runtime posture", Section: "performance", Kind: FieldEnum, Enum: []string{"auto", "manual"}},
+	{Key: "preferFastest", Label: "Prefer fastest safe inference", Section: "performance", Kind: FieldBool,
+		Hint: "Speed-priority AUTO profile within measured memory/GPU limits — fastest safe, not guaranteed maximum throughput or GPU execution. Manual mode is never overwritten."},
 
 	// Agent & Tools
 	{Key: "maxIterations", Label: "Max agent iterations", Section: "agent", Kind: FieldInt},

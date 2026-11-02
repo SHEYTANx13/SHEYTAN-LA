@@ -328,6 +328,18 @@ type Config struct {
 	SmoothStream bool `json:"smoothStream" yaml:"smoothStream"`
 	TargetFPS    int  `json:"targetFps" yaml:"targetFps"`
 
+	// PreferFastest (v1.11.1) — the speed-priority preference for the
+	// AUTO runtime posture. ON by default: the ONE recommendation
+	// authority biases its profile toward the fastest SAFE settings
+	// (within measured memory/GPU limits, model fit, hardware
+	// evidence and safety admission — never forced maxima). OFF =
+	// the balanced/normal AUTO policy. MANUAL mode is unaffected:
+	// explicit user values are always preserved verbatim. The
+	// default-primed JSON unmarshal gives the legacy contract for
+	// free: a config file without the field keeps the ON default; an
+	// explicit stored false STAYS false (never re-defaulted).
+	PreferFastest bool `json:"preferFastest" yaml:"preferFastest"`
+
 	// v1.11.0: the optional 3D Studio (read-only system-topology
 	// visualizer over a locally bundled Three.js release). Enabled by
 	// default; disabling it removes the navigation entry AND makes the
@@ -520,6 +532,11 @@ func Default() *Config {
 
 		SmoothStream: true,
 		TargetFPS:    120,
+
+		// v1.11.1: fastest-safe inference is the default posture
+		// (operator request) — one explicit opt-out exists in
+		// Settings/Performance.
+		PreferFastest: true,
 
 		// 3D Studio defaults to ON — it is a passive read-only viewer
 		// and costs nothing until the user opens it.

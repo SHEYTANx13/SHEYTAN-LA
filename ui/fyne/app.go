@@ -130,8 +130,15 @@ func (ap *App) Window() fyne.Window { return ap.w }
 // the hub owns the one bounded presentation store of this process).
 func (ap *App) Workspace() *wsHub { return ap.ws }
 
-// Ctx is the app-lifetime context.
-func (ap *App) Ctx() context.Context { return ap.rootCtx }
+// Ctx is the app-lifetime context. Before Run() arms it (tests,
+// composition probes) the nil root falls back to Background — callers
+// never hand a nil Context to the HTTP layer.
+func (ap *App) Ctx() context.Context {
+	if ap.rootCtx != nil {
+		return ap.rootCtx
+	}
+	return context.Background()
+}
 
 // Close closes the window (programmatic shutdown path).
 //

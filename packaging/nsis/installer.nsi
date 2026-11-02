@@ -139,24 +139,21 @@ ManifestDPIAware true
 !if ! /FileExists "${BUILDDIR}\${EXE}"
   !error "NSIS: staging executable not found: ${BUILDDIR}\${EXE} (build the portable application first; pass an ABSOLUTE -DBUILDDIR from CI)"
 !endif
-; The license page renders the staged single-source LICENSE.md — it is a
-; REQUIRED payload artifact, so its absence must fail the installer build
-; with the exact missing path (same fail-fast class as the EXE above).
-!if ! /FileExists "${BUILDDIR}\LICENSE.md"
-  !error "NSIS: staged LICENSE.md not found: ${BUILDDIR}\LICENSE.md (CI stages the single-source LICENSE.md into the package root before makensis)"
+; v1.11.1 MINIMAL ROOT: every static payload file lives under
+; resources\docs or resources\brand — the assertions follow the staged
+; tree exactly, so a staging drift fails the installer build with the
+; exact missing path (same fail-fast class as the EXE above).
+!if ! /FileExists "${BUILDDIR}\resources\docs\LICENSE.md"
+  !error "NSIS: staged LICENSE.md not found: ${BUILDDIR}\resources\docs\LICENSE.md (CI stages the single-source LICENSE.md under resources\docs before makensis)"
 !endif
-; v1.2.3 (run #125 payload audit): the canonical install README and the
-; build-info manifest are REQUIRED staged payload files. The workflow's
-; BUILD-INFO step writes both into the staging root before makensis runs
-; (and the ZIP guard requires both), the File /r pass below installs
-; both, and the generated uninstall manifest enumerates both — so a
-; staging drift must fail the installer build with the exact missing
-; path, the same fail-fast class as the EXE and LICENSE.md above.
-!if ! /FileExists "${BUILDDIR}\README.txt"
-  !error "NSIS: staged README.txt not found: ${BUILDDIR}\README.txt (CI's BUILD-INFO step writes the canonical install README; the installer payload requires it)"
+!if ! /FileExists "${BUILDDIR}\resources\docs\README.txt"
+  !error "NSIS: staged README.txt not found: ${BUILDDIR}\resources\docs\README.txt (CI's BUILD-INFO step writes the canonical install README under resources\docs; the installer payload requires it)"
 !endif
-!if ! /FileExists "${BUILDDIR}\BUILD-INFO.txt"
-  !error "NSIS: staged BUILD-INFO.txt not found: ${BUILDDIR}\BUILD-INFO.txt (CI's BUILD-INFO step writes the build manifest; the installer payload requires it)"
+!if ! /FileExists "${BUILDDIR}\resources\docs\BUILD-INFO.txt"
+  !error "NSIS: staged BUILD-INFO.txt not found: ${BUILDDIR}\resources\docs\BUILD-INFO.txt (CI's BUILD-INFO step writes the build manifest under resources\docs; the installer payload requires it)"
+!endif
+!if ! /FileExists "${BUILDDIR}\resources\brand\sheytan.ico"
+  !error "NSIS: staged brand icon not found: ${BUILDDIR}\resources\brand\sheytan.ico (CI stages build/sheytan.ico under resources\brand — the one payload authority feeds the ZIP, the shortcuts and the uninstall manifest)"
 !endif
 
 ; v1.10.14 UNINSTALL SYMMETRY: CI generates payload-uninstall.nsh from
@@ -235,9 +232,10 @@ VIAddVersionKey "LegalCopyright" "(c) 2024-2026 Parsaetak. All rights reserved."
 ; the installer stays a two-click experience (directory → install).
 !define MUI_PAGE_CUSTOMFUNCTION_SHOW DirectoryPageShow
 !insertmacro MUI_PAGE_WELCOME
-; License page — the single-source LICENSE.md (staged into the package
-; root by CI; compile-time assertion above refuses to build without it).
-!insertmacro MUI_PAGE_LICENSE "${BUILDDIR}\LICENSE.md"
+; License page — the single-source LICENSE.md (staged under
+; resources\docs by CI; compile-time assertion above refuses to build
+; without it).
+!insertmacro MUI_PAGE_LICENSE "${BUILDDIR}\resources\docs\LICENSE.md"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${EXE}"
@@ -303,45 +301,46 @@ upgrade_retry_sleep:
 upgrade_replaced:
 
   ; --- application payload (never models) ---------------------------------
-  ; REQUIRED staged payload files. These explicit non-/nonfatal File lines
-  ; are the second guard layer after the /FileExists assertions above: a
-  ; missing required file aborts the build before the recursive pass. The
-  ; recursive pass below re-copies identical bytes to the same $INSTDIR
-  ; destinations, so the installed result is exactly the staged tree.
+  ; REQUIRED staged payload files (second guard layer after the
+  ; /FileExists assertions above: a missing required file aborts the
+  ; build before the recursive pass). The recursive pass below re-copies
+  ; identical bytes to the same $INSTDIR destinations, so the installed
+  ; result is exactly the staged tree.
   File "${BUILDDIR}\${EXE}"
-  ; v1.2.2: REQUIRED — CI stages the single-source LICENSE.md into the
-  ; package root and the license page renders it; /nonfatal would ship
-  ; an installer without its license on any staging drift.
-  File "${BUILDDIR}\LICENSE.md"
+  ; v1.11.1 minimal root: LICENSE.md and the brand icon are staged under
+  ; resources\ — the explicit lines keep the fail-fast guard layer.
+  File "${BUILDDIR}\resources\docs\LICENSE.md"
   ; SIGNATURE stays OPTIONAL: it is staged only when release credentials
   ; produce it, and an unsigned release is a valid artifact.
-  File /nonfatal "${BUILDDIR}\SIGNATURE"
-  File "..\..\build\sheytan.ico"
-  ; v1.11.0 PAYLOAD (one-Go-UI migration) — v1.2.3 comment correction
-  ; (run #125 audit; the old text described the OPPOSITE of the actual
-  ; workflow behavior):
-  ;
-  ;   The staging tree that reaches makensis contains EXACTLY:
-  ;     SHEYTAN-LA.exe, SHEYTAN-LA.bat, LICENSE.md, SIGNATURE,
-  ;     README.txt, BUILD-INFO.txt, models\README.txt,
-  ;     workspace\README.txt (+ the models\ and workspace\ dirs).
+  File /nonfatal "${BUILDDIR}\resources\docs\SIGNATURE"
+  File "${BUILDDIR}\resources\brand\sheytan.ico"
+  ; v1.11.1 PAYLOAD (minimal installed root — operator request) — the
+  ; staging tree that reaches makensis contains EXACTLY:
+  ;     SHEYTAN-LA.exe, SHEYTAN-LA.bat,
+  ;     resources\docs\README.txt, resources\docs\BUILD-INFO.txt,
+  ;     resources\docs\LICENSE.md, resources\docs\SIGNATURE (optional),
+  ;     resources\brand\sheytan.ico
   ;   NOTHING is excluded before makensis: the smoke runs from the
   ;   RUNNER_TEMP copy (the staging tree stays pristine), the ZIP is
   ;   compressed from this same tree, and this File /r installs the SAME
   ;   tree — one payload root, three consumers (ZIP, manifest, installer).
   ;   The generated payload-uninstall.nsh enumerates exactly this tree,
   ;   so the uninstaller removes exactly what this line installs.
+  ;   The RETIRED root-level models\ and workspace\ placeholder
+  ;   directories are gone: the canonical data root is <AppRoot>\data
+  ;   (created + ACL'd below); user-created legacy roots are folded by
+  ;   the runtime's one-time migration and are never deleted here.
   ;
   ;   (History: this File line previously carried a stale
   ;   `File /nonfatal "${BUILDDIR}\README.md"` — the repo-root README.md
   ;   is NEVER staged, so every hosted build emitted NSIS warning 7010
   ;   for a file the payload contract never contained. Removed in the
-  ;   run #125 payload audit; the canonical install README is README.txt
-  ;   (required via /FileExists above + installed by /r). The
-  ;   uninstaller's hardcoded `Delete "$INSTDIR\README.md"` below is
-  ;   deliberately RETAINED as legacy fallback: pre-audit installs may
-  ;   still carry a README.md, and a Delete on a missing file is a
-  ;   harmless no-op.)
+  ;   run #125 payload audit; the canonical install README is
+  ;   resources\docs\README.txt (required via /FileExists above +
+  ;   installed by /r). The uninstaller's hardcoded
+  ;   `Delete "$INSTDIR\README.md"` below is deliberately RETAINED as
+  ;   legacy fallback: pre-audit installs may still carry a README.md,
+  ;   and a Delete on a missing file is a harmless no-op.)
   File /r "${BUILDDIR}\*.*"
 
   ; Version-aware upgrade bookkeeping.
@@ -390,18 +389,19 @@ upgrade_replaced:
   SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
 
   ; Windows application identity (AppUserModelID) — notifications and
-  ; taskbar grouping resolve to SHEYTAN-LA.
+  ; taskbar grouping resolve to SHEYTAN-LA. v1.11.1: the icon lives in
+  ; the installed resources\brand tree (one payload authority).
   WriteRegStr HKCU "Software\Classes\AppUserModelId\${AUMID}" "DisplayName" "${DESCRIPTION}"
-  WriteRegStr HKCU "Software\Classes\AppUserModelId\${AUMID}" "IconUri" "$INSTDIR\sheytan.ico"
+  WriteRegStr HKCU "Software\Classes\AppUserModelId\${AUMID}" "IconUri" "$INSTDIR\resources\brand\sheytan.ico"
 
   ; Per-machine shell context: shortcuts land on the common desktop and
   ; the all-users Start Menu, so every user of the machine sees them and
   ; the uninstaller removes exactly what the installer created.
   SetShellVarContext all
 
-  ; Start Menu shortcuts.
+  ; Start Menu shortcuts (icon from the installed resources\brand tree).
   CreateDirectory "$SMPROGRAMS\${PRODUCT}"
-  CreateShortcut "$SMPROGRAMS\${PRODUCT}\${DESCRIPTION}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\sheytan.ico"
+  CreateShortcut "$SMPROGRAMS\${PRODUCT}\${DESCRIPTION}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\resources\brand\sheytan.ico"
   CreateShortcut "$SMPROGRAMS\${PRODUCT}\Uninstall ${DESCRIPTION}.lnk" "$INSTDIR\Uninstall.exe"
 
   ; Optional desktop shortcut — GENUINE OPTION (v1.2.1). The checkbox on
@@ -409,14 +409,14 @@ upgrade_replaced:
   ;   checked   → desktop shortcut created
   ;   unchecked → no desktop shortcut created
   IntCmp $CreateDesktopShortcut ${BST_CHECKED} 0 skip_desktop skip_desktop
-  CreateShortcut "$DESKTOP\${DESCRIPTION}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\sheytan.ico"
+  CreateShortcut "$DESKTOP\${DESCRIPTION}.lnk" "$INSTDIR\${EXE}" "" "$INSTDIR\resources\brand\sheytan.ico"
 skip_desktop:
 
   ; Add/Remove Programs entry.
   WriteRegStr HKLM "${UNINSTKEY}" "DisplayName" "${DESCRIPTION} v${VERSION}"
   WriteRegStr HKLM "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr HKLM "${UNINSTKEY}" "Publisher" "${PUBLISHER}"
-  WriteRegStr HKLM "${UNINSTKEY}" "DisplayIcon" "$INSTDIR\sheytan.ico"
+  WriteRegStr HKLM "${UNINSTKEY}" "DisplayIcon" "$INSTDIR\resources\brand\sheytan.ico"
   WriteRegStr HKLM "${UNINSTKEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr HKLM "${UNINSTKEY}" "UninstallString" "$INSTDIR\Uninstall.exe"
   WriteRegDWORD HKLM "${UNINSTKEY}" "NoModify" 1
@@ -461,6 +461,11 @@ Section "Uninstall"
   ; directory only when it is EMPTY, so anything left behind stays on
   ; disk untouched. Recursion is forbidden here by the CI contract on
   ; this very file.
+  ; The hardcoded root-level Deletes below are LEGACY fallbacks (missing
+  ; files are no-ops): pre-v1.11.1 installs carried LICENSE.md/SIGNATURE/
+  ; sheytan.ico at the root, and pre-audit installs a README.md. The
+  ; v1.11.1 payload (resources\docs + resources\brand) is removed by the
+  ; GENERATED manifest above — exactly what was written.
   Delete "$INSTDIR\${EXE}"
   Delete "$INSTDIR\LICENSE.md"
   Delete "$INSTDIR\README.md"

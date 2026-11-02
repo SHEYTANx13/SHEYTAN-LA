@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,6 +44,26 @@ type fakeCore struct {
 	lastSelectModel string
 	configPatched   bool
 
+	// v1.11.1 models/selection test surface: a controllable selection
+	// state machine for the non-destructive model-selection flow.
+	selectMux   sync.Mutex
+	selectPhase string        // GET-side live phase while a flight is active
+	selectBlock chan struct{} // non-nil: POST blocks until closed
+	selectFail  string        // non-empty: POST fails with this message
+	selectPosts int           // number of POST /api/models/select handled
+
+	// v1.11.1 engine update-check test surface: the controllable official
+	// llama.cpp release-check state the Models panel renders.
+	engineUpdMux       sync.Mutex
+	engineUpdStatus    string         // check status class (default current)
+	engineUpdInstalled string         // installed tag (default b12031)
+	engineUpdLatest    string         // latest resolved tag (default b12032 when update-available)
+	engineUpdAsset     string         // exact asset name override
+	engineUpdProgress  map[string]any // live progress envelope (nil = none)
+	engineUpdFail      bool           // GET check fails with 500
+	engineUpdPosts     int            // number of POST /api/engine/update handled
+	engineUpdBlock     chan struct{}  // non-nil: POST blocks until closed
+
 	cfg map[string]any
 }
 
@@ -68,7 +89,10 @@ func newFakeCore(t *testing.T) *fakeCore {
 	mux.HandleFunc("/api/sessions/", f.handleSession)
 	mux.HandleFunc("/api/run", f.handleRun)
 	mux.HandleFunc("/api/config", f.handleConfig)
+	mux.HandleFunc("/api/models", f.handleModels)
 	mux.HandleFunc("/api/models/select", f.handleSelect)
+	mux.HandleFunc("/api/engine/update/check", f.handleEngineUpdateCheck)
+	mux.HandleFunc("/api/engine/update", f.handleEngineUpdate)
 	mux.HandleFunc("/api/studio/state", f.handleStudioState)
 	f.srv = httptest.NewServer(mux)
 	// Point the unix-socket dialer at the TCP test server (test seam).
@@ -236,7 +260,21 @@ func (f *fakeCore) handleSelect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != http.MethodPost {
-		writeJSON(w, 200, map[string]any{"phase": "ready"})
+		// GET: the AUTHORITATIVE live selection state. While a POST
+		// flight is blocked (test-controlled), the phase the test set is
+		// reported; otherwise the settled "ready" state.
+		f.selectMux.Lock()
+		phase := f.selectPhase
+		inFlight := f.selectBlock != nil
+		model := f.lastSelectModel
+		f.selectMux.Unlock()
+		if inFlight && phase == "" {
+			phase = "select"
+		}
+		if phase == "" {
+			phase = "ready"
+		}
+		writeJSON(w, 200, map[string]any{"phase": phase, "model": model})
 		return
 	}
 	var body struct {
@@ -247,8 +285,147 @@ func (f *fakeCore) handleSelect(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "model required"})
 		return
 	}
+	f.selectMux.Lock()
+	f.selectPosts++
+	fail := f.selectFail
+	block := f.selectBlock
+	f.selectMux.Unlock()
+	if block != nil {
+		<-block
+	}
+	if fail != "" {
+		writeJSON(w, 500, map[string]string{"error": fail})
+		return
+	}
 	f.lastSelectModel = body.Model
 	writeJSON(w, 200, map[string]any{"phase": "ready", "model": body.Model, "applied": true})
+}
+
+// setSelectPhase drives the fake's GET-side live phase (tests).
+func (f *fakeCore) setSelectPhase(ph string) {
+	f.selectMux.Lock()
+	f.selectPhase = ph
+	f.selectMux.Unlock()
+}
+
+// selectPOSTs reports how many selection POSTs were handled (tests).
+func (f *fakeCore) selectPOSTs() int {
+	f.selectMux.Lock()
+	defer f.selectMux.Unlock()
+	return f.selectPosts
+}
+
+// handleModels serves the fake /api/models payload (two local models; the
+// second is already serving — enough surface for the selection-flow
+// tests: markers, detail, single-flight, phase polling).
+func (f *fakeCore) handleModels(w http.ResponseWriter, r *http.Request) {
+	if !f.authed(w, r) {
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"backend": "llama",
+		"local": []map[string]any{
+			{
+				"id": "model-a.gguf", "name": "Model A", "path": "/models/model-a.gguf",
+				"sizeBytes": 4294967296, "architecture": "llama", "quantization": "Q4_K_M",
+				"contextLength": 32768, "parameterInfo": "8B", "recommendedContext": 8192,
+				"visionState": "none", "serving": false,
+			},
+			{
+				"id": "model-b.gguf", "name": "Model B", "serving": true,
+			},
+		},
+	})
+}
+
+// handleEngineUpdateCheck serves the fake GET /api/engine/update/check —
+// the controllable official-release check state.
+func (f *fakeCore) handleEngineUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	if !f.authed(w, r) {
+		return
+	}
+	f.engineUpdMux.Lock()
+	defer f.engineUpdMux.Unlock()
+	if f.engineUpdFail {
+		writeJSON(w, 500, map[string]string{"error": "release list unreachable"})
+		return
+	}
+	status := f.engineUpdStatus
+	if status == "" {
+		status = "current"
+	}
+	installed := f.engineUpdInstalled
+	if installed == "" {
+		installed = "b12031"
+	}
+	latest := f.engineUpdLatest
+	if latest == "" && status == "update-available" {
+		latest = "b12032"
+	}
+	out := map[string]any{
+		"installedTag":     installed,
+		"installedVariant": "cpu",
+		"assetVariant":     "cpu",
+		"platform":         "windows/amd64",
+		"source":           "ggml-org/llama.cpp",
+		"status":           status,
+		"checkedAt":        "2026-11-02T00:00:00Z",
+	}
+	if latest != "" {
+		out["latestTag"] = latest
+		asset := f.engineUpdAsset
+		if asset == "" {
+			asset = "llama-" + latest + "-bin-win-cpu-x64.zip"
+		}
+		out["assetName"] = asset
+	}
+	switch status {
+	case "update-available":
+		out["message"] = "engine update available: " + installed + " to " + latest
+	case "current":
+		out["message"] = "engine is current"
+	}
+	if f.engineUpdProgress != nil {
+		out["progress"] = f.engineUpdProgress
+	}
+	writeJSON(w, 200, out)
+}
+
+// handleEngineUpdate serves the fake POST /api/engine/update — the
+// user-triggered engine update start (blocks while the test holds the
+// block channel; the check surface then reports the driven status).
+func (f *fakeCore) handleEngineUpdate(w http.ResponseWriter, r *http.Request) {
+	if !f.authed(w, r) {
+		return
+	}
+	f.engineUpdMux.Lock()
+	f.engineUpdPosts++
+	block := f.engineUpdBlock
+	f.engineUpdMux.Unlock()
+	if block != nil {
+		<-block
+	}
+	writeJSON(w, 200, map[string]any{
+		"status":  "installing",
+		"message": "engine update transaction started",
+	})
+}
+
+// setEngineUpdateCheck drives the fake check state (tests).
+func (f *fakeCore) setEngineUpdateCheck(status, installed, latest string, progress map[string]any) {
+	f.engineUpdMux.Lock()
+	f.engineUpdStatus = status
+	f.engineUpdInstalled = installed
+	f.engineUpdLatest = latest
+	f.engineUpdProgress = progress
+	f.engineUpdMux.Unlock()
+}
+
+// engineUpdatePOSTs reports how many engine-update POSTs were handled.
+func (f *fakeCore) engineUpdatePOSTs() int {
+	f.engineUpdMux.Lock()
+	defer f.engineUpdMux.Unlock()
+	return f.engineUpdPosts
 }
 
 // deepMerge mirrors the core's patch semantics for the fields the fake

@@ -55,6 +55,9 @@ func (s *Server) buildRecommendationInput(cfg *config.Config, modelName, task st
 		ConfiguredContext:  cfg.LLM.NumCtx,
 		EngineContextLimit: s.llama.EngineContextLimit(),
 		KVQuant:            cfg.EffectiveKVCacheQuant(),
+		// v1.11.1: the persisted speed-priority preference rides
+		// the ONE recommendation input — no second tuning engine.
+		PreferFastest: cfg.PreferFastest,
 	}
 	if !recommendation.IsValidTask(task) {
 		in.Task = recommendation.TaskChat

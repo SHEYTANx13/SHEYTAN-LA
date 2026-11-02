@@ -36,6 +36,10 @@ const (
 	// is retired from the artifact set).
 	LinuxExeName   = "SHEYTAN-LA"
 	LauncherScript = "SHEYTAN-LA.bat"
+	// BrandIconName is the installed brand asset (v1.11.1 minimal root:
+	// it ships under resources/brand — one payload authority feeding the
+	// ZIP, the NSIS shortcuts/ARP icon and the generated uninstall list).
+	BrandIconName = "sheytan.ico"
 )
 
 // Canonical workflow package-root variables. These are the exact
@@ -119,14 +123,17 @@ const (
 // RequiredWindowsZipEntries lists the entries the Windows portable ZIP
 // must contain, expressed against the contracted app root. This is the
 // CONCRETE truth (what the sealed ZIP must hold after the workflow's
-// variables expand).
+// variables expand). v1.11.1 minimal installed root: the executable and
+// the launcher stay at the root; every static file lives under
+// resources/docs and resources/brand; no root-level placeholder dirs.
 func (c Contract) RequiredWindowsZipEntries() []string {
 	return []string{
 		WindowsAppRoot + "/" + WindowsExeName,
-		WindowsAppRoot + "/README.txt",
-		WindowsAppRoot + "/BUILD-INFO.txt",
-		WindowsAppRoot + "/models/README.txt",
-		WindowsAppRoot + "/workspace/README.txt",
+		WindowsAppRoot + "/" + LauncherScript,
+		WindowsAppRoot + "/resources/docs/README.txt",
+		WindowsAppRoot + "/resources/docs/BUILD-INFO.txt",
+		WindowsAppRoot + "/resources/docs/LICENSE.md",
+		WindowsAppRoot + "/resources/brand/" + BrandIconName,
 	}
 }
 
@@ -135,13 +142,13 @@ func (c Contract) RequiredWindowsZipEntries() []string {
 // is rooted at LinuxAppRoot, the single Linux identity — a verifier that
 // mixes roots agrees with itself while disagreeing with the ZIP it
 // verifies, which is the exact failure class this contract prevents.
+// v1.11.1 minimal root: static content under resources/docs.
 func (c Contract) RequiredLinuxZipEntries() []string {
 	return []string{
 		LinuxAppRoot + "/" + LinuxExeName,
-		LinuxAppRoot + "/README.txt",
-		LinuxAppRoot + "/BUILD-INFO.txt",
-		LinuxAppRoot + "/models/README.txt",
-		LinuxAppRoot + "/workspace/README.txt",
+		LinuxAppRoot + "/resources/docs/README.txt",
+		LinuxAppRoot + "/resources/docs/BUILD-INFO.txt",
+		LinuxAppRoot + "/resources/docs/LICENSE.md",
 	}
 }
 
@@ -153,10 +160,11 @@ func (c Contract) RequiredLinuxZipEntries() []string {
 func (c Contract) RequiredWindowsZipWorkflowEntries() []string {
 	return []string{
 		WinRootPwsh + "/" + WindowsExeName,
-		WinRootPwsh + "/README.txt",
-		WinRootPwsh + "/BUILD-INFO.txt",
-		WinRootPwsh + "/models/README.txt",
-		WinRootPwsh + "/workspace/README.txt",
+		WinRootPwsh + "/" + LauncherScript,
+		WinRootPwsh + "/resources/docs/README.txt",
+		WinRootPwsh + "/resources/docs/BUILD-INFO.txt",
+		WinRootPwsh + "/resources/docs/LICENSE.md",
+		WinRootPwsh + "/resources/brand/" + BrandIconName,
 	}
 }
 
@@ -166,9 +174,8 @@ func (c Contract) RequiredWindowsZipWorkflowEntries() []string {
 func (c Contract) RequiredLinuxZipWorkflowEntries() []string {
 	return []string{
 		LinuxRootBash + "/" + LinuxExeName,
-		LinuxRootBash + "/README.txt",
-		LinuxRootBash + "/BUILD-INFO.txt",
-		LinuxRootBash + "/models/README.txt",
-		LinuxRootBash + "/workspace/README.txt",
+		LinuxRootBash + "/resources/docs/README.txt",
+		LinuxRootBash + "/resources/docs/BUILD-INFO.txt",
+		LinuxRootBash + "/resources/docs/LICENSE.md",
 	}
 }
