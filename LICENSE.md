@@ -1,6 +1,6 @@
-# LICENSE.md — SHEYTAN-Local-Agent licensing
+# LICENSE — SHEYTAN-Local-Agent licensing
 
-Copyright © 2024–2026 Parsaetak (https://github.com/Parsaetak). All rights
+Copyright © 2024–2026 Parsaetak + SHEYTAN ([https://linktr.ee/Parsaetak], [https://github.com/SHEYTANx13]). All rights
 reserved.
 
 This is the **sole licensing artifact** of SHEYTAN-Local-Agent ("the
@@ -495,5 +495,5 @@ Only the repository maintainer (Parsaetak) may reclassify a component:
 ## 8. Contact
 
 Licensing questions, proprietary-use inquiries and exceptions:
-**https://github.com/Parsaetak** (open an issue or use the contact
+**https://linktr.ee/Parsaetak** or **https://github.com/SHEYTANx13** (open an issue or use the contact
 channel listed there).
