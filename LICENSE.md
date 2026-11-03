@@ -1,6 +1,6 @@
 # LICENSE — SHEYTAN-Local-Agent licensing
 
-Copyright © 2024–2026 Parsaetak + SHEYTAN ([https://linktr.ee/Parsaetak], [https://github.com/SHEYTANx13]). All rights
+Copyright © 2024–2026 Parsaetak + SHEYTAN (https://linktr.ee/Parsaetak, https://github.com/SHEYTANx13). All rights
 reserved.
 
 This is the **sole licensing artifact** of SHEYTAN-Local-Agent ("the
