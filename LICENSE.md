@@ -1,6 +1,6 @@
 # LICENSE — SHEYTAN-Local-Agent licensing
 
-Copyright © 2024–2026 Parsaetak + SHEYTAN (https://linktr.ee/Parsaetak, https://github.com/SHEYTANx13). All rights
+Copyright © 2024–2026 Parsaetak (https://linktr.ee/Parsaetak) + SHEYTAN (https://github.com/SHEYTANx13). All rights
 reserved.
 
 This is the **sole licensing artifact** of SHEYTAN-Local-Agent ("the
@@ -372,11 +372,11 @@ governing every component classified Proprietary in §2:
 
 <!-- proprietary-text-begin -->
 
-PARSAETAK PROPRIETARY LICENSE
+PARSAETAK & SHEYTAN PROPRIETARY LICENSE
 =============================
 Version 1.1 · Last updated: 2026-09-26
 
-Copyright © 2024–2026 Parsaetak (https://github.com/Parsaetak). All rights
+Copyright © 2024–2026 Parsaetak (https://linktr.ee/Parsaetak) + SHEYTAN (https://github.com/SHEYTANx13) . All rights
 reserved.
 
 SCOPE OF THIS LICENSE
