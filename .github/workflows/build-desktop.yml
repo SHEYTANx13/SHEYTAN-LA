@@ -37,8 +37,9 @@
 #   Linux x64      native Linux build of SHEYTAN-LA (executable bit), ELF
 #                  verification, compiled-version cross-check, Xvfb
 #                  launch smoke, portable ZIP
-#   consolidate-logs   ONE consolidated log artifact from namespaced
-#                  per-job parts (always runs; red runs keep their log)
+#   consolidate-logs   ONE plain-text run log (SHEYTAN-LA-all-logs.txt)
+#                  collected from the run-attempt logs API (always runs;
+#                  red runs keep their log)
 #   release        tags only: publishes the contracted artifacts
 #
 # Honesty contract: a green run is build/test/smoke evidence on hosted
@@ -133,7 +134,7 @@ jobs:
           echo "RUN gofmt -l cmd internal ui" >> ci-logs/gate-order.txt
           # The gate's own evidence MUST outlive the step log: on red, the
           # violation list and the exact formatter version are teed into the
-          # uploaded preflight-logs-part artifact (run #118 root cause: the
+          # consolidated run-log artifact (run #118 root cause: the
           # file list existed only in the step log, so nobody could retrieve
           # which files to reformat).
           {
@@ -144,7 +145,7 @@ jobs:
           if [ -n "$unformatted" ]; then
             echo "::error::gofmt violations — run gofmt -w on:"
             echo "$unformatted"
-            echo "::error::full list captured in the preflight-logs-part artifact at ci-logs/preflight-gofmt.log"
+            echo "::error::full list captured at ci-logs/preflight-gofmt.log — retrievable in the SHEYTAN-LA-all-logs.txt run-log artifact"
             exit 1
           fi
           echo "gofmt OK" | tee -a ci-logs/preflight-gofmt.log
@@ -155,21 +156,6 @@ jobs:
           set -euo pipefail
           go vet ./... 2>&1 | tee ci-logs/preflight-vet.log
           echo "gate OK: go vet ./..."
-
-      - name: Upload preflight log part
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          # v1.11.1 STABLE NAME CONTRACT: no run-attempt suffix — a rerun
-          # REPLACES the same artifact (upload-artifact overwrite: true,
-          # verified against the pinned v7 action.yml) instead of
-          # colliding. Run id / commit / attempt live INSIDE the
-          # consolidated report as structured metadata.
-          name: preflight-logs-part
-          path: ci-logs/
-          retention-days: 7
-          if-no-files-found: ignore
-          overwrite: true
 
   # ==========================================================================
   # Audit — the headless core suite, race gates and release-surface gates.
@@ -236,16 +222,6 @@ jobs:
           echo "RUN bash scripts/ci/consolidate-run-log-fixtures.sh" >> ci-logs/gate-order.txt
           bash scripts/ci/consolidate-run-log-fixtures.sh 2>&1 | tee ci-logs/audit-log-fixtures.log
           echo "gate OK: log collector fixtures" >> ci-logs/gate-order.txt
-
-      - name: Upload audit log part
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: audit-logs-part
-          path: ci-logs/
-          retention-days: 7
-          if-no-files-found: ignore
-          overwrite: true
 
   # ==========================================================================
   # UI — the Fyne suite (real widget trees over a fake core), the full
@@ -383,16 +359,6 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/ci-logs"
           cp smoke-stdout.log "$GITHUB_WORKSPACE/ci-logs/linux-smoke-stdout.log"
 
-      - name: Upload UI log part
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: ui-logs-part
-          path: ci-logs/
-          retention-days: 7
-          if-no-files-found: ignore
-          overwrite: true
-
   # ==========================================================================
   # Windows x64 — the native build of SHEYTAN-LA.exe (MSYS2 UCRT64 CGO for
   # Fyne), PE verification, launch smoke, portable ZIP + NSIS installer.
@@ -464,7 +430,7 @@ jobs:
       #   - every failure path emits a titled ::error naming the stage,
       #     the attempt count and the got/want hashes; the step transcript
       #     (download attempt lines + hash result) tees into
-      #     ci-logs/win-mesa-acquire.log → windows-logs-part artifact.
+      #     ci-logs/win-mesa-acquire.log → the consolidated run-log artifact.
       # Mesa pin (verified 2026-10-30 against the real release asset):
       #   repo/release : pal1000/mesa-dist-win  tag 26.2.5
       #   asset        : mesa3d-26.2.5-release-msvc.7z (70,248,244 bytes)
@@ -775,7 +741,7 @@ jobs:
       # Best-effort contract: the audit's own PE-parse failures are
       # FAIL-OPEN (log + continue) — it adds signal, it never blocks a
       # green smoke. Full output tees into
-      # ci-logs/win-smoke-dep-audit.log (windows-logs-part artifact).
+      # ci-logs/win-smoke-dep-audit.log (consolidated run-log artifact).
       - name: Pre-launch dependency audit (static imports, fail-open parser)
         run: |
           $smokeRoot = Join-Path $env:RUNNER_TEMP "win-smoke\${{ env.WIN_PKG_ROOT }}"
@@ -909,8 +875,8 @@ jobs:
           Write-Host "--- application output tail ---"
           if (Test-Path $smokeLog) { Get-Content $smokeLog -Tail 20 }
 
-      # The smoke copy's own diagnostics must land in the windows-logs-part
-      # artifact (run #117: zero diagnostics survived the step log). Red or
+      # The smoke copy's own diagnostics must land in the consolidated
+      # run-log artifact (run #117: zero diagnostics survived the step log). Red or
       # green, best-effort collection of the app's portable data residue
       # from the COPY (never the staging tree).
       - name: Collect smoke diagnostics into ci-logs (best-effort)
@@ -934,18 +900,6 @@ jobs:
               if (Test-Path $f) { Copy-Item $f ("ci-logs/" + $f) -Force; Write-Host "collected $f -> ci-logs" }
             }
           } catch { Write-Host "diagnostic collection (best-effort) failed: $($_.Exception.Message)" }
-
-      - name: Upload smoke app output (Windows)
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          # v1.11.1: run id keeps this diagnostic artifact unique per run;
-          # the attempt suffix is gone (a rerun replaces the same name).
-          name: windows-smoke-app-output-${{ github.run_id }}
-          path: smoke-app-output.log*
-          if-no-files-found: ignore
-          retention-days: 7
-          overwrite: true
 
       # BUILD-INFO and package metadata (run #54 root cause #3): explicit
       # writes — no here-string indentation traps — each file validated
@@ -1145,7 +1099,7 @@ jobs:
           # Run #122 lesson: the red was NAMED but not RETRIEVABLE — the
           # makensis transcript existed only in the auth-gated step log.
           # Every makensis line is now teed into ci-logs/win-nsis-build.log
-          # (uploaded by the windows-logs-part artifact), and the
+          # (retrievable in the consolidated run-log artifact), and the
           # payload-uninstall include marker is asserted in that teed log
           # after the build, with a titled ::error on absence.
           $nsi = "packaging/nsis/installer.nsi"
@@ -1191,8 +1145,9 @@ jobs:
       # place, does not self-delete, lets the caller wait for the exit
       # code). https://nsis.sourceforge.io/Docs/Chapter3.html
       # Every failure emits a titled ::error naming the stage and the
-      # transcript; the transcript reaches windows-logs-part on red AND
-      # green (Start-Transcript + the always() upload). Cleanup is strictly
+      # transcript; the transcript reaches the consolidated run-log on red
+      # AND green (the run-attempt log collector runs with if: always()).
+      # Cleanup is strictly
       # bounded to the unique GUID-named directory under RUNNER_TEMP.
       # ----------------------------------------------------------------------
       - name: "NSIS install/uninstall smoke (payload symmetry + data preservation)"
@@ -1352,26 +1307,18 @@ jobs:
           if (-not (Test-Path $zip) -and (Test-Path $inst)) { Write-Host "::error::package gate: portable ZIP missing at $zip while the installer exists at $inst — packaging drifted"; throw "portable ZIP missing while the installer exists — packaging drifted" }
           Write-Host "package gate: reached"
 
+      # v1.11.1 §7.4: the bundle uploads only on job success — never on
+      # always() — and only when BOTH verified distribution files exist
+      # (error on missing): no partial or placeholder package bundles.
       - name: Upload Windows package
-        if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7 (immutable SHA)
         with:
           name: windows-x64-package
           path: |
             dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip
             dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer.exe
           retention-days: 14
-          if-no-files-found: ignore
-          overwrite: true
-
-      - name: Upload Windows log part
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: windows-logs-part
-          path: ci-logs/
-          retention-days: 7
-          if-no-files-found: ignore
+          if-no-files-found: error
           overwrite: true
 
   # ==========================================================================
@@ -1636,39 +1583,38 @@ jobs:
           fi
           echo "package gate: reached"
 
+      # v1.11.1 §7.4: the bundle uploads only on job success — never on
+      # always() — and only when the verified portable archive exists
+      # (error on missing): no partial or placeholder package bundles.
       - name: Upload Linux package
-        if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7 (immutable SHA)
         with:
           name: linux-x64-package
           path: dist/${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64.zip
           retention-days: 14
-          if-no-files-found: ignore
-          overwrite: true
-
-      - name: Upload Linux log part
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: linux-logs-part
-          path: ci-logs/
-          retention-days: 7
-          if-no-files-found: ignore
+          if-no-files-found: error
           overwrite: true
 
   # ==========================================================================
-  # Consolidate logs — ONE authoritative consolidated text artifact per
-  # RUN (run #54 root cause #4; v1.11.1: the artifact name is stable —
-  # run id only, no attempt suffix; a rerun REPLACES it): the per-job log
-  # parts are downloaded
-  # WITHOUT merge-multiple (each artifact extracts into its own
-  # namespaced directory, so same-named logs like gate-order.txt can
-  # never overwrite each other) and are assembled by
-  # scripts/ci/consolidate-run-log.sh into a deterministic report with a
-  # run summary, an error index, a warning index and an explicit MISSING
-  # LOG SOURCE / NEVER_STARTED section. The artifact is uploaded on red
-  # and green runs alike; the collector fails AFTER preservation when a
-  # source is missing so a red run keeps its complete log.
+  # Consolidate logs — ONE authoritative PLAIN-TEXT run log per RUN,
+  # collected directly from the GitHub run-attempt logs API (no per-job
+  # part artifacts, no intermediate downloads, no ZIP wrapper:
+  # upload-artifact@v7 archive:false uploads the file itself, so the
+  # artifact name IS the filename: SHEYTAN-LA-all-logs.txt).
+  #   - Always runs — red and cancelled runs keep their log.
+  #   - Sees EVERY job of the run through the jobs API, including the
+  #     tag-only release job (skipped on normal main pushes = NEVER_STARTED,
+  #     never "failed"). The needs list stays acyclic: release needs
+  #     consolidate-logs, so consolidate-logs does NOT need release; the
+  #     jobs API covers it regardless.
+  #   - Fails closed on jobs-API/pagination/redirect/download/ZIP errors:
+  #     a diagnostic report is still written and uploaded, then the
+  #     collector verdict step fails the job.
+  #   - The bearer token is sent only to the API host; the signed download
+  #     URL is fetched by a credential-free curl after an https check.
+  #   - Secrets are redacted before the artifact is written.
+  # The collector script and its offline fixture suite (run in the audit
+  # job) live in scripts/ci/consolidate-run-log*.sh.
   # ==========================================================================
   consolidate-logs:
     name: Consolidate logs
@@ -1676,134 +1622,77 @@ jobs:
     needs: [preflight, audit, ui, build-windows, build-linux]
     if: always()
     timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: Checkout (collector script)
         uses: actions/checkout@v7
 
-      # ONE download step per expected log part, each with an explicit
-      # name + path. Run #118 root cause: a single pattern-download step
-      # lands its files FLAT into ci-parts/ whenever the pattern matches
-      # EXACTLY ONE artifact (download-artifact@v8 resolves the destination
-      # as artifacts.length === 1 ? path : path/<artifact.name>) — so the
-      # red-preflight-only shape of run #118 produced ci-parts/
-      # gate-order.txt instead of a namespaced job directory, the collector
-      # counted a missing source, and the job went red on exit 1 AFTER the
-      # report was written. An explicit name: download is ALWAYS namespaced
-      # regardless of how many artifacts exist; skipped jobs contribute no
-      # download attempt (the if: gate) and a ran-but-silent job keeps the
-      # collector as the single red signal (continue-on-error) that names
-      # the coverage gap.
-      #
-      # v1.11.1 STABLE NAMES: the artifact names carry NO run-attempt
-      # suffix (a rerun REPLACES the same stable name via upload
-      # overwrite: true). The download path keeps the per-job namespace —
-      # ci-parts/<stable-artifact-name>/ — so same-named logs from
-      # different jobs still never flatten/collide.
-      - name: Download preflight log part
-        if: needs.preflight.result != 'skipped'
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          name: preflight-logs-part
-          path: ci-parts/preflight-logs-part
-
-      - name: Download audit log part
-        if: needs.audit.result != 'skipped'
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          name: audit-logs-part
-          path: ci-parts/audit-logs-part
-
-      - name: Download ui log part
-        if: needs.ui.result != 'skipped'
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          name: ui-logs-part
-          path: ci-parts/ui-logs-part
-
-      - name: Download windows log part
-        if: needs.build-windows.result != 'skipped'
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          name: windows-logs-part
-          path: ci-parts/windows-logs-part
-
-      - name: Download linux log part
-        if: needs.build-linux.result != 'skipped'
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          name: linux-logs-part
-          path: ci-parts/linux-logs-part
-
-      - name: Build the consolidated run log
+      # ONE collector, ONE plain-text artifact. The collector pulls the
+      # run-attempt logs archive + paginated jobs metadata directly from
+      # the GitHub API — no per-job part artifacts, no intermediate
+      # downloads, nothing to flatten or collide. Red/cancelled runs keep
+      # their log (the collector writes the report BEFORE exiting nonzero
+      # on coverage gaps, and the upload below runs with if: always()).
+      - name: Collect the run-attempt logs into one plain-text report
         id: collector
         env:
-          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
-          AUDIT_RESULT: ${{ needs.audit.result }}
-          UI_RESULT: ${{ needs.ui.result }}
-          WINDOWS_RESULT: ${{ needs.build-windows.result }}
-          LINUX_RESULT: ${{ needs.build-linux.result }}
+          GH_TOKEN: ${{ github.token }}
+          CONSOLIDATE_REPO: ${{ github.repository }}
+          CONSOLIDATE_RUN_ID: ${{ github.run_id }}
+          CONSOLIDATE_ATTEMPT: ${{ github.run_attempt }}
+          CONSOLIDATE_COMMIT: ${{ github.sha }}
+          CONSOLIDATE_REF: ${{ github.ref }}
+          CONSOLIDATE_WORKFLOW: ${{ github.workflow }}
+          CONSOLIDATE_TRIGGER: ${{ github.event_name }}
         run: |
           set -uo pipefail
-          specs=()
-          specs+=("preflight-logs-part:${PREFLIGHT_RESULT}")
-          specs+=("audit-logs-part:${AUDIT_RESULT}")
-          specs+=("ui-logs-part:${UI_RESULT}")
-          specs+=("windows-logs-part:${WINDOWS_RESULT}")
-          specs+=("linux-logs-part:${LINUX_RESULT}")
-          job_args=()
-          for s in "${specs[@]}"; do job_args+=("--job" "$s"); done
-          bash scripts/ci/consolidate-run-log.sh \
-            --out consolidated-run-log.txt \
-            --parts-root ci-parts \
-            --run-id "${{ github.run_id }}" \
-            --attempt "${{ github.run_attempt }}" \
-            --commit "${{ github.sha }}" \
-            --ref "${{ github.ref }}" \
-            --workflow "${{ github.workflow }}" \
-            --trigger "${{ github.event_name }}" \
-            --started-at "${{ github.event.head_commit.timestamp }}" \
-            "${job_args[@]}"
-          rc=$?
-          # A red collector must NAME the coverage gap (run #118: exit 1
-          # with no retrievable diagnosis). The report's MISSING LOG SOURCE
-          # section is the authority — mirror every missing job as its own
-          # ::error annotation so the run page carries the answer.
-          if [ "$rc" -ne 0 ] && [ -f consolidated-run-log.txt ]; then
-            sed -n '/^=== MISSING LOG SOURCE ===/,/^$/p' consolidated-run-log.txt \
-              | grep -oE "job '[^']*'" | sed "s/^job '//; s/'$//" | while IFS= read -r j; do
-                echo "::error::Consolidate logs: missing log source — job '$j' contributed no log parts (full report in the consolidated-run-log artifact)"
-              done
+          rc=0
+          bash scripts/ci/consolidate-run-log.sh --out SHEYTAN-LA-all-logs.txt || rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Consolidate logs: collector reported a coverage/verification gap (rc=$rc) — the report artifact still carries the diagnosis"
           fi
           {
             echo "## Consolidated run log"
             echo ""
-            echo "Artifact: \`SHEYTAN-LA-all-logs-run-${{ github.run_id }}\` (consolidated-run-log.txt) — attempt ${{ github.run_attempt }} is recorded INSIDE the report as provenance metadata"
-            echo ""
-            echo "=== ERROR INDEX === summary is embedded in the artifact; check the RUN SUMMARY section for captured/missing counts."
+            echo "Artifact: \`SHEYTAN-LA-all-logs.txt\` — ONE plain-text file (upload-artifact archive:false), attempt ${{ github.run_attempt }} recorded INSIDE the report."
             echo "If the artifact contains a '=== MISSING LOG SOURCE ===' section, job logs could not be recovered for those jobs and coverage is incomplete."
             echo ""
-            echo "Job results: preflight=${PREFLIGHT_RESULT} audit=${AUDIT_RESULT} ui=${UI_RESULT} windows=${WINDOWS_RESULT} linux=${LINUX_RESULT}"
+            echo "Job results: preflight=${{ needs.preflight.result }} audit=${{ needs.audit.result }} ui=${{ needs.ui.result }} windows=${{ needs.build-windows.result }} linux=${{ needs.build-linux.result }}"
           } >> "$GITHUB_STEP_SUMMARY"
-          exit $rc
 
-      # The ONE mandatory user-facing log artifact: if-no-files-found:
-      # error (never ignore — a silently absent log is a contract breach).
-      # v1.11.1: stable name (run id only) — a rerun replaces the same
+      # The ONE mandatory user-facing log artifact. upload-artifact is
+      # pinned to the verified immutable v7 commit SHA; archive:false
+      # uploads the file ITSELF (filename = artifact display name, no ZIP
+      # wrapper — verified against this revision's action.yml);
+      # if-no-files-found: error (never ignore — a silently absent log is
+      # a contract breach); stable name — a rerun replaces the same
       # artifact; the attempt number lives inside the report content.
-      - name: Upload the consolidated log
+      - name: Upload the consolidated run log (single plain-text artifact)
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7 (immutable SHA)
         with:
-          name: SHEYTAN-LA-all-logs-run-${{ github.run_id }}
-          path: consolidated-run-log.txt
-          retention-days: 14
+          path: SHEYTAN-LA-all-logs.txt
           if-no-files-found: error
+          retention-days: 14
           overwrite: true
+          archive: false
+
+      - name: Collector verdict (fail the job on coverage gaps)
+        if: always()
+        run: |
+          rc="${{ steps.collector.outputs.rc }}"
+          if [ -z "$rc" ]; then
+            echo "::error::collector step produced no verdict — fail closed"
+            exit 1
+          fi
+          if [ "$rc" != "0" ]; then
+            echo "::error::collector exited $rc — the report artifact names the missing log sources / errors"
+            exit 1
+          fi
+          echo "collector verdict: complete report (rc=0)"
 
   # ==========================================================================
   # Release — tags only. Publishes the contracted artifacts.
