@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/humanize"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/updater"
 	"io"
 	"os"
 	"path/filepath"
@@ -82,17 +83,6 @@ func (t ArchiveTool) Run(ctx context.Context, args json.RawMessage) (string, err
 	default:
 		return "", fmt.Errorf("unknown action %q (zip|unzip|tar|untar|list)", p.Action)
 	}
-}
-
-// safeJoin resolves entry names inside the extraction root, refusing
-// absolute paths and .. traversal (zip-slip).
-func safeJoin(root, name string) (string, error) {
-	name = strings.TrimPrefix(strings.ReplaceAll(name, "\\", "/"), "/")
-	clean := filepath.Clean(name)
-	if strings.HasPrefix(clean, "..") || filepath.IsAbs(clean) {
-		return "", fmt.Errorf("unsafe entry %q (path traversal)", name)
-	}
-	return filepath.Join(root, clean), nil
 }
 
 func (t ArchiveTool) zip_(sources []string, dest string) (string, error) {
@@ -213,30 +203,50 @@ func (t ArchiveTool) unzip(path, dest string) (string, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", err
 	}
+	// v1.11.1 (run 41901967798): ROOTED extraction. Every write goes
+	// through an os.Root handle bound to the destination root, so the OS
+	// resolves the final path inside the root — a hostile member can
+	// neither escape lexically nor redirect a later write through a
+	// symlink planted in the extraction tree. Symlink members are
+	// rejected outright, and member names are validated by the ONE
+	// authoritative lexical validator shared with the updater
+	// (updater.SafeArchiveRel): absolute/rooted/drive/UNC members,
+	// traversal and NUL-bearing names all fail closed.
+	rooted, err := os.OpenRoot(root)
+	if err != nil {
+		return "", err
+	}
+	defer rooted.Close()
+
 	var total uint64
 	extracted := 0
 	for _, zf := range zr.File {
 		if zf.UncompressedSize64 > archiveMaxOut || total+zf.UncompressedSize64 > archiveMaxOut {
 			return "", fmt.Errorf("archive too large (cap %d MB)", archiveMaxOut>>20)
 		}
-		target, err := safeJoin(root, zf.Name)
+		if zf.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("unsafe entry %q (symlink members are not allowed)", zf.Name)
+		}
+		rel, err := updater.SafeArchiveRel(zf.Name)
 		if err != nil {
 			return "", err
 		}
 		if zf.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := rooted.MkdirAll(rel, 0o755); err != nil {
 				return "", err
 			}
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return "", err
+		if dirRel := filepath.Dir(rel); dirRel != "." {
+			if err := rooted.MkdirAll(dirRel, 0o755); err != nil {
+				return "", err
+			}
 		}
 		src, err := zf.Open()
 		if err != nil {
 			return "", err
 		}
-		dst, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		dst, err := rooted.OpenFile(rel, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 		if err != nil {
 			src.Close()
 			return "", err
@@ -248,7 +258,7 @@ func (t ArchiveTool) unzip(path, dest string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		reportFileCreated(target)
+		reportFileCreated(filepath.Join(root, rel))
 		extracted++
 	}
 	return fmt.Sprintf("unzipped %d file(s) from %s -> %s", extracted, path, destOrAuto(dest, root)), nil
@@ -356,6 +366,11 @@ func (t ArchiveTool) untar(path, dest string) (string, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", err
 	}
+	rooted, err := os.OpenRoot(root)
+	if err != nil {
+		return "", err
+	}
+	defer rooted.Close()
 	tr := tar.NewReader(r)
 	extracted := 0
 	var total uint64
@@ -370,20 +385,29 @@ func (t ArchiveTool) untar(path, dest string) (string, error) {
 		if extracted > archiveMaxN || total > archiveMaxOut {
 			return "", fmt.Errorf("archive too large (entry/size cap)")
 		}
-		target, err := safeJoin(root, hdr.Name)
+		// v1.11.1 (run 41901967798): rooted extraction + link-member
+		// rejection + the shared lexical validator (updater.SafeArchiveRel).
+		if hdr.Typeflag == tar.TypeSymlink || hdr.Typeflag == tar.TypeLink {
+			return "", fmt.Errorf("unsafe entry %q (link members are not allowed)", hdr.Name)
+		}
+
+		rel, err := updater.SafeArchiveRel(hdr.Name)
 		if err != nil {
 			return "", err
 		}
+
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := rooted.MkdirAll(rel, 0o755); err != nil {
 				return "", err
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return "", err
+			if dirRel := filepath.Dir(rel); dirRel != "." {
+				if err := rooted.MkdirAll(dirRel, 0o755); err != nil {
+					return "", err
+				}
 			}
-			dst, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+			dst, err := rooted.OpenFile(rel, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 			if err != nil {
 				return "", err
 			}
@@ -393,7 +417,7 @@ func (t ArchiveTool) untar(path, dest string) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			reportFileCreated(target)
+			reportFileCreated(filepath.Join(root, rel))
 			extracted++
 		}
 	}

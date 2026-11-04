@@ -1180,6 +1180,19 @@ func extractArchiveBySuffix(archivePath, url, dir string) error {
 
 		tr := tar.NewReader(gz)
 
+		// v1.11.1 (run 41901967798): ROOTED extraction. The write side is
+		// bound to an os.Root handle on the staging directory, so the OS
+		// resolves the final path INSIDE the root — a lexical validator
+		// alone cannot stop a symlink planted in the staging tree from
+		// redirecting a later member write outside it. Link members are
+		// rejected outright: a staged engine archive must be a plain
+		// file tree.
+		rooted, err := os.OpenRoot(dir)
+		if err != nil {
+			return err
+		}
+		defer rooted.Close()
+
 		for {
 			hdr, err := tr.Next()
 			if err == io.EOF {
@@ -1189,23 +1202,29 @@ func extractArchiveBySuffix(archivePath, url, dir string) error {
 				return err
 			}
 
-			out, err := SafeArchivePath(dir, hdr.Name)
+			if hdr.Typeflag == tar.TypeSymlink || hdr.Typeflag == tar.TypeLink {
+				return fmt.Errorf("tar member %q is a link — link members are not allowed in engine archives", hdr.Name)
+			}
+
+			rel, err := SafeArchiveRel(hdr.Name)
 			if err != nil {
 				return err
 			}
 
 			if hdr.Typeflag == tar.TypeDir {
-				if err := os.MkdirAll(out, 0o755); err != nil {
+				if err := rooted.MkdirAll(rel, 0o755); err != nil {
 					return err
 				}
 				continue
 			}
 
-			if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-				return err
+			if dirRel := filepath.Dir(rel); dirRel != "." {
+				if err := rooted.MkdirAll(dirRel, 0o755); err != nil {
+					return err
+				}
 			}
 
-			outFile, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
+			outFile, err := rooted.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
 			if err != nil {
 				return err
 			}

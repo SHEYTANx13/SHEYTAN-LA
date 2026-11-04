@@ -820,13 +820,30 @@ func extractZip(zipPath, dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	// v1.11.1 (run 41901967798): ROOTED extraction. Every write goes
+	// through an os.Root handle bound to the staging directory: the OS
+	// resolves the final path inside the root, so a hostile member can
+	// neither escape lexically nor redirect a later write through a
+	// symlink planted in the staging tree. Symlink members are rejected
+	// outright — a staged engine update must be a plain file tree.
+	rooted, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer rooted.Close()
+
 	for _, f := range zr.File {
-		out, err := safeZipPath(dir, f.Name)
+		if f.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("zip member %q is a symlink — link members are not allowed in engine update archives", f.Name)
+		}
+
+		rel, err := safeZipRel(f.Name)
 		if err != nil {
 			return err
 		}
+
 		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(out, 0o755); err != nil {
+			if err := rooted.MkdirAll(rel, 0o755); err != nil {
 				return err
 			}
 			continue
@@ -834,8 +851,10 @@ func extractZip(zipPath, dir string) error {
 		if f.UncompressedSize64 > engineUpdateEntryCapBytes {
 			return fmt.Errorf("zip member %q exceeds %d bytes", f.Name, engineUpdateEntryCapBytes)
 		}
-		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-			return err
+		if dirRel := filepath.Dir(rel); dirRel != "." {
+			if err := rooted.MkdirAll(dirRel, 0o755); err != nil {
+				return err
+			}
 		}
 		rc, err := f.Open()
 		if err != nil {
@@ -845,7 +864,7 @@ func extractZip(zipPath, dir string) error {
 		// mark the server binary executable, and the validated candidate
 		// must be executable BEFORE it is swapped in (the pre-swap
 		// static gate rejects non-executable files on Unix).
-		fo, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode().Perm())
+		fo, err := rooted.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode().Perm())
 		if err != nil {
 			_ = rc.Close()
 			return err
@@ -890,6 +909,43 @@ func extractZip(zipPath, dir string) error {
 // under filepath.IsAbs on Windows (it is "rooted" without a volume), so
 // the previous IsAbs/VolumeName checks alone let it through.
 func safeZipPath(dir, name string) (string, error) {
+	// v1.11.1: the lexical layer is shared with the ROOTED extractors
+	// through safeZipRel — the absolute and relative spellings can
+	// never disagree about what an extractable member looks like.
+	rel, err := safeZipRel(name)
+	if err != nil {
+		return "", err
+	}
+
+	base, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+
+	base = filepath.Clean(base)
+
+	target := filepath.Join(base, rel)
+	relCheck, err := filepath.Rel(base, target)
+	if err != nil {
+		return "", err
+	}
+
+	if relCheck == "" || relCheck == ".." ||
+		strings.HasPrefix(relCheck, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("zip path %q escapes extraction directory", name)
+	}
+
+	return target, nil
+}
+
+// safeZipRel is the LEXICAL layer of safeZipPath: it validates one
+// archive member and returns the CLEAN, ROOT-RELATIVE name (no directory
+// binding), for callers that perform the open through a rooted handle
+// (os.Root). Rejected (separator-canonical — the checks hold regardless
+// of the OS that produced the archive): POSIX-absolute, Windows-rooted,
+// drive-letter and UNC members, any ".." traversal, empty/"." names and
+// NUL-bearing names.
+func safeZipRel(name string) (string, error) {
 	name = strings.TrimSpace(name)
 
 	if name == "" {
@@ -904,8 +960,8 @@ func safeZipPath(dir, name string) (string, error) {
 	// host, so rooted/UNC/traversal shapes are visible everywhere.
 	unified := strings.ReplaceAll(name, "\\", "/")
 
-	// POSIX-absolute, Windows-rooted ("\x") and UNC ("\\srv/share")
-	// members all begin with a separator once unified.
+	// POSIX-absolute, Windows-rooted and UNC members all begin with a
+	// separator once unified.
 	if strings.HasPrefix(unified, "/") {
 		return "", fmt.Errorf("zip path %q is absolute", name)
 	}
@@ -931,31 +987,36 @@ func safeZipPath(dir, name string) (string, error) {
 		return "", fmt.Errorf("zip path %q is absolute or contains a volume", name)
 	}
 
-	base, err := filepath.Abs(dir)
-	if err != nil {
-		return "", err
+	rel := strings.TrimPrefix(clean, string(filepath.Separator))
+
+	if rel == "" || rel == "." {
+		return "", fmt.Errorf("zip contains invalid path %q", name)
 	}
 
-	base = filepath.Clean(base)
+	rel = filepath.Clean(rel)
 
-	target := filepath.Join(base, clean)
-	rel, err := filepath.Rel(base, target)
-	if err != nil {
-		return "", err
-	}
-
-	if rel == "" || rel == ".." ||
-		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	// The relative form must still be INSIDE the root: Clean can
+	// collapse interior ".." segments into a leading one.
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("zip path %q escapes extraction directory", name)
 	}
 
-	return target, nil
+	return rel, nil
 }
 
 // SafeArchivePath is the exported view of the authoritative validator for
 // sibling packages (internal/llm engine downloads share the contract).
 func SafeArchivePath(dir, name string) (string, error) {
 	return safeZipPath(dir, name)
+}
+
+// SafeArchiveRel is the exported ROOT-RELATIVE view of the same
+// authoritative validation: the clean member name to open through an
+// os.Root handle bound to the extraction directory. Sibling extractors
+// (the internal/tools archive unpacking) share the ONE rule set through
+// this spelling.
+func SafeArchiveRel(name string) (string, error) {
+	return safeZipRel(name)
 }
 
 func humanWhen(t time.Time) string {

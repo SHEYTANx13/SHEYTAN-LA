@@ -148,6 +148,18 @@ type LlamaServer struct {
 	// Guarded by mu. Nil when no process is owned.
 	exitDone chan struct{}
 
+	// exitSeen records that the exit watcher observed the CURRENT
+	// child's death (v1.11.1 boot-commit honesty gate, run
+	// 41901967798). The watcher sets it in the same critical section
+	// that confiscates cmd, and the boot's ready-commit re-reads it
+	// under the SAME mutex: a child that dies between its /health 200
+	// and the ready commit can no longer be classified against the
+	// transient "starting" state — a classification that silently
+	// swallowed the death (no stopped event, no watchdog) while the
+	// boot stranded a dead process behind a ready label. Reset at
+	// every spawn. Guarded by mu.
+	exitSeen bool
+
 	// caps is the engine capability profile in force for the CURRENT or
 	// last boot (Phase 7). Guarded by mu. Resolved per boot from the
 	// persisted verified profile / --help detection, then persisted again
@@ -448,9 +460,15 @@ func (s *LlamaServer) SubscribeEvents() (<-chan EngineEvent, func()) {
 		s.subsMu.Lock()
 		defer s.subsMu.Unlock()
 
-		if existing, ok := s.subs[id]; ok {
+		if _, ok := s.subs[id]; ok {
+			// v1.11.1: the channel is deliberately NOT closed. The fan-out
+			// snapshots subscribers under subsMu but sends OUTSIDE it;
+			// closing here could race a send on a snapshotted channel
+			// (send on a closed channel panics — a worse fate than a
+			// dropped event, and tests unsubscribe while the watchdog may
+			// still publish). The abandoned channel is garbage-collected;
+			// every consumer is select-based and never relies on closure.
 			delete(s.subs, id)
-			close(existing)
 		}
 	}
 }
@@ -963,20 +981,40 @@ func (s *LlamaServer) startLocked() error {
 					"retrying full-speed launch (compat 0) before the persisted level %d — recorded reason %q no longer applies to the verified capability profile",
 					startLevel, why)
 
-				if err := s.launchWithRepair(cfg, binPath, modelPath, 0, caps); err == nil {
-					persistBootOutcome(0, "")
+				launchErr := s.launchWithRepair(cfg, binPath, modelPath, 0, caps)
 
-					s.logf("full-speed profile restored — compatibility mode no longer required")
+				if launchErr == nil {
+					// v1.11.1 boot-commit honesty gate: the death record,
+					// the episode begin and the ready transition are ONE
+					// mutex-serialized decision (commitBootOutcome) — a
+					// death in the commit window can no longer be silently
+					// swallowed behind a ready label.
+					commit := s.commitBootOutcome()
 
-					logging.Default().Info("engine",
-						"engine restored to the full-speed profile (compat 0) for %s",
-						filepath.Base(modelPath))
+					if commit == bootCommitted {
+						persistBootOutcome(0, "")
 
-					s.mu.Lock()
-					episodeOK := s.beginEpisodeLocked()
-					s.mu.Unlock()
+						s.logf("full-speed profile restored — compatibility mode no longer required")
 
-					if !episodeOK {
+						logging.Default().Info("engine",
+							"engine restored to the full-speed profile (compat 0) for %s",
+							filepath.Base(modelPath))
+
+						// v1.2.0: the projector survived a VERIFIED
+						// boot — the only honest path to ready.
+						if mmproj != "" {
+							s.setVision(vision.StateReady,
+								"mmproj verified: engine serving with the paired projector "+filepath.Base(mmproj))
+						}
+
+						// v1.3.7: the ladder VERIFIED the engine — a pending
+						// model-architecture update commits exactly here.
+						s.commitPendingEngineUpdate()
+
+						return nil
+					}
+
+					if commit == bootStopWon {
 						// A deliberate Stop() raced the boot: the shutdown
 						// owns the lifecycle — kill the fresh child.
 						s.abortFreshBoot()
@@ -986,29 +1024,29 @@ func (s *LlamaServer) startLocked() error {
 						)
 					}
 
-					// v1.2.0: the projector survived a VERIFIED
-					// boot — the only honest path to ready.
-					if mmproj != "" {
-						s.setVision(vision.StateReady,
-							"mmproj verified: engine serving with the paired projector "+filepath.Base(mmproj))
+					// bootExitObserved: the child that answered /health
+					// died before the boot could commit. Refuse the ready
+					// label and fall through to the failed-retry handling
+					// below — the compatibility ladder owns the retry with
+					// a fresh child.
+					launchErr = &exitFailure{
+						err: fmt.Errorf(
+							"llama.cpp died as it became ready (exit observed before the boot committed)",
+						),
+						tail: s.errRing.lines(),
 					}
 
-					// v1.3.7: the ladder VERIFIED the engine — a pending
-					// model-architecture update commits exactly here.
-					s.commitPendingEngineUpdate()
-
-					s.setState(StateReady)
-					return nil
+					s.logf("engine died as it became ready — ready commit refused, resuming the compatibility ladder")
 				}
 
 				// Remember WHY the retry failed so a successful
 				// boot further down the ladder records an honest
 				// reason instead of an empty one.
-				lastReason = compatReasonFromError(err)
+				lastReason = compatReasonFromError(launchErr)
 
 				logging.Default().Warn("engine",
 					"full-speed retry failed (%v) — resuming the compatibility ladder at level %d",
-					err, startLevel)
+					launchErr, startLevel)
 				s.logf("full-speed retry failed — resuming at compatibility level %d", startLevel)
 			}
 		}
@@ -1018,52 +1056,69 @@ func (s *LlamaServer) startLocked() error {
 				err := s.launchWithRepair(cfg, binPath, modelPath, level, caps)
 
 				if err == nil {
-					// Never overwrite a recorded reason with an
-					// empty one (a boot that succeeds at the
-					// persisted level without any new failure
-					// has no fresh reason of its own).
-					reasonForPersist := lastReason
-					if reasonForPersist == "" {
-						reasonForPersist = cfg.EngineCompatReason
-					}
+					// v1.11.1 boot-commit honesty gate: the death record,
+					// the episode begin and the ready transition are ONE
+					// mutex-serialized decision (commitBootOutcome) — a
+					// death in the commit window can no longer be silently
+					// swallowed behind a ready label.
+					commit := s.commitBootOutcome()
 
-					persistBootOutcome(level, reasonForPersist)
-
-					if level > 0 {
-						// v1.6.0 (honest diagnostics): an empty
-						// reason is reported as the EXPLICIT
-						// value "unknown" — never the fake
-						// diagnosis "reason unrecorded", which
-						// stated the absence of a record as
-						// though it were a diagnosis itself.
-						why := lastReason
-						if why == "" {
-							why = "unknown"
+					if commit == bootCommitted {
+						// Never overwrite a recorded reason with an
+						// empty one (a boot that succeeds at the
+						// persisted level without any new failure
+						// has no fresh reason of its own).
+						reasonForPersist := lastReason
+						if reasonForPersist == "" {
+							reasonForPersist = cfg.EngineCompatReason
 						}
 
-						s.logf(
-							"engine started in compatibility mode %d (%s) — some speed flags disabled (recorded reason: %s)",
-							level,
-							compatLevelName(level),
-							why,
-						)
+						persistBootOutcome(level, reasonForPersist)
 
-						logging.Default().Warn(
-							"engine",
-							"started in compatibility mode %d (%s) for %s — recorded reason: %s",
-							level,
-							compatLevelName(level),
-							filepath.Base(modelPath),
-							why,
-						)
+						if level > 0 {
+							// v1.6.0 (honest diagnostics): an empty
+							// reason is reported as the EXPLICIT
+							// value "unknown" — never the fake
+							// diagnosis "reason unrecorded", which
+							// stated the absence of a record as
+							// though it were a diagnosis itself.
+							why := lastReason
+							if why == "" {
+								why = "unknown"
+							}
+
+							s.logf(
+								"engine started in compatibility mode %d (%s) — some speed flags disabled (recorded reason: %s)",
+								level,
+								compatLevelName(level),
+								why,
+							)
+
+							logging.Default().Warn(
+								"engine",
+								"started in compatibility mode %d (%s) for %s — recorded reason: %s",
+								level,
+								compatLevelName(level),
+								filepath.Base(modelPath),
+								why,
+							)
+						}
+
+						// v1.2.0: verified boot WITH the projector
+						// — vision is genuinely ready.
+						if mmproj != "" {
+							s.setVision(vision.StateReady,
+								"mmproj verified: engine serving with the paired projector "+filepath.Base(mmproj))
+						}
+
+						// v1.3.7: the ladder VERIFIED the engine — a pending
+						// model-architecture update commits exactly here.
+						s.commitPendingEngineUpdate()
+
+						return nil
 					}
 
-					// A successful boot starts a fresh recovery episode.
-					s.mu.Lock()
-					episodeOK := s.beginEpisodeLocked()
-					s.mu.Unlock()
-
-					if !episodeOK {
+					if commit == bootStopWon {
 						// A deliberate Stop() raced the boot: the shutdown
 						// owns the lifecycle — kill the fresh child.
 						s.abortFreshBoot()
@@ -1073,19 +1128,19 @@ func (s *LlamaServer) startLocked() error {
 						)
 					}
 
-					// v1.2.0: verified boot WITH the projector
-					// — vision is genuinely ready.
-					if mmproj != "" {
-						s.setVision(vision.StateReady,
-							"mmproj verified: engine serving with the paired projector "+filepath.Base(mmproj))
+					// bootExitObserved: the child that answered /health
+					// died before the boot could commit. Refuse the ready
+					// label and treat the launch as failed — the ladder
+					// retries with a fresh child instead of stranding a
+					// dead process behind an alive state.
+					err = &exitFailure{
+						err: fmt.Errorf(
+							"llama.cpp died as it became ready (exit observed before the boot committed)",
+						),
+						tail: s.errRing.lines(),
 					}
 
-					// v1.3.7: the ladder VERIFIED the engine — a pending
-					// model-architecture update commits exactly here.
-					s.commitPendingEngineUpdate()
-
-					s.setState(StateReady)
-					return nil
+					s.logf("engine died as it became ready — ready commit refused, descending the compatibility ladder")
 				}
 
 				lastErr = err
@@ -1746,6 +1801,7 @@ func (s *LlamaServer) launchArgs(
 	s.mu.Lock()
 	s.cmd = cmd
 	s.exitDone = exit.done
+	s.exitSeen = false // per-boot death record: this child has not exited
 	s.mu.Unlock()
 
 	go func() {
@@ -1764,6 +1820,11 @@ func (s *LlamaServer) launchArgs(
 		if latest {
 			s.cmd = nil
 			s.exitDone = nil
+
+			// v1.11.1: record the death in the SAME critical section —
+			// the boot's ready-commit reads it under the same mutex, so
+			// a death landing in the commit window is never swallowed.
+			s.exitSeen = true
 		}
 
 		deliberate := s.stopping
@@ -3824,6 +3885,54 @@ func (s *LlamaServer) beginEpisodeLocked() bool {
 	s.startedAt = time.Now()
 
 	return true
+}
+
+// bootCommit is the verdict of the v1.11.1 boot-commit honesty gate.
+type bootCommit int
+
+const (
+	// bootCommitted: the episode began and Ready was published in the
+	// SAME critical section — any later death is classified against an
+	// alive state (honest stopped transition + bounded restart).
+	bootCommitted bootCommit = iota
+
+	// bootExitObserved: the exit watcher recorded the CURRENT child's
+	// death before the commit. The boot must refuse to publish ready —
+	// the compatibility ladder owns the retry with a fresh child.
+	bootExitObserved
+
+	// bootStopWon: a deliberate Stop() raced the boot; the shutdown
+	// owns the lifecycle and the fresh child must be killed.
+	bootStopWon
+)
+
+// commitBootOutcome performs the ready commit as ONE mutex-serialized
+// decision: the death record (exitSeen), the episode begin and the ready
+// transition cannot interleave with the exit watcher's classification.
+// Before v1.11.1 the episode begin and the ready transition were two
+// separate critical sections, and a child dying between its /health 200
+// and the ready transition was classified against the transient
+// "starting" state — the crash was swallowed silently (no stopped event,
+// no restart) while the boot stranded a dead process behind a ready
+// label (run 41901967798: TestStopDuringRestartBackoffCancelsRestart,
+// "crashed engine never reported stopped").
+func (s *LlamaServer) commitBootOutcome() bootCommit {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.exitSeen {
+		return bootExitObserved
+	}
+
+	if !s.beginEpisodeLocked() {
+		return bootStopWon
+	}
+
+	// The ready transition rides the SAME critical section: from here
+	// on the watcher classifies any death against an alive state.
+	s.setStateLocked(StateReady)
+
+	return bootCommitted
 }
 
 // abortFreshBoot kills a child that became healthy while a deliberate Stop()

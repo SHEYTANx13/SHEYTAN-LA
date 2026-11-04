@@ -41,6 +41,44 @@ import (
 // a requirement on Qt. Qt/CMake/QML and GTK/WebKit stacks are both
 // RETIRED and BANNED.
 
+// workflowHasAction reports whether any `uses:` line in the workflow
+// references actionID with one of the accepted refs (a moving major tag
+// or its verified immutable commit SHA). The scan trims CRLF so the
+// check is line-ending-proof on every runner.
+func workflowHasAction(workflow, actionID string, acceptedRefs ...string) bool {
+	for _, line := range strings.Split(workflow, "\n") {
+		trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+
+		const usesKey = "uses: "
+
+		if !strings.HasPrefix(trimmed, usesKey) {
+			continue
+		}
+
+		ref := trimmed[len(usesKey):]
+
+		if !strings.HasPrefix(ref, actionID+"@") {
+			continue
+		}
+
+		version := ref[len(actionID)+1:]
+
+		// A trailing annotation (`# v3 (immutable SHA)`) is a comment,
+		// not part of the ref: cut at the first whitespace.
+		if i := strings.IndexAny(version, " \t"); i >= 0 {
+			version = version[:i]
+		}
+
+		for _, accepted := range acceptedRefs {
+			if version == accepted {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func stressReleaseSurface() error {
 	// Release-surface floor: 1.1.2. This is a minimum rather than an exact
 	// pin so future compatible point releases cannot silently downgrade
@@ -289,24 +327,56 @@ func stressReleaseSurface() error {
 	// v1.1.1 era runs carried the "Node.js 20 is deprecated" warning on
 	// checkout@v4 / setup-go@v5 / setup-node@v4. The stress gate must
 	// follow the workflow forward, not pin it to the deprecated set.
-	// v1.10.14-fixed (R3/D19, re-derived 2026-10-23): upload-artifact
-	// v7.0.2 and download-artifact v8.0.2 (2026-10-07) are the verified
-	// latest majors; the stale @v6/@v7 floors here would fail the gate
-	// on a correct workflow (the run-#40 red's twin defect).
-	for _, action := range []string{
-		"actions/checkout@v7",
-		"actions/setup-go@v7",
-		"actions/upload-artifact@v7",
-		"actions/download-artifact@v8",
-		"softprops/action-gh-release@v3",
-		"msys2/setup-msys2@v2",
+	// v1.10.14-fixed (R3/D19, re-derived 2026-10-23): download-artifact
+	// v8.0.2 (2026-10-07) is the verified latest major; the stale @v6
+	// floors here would fail the gate on a correct workflow (the
+	// run-#40 red's twin defect).
+	// v1.11.1 (run 41901967798 Failure A): upload-artifact left this
+	// literal list — the workflow pins it to the official v7.0.2
+	// immutable commit SHA, which the old `Contains(...@v7)` spelling
+	// rejected. It is validated below by the SHARED allowlist validator
+	// (the exact functions the release-contract tests run), so the
+	// stress gate and the contract tests can never drift apart again.
+	// v1.11.1 (run 41901967798, Failure A defect class): presence is
+	// checked by PARSING the uses: reference — a moving major tag OR its
+	// verified immutable commit SHA both satisfy the gate. The literal
+	// full-spelling Contains rejected a CORRECT workflow once
+	// action-gh-release/setup-msys2 migrated to immutable SHA pins
+	// (same defect the upload-artifact check exposed; the list stops at
+	// the first miss, so CI only ever named the first one).
+	for _, required := range []struct {
+		id   string
+		refs []string
+	}{
+		{id: "actions/checkout", refs: []string{"v7"}},
+		{id: "actions/setup-go", refs: []string{"v7"}},
+		{id: "actions/download-artifact", refs: []string{"v8"}},
+		{id: "softprops/action-gh-release", refs: []string{
+			"v3",
+			"efb35369e0ad2afab669f228072c1b0d510eae64", // v3 (immutable SHA)
+		}},
+		{id: "msys2/setup-msys2", refs: []string{
+			"v2",
+			"ec48f7c5447b3140e2b088413ae3a55687bccb6e", // v2 (immutable SHA)
+		}},
 	} {
-		if !strings.Contains(w, action) {
+		if !workflowHasAction(w, required.id, required.refs...) {
 			return fmt.Errorf(
-				"workflow missing required action %s",
-				action,
+				"workflow missing required action %s (accepted: moving tag or verified immutable SHA)",
+				required.id,
 			)
 		}
+	}
+
+	// 3d-v2 (v1.11.1): the shared upload-artifact pin + contract
+	// validators — immutable-SHA allowlist, per-job/per-step scoping,
+	// exactly one consolidated log upload, exact package payloads.
+	if err := releasecontract.ValidateUploadArtifactPins(w); err != nil {
+		return fmt.Errorf("upload-artifact pin policy: %w", err)
+	}
+
+	if err := releasecontract.ValidateUploadArtifactContract(w); err != nil {
+		return fmt.Errorf("upload-artifact contract: %w", err)
 	}
 
 	// 3e. The Node/frontend stack is RETIRED (v1.11.0 one-Go-UI): the
@@ -594,20 +664,47 @@ func stressReleaseSurface() error {
 	// merged all per-job log parts into ONE flat directory, so
 	// identically named logs — gate-order.txt — overwrote each other
 	// before concatenation, and if-no-files-found: ignore could drop
-	// the mandatory artifact silently). The workflow must keep the
-	// per-job log parts namespaced, must fail the collector after
-	// preserving the report when sources are missing, and must upload
-	// exactly one consolidated artifact with if-no-files-found: error.
+	// the mandatory artifact silently).
+	// v1.11.1 single-artifact rework (run #41548925352): the per-job
+	// log parts and their run-id-suffixed consolidated name are
+	// RETIRED — the collector pulls every job's log from the paginated
+	// jobs API and uploads the ONE stable-name artifact
+	// SHEYTAN-LA-all-logs.txt (archive:false); the attempt number
+	// lives ONLY inside the report (CONSOLIDATE_ATTEMPT). The retired
+	// name is BANNED by the artifact-naming contract test, so the old
+	// anchor here contradicted the release contract and failed every
+	// correct workflow. The anchors below ARE the current contract,
+	// shared with internal/releasecontract.
 	for _, consolidation := range []string{
-		"SHEYTAN-LA-all-logs-run-",
+		"SHEYTAN-LA-all-logs.txt",
+		"CONSOLIDATE_ATTEMPT: ${{ github.run_attempt }}",
 		"scripts/ci/consolidate-run-log.sh",
 		"=== MISSING LOG SOURCE ===",
-		"=== ERROR INDEX ===",
 	} {
 		if !strings.Contains(w, consolidation) {
 			return fmt.Errorf(
-				"consolidated run-log contract missing %q — the one-file log must be namespaced, complete and uploaded on red runs too",
+				"consolidated run-log contract missing %q — the one-file log must be stable, complete and uploaded on red runs too",
 				consolidation,
+			)
+		}
+	}
+
+	// The report-format markers are owned by the COLLECTOR SCRIPT the
+	// workflow invokes (v1.11.1 rework moved them out of the workflow
+	// text) — pin them against the script file, not the workflow.
+	collector, err := os.ReadFile("scripts/ci/consolidate-run-log.sh")
+	if err != nil {
+		return fmt.Errorf("read collector script: %v", err)
+	}
+
+	for _, marker := range []string{
+		"=== MISSING LOG SOURCE ===",
+		"=== ERROR INDEX ===",
+	} {
+		if !strings.Contains(string(collector), marker) {
+			return fmt.Errorf(
+				"scripts/ci/consolidate-run-log.sh must keep emitting the report marker %q — the consolidated report must name missing sources and errors",
+				marker,
 			)
 		}
 	}

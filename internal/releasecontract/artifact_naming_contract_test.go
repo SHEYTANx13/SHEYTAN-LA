@@ -19,10 +19,21 @@
 //   - the attempt number survives ONLY inside the consolidated report as
 //     structured provenance metadata (the workflow's CONSOLIDATE_ATTEMPT
 //     env + the fixtures' --attempt rerun case), never in a name.
+//
+// v1.11.1 (run 41901967798): the extraction below uses the SHARED YAML-
+// parsed, per-job-scoped contract helpers (workflow_contract.go) instead
+// of the retired hand-rolled line scanner. The scanner was CRLF-
+// sensitive: windows-latest materializes the unpinned .yml as CRLF, its
+// job-boundary regexp never matched, step context leaked across jobs and
+// job display names ("Linux x64", "Consolidate logs") were captured as
+// artifact names — "Consolidate logs" contains "logs", so the one-log-
+// upload count found 2 and the Windows headless gate went red on a
+// CORRECT workflow. A real YAML parser is line-ending-proof by
+// construction; fixture coverage pins the CRLF case explicitly.
 package releasecontract
 
 import (
-	"regexp"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -40,101 +51,78 @@ var retiredLogPartNames = []string{
 
 // stablePackageNames are the contracted package artifact names.
 var stablePackageNames = []string{
-	"windows-x64-package",
-	"linux-x64-package",
+	WindowsPackageArtifactName,
+	LinuxPackageArtifactName,
 }
 
-// artifactStepNames extracts every `name: <value>` key inside an
-// upload-artifact / download-artifact step's with: block. A line scanner
-// (Go regexp has no lookaheads) tracks step context: after
-// `uses: actions/<action>@` the following with: block belongs to that
-// step until the next step header. Step/JOB display names ("name:" of a
-// step header) never enter the extraction.
-func artifactStepNames(t *testing.T, workflow, action string) []string {
+// mustArtifactSteps extracts the artifact steps of one action through
+// the SHARED parser (the same functions the stress gate runs). A parse
+// failure or an empty extraction is a broken CONTRACT, never a passing
+// vacuity.
+func mustArtifactSteps(t *testing.T, workflow, actionID string) []ArtifactStep {
 	t.Helper()
-	var names []string
-	inStep := false
-	inWith := false
-	jobBoundary := regexp.MustCompile(`^  [A-Za-z0-9_-]+:$`)
-	for _, line := range strings.Split(workflow, "\n") {
-		if jobBoundary.MatchString(line) { // a new JOB starts — never leak a step context across jobs
-			inStep = false
-			inWith = false
-			continue
-		}
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "uses: actions/"+action+"@") {
-			inStep = true
-			inWith = false
-			continue
-		}
-		if !inStep {
-			continue
-		}
-		// A new step header (or a new uses:) ends the current step.
-		if strings.HasPrefix(trimmed, "- name:") || strings.HasPrefix(trimmed, "uses:") {
-			inStep = false
-			inWith = false
-			continue
-		}
-		if strings.HasPrefix(trimmed, "with:") {
-			inWith = true
-			continue
-		}
-		if inWith && strings.HasPrefix(trimmed, "name:") {
-			names = append(names, strings.TrimSpace(strings.TrimPrefix(trimmed, "name:")))
-		}
+
+	steps, err := ArtifactSteps(workflow, actionID)
+	if err != nil {
+		t.Fatalf("workflow parse failed: %v", err)
 	}
-	return names
+
+	if len(steps) == 0 {
+		t.Fatalf("no %s steps found in %s — the extraction is broken, not the workflow", actionID, workflowRelPath)
+	}
+
+	return steps
 }
 
-// uploadStepBodies returns the with:-block key lines of every
-// upload-artifact step (same scanner discipline as artifactStepNames).
-func uploadStepBodies(workflow string) []string {
-	var bodies []string
-	inStep := false
-	inWith := false
-	var cur []string
-	jobBoundary := regexp.MustCompile(`^  [A-Za-z0-9_-]+:$`)
-	flush := func() {
-		if len(cur) > 0 {
-			bodies = append(bodies, strings.Join(cur, "\n"))
-		}
-		cur = nil
+// TestWorkflowUploadArtifactPinsMatchAllowlist: every upload-artifact
+// use in the REAL workflow is pinned to the reviewed immutable v7.0.2
+// commit SHA (the shared stress-gate validator — one authority).
+func TestWorkflowUploadArtifactPinsMatchAllowlist(t *testing.T) {
+	workflow := readTreeFile(t, workflowRelPath)
+
+	if err := ValidateUploadArtifactPins(workflow); err != nil {
+		t.Fatalf("upload-artifact pin policy violated: %v", err)
 	}
-	for _, line := range strings.Split(workflow, "\n") {
-		if jobBoundary.MatchString(line) { // a new JOB starts — never leak a step context across jobs
-			flush()
-			inStep = false
-			inWith = false
-			continue
+}
+
+// TestWorkflowStableArtifactNamesExact: the ONE consolidated log
+// artifact and the two packages use the exact contracted names, the
+// upload surface is EXACTLY those three steps (scoped per job by the
+// shared parser), and the retired run-id-suffixed log name never
+// reappears.
+func TestWorkflowStableArtifactNamesExact(t *testing.T) {
+	workflow := readTreeFile(t, workflowRelPath)
+
+	// The shared validator carries the exact contract semantics — the
+	// stress gate runs the SAME function, so the two gates cannot drift.
+	if err := ValidateUploadArtifactContract(workflow); err != nil {
+		t.Fatalf("upload-artifact contract violated: %v", err)
+	}
+
+	downloads := mustArtifactSteps(t, workflow, "actions/download-artifact")
+
+	for _, want := range stablePackageNames {
+		found := false
+
+		for _, d := range downloads {
+			if d.Name == want {
+				found = true
+				break
+			}
 		}
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "uses: actions/upload-artifact@") {
-			inStep = true
-			inWith = false
-			cur = nil
-			continue
-		}
-		if !inStep {
-			continue
-		}
-		if strings.HasPrefix(trimmed, "- name:") || strings.HasPrefix(trimmed, "uses:") {
-			flush()
-			inStep = false
-			inWith = false
-			continue
-		}
-		if strings.HasPrefix(trimmed, "with:") {
-			inWith = true
-			continue
-		}
-		if inWith && trimmed != "" {
-			cur = append(cur, trimmed)
+
+		if !found {
+			t.Errorf("stable download artifact name %q missing from the release job's download steps", want)
 		}
 	}
-	flush()
-	return bodies
+
+	for _, banned := range append([]string{
+		"SHEYTAN-LA-all-logs-run-${{ github.run_id }}",
+	}, retiredLogPartNames...) {
+		if strings.Contains(workflow, banned) {
+			t.Errorf("retired artifact name/shape %q must not reappear (v1.11.1 single-artifact contract)", banned)
+		}
+	}
 }
 
 // TestWorkflowArtifactNamesCarryNoAttemptSuffix: no upload OR download
@@ -142,14 +130,10 @@ func uploadStepBodies(workflow string) []string {
 func TestWorkflowArtifactNamesCarryNoAttemptSuffix(t *testing.T) {
 	workflow := readTreeFile(t, workflowRelPath)
 
-	for _, action := range []string{"upload-artifact", "download-artifact"} {
-		names := artifactStepNames(t, workflow, action)
-		if len(names) == 0 {
-			t.Fatalf("no %s steps with artifact names found in %s — the extraction is broken, not the workflow", action, workflowRelPath)
-		}
-		for _, name := range names {
-			if strings.Contains(strings.ToLower(name), "attempt") {
-				t.Errorf("%s artifact name %q carries a run-attempt suffix — v1.11.1 stable-name contract (run id/commit/attempt live INSIDE the consolidated report)", action, name)
+	for _, action := range []string{"actions/upload-artifact", "actions/download-artifact"} {
+		for _, step := range mustArtifactSteps(t, workflow, action) {
+			if strings.Contains(strings.ToLower(step.Name), "attempt") {
+				t.Errorf("%s artifact name %q carries a run-attempt suffix — v1.11.1 stable-name contract (run id/commit/attempt live INSIDE the consolidated report)", action, step.Name)
 			}
 		}
 	}
@@ -165,44 +149,6 @@ func TestWorkflowArtifactNamesCarryNoAttemptSuffix(t *testing.T) {
 	}
 }
 
-// TestWorkflowStableArtifactNamesExact: the ONE consolidated log
-// artifact and the two packages use the exact contracted names, and the
-// retired run-id-suffixed log name never reappears.
-func TestWorkflowStableArtifactNamesExact(t *testing.T) {
-	workflow := readTreeFile(t, workflowRelPath)
-
-	uploads := artifactStepNames(t, workflow, "upload-artifact")
-	downloads := artifactStepNames(t, workflow, "download-artifact")
-
-	if !containsExact(uploads, "SHEYTAN-LA-all-logs.txt") {
-		t.Errorf("the consolidated log upload must use the exact stable name SHEYTAN-LA-all-logs.txt (single plain-text artifact)")
-	}
-	logUploads := 0
-	for _, n := range uploads {
-		if strings.Contains(n, "logs") {
-			logUploads++
-		}
-	}
-	if logUploads != 1 {
-		t.Errorf("exactly ONE log artifact upload is contracted (the consolidated report), found %d: %v", logUploads, uploads)
-	}
-	for _, want := range stablePackageNames {
-		if !containsExact(uploads, want) {
-			t.Errorf("stable upload artifact name %q missing from the workflow's upload steps", want)
-		}
-		if !containsExact(downloads, want) {
-			t.Errorf("stable download artifact name %q missing from the release job's download steps", want)
-		}
-	}
-	for _, banned := range append([]string{
-		"SHEYTAN-LA-all-logs-run-${{ github.run_id }}",
-	}, retiredLogPartNames...) {
-		if strings.Contains(workflow, banned) {
-			t.Errorf("retired artifact name/shape %q must not reappear (v1.11.1 single-artifact contract)", banned)
-		}
-	}
-}
-
 // TestWorkflowUploadsOverwriteOnRerun: every upload-artifact step carries
 // overwrite: true — the deterministic rerun strategy for stable names
 // (verified against the pinned v7 action.yml, whose `overwrite` input
@@ -210,13 +156,10 @@ func TestWorkflowStableArtifactNamesExact(t *testing.T) {
 func TestWorkflowUploadsOverwriteOnRerun(t *testing.T) {
 	workflow := readTreeFile(t, workflowRelPath)
 
-	bodies := uploadStepBodies(workflow)
-	if len(bodies) == 0 {
-		t.Fatalf("no upload-artifact steps found in %s", workflowRelPath)
-	}
-	for i, body := range bodies {
-		if !strings.Contains(body, "overwrite: true") {
-			t.Errorf("upload-artifact step #%d lacks `overwrite: true` — a rerun would collide with the existing stable-name artifact (body: %q)", i+1, body)
+	for _, step := range mustArtifactSteps(t, workflow, "actions/upload-artifact") {
+		if v, ok := step.With["overwrite"]; !ok || v != true {
+			t.Errorf("job %q step %q (artifact %q) lacks `overwrite: true` — a rerun would collide with the existing stable-name artifact",
+				step.Job, step.Step, step.Name)
 		}
 	}
 }
@@ -228,13 +171,14 @@ func TestWorkflowUploadsOverwriteOnRerun(t *testing.T) {
 func TestWorkflowHasNoLogPartArtifacts(t *testing.T) {
 	workflow := readTreeFile(t, workflowRelPath)
 
-	for _, action := range []string{"upload-artifact", "download-artifact"} {
-		for _, name := range artifactStepNames(t, workflow, action) {
-			if strings.HasSuffix(name, "-logs-part") {
-				t.Errorf("retired log-part artifact %q found in a %s step (single-artifact contract)", name, action)
+	for _, action := range []string{"actions/upload-artifact", "actions/download-artifact"} {
+		for _, step := range mustArtifactSteps(t, workflow, action) {
+			if strings.HasSuffix(step.Name, "-logs-part") {
+				t.Errorf("retired log-part artifact %q found in a %s step (single-artifact contract)", step.Name, action)
 			}
 		}
 	}
+
 	if strings.Contains(workflow, "ci-parts/") {
 		t.Error("retired ci-parts/ namespaced download paths found (single-artifact contract)")
 	}
@@ -264,11 +208,222 @@ func TestAttemptSurvivesOnlyAsReportMetadata(t *testing.T) {
 	}
 }
 
-func containsExact(names []string, want string) bool {
-	for _, n := range names {
-		if n == want {
-			return true
+// ---------------------------------------------------------------------------
+// Fixture coverage (run 41901967798 §2.2/§2.3): the pin policy and the
+// scoped upload contract are pinned against synthetic workflows so the
+// shared validators are proven on BOTH sides of every rule — including
+// the CRLF materialization that broke the retired scanner on the
+// Windows runner.
+// ---------------------------------------------------------------------------
+
+// fixtureUploadWorkflow is a structurally faithful three-upload
+// workflow: both package uploads plus the single consolidated log
+// upload. The %s slots receive the upload-artifact refs.
+const fixtureUploadWorkflow = `jobs:
+  build-windows:
+    name: Windows x64
+    steps:
+      - name: Upload Windows package
+        uses: actions/upload-artifact@%s
+        with:
+          name: windows-x64-package
+          path: |
+            dist/SHEYTAN-LA-v1.11.1-windows-x64.zip
+            dist/SHEYTAN-LA-v1.11.1-windows-x64-installer.exe
+          retention-days: 14
+          if-no-files-found: error
+          overwrite: true
+  build-linux:
+    name: Linux x64
+    steps:
+      - name: Upload Linux package
+        uses: actions/upload-artifact@%s
+        with:
+          name: linux-x64-package
+          path: dist/SHEYTAN-LA-v1.11.1-linux-x64.zip
+          retention-days: 14
+          if-no-files-found: error
+          overwrite: true
+  consolidate-logs:
+    name: Consolidate logs
+    steps:
+      - name: Upload the consolidated run log (single plain-text artifact)
+        if: always()
+        uses: actions/upload-artifact@%s
+        with:
+          name: SHEYTAN-LA-all-logs.txt
+          path: SHEYTAN-LA-all-logs.txt
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+          archive: false
+`
+
+// fixtureWithDuplicateLogUpload adds a SECOND consolidated log upload in
+// another job — the negative contract case.
+const fixtureWithDuplicateLogUpload = `jobs:
+  build-windows:
+    name: Windows x64
+    steps:
+      - name: Upload Windows package
+        uses: actions/upload-artifact@` + UploadArtifactV7SHA + `
+        with:
+          name: windows-x64-package
+          path: |
+            dist/SHEYTAN-LA-v1.11.1-windows-x64.zip
+            dist/SHEYTAN-LA-v1.11.1-windows-x64-installer.exe
+          overwrite: true
+  consolidate-logs:
+    name: Consolidate logs
+    steps:
+      - name: Upload the consolidated run log (single plain-text artifact)
+        uses: actions/upload-artifact@` + UploadArtifactV7SHA + `
+        with:
+          name: SHEYTAN-LA-all-logs.txt
+          path: SHEYTAN-LA-all-logs.txt
+          archive: false
+          overwrite: true
+  debug-logs:
+    name: Debug logs
+    steps:
+      - name: Upload the consolidated run log AGAIN (contract breach)
+        uses: actions/upload-artifact@` + UploadArtifactV7SHA + `
+        with:
+          name: SHEYTAN-LA-all-logs.txt
+          path: SHEYTAN-LA-all-logs.txt
+          archive: false
+          overwrite: true
+`
+
+// fixtureWithExtraUpload carries an unrelated fourth upload — the
+// closed-surface negative case.
+const fixtureWithExtraUpload = `jobs:
+  build-windows:
+    name: Windows x64
+    steps:
+      - name: Upload Windows package
+        uses: actions/upload-artifact@` + UploadArtifactV7SHA + `
+        with:
+          name: windows-x64-package
+          path: dist/SHEYTAN-LA-v1.11.1-windows-x64.zip
+          overwrite: true
+  consolidate-logs:
+    name: Consolidate logs
+    steps:
+      - name: Upload the consolidated run log (single plain-text artifact)
+        uses: actions/upload-artifact@` + UploadArtifactV7SHA + `
+        with:
+          name: SHEYTAN-LA-all-logs.txt
+          path: SHEYTAN-LA-all-logs.txt
+          archive: false
+          overwrite: true
+  build-linux:
+    name: Linux x64
+    steps:
+      - name: Upload Linux package
+        uses: actions/upload-artifact@` + UploadArtifactV7SHA + `
+        with:
+          name: linux-x64-package
+          path: dist/SHEYTAN-LA-v1.11.1-linux-x64.zip
+          overwrite: true
+  extra:
+    name: Extra
+    steps:
+      - name: Upload something else
+        uses: actions/upload-artifact@` + UploadArtifactV7SHA + `
+        with:
+          name: debug-bundle
+          path: debug/
+          overwrite: true
+`
+
+// TestUploadArtifactContractFixtures: the positive fixture (both package
+// uploads + the single consolidated log upload) PASSES — including its
+// CRLF materialization, the exact shape the retired scanner broke on —
+// and both negative fixtures FAIL with the contract message.
+func TestUploadArtifactContractFixtures(t *testing.T) {
+	good := fmt.Sprintf(fixtureUploadWorkflow,
+		UploadArtifactV7SHA, UploadArtifactV7SHA, UploadArtifactV7SHA)
+
+	if err := ValidateUploadArtifactContract(good); err != nil {
+		t.Fatalf("the contracted three-upload fixture must pass: %v", err)
+	}
+
+	// CRLF variant — the windows-latest checkout materialization. The
+	// retired scanner leaked step context across jobs exactly here; the
+	// YAML-based extraction must be indifferent.
+	crlf := strings.ReplaceAll(good, "\n", "\r\n")
+	if err := ValidateUploadArtifactContract(crlf); err != nil {
+		t.Fatalf("the CRLF-materialized fixture must pass (run 41901967798 Failure B): %v", err)
+	}
+
+	if err := ValidateUploadArtifactContract(fixtureWithDuplicateLogUpload); err == nil {
+		t.Fatal("a duplicate consolidated log upload must FAIL the contract")
+	} else if !strings.Contains(err.Error(), "exactly ONE consolidated log artifact upload") {
+		t.Fatalf("duplicate-log failure must name the one-log rule, got: %v", err)
+	}
+
+	if err := ValidateUploadArtifactContract(fixtureWithExtraUpload); err == nil {
+		t.Fatal("an extra (non-contracted) upload must FAIL the contract")
+	} else if !strings.Contains(err.Error(), "debug-bundle") {
+		t.Fatalf("extra-upload failure must name the offending artifact, got: %v", err)
+	}
+
+	// A package upload must never satisfy the log rule by substring:
+	// a workflow whose ONLY upload is a package has ZERO log uploads.
+	pkgOnly := `jobs:
+  build-windows:
+    steps:
+      - name: Upload Windows package
+        uses: actions/upload-artifact@` + UploadArtifactV7SHA + `
+        with:
+          name: windows-x64-package
+          path: dist/SHEYTAN-LA-v1.11.1-windows-x64.zip
+          overwrite: true
+`
+	if err := ValidateUploadArtifactContract(pkgOnly); err == nil {
+		t.Fatal("a package-only upload surface must FAIL (zero consolidated log uploads)")
+	}
+}
+
+// TestUploadArtifactPinPolicyFixtures: the v7.0.2 immutable SHA is
+// accepted (with or without a trailing comment); a moving @v7 tag, a
+// version tag, @main, a partial hash and an unapproved SHA are all
+// rejected under the current pin policy.
+func TestUploadArtifactPinPolicyFixtures(t *testing.T) {
+	fixture := func(ref string) string {
+		return fmt.Sprintf(fixtureUploadWorkflow, ref, ref, ref)
+	}
+
+	// Accepted: the exact reviewed immutable SHA.
+	if err := ValidateUploadArtifactPins(fixture(UploadArtifactV7SHA)); err != nil {
+		t.Fatalf("the verified v7.0.2 SHA pin must be accepted: %v", err)
+	}
+
+	// Accepted: the same SHA with the workflow's trailing comment shape.
+	// (YAML strips comments before the value reaches the validator —
+	// asserted here so a comment regression cannot reappear.)
+	withComment := fixture(UploadArtifactV7SHA + ` # v7 (immutable SHA)`)
+	if err := ValidateUploadArtifactPins(withComment); err != nil {
+		t.Fatalf("the SHA pin with a trailing comment must be accepted: %v", err)
+	}
+
+	// Rejected: the moving @v7 tag — the EXACT spelling the old literal
+	// check demanded and the current policy forbids.
+	for _, bad := range []string{
+		"v7",
+		"v7.0.2",
+		"main",
+		UploadArtifactV7SHA[:12],
+		"cf430e030ddbb5b0abf93d22962f4752f3646cd0", // unapproved SHA
+	} {
+		if err := ValidateUploadArtifactPins(fixture(bad)); err == nil {
+			t.Errorf("ref %q must be REJECTED under the immutable-pin policy", bad)
 		}
 	}
-	return false
+
+	// Rejected: no upload-artifact step at all.
+	if err := ValidateUploadArtifactPins("jobs:\n  preflight:\n    steps:\n      - name: empty\n        run: echo hi\n"); err == nil {
+		t.Fatal("a workflow without upload-artifact steps must FAIL the pin policy (the log upload is missing)")
+	}
 }

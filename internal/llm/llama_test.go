@@ -386,6 +386,25 @@ func runFakeLlamaServer() {
 		_, _ = w.Write([]byte(`{"default_generation_settings":{"n_ctx":16384}}`))
 	})
 
+	// v1.11.1 boot-commit honesty regression (run 41901967798): mode
+	// "die-after-health" honors the /health contract exactly once — the
+	// 200 is flushed and the process exits immediately, forcing the
+	// child's death into the parent's health→ready-commit window on
+	// EVERY boot deterministically (no timing dependence).
+	if mode == "die-after-health" {
+		wrapped := http.NewServeMux()
+		wrapped.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			os.Exit(1)
+		})
+		mux = wrapped
+	}
+
 	if ephemeralAddrFile != "" {
 		l, lerr := net.Listen("tcp", "127.0.0.1:0")
 		if lerr != nil {
@@ -1030,6 +1049,100 @@ func TestStopDuringRestartBackoffCancelsRestart(t *testing.T) {
 	if ev, ok := waitForState(t, events, 2500*time.Millisecond,
 		StateStarting, StateReady, StateRunning, StateBusy, StateDownloading); ok {
 		t.Fatalf("pending restart was not canceled by Stop: %s", ev.State)
+	}
+}
+
+// TestDeathDuringBootCommitIsNeverSwallowed pins the v1.11.1
+// boot-commit honesty gate (run 41901967798): a child that dies in the
+// window between its /health 200 and the ready commit must never strand
+// a dead process behind a ready label. Before the fix the exit watcher
+// classified such a death against the transient "starting" state and
+// swallowed it silently — no stopped event, no watchdog — and the boot
+// then published ready for an engine that was already dead (the load-
+// dependent CI red: "crashed engine never reported stopped").
+//
+// The fake engine honors /health exactly once and exits the instant the
+// response is flushed, so EVERY child dies inside the commit window.
+// The test is deterministic WITHOUT sleeps: whichever side wins each
+// individual race, the CONTRACT must hold —
+//
+//  1. the lifecycle terminates in the bounded failed state (a dead
+//     child is never left serving a ready label forever);
+//  2. every ready event is followed immediately by an honest stopped
+//     event (a committed boot's death is classified as a crash, never
+//     swallowed);
+//  3. the restart budget stays bounded (maxAutoRestarts);
+//  4. nothing boots after the terminal failed state.
+func TestDeathDuringBootCommitIsNeverSwallowed(t *testing.T) {
+	cfg, _ := fakeEngineConfig(t, "die-after-health")
+
+	srv := NewLlamaServer(config.NewSource(cfg))
+
+	events, unsubscribe := srv.SubscribeEvents()
+	defer unsubscribe()
+
+	// An honest boot failure (error return) is as acceptable as a
+	// committed boot whose child dies right after: the contract is
+	// about the EVENT history, not the return value.
+	_ = srv.Start()
+
+	// Collect the full transition history until the terminal failed
+	// state. The outer deadline is a deadlock guard, not a timing
+	// tool: every path here is event-driven.
+	deadline := time.After(30 * time.Second)
+
+	var states []string
+
+	terminal := false
+
+	for !terminal {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatalf("event channel closed before the terminal state (states=%v)", states)
+			}
+
+			states = append(states, ev.State)
+
+			if ev.State == StateFailed {
+				terminal = true
+			}
+
+		case <-deadline:
+			t.Fatalf("lifecycle never reached the bounded terminal state (state=%s restarts=%d states=%v)",
+				srv.State(), srv.Restarts(), states)
+		}
+	}
+
+	// INVARIANT 1: no swallowed death. Every ready transition must be
+	// followed immediately by an honest stopped transition — the crash
+	// of a committed boot is always classified against an alive state.
+	for i, st := range states {
+		if st != StateReady {
+			continue
+		}
+
+		if i+1 >= len(states) || states[i+1] != StateStopped {
+			t.Fatalf("ready was not followed by an honest stopped transition (swallowed crash): %v", states)
+		}
+	}
+
+	// INVARIANT 2: the terminal state is honest — failed, never a
+	// dead engine behind ready/starting.
+	if got := srv.State(); got != StateFailed {
+		t.Fatalf("terminal state = %s, want failed (states=%v)", got, states)
+	}
+
+	// INVARIANT 3: the bounded recovery budget held.
+	if got := srv.Restarts(); got > maxAutoRestarts {
+		t.Fatalf("restart budget exceeded: %d > %d", got, maxAutoRestarts)
+	}
+
+	// INVARIANT 4: nothing may boot after the terminal state (a leaked
+	// watchdog would fire well inside this window).
+	if ev, ok := waitForState(t, events, 2*time.Second,
+		StateStarting, StateReady, StateRunning, StateBusy, StateDownloading); ok {
+		t.Fatalf("lifecycle resurrected after the terminal failed state: %s", ev.State)
 	}
 }
 

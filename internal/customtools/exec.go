@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -410,6 +411,82 @@ func isLocalishHost(hostname string) bool {
 	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast())
 }
 
+// safeToolDialer is the connection-time SSRF guard (CodeQL
+// go/request-forgery, alert #288 at run 41901967798). The endpoint
+// validator sees HOSTNAMES; a hostile or model-influenced DNS answer can
+// still point a benign name at a forbidden address (DNS rebinding /
+// metadata pivot). Control runs on EVERY connection attempt with the
+// RESOLVED address after DNS and before any packet is sent, so the
+// blocked classes hold no matter how the name was spelled or resolved.
+//
+// The local-first trust boundary is preserved: loopback and
+// private-network destinations stay reachable (first-party local
+// services are a supported tool target); only the cloud-metadata /
+// link-local classes are refused at connect time.
+var safeToolDialer = &net.Dialer{
+	Timeout:   10 * time.Second,
+	KeepAlive: 30 * time.Second,
+	Control: func(_ string, address string, _ syscall.RawConn) error {
+		return guardResolvedAddress(address)
+	},
+}
+
+// guardResolvedAddress refuses connections whose resolved IP belongs to
+// the forbidden classes: link-local unicast/multicast (169.254.0.0/16,
+// fe80::/10 — the cloud metadata range included) and the documented
+// IPv6 metadata unique-local endpoint. IPv4-mapped IPv6 forms are
+// normalized before classification, so ::ffff:169.254.169.254 cannot
+// smuggle a link-local target through.
+func guardResolvedAddress(address string) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("tool connection guard: split %q: %w", redactedURL(address), err)
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("tool connection guard: unresolved address %q is not an IP", redactedURL(host))
+	}
+
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
+
+	// The documented IPv6 metadata endpoint is a unique-local address,
+	// not link-local: blocked explicitly (mirrors the endpoint-level
+	// name check, at connect time).
+	if ip.String() == "fd00:ec2::254" {
+		return fmt.Errorf(
+			"tool connection guard: resolved address %s is refused (cloud metadata targets are not reachable from tool execution)",
+			redactedURL(ip.String()),
+		)
+	}
+
+	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return fmt.Errorf(
+			"tool connection guard: resolved address %s is refused (cloud metadata / link-local targets are not reachable from tool execution)",
+			redactedURL(ip.String()),
+		)
+	}
+
+	return nil
+}
+
+// newToolHTTPClient builds the default tool HTTP client: bounded
+// timeout, the connection-time guard on every resolved address, and the
+// endpoint redirect policy on every hop.
+func newToolHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DialContext:         safeToolDialer.DialContext,
+			ForceAttemptHTTP2:   true,
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
+		CheckRedirect: toolRedirectPolicy,
+	}
+}
+
 // validateToolEndpoint enforces the tool HTTP policy on any request or
 // redirect target: https scheme, non-empty host, and no metadata/link-local
 // destination. It never inspects or logs credentials.
@@ -496,7 +573,10 @@ func (t *Tool) runHTTP(ctx context.Context, args map[string]any) ([]byte, error)
 
 	client := t.client
 	if client == nil {
-		client = &http.Client{Timeout: time.Duration(t.def.TimeoutSec) * time.Second}
+		// Default client: bounded timeout, the connection-time resolved-IP
+		// guard (DNS rebinding cannot pivot a benign name into the cloud
+		// metadata range) and the redirect policy on every hop.
+		client = newToolHTTPClient(time.Duration(t.def.TimeoutSec) * time.Second)
 	} else {
 		// Keep the injected transport (tests) but impose the tool's
 		// redirect policy on every hop.
