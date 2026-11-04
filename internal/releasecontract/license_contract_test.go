@@ -217,7 +217,7 @@ func TestLicenseMDIsTheCompleteConsolidatedDocument(t *testing.T) {
 	// (c) Parsaetak Proprietary License v1.1 — representative anchors from
 	// the full text (scope, every numbered clause, contact).
 	for _, anchor := range []string{
-		"PARSAETAK PROPRIETARY LICENSE",
+		"PARSAETAK & SHEYTAN PROPRIETARY LICENSE",
 		"Version 1.1",
 		"SCOPE OF THIS LICENSE",
 		"IMPORTANT — READ CAREFULLY",
@@ -342,7 +342,7 @@ func TestLicenseMDSynchronizedWithBrand(t *testing.T) {
 	// even if brand.LicenseText itself regresses in the same direction:
 	// the document must start with the consolidated title and end with
 	// the consolidated contact section.
-	if !strings.HasPrefix(shipped, "# LICENSE.md — SHEYTAN-Local-Agent licensing") {
+	if !strings.HasPrefix(shipped, "# LICENSE — SHEYTAN-Local-Agent licensing") {
 		t.Errorf("LICENSE.md does not start with the consolidated document title (regenerate with scripts/gen-license.go)")
 	}
 	if !strings.HasSuffix(shipped, "channel listed there).\n") {
@@ -358,7 +358,7 @@ func TestLicenseMDSynchronizedWithBrand(t *testing.T) {
 
 	// Anchor: the title and both marker comments must appear in brand.go.
 	for _, anchor := range []string{
-		"const LicenseText = `# LICENSE.md — SHEYTAN-Local-Agent licensing",
+		"const LicenseText = `# LICENSE — SHEYTAN-Local-Agent licensing",
 		"apache-2.0-text-begin",
 		"apache-2.0-text-end",
 		"proprietary-text-begin",

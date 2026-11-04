@@ -264,3 +264,35 @@ func treeHasObjects(o fyne.CanvasObject) bool {
 		return true
 	}
 }
+
+// TestShellShowsInitialViewAtBoot pins the boot contract: after the
+// startup sequence (root + showInitialView) the content area is NOT
+// blank — the lazy-build shell rework lost the initial show call and the
+// window presented an empty primary surface until the first navigation
+// click (the Xvfb smoke never clicks navigation, so only this test
+// catches the regression class).
+func TestShellShowsInitialViewAtBoot(t *testing.T) {
+	ap, _ := newTestAppForShell(t)
+	sh := newShell(ap)
+	if sh.root() == nil {
+		t.Fatal("shell root must build")
+	}
+	ap.shell = sh
+	ap.showInitialView()
+
+	uiTestMu.Lock()
+	n := len(sh.body.Objects)
+	active := sh.active
+	uiTestMu.Unlock()
+
+	if n == 0 {
+		t.Fatal("blank primary surface at boot — the initial view never rendered")
+	}
+	if active != primaryViews[0].id {
+		t.Fatalf("initial active view = %q, want %q", active, primaryViews[0].id)
+	}
+	if !treeHasObjects(sh.body.Objects[0]) {
+		t.Fatal("the initial view rendered an empty tree")
+	}
+	drainBackgroundRefreshes()
+}

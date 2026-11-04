@@ -103,6 +103,17 @@ func TestModelStudioCardPopulatesFromSystems(t *testing.T) {
 func TestModelStudioApplyBinding(t *testing.T) {
 	p, srv := newStudioPanelUnderTest(t)
 
+	// Synchronize on the async systems fetch actually landing: the
+	// select carries BOTH systems before any selection is made. A
+	// blind SetSelectedIndex against a not-yet-populated select is
+	// out-of-range (no OnChanged, nothing armed) — the exact race the
+	// hosted ui gate hit.
+	waitFor(t, func() bool {
+		uiTestMu.Lock()
+		defer uiTestMu.Unlock()
+		return len(p.studioSys.Options) == 2
+	}, "systems options populated")
+
 	// Choose the second system ("Coder") — its binding is inherit/inherit.
 	uiDoLocked(func() { p.studioSys.SetSelectedIndex(1) })
 	waitFor(t, func() bool {
@@ -119,6 +130,20 @@ func TestModelStudioApplyBinding(t *testing.T) {
 	if gotModel != studioInheritModel || gotProfile != studioInheritProfile {
 		t.Fatalf("inherit binding must render the inherit options, got model=%q profile=%q", gotModel, gotProfile)
 	}
+
+	// The model picker shows REAL local model facts: wait until the
+	// models fetch has landed and "Model A" is actually selectable
+	// (SetSelected on a value outside Options is silently ignored).
+	waitFor(t, func() bool {
+		uiTestMu.Lock()
+		defer uiTestMu.Unlock()
+		for _, o := range p.studioModel.Options {
+			if o == "Model A" {
+				return true
+			}
+		}
+		return false
+	}, "model options populated")
 
 	// Assign a model + profile and Apply.
 	uiDoLocked(func() {
@@ -151,6 +176,15 @@ func TestModelStudioApplyBinding(t *testing.T) {
 
 func TestModelStudioApplyErrorRearms(t *testing.T) {
 	p, srv := newStudioPanelUnderTest(t)
+
+	// The initial systems fetch must have landed (both options
+	// selectable) before the store is taken down — otherwise the
+	// selection below is out-of-range and nothing can arm.
+	waitFor(t, func() bool {
+		uiTestMu.Lock()
+		defer uiTestMu.Unlock()
+		return len(p.studioSys.Options) == 2
+	}, "systems options populated")
 
 	srv.setSystemsFail(true)
 

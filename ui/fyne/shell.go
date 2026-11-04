@@ -167,6 +167,17 @@ func newShell(ap *App) *shell {
 	}
 }
 
+// showInitialView renders the FIRST primary view at boot. The shell's
+// lazy-build rework lost the initial show call: the window then presented
+// a blank primary surface until the first navigation click — exactly the
+// "blank initial screen" class the recovery work order forbids.
+func (ap *App) showInitialView() {
+	if ap.shell == nil || len(primaryViews) == 0 {
+		return
+	}
+	ap.shell.show(primaryViews[0].id)
+}
+
 // root assembles the full shell widget tree. Layout is responsive: the
 // navPolicy resolves the navigation presentation from the canvas width —
 // wide rail, compact rail, or a top navigation strip (with a More menu

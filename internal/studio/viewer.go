@@ -267,15 +267,11 @@ func (v *Viewer) serveTopology(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	topo, err := v.src.StudioTopology(ctx)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte(`{"error":"topology source unavailable: ` + jsonEscape(err.Error()) + `"}`))
+		writeViewerJSONError(w, http.StatusServiceUnavailable, "topology source unavailable: "+err.Error())
 		return
 	}
 	if err := topo.Validate(); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"error":"topology failed the schema gate: ` + jsonEscape(err.Error()) + `"}`))
+		writeViewerJSONError(w, http.StatusInternalServerError, "topology failed the schema gate: "+err.Error())
 		return
 	}
 	v.mu.lock()

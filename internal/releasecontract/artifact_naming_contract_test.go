@@ -1,34 +1,36 @@
 // Package releasecontract — artifact_naming_contract_test.go
 //
-// v1.11.1 STABLE ARTIFACT NAME CONTRACT (operator request: remove the
-// Actions artifact/log "attempt1" naming noise).
-//
-// The contract under test, over .github/workflows/build-desktop.yml:
+// v1.11.1 SINGLE-ARTIFACT RUN-LOG CONTRACT (work order for run
+// #41548925352 §6.2, implemented by the v1.11.1 collector rework):
 //
 //   - NO artifact name (upload or download) carries a run-attempt suffix
 //     in ANY spelling (`-attempt${{ ... }}`, `-attempt-1`, `-attempt1`);
-//   - the five log parts and the two packages use the exact STABLE names;
-//   - every upload-artifact step carries overwrite: true (verified
-//     against the pinned actions/upload-artifact@v7 action.yml: the
-//     input exists and defaults to false) so a workflow RERUN REPLACES
-//     the same stable name instead of colliding;
-//   - every log-part download keeps its per-job namespaced path
-//     (ci-parts/<stable-name>/) — the anti-flatten rule from run #118;
+//   - the consolidated run log is the ONE log artifact: the exact stable
+//     plain-text name SHEYTAN-LA-all-logs.txt (upload-artifact
+//     archive:false — the artifact downloads as the file itself, and the
+//     artifact display name equals the file name);
+//   - the two packages keep the exact stable names on upload (build
+//     jobs) and download (release job);
+//   - the retired five-part log-part era (preflight/audit/ui/windows/
+//     linux-logs-part, ci-parts/ namespaced downloads, per-part
+//     merge-multiple) must NOT reappear — the collector now pulls every
+//     completed job's log straight from the paginated jobs API, so there
+//     is nothing to flatten in the first place;
 //   - the attempt number survives ONLY inside the consolidated report as
-//     structured provenance metadata (--attempt flag), never in a name.
-//
-// The collector-side behavior (five stable parts captured, no collisions,
-// rerun/overwrite shape) is pinned by scripts/ci/consolidate-run-log-fixtures.sh
-// cases 10–13, which CI runs in the audit job.
+//     structured provenance metadata (the workflow's CONSOLIDATE_ATTEMPT
+//     env + the fixtures' --attempt rerun case), never in a name.
 package releasecontract
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
 
-// stableLogPartNames are the five contracted log-part artifact names.
-var stableLogPartNames = []string{
+// retiredLogPartNames are the v1.10-era per-job log-part artifact names.
+// The v1.11.1 collector replaced them with job-specific API log
+// retrieval; these names must never reappear in the workflow.
+var retiredLogPartNames = []string{
 	"preflight-logs-part",
 	"audit-logs-part",
 	"ui-logs-part",
@@ -53,7 +55,13 @@ func artifactStepNames(t *testing.T, workflow, action string) []string {
 	var names []string
 	inStep := false
 	inWith := false
+	jobBoundary := regexp.MustCompile(`^  [A-Za-z0-9_-]+:$`)
 	for _, line := range strings.Split(workflow, "\n") {
+		if jobBoundary.MatchString(line) { // a new JOB starts — never leak a step context across jobs
+			inStep = false
+			inWith = false
+			continue
+		}
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "uses: actions/"+action+"@") {
 			inStep = true
@@ -87,6 +95,7 @@ func uploadStepBodies(workflow string) []string {
 	inStep := false
 	inWith := false
 	var cur []string
+	jobBoundary := regexp.MustCompile(`^  [A-Za-z0-9_-]+:$`)
 	flush := func() {
 		if len(cur) > 0 {
 			bodies = append(bodies, strings.Join(cur, "\n"))
@@ -94,6 +103,12 @@ func uploadStepBodies(workflow string) []string {
 		cur = nil
 	}
 	for _, line := range strings.Split(workflow, "\n") {
+		if jobBoundary.MatchString(line) { // a new JOB starts — never leak a step context across jobs
+			flush()
+			inStep = false
+			inWith = false
+			continue
+		}
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "uses: actions/upload-artifact@") {
 			inStep = true
@@ -150,31 +165,41 @@ func TestWorkflowArtifactNamesCarryNoAttemptSuffix(t *testing.T) {
 	}
 }
 
-// TestWorkflowStableArtifactNamesExact: the five log parts, the two
-// packages and the consolidated report use the exact contracted names.
+// TestWorkflowStableArtifactNamesExact: the ONE consolidated log
+// artifact and the two packages use the exact contracted names, and the
+// retired run-id-suffixed log name never reappears.
 func TestWorkflowStableArtifactNamesExact(t *testing.T) {
 	workflow := readTreeFile(t, workflowRelPath)
 
 	uploads := artifactStepNames(t, workflow, "upload-artifact")
 	downloads := artifactStepNames(t, workflow, "download-artifact")
 
-	for _, want := range append(append([]string{}, stableLogPartNames...), stablePackageNames...) {
+	if !containsExact(uploads, "SHEYTAN-LA-all-logs.txt") {
+		t.Errorf("the consolidated log upload must use the exact stable name SHEYTAN-LA-all-logs.txt (single plain-text artifact)")
+	}
+	logUploads := 0
+	for _, n := range uploads {
+		if strings.Contains(n, "logs") {
+			logUploads++
+		}
+	}
+	if logUploads != 1 {
+		t.Errorf("exactly ONE log artifact upload is contracted (the consolidated report), found %d: %v", logUploads, uploads)
+	}
+	for _, want := range stablePackageNames {
 		if !containsExact(uploads, want) {
 			t.Errorf("stable upload artifact name %q missing from the workflow's upload steps", want)
 		}
-	}
-	for _, want := range stableLogPartNames {
-		if !containsExact(downloads, want) {
-			t.Errorf("stable download artifact name %q missing from the workflow's download steps", want)
-		}
-	}
-	for _, want := range stablePackageNames {
 		if !containsExact(downloads, want) {
 			t.Errorf("stable download artifact name %q missing from the release job's download steps", want)
 		}
 	}
-	if !containsExact(uploads, "SHEYTAN-LA-all-logs-run-${{ github.run_id }}") {
-		t.Errorf("the consolidated log upload must use the stable name SHEYTAN-LA-all-logs-run-<run_id> (no attempt suffix)")
+	for _, banned := range append([]string{
+		"SHEYTAN-LA-all-logs-run-${{ github.run_id }}",
+	}, retiredLogPartNames...) {
+		if strings.Contains(workflow, banned) {
+			t.Errorf("retired artifact name/shape %q must not reappear (v1.11.1 single-artifact contract)", banned)
+		}
 	}
 }
 
@@ -196,40 +221,42 @@ func TestWorkflowUploadsOverwriteOnRerun(t *testing.T) {
 	}
 }
 
-// TestWorkflowLogPartDownloadsStayNamespaced: every log-part download
-// extracts into its own ci-parts/<stable-name>/ directory — the run #118
-// anti-flatten rule (same-named logs from different jobs never collide).
-func TestWorkflowLogPartDownloadsStayNamespaced(t *testing.T) {
+// TestWorkflowHasNoLogPartArtifacts: the five-part era is retired — no
+// log-part uploads/downloads and no ci-parts/ namespacing remain. The
+// collector fetches every completed job's log directly from the jobs
+// API, so there is nothing to flatten in the first place.
+func TestWorkflowHasNoLogPartArtifacts(t *testing.T) {
 	workflow := readTreeFile(t, workflowRelPath)
 
-	for _, name := range stableLogPartNames {
-		wantPath := "ci-parts/" + name
-		if !strings.Contains(workflow, wantPath) {
-			t.Errorf("download for %q must extract into the namespaced path %s (anti-flatten rule from run #118)", name, wantPath)
+	for _, action := range []string{"upload-artifact", "download-artifact"} {
+		for _, name := range artifactStepNames(t, workflow, action) {
+			if strings.HasSuffix(name, "-logs-part") {
+				t.Errorf("retired log-part artifact %q found in a %s step (single-artifact contract)", name, action)
+			}
 		}
 	}
-	if strings.Contains(workflow, "merge-multiple: true") {
-		t.Error("merge-multiple must never be enabled for log-part downloads — namespaced extraction is the anti-collision contract")
+	if strings.Contains(workflow, "ci-parts/") {
+		t.Error("retired ci-parts/ namespaced download paths found (single-artifact contract)")
 	}
 }
 
 // TestAttemptSurvivesOnlyAsReportMetadata: the collector still receives
 // the attempt number for provenance INSIDE the report (structured
-// metadata), and the fixtures script carries the stable-name + rerun
-// coverage (cases 12/13).
+// metadata via CONSOLIDATE_ATTEMPT + the fixtures' --attempt rerun
+// case), and the fixtures pin the current coverage classes.
 func TestAttemptSurvivesOnlyAsReportMetadata(t *testing.T) {
 	workflow := readTreeFile(t, workflowRelPath)
-	if !strings.Contains(workflow, `--attempt "${{ github.run_attempt }}"`) {
-		t.Error("the collector must keep receiving --attempt for report-internal provenance metadata")
+	if !strings.Contains(workflow, "CONSOLIDATE_ATTEMPT: ${{ github.run_attempt }}") {
+		t.Error("the collector must keep receiving the attempt (CONSOLIDATE_ATTEMPT) for report-internal provenance metadata")
 	}
 
 	fixtures := readTreeFile(t, "scripts/ci/consolidate-run-log-fixtures.sh")
 	for _, anchor := range []string{
-		"v1.11.1 green run: 5/5 stable-name parts captured",
-		"v1.11.1 rerun/overwrite",
+		"rerun: attempt 2 recorded as provenance metadata",
+		"green run: 5/5 captured + skipped release",
 	} {
 		if !strings.Contains(fixtures, anchor) {
-			t.Errorf("collector fixtures must pin the stable-name coverage class %q (case missing)", anchor)
+			t.Errorf("collector fixtures must pin the coverage class %q (case missing)", anchor)
 		}
 	}
 	if strings.Contains(fixtures, "logs-part-attempt1") {

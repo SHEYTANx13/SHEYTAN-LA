@@ -24,6 +24,7 @@ package continuum
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -167,8 +168,12 @@ func stripMarkdownNoise(s string) string {
 // list with fuzzy dedup, then caps. The result keeps the newest items at the
 // front so the cap drops the OLDEST knowledge first.
 func mergeItems(existing, incoming []string, cap int) []string {
-	out := make([]string, 0, len(existing)+len(incoming))
-	seen := make([]string, 0, len(existing)+len(incoming))
+	// Checked arithmetic (CodeQL go/allocation-size-overflow): the
+	// allocation cap saturates instead of silently wrapping on absurd
+	// input sizes.
+	allocCap := addSizes(len(existing), len(incoming))
+	out := make([]string, 0, allocCap)
+	seen := make([]string, 0, allocCap)
 	add := func(item string) {
 		if item == "" {
 			return
@@ -616,4 +621,16 @@ func EstimateUsage(msgs []llm.Message, budgetTokens int) Usage {
 		}
 	}
 	return Usage{EstTokens: est, BudgetTokens: budgetTokens, Pct: float64(est) * 100 / float64(budgetTokens)}
+}
+
+// addSizes returns a+b with negative inputs clamped to 0 and overflow
+// saturated at math.MaxInt — make() caps never wrap.
+func addSizes(a, b int) int {
+	if a < 0 || b < 0 {
+		return 0
+	}
+	if a > math.MaxInt-b {
+		return math.MaxInt
+	}
+	return a + b
 }

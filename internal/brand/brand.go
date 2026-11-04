@@ -130,9 +130,9 @@ func itoa(n int) string {
 // repository root — the ONE license artifact the repository is allowed to
 // carry (enforced by internal/releasecontract). The file can therefore
 // never drift from what the app prints through the license CLI.
-const LicenseText = `# LICENSE.md — SHEYTAN-Local-Agent licensing
+const LicenseText = `# LICENSE — SHEYTAN-Local-Agent licensing
 
-Copyright © 2024–2026 Parsaetak (https://github.com/Parsaetak). All rights
+Copyright © 2024–2026 Parsaetak (https://linktr.ee/Parsaetak) + SHEYTAN (https://github.com/SHEYTANx13). All rights
 reserved.
 
 This is the **sole licensing artifact** of SHEYTAN-Local-Agent ("the
@@ -504,11 +504,11 @@ governing every component classified Proprietary in §2:
 
 <!-- proprietary-text-begin -->
 
-PARSAETAK PROPRIETARY LICENSE
+PARSAETAK & SHEYTAN PROPRIETARY LICENSE
 =============================
 Version 1.1 · Last updated: 2026-09-26
 
-Copyright © 2024–2026 Parsaetak (https://github.com/Parsaetak). All rights
+Copyright © 2024–2026 Parsaetak (https://linktr.ee/Parsaetak) + SHEYTAN (https://github.com/SHEYTANx13) . All rights
 reserved.
 
 SCOPE OF THIS LICENSE
@@ -627,5 +627,5 @@ Only the repository maintainer (Parsaetak) may reclassify a component:
 ## 8. Contact
 
 Licensing questions, proprietary-use inquiries and exceptions:
-**https://github.com/Parsaetak** (open an issue or use the contact
+**https://linktr.ee/Parsaetak** or **https://github.com/SHEYTANx13** (open an issue or use the contact
 channel listed there).`

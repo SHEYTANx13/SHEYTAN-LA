@@ -59,6 +59,14 @@ func (ap *App) Run() int {
 	ap.w.Resize(fyne.NewSize(1080, 720))
 	ap.w.SetMaster()
 
+	// The initial primary view renders at boot — the shell must never
+	// present a blank primary surface before the first navigation click
+	// (v1.11.1 recovery: the lazy-build shell rework lost the initial
+	// show call; the Xvfb smoke never clicks navigation and the detached
+	// view tests cannot see the assembled shell, so the blank boot
+	// surface shipped unnoticed).
+	ap.showInitialView()
+
 	// Keyboard navigation: Ctrl+1..7 switch primary views, Ctrl+N creates
 	// a session in the current mode.
 	ap.registerShortcuts()

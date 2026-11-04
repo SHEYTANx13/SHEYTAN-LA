@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -375,6 +376,82 @@ func checkType(name, want string, v any) error {
 	return nil
 }
 
+// isMetadataOrLinkLocalHost reports whether hostname is a cloud-metadata
+// or link-local target that tool execution must never reach.
+func isMetadataOrLinkLocalHost(hostname string) bool {
+	hostname = strings.TrimSuffix(hostname, ".")
+	// Strip an IPv6 zone suffix (%eth0) before parsing.
+	if i := strings.IndexByte(hostname, '%'); i >= 0 {
+		hostname = hostname[:i]
+	}
+	if strings.EqualFold(hostname, "metadata.google.internal") {
+		return true
+	}
+	// AWS IMDSv6 is a unique-local address, not link-local: block the
+	// documented metadata endpoint explicitly.
+	if strings.EqualFold(hostname, "fd00:ec2::254") {
+		return true
+	}
+	ip := net.ParseIP(hostname)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()
+}
+
+// isLocalishHost reports whether hostname is loopback or a private-network
+// address literal (the local-first trust boundary).
+func isLocalishHost(hostname string) bool {
+	hostname = strings.TrimSuffix(hostname, ".")
+	if strings.EqualFold(hostname, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(hostname)
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast())
+}
+
+// validateToolEndpoint enforces the tool HTTP policy on any request or
+// redirect target: https scheme, non-empty host, and no metadata/link-local
+// destination. It never inspects or logs credentials.
+func validateToolEndpoint(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("endpoint parse: %w", err)
+	}
+	if u.Scheme != "https" {
+		return fmt.Errorf("only https endpoints are allowed (got %s)", redactedURL(raw))
+	}
+	hostname := u.Hostname()
+	if hostname == "" {
+		return fmt.Errorf("endpoint host is empty (%s)", redactedURL(raw))
+	}
+	if isMetadataOrLinkLocalHost(hostname) {
+		return fmt.Errorf("endpoint host %s is refused (cloud metadata / link-local targets are not reachable from tool execution)", hostname)
+	}
+	return nil
+}
+
+// toolRedirectPolicy revalidates every redirect hop: https-only, endpoint
+// policy, no protocol downgrade, and no confused-deputy pivot from a
+// public origin into loopback/private hosts (same-host hops stay allowed
+// so first-party local tools keep working).
+func toolRedirectPolicy(req *http.Request, via []*http.Request) error {
+	if err := validateToolEndpoint(req.URL.String()); err != nil {
+		return fmt.Errorf("redirect target refused: %w", err)
+	}
+	if len(via) > 0 {
+		origin := via[0].URL.Hostname()
+		hop := req.URL.Hostname()
+		if strings.EqualFold(strings.TrimSuffix(origin, "."), strings.TrimSuffix(hop, ".")) {
+			return nil
+		}
+		if isLocalishHost(hop) {
+			return fmt.Errorf("redirect from %s into local/private host %s refused", redactedURL(via[0].URL.String()), hop)
+		}
+	}
+	return nil
+}
+
 // runHTTP performs the bounded HTTPS request.
 func (t *Tool) runHTTP(ctx context.Context, args map[string]any) ([]byte, error) {
 	cfg := t.def.HTTP
@@ -384,9 +461,14 @@ func (t *Tool) runHTTP(ctx context.Context, args map[string]any) ([]byte, error)
 		return nil, fmt.Errorf("url: %w", err)
 	}
 
-	// HTTPS-only enforcement INCLUDING the substituted result.
-	if !strings.HasPrefix(strings.ToLower(endpoint), "https://") {
-		return nil, fmt.Errorf("only https endpoints are allowed (got %s)", redactedURL(endpoint))
+	// Endpoint policy INCLUDING the substituted result: https-only, and
+	// cloud-metadata / link-local targets are refused outright (the tool
+	// executor must never become a pivot onto the runner's metadata
+	// service). Loopback and private-network destinations stay allowed —
+	// this is a local-first application and tools legitimately call
+	// first-party local services.
+	if err := validateToolEndpoint(endpoint); err != nil {
+		return nil, err
 	}
 
 	var body io.Reader
@@ -415,12 +497,22 @@ func (t *Tool) runHTTP(ctx context.Context, args map[string]any) ([]byte, error)
 	client := t.client
 	if client == nil {
 		client = &http.Client{Timeout: time.Duration(t.def.TimeoutSec) * time.Second}
+	} else {
+		// Keep the injected transport (tests) but impose the tool's
+		// redirect policy on every hop.
+		c := *client
+		c.CheckRedirect = toolRedirectPolicy
+		client = &c
+	}
+	if client.CheckRedirect == nil {
+		client.CheckRedirect = toolRedirectPolicy
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request: %w", err)
 	}
+
 	defer resp.Body.Close()
 
 	// Bounded read: the output cap is enforced at the READER, not after
