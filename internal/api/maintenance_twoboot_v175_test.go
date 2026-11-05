@@ -8,14 +8,14 @@ package api
 // internal/updater and internal/installer. The test THIS file adds is the
 // END-TO-END two-boot proof the release contract requires:
 //
-//	Boot #1: a genuinely older engine; the gate runs the (seamed)
-//	         transaction to b11223; the transaction commits the real
-//	         identity artifacts (binary + engine-install.json manifest +
-//	         installed.json engineTag) into the SHARED data root.
-//	Boot #2: the SAME data root, a FRESH Server (a genuine process
-//	         restart); normal maintenance must recognize the committed
-//	         identity and complete with ZERO redundant download/install
-//	         transactions.
+//      Boot #1: a genuinely older engine; the gate runs the (seamed)
+//               transaction to b11223; the transaction commits the real
+//               identity artifacts (binary + engine-install.json manifest +
+//               installed.json engineTag) into the SHARED data root.
+//      Boot #2: the SAME data root, a FRESH Server (a genuine process
+//               restart); normal maintenance must recognize the committed
+//               identity and complete with ZERO redundant download/install
+//               transactions.
 //
 // Plus the identity fallback matrix, driven through the SAME gate decision
 // the production boot uses:
@@ -34,6 +34,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -78,25 +79,109 @@ func newTwoBootServer(t *testing.T, dataDir, model string) *maintenanceTestHarne
 func commitEngineTransaction(t *testing.T, cfg *config.Config, tag string) {
 	t.Helper()
 
+	if err := commitEngineTransactionErr(cfg, tag); err != nil {
+		t.Fatalf("commit engine transaction %s: %v", tag, err)
+	}
+}
+
+// commitEngineTransactionErr is commitEngineTransaction returning the
+// error instead of failing the test. The maintenance gate drives the
+// seam callback on its OWN goroutine: a t.Fatalf there terminates only
+// that goroutine (runtime.Goexit), the gate never reaches a terminal
+// phase, and the test degrades into a misleading 15 s prewarm timeout
+// (the observed CI signature). Callers inside a gate transaction must
+// return the error so the gate settles (FAILED) and the test fails
+// immediately with the real cause.
+//
+// v1.11.1 ETXTBSY FIX — the binary is NEVER opened for truncation
+// (os.WriteFile = O_TRUNC) at the live path. Linux fails that write
+// with "text file busy" whenever anything holds the executable open
+// for execution (a still-running fixture engine, or the kernel's own
+// transient exec window) — the confirmed Fyne-UI-gates failure. The
+// production installer has always swapped STAGED content into place
+// with a directory-entry rename; this helper now does the same at file
+// granularity: write a unique sibling temp file in the SAME directory,
+// fsync it, close it, then os.Rename over the live name. A rename
+// replaces the directory entry — it never needs write access to the
+// target inode — so a process executing the old binary keeps running
+// against the old inode and the swap cannot fail with ETXTBSY. On
+// Windows os.Rename maps to MoveFileEx(REPLACE_EXISTING): valid while
+// no process executes the target, and the Windows updater's own
+// stop-before-swap transaction remains the authority for a running
+// engine (the managed path there is only rewritten when idle).
+func commitEngineTransactionErr(cfg *config.Config, tag string) error {
 	binDir := updater.EngineBinDir(cfg)
 
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatalf("bin dir: %v", err)
+		return fmt.Errorf("bin dir: %w", err)
 	}
 
 	bin := filepath.Join(binDir, "llama-server")
 
-	if err := os.WriteFile(bin, []byte("fake llama-server "+tag), 0o755); err != nil {
-		t.Fatalf("write binary: %v", err)
+	if err := writeFileAtomic(bin, []byte("fake llama-server "+tag), 0o755); err != nil {
+		return fmt.Errorf("write binary: %w", err)
 	}
 
 	manifest := `{"tag":"` + tag + `","sha256":"deadbeef","size":1024,"source":"test"}`
 
-	if err := os.WriteFile(filepath.Join(binDir, "engine-install.json"), []byte(manifest), 0o644); err != nil {
-		t.Fatalf("write manifest: %v", err)
+	if err := writeFileAtomic(filepath.Join(binDir, "engine-install.json"), []byte(manifest), 0o644); err != nil {
+		return fmt.Errorf("write manifest: %w", err)
 	}
 
 	updater.RecordEngineTag(cfg, tag)
+
+	return nil
+}
+
+// writeFileAtomic replaces path with content through a unique temp file
+// in the SAME directory, fully written, fsynced, closed, permissioned
+// and renamed. Never O_TRUNC on the live path.
+func writeFileAtomic(path string, content []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+
+	tmp, err := os.CreateTemp(dir, "."+base+".*.new")
+	if err != nil {
+		return err
+	}
+
+	tmpName := tmp.Name()
+
+	// Every failure below removes the temp file; the live path is only
+	// replaced by the final successful rename.
+	ok := false
+
+	defer func() {
+		if !ok {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return err
+	}
+
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+
+	if err := os.Chmod(tmpName, perm); err != nil {
+		return err
+	}
+
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+
+	ok = true
+
+	return nil
 }
 
 // TestMaintenanceTwoBootsDoNotRedownloadCommittedEngine — the §6 two-boot

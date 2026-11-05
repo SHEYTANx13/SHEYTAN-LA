@@ -317,7 +317,7 @@ func InstallStagedDeferredWithVariant(
 	// 1) DISCOVER + DOWNLOAD to staging (never the live directory).
 	logging.Default().Info("updater", "downloading engine %s (%s backend) from %s", tag, variant, url)
 
-	archive, err := downloadEngineArchiveStaged(ctx, url, tag, binDir, onProgress)
+	archive, err := downloadEngineArchiveStaged(ctx, url, tag, binDir, variant, onProgress)
 	if err != nil {
 		return nil, fmt.Errorf("download engine %s: %w", tag, err)
 	}
@@ -394,7 +394,7 @@ func DownloadEngineArchiveStaged(
 		return "", err
 	}
 
-	return downloadEngineArchiveStaged(ctx, url, tag, binDir, onProgress)
+	return downloadEngineArchiveStaged(ctx, url, tag, binDir, variant, onProgress)
 }
 
 // StagedInstall is a validated engine package that has been atomically
@@ -1114,13 +1114,36 @@ func ReadInstallManifest(cfg *config.Config) (installManifest, bool) {
 // downloadEngineArchiveStaged fetches the release archive through the
 // Download Manager into <binDir>/.engine-download (verified, resumable,
 // bounded) and returns the archive path.
+//
+// v1.11.1 (run 41933333132) VARIANT IDENTITY FIX: the local archive
+// name and the download-manager cache key are derived from the SAME
+// (tag, variant) descriptor as the download URL — via the one naming
+// authority (AssetNameForVariant). The function used to name the file
+// with the CPU alias AssetName(tag) and a variant-blind cache key, so a
+// Vulkan transfer landed in llama-<tag>-bin-win-cpu-x64.zip under the
+// CPU cache key: the observed "requested variant=vulkan ... extract
+// engine: open .../llama-b12119-bin-win-cpu-x64.zip" mismatch. A CPU
+// archive name can never satisfy a Vulkan lookup again — and two
+// concurrent transactions for different variants of the same build can
+// no longer collide on one Dest + .part file.
 func downloadEngineArchiveStaged(
 	ctx context.Context,
 	url, tag, binDir string,
+	variant AssetVariant,
 	onProgress func(downloader.Progress),
 ) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
+
+	// ONE immutable descriptor → exact asset name. Fail closed when the
+	// naming layer has no prebuilt for this (platform, tag, variant):
+	// never fall back to another variant's file name.
+	asset := AssetNameForVariant(tag, variant)
+	if asset == "" {
+		return "", fmt.Errorf(
+			"no prebuilt llama.cpp %s engine asset name for %s/%s at %s — refusing to download under another variant's name",
+			variant, runtime.GOOS, runtime.GOARCH, tag)
+	}
 
 	stage := filepath.Join(binDir, ".engine-download")
 	if err := os.MkdirAll(stage, 0o755); err != nil {
@@ -1128,17 +1151,19 @@ func downloadEngineArchiveStaged(
 	}
 
 	opts := downloader.Options{
-		Dest: filepath.Join(stage, AssetName(tag)),
+		Dest: filepath.Join(stage, asset),
 		Sources: []downloader.Source{{
 			URL:   url,
 			Label: "llama.cpp release " + tag + " (github.com/ggml-org/llama.cpp)",
 			Trust: downloader.TrustPrimary,
 		}},
-		MaxBytes:   engineUpdateCapBytes,
-		FileMode:   0o644,
-		Resume:     true,
-		AllowHTTP:  downloader.IsLoopbackURL(url),
-		CacheKey:   "llama-engine-update-" + tag,
+		MaxBytes:  engineUpdateCapBytes,
+		FileMode:  0o644,
+		Resume:    true,
+		AllowHTTP: downloader.IsLoopbackURL(url),
+		// Build + OS + arch + variant + exact asset name — a CPU entry
+		// can never satisfy a Vulkan lookup (and vice versa).
+		CacheKey:   engineArchiveCacheKey(tag, variant, asset),
 		CacheDir:   stage,
 		OnProgress: onProgress,
 	}
@@ -1154,6 +1179,14 @@ func downloadEngineArchiveStaged(
 	}
 
 	return res.Path, nil
+}
+
+// engineArchiveCacheKey scopes the download manager's source cache to ONE
+// exact engine asset: build + OS + arch + variant + asset name. Two
+// transactions for different variants of the same build never share a
+// source-cache entry.
+func engineArchiveCacheKey(tag string, variant AssetVariant, asset string) string {
+	return "llama-engine-update-" + tag + "-" + runtime.GOOS + "-" + runtime.GOARCH + "-" + string(variant) + "-" + asset
 }
 
 // extractArchiveBySuffix unpacks a VERIFIED archive into dir. Zip members

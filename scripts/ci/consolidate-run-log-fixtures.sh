@@ -463,5 +463,115 @@ else
   bad "workflow shape contract"
 fi
 
+# 17-21. v1.11.1 (run 41933333132, P1-D): the failure summary is METADATA-
+# driven and annotation extraction EXCLUDES runner-echoed command source.
+# The old collector grepped every log line for ::error:: — including the
+# echoed step source — and reported 78 "failed commands" for a run with
+# exactly one failed job.
+
+# 17. runner-echoed BASH source containing a ::error:: literal -------------
+f="$work/case17"; mkdir -p "$f"
+ids=($(mk_jobs "$f" "Preflight compile gate|completed|success"))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+echo "::error::this is only a literal"
++ echo "::error::this is only a literal"
+gofmt OK
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-all-logs.txt"
+if [ $rc -eq 0 ] \
+  && grep -q "failed terminal jobs (metadata): 0" "$out" \
+  && grep -q "error annotations: 0" "$out" \
+  && grep -q "runner-echoed command-source literals excluded: 2" "$out"; then
+  ok "echoed bash source with a ::error:: literal (plain + xtrace forms): zero failed jobs (metadata), zero error annotations, source lines excluded"
+else
+  bad "echoed bash ::error:: literal (rc=$rc)"
+fi
+
+# 18. runner-echoed POWERSHELL source containing a ::error:: literal -------
+f="$work/case18"; mkdir -p "$f"
+ids=($(mk_jobs "$f" "Windows x64|completed|success"))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+2026-11-01T23:42:20.0000000Z Write-Host "::error::gofmt violations — run gofmt -w on:"
+2026-11-01T23:42:20.1000000Z gate OK: gofmt -l cmd internal ui
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-all-logs.txt"
+if [ $rc -eq 0 ] \
+  && grep -q "failed terminal jobs (metadata): 0" "$out" \
+  && grep -q "error annotations: 0" "$out" \
+  && grep -q "runner-echoed command-source literals excluded: 1" "$out"; then
+  ok "echoed PowerShell Write-Host with a ::error:: literal: zero failures, source excluded"
+else
+  bad "echoed PowerShell ::error:: literal (rc=$rc)"
+fi
+
+# 19. ACTUAL emitted ::error:: from executed output (job still succeeded) --
+f="$work/case19"; mkdir -p "$f"
+ids=($(mk_jobs "$f" "Linux x64|completed|success"))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+some tool emitted an annotation into its stdout
+::error::tool advisory: cache miss for optional feature X (non-fatal)
+ELF checks OK
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-all-logs.txt"
+if [ $rc -eq 0 ] \
+  && grep -q "failed terminal jobs (metadata): 0" "$out" \
+  && grep -q "error annotations: 1" "$out" \
+  && grep -q "tool advisory" "$out" \
+  && grep -q "conclusion: success" "$out"; then
+  ok "an actually-emitted ::error:: is surfaced as an annotation WITHOUT being counted as a failed job (metadata stays authoritative)"
+else
+  bad "emitted ::error:: annotation (rc=$rc)"
+fi
+
+# 20. step metadata conclusion=failure with NO ::error:: in the log --------
+f="$work/case20"; mkdir -p "$f"
+cat > "$f/jobs-page-1.json" <<'EOF'
+{"total_count":1,"jobs":[{"id":901,"name":"Fyne UI gates (Linux)","status":"completed","conclusion":"failure","steps":[{"name":"Set up job","status":"completed","conclusion":"success"},{"name":"go test ./ui/fyne/","status":"completed","conclusion":"failure"},{"name":"Post Set up Go","status":"completed","conclusion":"success"}]}]}
+EOF
+mkdir -p "$f/job-logs/901"
+printf 'https://objects.githubusercontent.com/signed-job-901\n' > "$f/job-logs/901/location"
+cat > "$f/job-logs/901/body" <<'EOF'
+--- FAIL: TestSomething
+FAIL
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-all-logs.txt"
+if [ $rc -eq 0 ] \
+  && grep -q "failed terminal jobs (metadata): 1" "$out" \
+  && grep -q "  failed job: Fyne UI gates (Linux)" "$out" \
+  && grep -q "failed steps (metadata): 1" "$out" \
+  && grep -q "error annotations: 0" "$out"; then
+  ok "step conclusion=failure with no ::error:: output: failure counted from METADATA (job + step), not from log text"
+else
+  bad "metadata-only failure (rc=$rc)"
+fi
+
+# 21. successful job with DOZENS of echoed error-string literals -----------
+f="$work/case21"; mkdir -p "$f"
+ids=($(mk_jobs "$f" "Preflight compile gate|completed|success"))
+{
+  i=0
+  while [ $i -lt 40 ]; do
+    printf 'echo "::error::violation-template-%s"\n' "$i"
+    i=$((i+1))
+  done
+  echo "gofmt OK"
+} > "$f/job-logs-body"
+mk_joblog "$f" "${ids[0]}" < "$f/job-logs-body"
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-all-logs.txt"
+if [ $rc -eq 0 ] \
+  && grep -q "failed terminal jobs (metadata): 0" "$out" \
+  && grep -q "error annotations: 0" "$out" \
+  && grep -q "runner-echoed command-source literals excluded: 40" "$out" \
+  && grep -q "conclusion: success" "$out"; then
+  ok "a successful job with dozens of echoed error-string literals remains success: 0 failed jobs, 0 annotations, all 40 source lines excluded"
+else
+  bad "success job with echoed literals (rc=$rc)"
+fi
+
 printf '\nfixtures: %d pass / %d fail\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

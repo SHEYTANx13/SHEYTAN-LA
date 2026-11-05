@@ -111,6 +111,12 @@ diag() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >>"$DIAG"; }
 
 # --- controlled exit: report first, then the verdict -------------------
 HARD_ERROR=0; CAPTURED=0; MISSING=0; NEVER_STARTED=0; IN_PROGRESS=0
+# v1.11.1 (run 41933333132, P1-D): failures come from METADATA, not from
+# grepping log text. The old "files/lines with failed commands" count
+# grepped every log line for ::error:: — including the runner's ECHOED
+# step source (a script line `echo "::error::gofmt violations"` is
+# source code, not an executed failure) — and reported 78 failed
+# commands for a run whose jobs metadata showed exactly ONE failed job.
 hard_fail() { diag "HARD ERROR: $*"; HARD_ERROR=$((HARD_ERROR+1)); }
 
 # --- redaction ----------------------------------------------------------
@@ -204,7 +210,10 @@ while [ "$page" -le 50 ]; do
     break
   fi
   n="$(timeout 10 jq -r '.jobs | length' "$WORK/jobs-$page.json")"
-  timeout 10 jq -c '.jobs[] | {id, name, status, conclusion}' "$WORK/jobs-$page.json" >> "$WORK/jobs.ndjson" 2>>"$DIAG" \
+  # v1.11.1 (P1-D): carry the per-job STEPS (name + conclusion) from the
+  # jobs API response — the authoritative per-step failure facts the
+  # summary reports. Jobs without a steps array normalize to [] .
+  timeout 10 jq -c '.jobs[] | {id, name, status, conclusion, steps: [(.steps // [])[] | {name, conclusion}]}' "$WORK/jobs-$page.json" >> "$WORK/jobs.ndjson" 2>>"$DIAG" \
     || hard_fail "failed to normalize jobs metadata on page $page"
   pages=$((pages+1))
   [ "$n" -eq 0 ] && break
@@ -293,6 +302,49 @@ ERRIDX="$WORK/erridx.txt"; WARNIDX="$WORK/warnidx.txt"
 NEVER_LIST="$WORK/never.txt"; MISSING_LIST="$WORK/missing.txt"
 : > "$NEVER_LIST"; : > "$MISSING_LIST"
 
+# v1.11.1 (P1-D) two labeled data sources, never mixed again:
+#   AUTHORITATIVE — job/step conclusions from the paginated jobs API
+#   (metadata; the only thing that can call a job failed).
+#   ANNOTATIONS   — runner annotation tokens found in the captured log
+#   OUTPUT, EXCLUDING runner-echoed command SOURCE lines (the literal
+#   `echo "::error::…"` / `Write-Host "::error::…"` statements the
+#   runner prints when echoing the step's script). Raw log lines are
+#   never discarded — only the indexes are classified.
+FAILED_JOBS=0; FAILED_JOB_LIST=""; STEP_FAILURES=0
+ANN_ERRORS=0; ANN_WARNINGS=0; ECHOED_SOURCE=0
+
+is_echoed_annotation_source() {  # $1 = one log line (no line-number prefix)
+  # A command SOURCE echo whose string LITERAL contains the annotation
+  # token: bash `echo/printf`, PowerShell `Write-*`, and the repo's Log
+  # helper. An ACTUAL emitted annotation is command OUTPUT — the token
+  # is not a quoted literal after a print command on the same line.
+  printf '%s\n' "$1" | grep -qE "(^|[;&|[:space:]+(-])(echo|printf|Write-Host|Write-Output|Write-Warning|Write-Error|Log)[[:space:]].*[\"'](::error::|##\\[error\\]|::warning::|##\\[warning\\])"
+}
+
+classify_job_log_annotations() {  # $1 = job name; $2 = captured log file
+  local jname="$1" sec="$2" hit content
+  while IFS= read -r hit; do
+    [ -z "$hit" ] && continue
+    content="${hit#*:}"   # strip grep's line-number prefix
+    case "$content" in
+      *"::error::"*|*"##[error]"*|*"EXIT_CODE: "[1-9]*" FAIL"*)
+        if is_echoed_annotation_source "$content"; then
+          ECHOED_SOURCE=$((ECHOED_SOURCE+1))
+          continue
+        fi
+        ANN_ERRORS=$((ANN_ERRORS+1))
+        printf 'job %s: %s\n' "$jname" "${hit:0:240}" >> "$ERRIDX";;
+      *"::warning::"*|*"##[warning]"*)
+        if is_echoed_annotation_source "$content"; then
+          ECHOED_SOURCE=$((ECHOED_SOURCE+1))
+          continue
+        fi
+        ANN_WARNINGS=$((ANN_WARNINGS+1))
+        printf 'job %s: %s\n' "$jname" "${hit:0:240}" >> "$WARNIDX";;
+    esac
+  done < <(grep -nE '::error::|##\[(error|warning)\]|::warning::|EXIT_CODE: [1-9][0-9]* FAIL' "$sec" 2>/dev/null | cut -c1-260 || true)
+}
+
 # Job sections are emitted in jobs-API order, one per job, exactly once.
 declare -a JOB_SECTIONS=()
 
@@ -302,6 +354,15 @@ if [ -s "$WORK/jobs.ndjson" ]; then
     jname="$(printf '%s' "$job" | jq -r '.name')"
     jstatus="$(printf '%s' "$job" | jq -r '.status')"
     jconc="$(printf '%s' "$job" | jq -r '.conclusion // "null"')"
+
+    # AUTHORITATIVE facts (P1-D): failed terminal jobs and failed steps
+    # come from the metadata, never from log text.
+    if [ "$jconc" = "failure" ]; then
+      FAILED_JOBS=$((FAILED_JOBS+1))
+      FAILED_JOB_LIST="${FAILED_JOB_LIST}${jname}\n"
+    fi
+    sfail="$(printf '%s' "$job" | timeout 10 jq -r '[(.steps // [])[] | select(.conclusion == "failure")] | length' 2>/dev/null || echo 0)"
+    STEP_FAILURES=$((STEP_FAILURES + sfail))
 
     if [ "$jconc" = "skipped" ]; then
       NEVER_STARTED=$((NEVER_STARTED+1))
@@ -336,12 +397,9 @@ if [ -s "$WORK/jobs.ndjson" ]; then
       echo "--- job log (GET /repos/$REPO/actions/jobs/$jid/logs) ---"
       cat "$sec"
       echo ""
-      while IFS= read -r hit; do
-        case "$hit" in
-          *::error::*|*"##[error]"*|*"EXIT_CODE: "[1-9]*" FAIL"*) printf 'job %s: %s\n' "$jname" "${hit:0:240}" >> "$ERRIDX";;
-          *::warning::*|*"##[warning]"*|*"::warning::"*) printf 'job %s: %s\n' "$jname" "${hit:0:240}" >> "$WARNIDX";;
-        esac
-      done < <(grep -nE '::error::|##\[(error|warning)\]|::warning::|EXIT_CODE: [1-9][0-9]* FAIL' "$sec" 2>/dev/null | cut -c1-260 || true)
+      # v1.11.1 (P1-D): annotation extraction with runner-echoed source
+      # exclusion — see classify_job_log_annotations above.
+      classify_job_log_annotations "$jname" "$sec"
     } > "${sec}.section"
     mv "${sec}.section" "$sec"
     JOB_SECTIONS+=("$jname|$jstatus|$jconc|$jid|CAPTURED")
@@ -376,8 +434,18 @@ diag "accounting: captured=$CAPTURED missing=$MISSING skipped=$NEVER_STARTED in_
   echo "jobs NEVER_STARTED (skipped): $NEVER_STARTED"
   echo "jobs IN_PROGRESS (no terminal state): $IN_PROGRESS"
   echo "collector self-log sections: 1"
-  echo "files/lines with failed commands: $(wc -l < "$ERRIDX")"
-  echo "files/lines with warnings: $(wc -l < "$WARNIDX")"
+  echo ""
+  echo "=== AUTHORITATIVE FAILURE SUMMARY (job/step metadata from the paginated jobs API) ==="
+  echo "failed terminal jobs (metadata): $FAILED_JOBS"
+  if [ "$FAILED_JOBS" -gt 0 ]; then
+    printf '%b' "$FAILED_JOB_LIST" | sed 's/^/  failed job: /'
+  fi
+  echo "failed steps (metadata): $STEP_FAILURES"
+  echo ""
+  echo "=== LOG ANNOTATIONS (emitted by executed commands; runner-echoed source lines excluded) ==="
+  echo "error annotations: $ANN_ERRORS"
+  echo "warning annotations: $ANN_WARNINGS"
+  echo "runner-echoed command-source literals excluded: $ECHOED_SOURCE"
   echo "collector hard errors: $HARD_ERROR"
   echo ""
   echo "=== ERROR INDEX ==="

@@ -56,6 +56,13 @@ const (
 	archiveChunk  = 1 << 20 // 1 MB streaming buffer
 	archiveMaxOut = 1 << 30 // 1 GB total extracted cap
 	archiveMaxN   = 20000   // entry count cap
+	// v1.11.1 (run 41933333132, work order §8.2.6/§8.2.7): the ZIP HEADER
+	// UncompressedSize64 is attacker-controlled metadata — the streamed
+	// copy is bounded BELOW it too, and the total decompressed size is
+	// also bounded against a compression-ratio bomb.
+	archiveEntryCap = 256 << 20 // single-member streamed cap
+	archiveMaxRatio = 200       // max decompressed:archive-size ratio
+	archiveRatioMin = 1 << 20   // ratio guard only above a 1 MiB floor
 )
 
 // Run implements the agent tool interface.
@@ -212,12 +219,27 @@ func (t ArchiveTool) unzip(path, dest string) (string, error) {
 	// authoritative lexical validator shared with the updater
 	// (updater.SafeArchiveRel): absolute/rooted/drive/UNC members,
 	// traversal and NUL-bearing names all fail closed.
+	//
+	// v1.11.1 (run 41933333132, work order §8.2.4/§8.2.6/§8.2.7): the
+	// extraction is also an exhaustive LEDGER — duplicate members,
+	// case-fold collisions (the Windows loader's and filesystem's
+	// matching rule) and file-vs-dir conflicts fail closed BEFORE any
+	// overwrite; every member copy is bounded by a streamed byte cap
+	// (the header's UncompressedSize64 is attacker metadata, never
+	// trusted alone); and the total decompressed size is additionally
+	// bounded against a compression-ratio bomb.
 	rooted, err := os.OpenRoot(root)
 	if err != nil {
 		return "", err
 	}
 	defer rooted.Close()
 
+	archiveSize := archiveRatioFloor()
+	if fi, statErr := os.Stat(abs); statErr == nil && fi.Size() > 0 {
+		archiveSize = fi.Size()
+	}
+
+	ledger := newExtractionLedger()
 	var total uint64
 	extracted := 0
 	for _, zf := range zr.File {
@@ -229,6 +251,9 @@ func (t ArchiveTool) unzip(path, dest string) (string, error) {
 		}
 		rel, err := updater.SafeArchiveRel(zf.Name)
 		if err != nil {
+			return "", err
+		}
+		if err := ledger.claim(rel, zf.FileInfo().IsDir()); err != nil {
 			return "", err
 		}
 		if zf.FileInfo().IsDir() {
@@ -251,17 +276,79 @@ func (t ArchiveTool) unzip(path, dest string) (string, error) {
 			src.Close()
 			return "", err
 		}
-		n, err := io.CopyBuffer(dst, src, make([]byte, archiveChunk))
+		// Streamed cap: never trust the header's size alone.
+		n, err := io.CopyBuffer(dst, io.LimitReader(src, archiveEntryCap+1), make([]byte, archiveChunk))
 		total += uint64(n)
 		src.Close()
 		dst.Close()
 		if err != nil {
 			return "", err
 		}
+		if n > archiveEntryCap {
+			return "", fmt.Errorf("zip member %q exceeds the streamed %d MB entry cap", zf.Name, archiveEntryCap>>20)
+		}
+		if total > archiveMaxOut {
+			return "", fmt.Errorf("archive too large (cap %d MB)", archiveMaxOut>>20)
+		}
+		if total > archiveRatioMin && total > uint64(archiveSize)*archiveMaxRatio {
+			return "", fmt.Errorf("archive decompression ratio exceeds %dx (%d bytes from a %d byte archive) — refusing suspected decompression bomb", archiveMaxRatio, total, archiveSize)
+		}
 		reportFileCreated(filepath.Join(root, rel))
 		extracted++
 	}
 	return fmt.Sprintf("unzipped %d file(s) from %s -> %s", extracted, path, destOrAuto(dest, root)), nil
+}
+
+// archiveRatioFloor keeps the ratio guard from dividing by a zero/absent
+// size when the archive cannot be stat'ed.
+func archiveRatioFloor() int64 { return 1 }
+
+// extractionLedger is the §8.2.4 overwrite/conflict authority for one
+// extraction: no duplicate members, no case-fold collisions, and no
+// file-vs-dir boundary conflicts — the first spelling of a path wins
+// its KIND, and any contradicting member fails the whole extraction.
+type extractionLedger struct {
+	files map[string]string // lowercased rel -> first original spelling
+	dirs  map[string]bool   // lowercased directory rel paths
+}
+
+func newExtractionLedger() *extractionLedger {
+	return &extractionLedger{files: map[string]string{}, dirs: map[string]bool{}}
+}
+
+func (l *extractionLedger) claim(rel string, isDir bool) error {
+	key := strings.ToLower(filepath.ToSlash(rel))
+
+	// Every ANCESTOR directory of this member must not be an existing
+	// file ("a" extracted as a file cannot later host "a/b").
+	dir := filepath.ToSlash(filepath.Dir(rel))
+	for dir != "." && dir != "/" && dir != "" {
+		if l.files[dir] != "" {
+			return fmt.Errorf("archive entry %q conflicts with the file %q (a file cannot become a directory)", rel, l.files[dir])
+		}
+		parent := filepath.ToSlash(filepath.Dir(dir))
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+
+	if isDir {
+		if _, exists := l.files[key]; exists {
+			return fmt.Errorf("archive entry %q conflicts with the file %q (a directory cannot replace a file)", rel, l.files[key])
+		}
+		l.dirs[key] = true
+		return nil
+	}
+
+	if _, exists := l.files[key]; exists {
+		return fmt.Errorf("archive contains duplicate or case-colliding entries for %q (first seen as %q)", rel, l.files[key])
+	}
+	if l.dirs[key] {
+		return fmt.Errorf("archive entry %q conflicts with an existing directory of the same path", rel)
+	}
+	l.files[key] = rel
+	return nil
 }
 
 func destOrAuto(dest, root string) string {
@@ -371,6 +458,13 @@ func (t ArchiveTool) untar(path, dest string) (string, error) {
 		return "", err
 	}
 	defer rooted.Close()
+
+	archiveSize := archiveRatioFloor()
+	if fi, statErr := os.Stat(abs); statErr == nil && fi.Size() > 0 {
+		archiveSize = fi.Size()
+	}
+
+	ledger := newExtractionLedger()
 	tr := tar.NewReader(r)
 	extracted := 0
 	var total uint64
@@ -387,6 +481,9 @@ func (t ArchiveTool) untar(path, dest string) (string, error) {
 		}
 		// v1.11.1 (run 41901967798): rooted extraction + link-member
 		// rejection + the shared lexical validator (updater.SafeArchiveRel).
+		// v1.11.1 (run 41933333132, §8.2.4/§8.2.7): the same extraction
+		// ledger and streamed caps as unzip — duplicate/case-colliding/
+		// conflicting members and header-lying sizes fail closed.
 		if hdr.Typeflag == tar.TypeSymlink || hdr.Typeflag == tar.TypeLink {
 			return "", fmt.Errorf("unsafe entry %q (link members are not allowed)", hdr.Name)
 		}
@@ -398,10 +495,16 @@ func (t ArchiveTool) untar(path, dest string) (string, error) {
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
+			if err := ledger.claim(rel, true); err != nil {
+				return "", err
+			}
 			if err := rooted.MkdirAll(rel, 0o755); err != nil {
 				return "", err
 			}
 		case tar.TypeReg:
+			if err := ledger.claim(rel, false); err != nil {
+				return "", err
+			}
 			if dirRel := filepath.Dir(rel); dirRel != "." {
 				if err := rooted.MkdirAll(dirRel, 0o755); err != nil {
 					return "", err
@@ -411,11 +514,21 @@ func (t ArchiveTool) untar(path, dest string) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			n, err := io.CopyBuffer(dst, tr, make([]byte, archiveChunk))
+			// Streamed cap: the tar header's Size is metadata too.
+			n, err := io.CopyBuffer(dst, io.LimitReader(tr, archiveEntryCap+1), make([]byte, archiveChunk))
 			total += uint64(n)
 			dst.Close()
 			if err != nil {
 				return "", err
+			}
+			if n > archiveEntryCap {
+				return "", fmt.Errorf("tar member %q exceeds the streamed %d MB entry cap", hdr.Name, archiveEntryCap>>20)
+			}
+			if total > archiveMaxOut {
+				return "", fmt.Errorf("archive too large (entry/size cap)")
+			}
+			if total > archiveRatioMin && total > uint64(archiveSize)*archiveMaxRatio {
+				return "", fmt.Errorf("archive decompression ratio exceeds %dx (%d bytes from a %d byte archive) — refusing suspected decompression bomb", archiveMaxRatio, total, archiveSize)
 			}
 			reportFileCreated(filepath.Join(root, rel))
 			extracted++

@@ -3343,10 +3343,22 @@ func (s *LlamaServer) updateEngineVariantTx(
 				return "", nil, fmt.Errorf("install %s engine: %w", variant, dlErr)
 			}
 
-			defer func() { _ = os.Remove(archivePath) }()
-
+			// v1.11.1 (run 41933333132) FIX — the staged swap OWNS the
+			// archive's lifetime now. The previous code removed the
+			// archive in a defer bound to THIS download closure, so the
+			// file was deleted the moment the closure returned — BEFORE
+			// the destructive window ever ran the swap — and the
+			// extraction failed with "open ...zip: The system cannot
+			// find the file specified" (the observed Windows Vulkan
+			// provisioning failure). The archive is consumed exactly
+			// once, by the extraction below; it is scratch, not a
+			// cache, and is removed on BOTH outcomes of the swap.
 			stagedSwap = func() (*updater.StagedInstall, error) {
-				return updater.InstallStagedFromArchiveDeferredWithVariant(cfg, tag, variant, archivePath)
+				staged, swapErr := updater.InstallStagedFromArchiveDeferredWithVariant(cfg, tag, variant, archivePath)
+
+				_ = os.Remove(archivePath)
+
+				return staged, swapErr
 			}
 		} else {
 			stagedSwap = func() (*updater.StagedInstall, error) {

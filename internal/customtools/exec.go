@@ -482,14 +482,35 @@ func newToolHTTPClient(timeout time.Duration) *http.Client {
 			DialContext:         safeToolDialer.DialContext,
 			ForceAttemptHTTP2:   true,
 			TLSHandshakeTimeout: 10 * time.Second,
+			// v1.11.1 (run 41933333132, §8.1.6): the environment proxy is
+			// EXPLICITLY disabled — a HTTP(S)_PROXY variable would otherwise
+			// be a second resolver/destination authority outside every
+			// endpoint policy this tool enforces (a proxy can change the
+			// actual destination and the connect-time IP guard never sees
+			// the real target). Response-body caps are enforced at the
+			// reader (runHTTP); headers are bounded by the client timeout.
+			Proxy: nil,
 		},
 		CheckRedirect: toolRedirectPolicy,
 	}
 }
 
 // validateToolEndpoint enforces the tool HTTP policy on any request or
-// redirect target: https scheme, non-empty host, and no metadata/link-local
-// destination. It never inspects or logs credentials.
+// redirect target. It never inspects or logs credentials.
+//
+// v1.11.1 (run 41933333132, work order §8.1) the policy is structural:
+//   - https scheme only;
+//   - non-empty, SYNTACTICALLY VALID host (no whitespace, separators or
+//     percent-encoding tricks in the host component);
+//   - NO embedded userinfo (credentials in the URL are a credential-
+//     handling defect AND an authority confusion: user@host is never
+//     the intended endpoint);
+//   - port policy: a NON-LOCAL endpoint may only use the https default
+//     port or the explicit 443 — a model-influenced template cannot
+//     pivot a public host onto an arbitrary service port. Local-first
+//     (loopback/private LAN) destinations keep arbitrary ports: that is
+//     the supported first-party-services case;
+//   - cloud-metadata / link-local destinations refused (unchanged).
 func validateToolEndpoint(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -502,17 +523,58 @@ func validateToolEndpoint(raw string) error {
 	if hostname == "" {
 		return fmt.Errorf("endpoint host is empty (%s)", redactedURL(raw))
 	}
+	if u.User != nil {
+		return fmt.Errorf("endpoint must not embed userinfo (%s)", redactedURL(raw))
+	}
+	if !validEndpointHost(hostname) {
+		return fmt.Errorf("endpoint host %s is not a valid host name", redactedURL(hostname))
+	}
 	if isMetadataOrLinkLocalHost(hostname) {
 		return fmt.Errorf("endpoint host %s is refused (cloud metadata / link-local targets are not reachable from tool execution)", hostname)
+	}
+	if !isLocalishHost(hostname) {
+		// Public endpoint: the https default port or explicit 443 only.
+		if port := u.Port(); port != "" && port != "443" {
+			return fmt.Errorf("public endpoint port %s is refused (non-local endpoints serve https on 443 only)", port)
+		}
 	}
 	return nil
 }
 
-// toolRedirectPolicy revalidates every redirect hop: https-only, endpoint
-// policy, no protocol downgrade, and no confused-deputy pivot from a
-// public origin into loopback/private hosts (same-host hops stay allowed
-// so first-party local tools keep working).
+// validEndpointHost rejects host components that cannot be intended
+// hostnames: whitespace, path/authority separators and percent-escapes.
+// IP literals and ordinary DNS names pass unchanged.
+func validEndpointHost(hostname string) bool {
+	if hostname == "" || len(hostname) > 253 {
+		return false
+	}
+
+	for _, r := range hostname {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '.', r == '-', r == ':', r == '[', r == ']', r == '_':
+			// accepted host characters (DNS names, IPv4/v6 literals)
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
+// toolRedirectPolicy revalidates every redirect hop: a small redirect
+// limit (the custom CheckRedirect REPLACES net/http's default 10-hop
+// cap, so the limit must be enforced here), https-only, endpoint policy,
+// no protocol downgrade, and no confused-deputy pivot from a public
+// origin into loopback/private hosts (same-host hops stay allowed so
+// first-party local tools keep working).
 func toolRedirectPolicy(req *http.Request, via []*http.Request) error {
+	const maxToolRedirects = 5
+	if len(via) >= maxToolRedirects {
+		return fmt.Errorf("tool request redirect limit exceeded (%d hops) — refusing", maxToolRedirects)
+	}
 	if err := validateToolEndpoint(req.URL.String()); err != nil {
 		return fmt.Errorf("redirect target refused: %w", err)
 	}

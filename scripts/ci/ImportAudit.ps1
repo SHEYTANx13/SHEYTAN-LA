@@ -12,13 +12,21 @@
   shell) and resolves every imported DLL name in the REAL loader search
   order for this launch (exe directory, then System32, then PATH).
 
-  Contract (fail-open by design):
-    - Every import resolved  -> report + exit 0 (smoke proceeds).
-    - Any import MISSING     -> ::error naming the DLL + exit 2 (the step
-      fails BEFORE the app is ever launched: a red with a named missing
+  Contract (v1.11.1, run 41933333132 — the audit is a RELEASE GATE):
+    - Every import resolved  -> report + exit 0 (PASS; smoke proceeds).
+    - Any import MISSING     -> ::error naming the DLL + exit 2 (FAIL; the
+      step fails BEFORE the app is ever launched: a red with a named missing
       DLL is diagnosable from the run page alone).
-    - PE parse failure       -> ::warning + continue (exit 0). The audit
-      adds signal; its own bugs must never block a green smoke.
+    - Audit could not run    -> diagnostics + exit 3 (ERROR; never PASS).
+      This covers a per-module PE parse failure (that module's import
+      closure was NOT verified), an unreadable/unresolvable input path,
+      and any unexpected terminating error — the previous v1.11.0
+      behavior "PE parse failure -> ::warning + continue (exit 0)"
+      reported "script ran without exception" as proof of a closure it
+      had not actually verified, and the wrapper's fail-open catch then
+      launched with the audit UNKNOWN (the confirmed run-41933333132
+      Windows warning). ERROR is never PASS: the caller fails the job
+      gate (after still collecting the separate launch-smoke evidence).
     - api-ms-* / ext-ms-* names are virtual API Set contracts resolved by
       the OS schema, not by file search — reported as API-SET, never MISSING.
 #>
@@ -41,7 +49,10 @@ if ($Modules.Count -eq 1 -and $Modules[0].ToString().Contains(',')) {
 }
 
 $ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+
 $script:sawMissing = $false
+$script:auditError = $false
 
 function Convert-RvaToOffset {
     param([UInt64]$Rva, $Sections)
@@ -129,57 +140,86 @@ function Resolve-InLoaderOrder {
 
 # Loader-order approximation prescribed by the smoke contract: exe dir,
 # System32, PATH. Deduplicated, non-empty.
-$searchDirs = @(
-    (Resolve-Path -LiteralPath $ExeDir).Path,
-    (Join-Path $SystemRoot "System32")
-) + @($env:PATH -split ';' | Where-Object { $_ -ne "" })
+#
+# v1.11.1: the WHOLE audit body runs inside one fail-closed guard. Any
+# terminating error (unreadable ExeDir, an unexpected parser exception
+# outside a per-module catch, a strict-mode violation) lands in the
+# final catch, which prints the full diagnostic record and classifies
+# the run as ERROR (exit 3) — never a silent PASS.
+try {
+    $searchDirs = @(
+        (Resolve-Path -LiteralPath $ExeDir).Path,
+        (Join-Path $SystemRoot "System32")
+    ) + @($env:PATH -split ';' | Where-Object { $_ -ne "" })
 
-Write-Output "=== smoke dependency audit (static imports, loader order: exe dir -> System32 -> PATH) ==="
-Write-Output ("search dirs: {0}" -f ($searchDirs -join ' ; '))
+    Write-Output "=== smoke dependency audit (static imports, loader order: exe dir -> System32 -> PATH) ==="
+    Write-Output ("search dirs: {0}" -f ($searchDirs -join ' ; '))
 
-# Case-insensitive index of the smoke copy's exe directory (the first loader
-# probe). Bounded: the copy holds a handful of files.
-$exeDirIndex = @{}
-Get-ChildItem -LiteralPath $searchDirs[0] -File | ForEach-Object {
-    $exeDirIndex[$_.Name.ToLowerInvariant()] = $_.FullName
-}
-
-foreach ($mod in $Modules) {
-    $modPath = Join-Path $ExeDir $mod
-    if (-not (Test-Path -LiteralPath $modPath)) {
-        Write-Output ("::error::smoke dependency audit: {0} is absent from the smoke copy — a load-chain module is missing before launch" -f $mod)
-        $script:sawMissing = $true
-        continue
+    # Case-insensitive index of the smoke copy's exe directory (the first loader
+    # probe). Bounded: the copy holds a handful of files.
+    $exeDirIndex = @{}
+    Get-ChildItem -LiteralPath $searchDirs[0] -File | ForEach-Object {
+        $exeDirIndex[$_.Name.ToLowerInvariant()] = $_.FullName
     }
-    try {
-        $imports = Get-StaticImportDlls -Path $modPath
-    } catch {
-        Write-Output ("::warning::smoke dependency audit: PE parse of {0} failed ({1}) — continuing to launch (audit is fail-open on its own parse errors)" -f $mod, $_.Exception.Message)
-        continue
-    }
-    Write-Output ("--- {0}: {1} static import(s) ---" -f $mod, $imports.Count)
-    $seen = @{}
-    foreach ($dll in $imports) {
-        $key = $dll.ToLowerInvariant()
-        if ($seen.ContainsKey($key)) { continue }
-        $seen[$key] = $true
-        if ($dll -match '^(api-ms-|ext-ms-)') {
-            Write-Output ("  [API-SET] {0} (virtual API Set name — resolved by the OS schema, not file search)" -f $dll)
+
+    foreach ($mod in $Modules) {
+        $modPath = Join-Path $ExeDir $mod
+        if (-not (Test-Path -LiteralPath $modPath)) {
+            Write-Output ("::error::smoke dependency audit: {0} is absent from the smoke copy — a load-chain module is missing before launch" -f $mod)
+            $script:sawMissing = $true
             continue
         }
-        $found = Resolve-InLoaderOrder -Name $dll -SearchDirs $searchDirs -ExeDirIndex $exeDirIndex
-        if ($found) {
-            Write-Output ("  [resolved] {0} -> {1}" -f $dll, $found)
-        } else {
-            Write-Output ("::error::smoke dependency audit: {0} imported by {1} has no resolvable copy (exe dir, System32, PATH)" -f $dll, $mod)
-            $script:sawMissing = $true
+        try {
+            $imports = Get-StaticImportDlls -Path $modPath
+        } catch {
+            # v1.11.1: a module whose import table could not be read has
+            # NOT been audited — "no exception on the other modules" is
+            # not a dependency-closure proof. Record ERROR (exit 3); the
+            # diagnostics here carry the exact parse failure.
+            Write-Output ("::warning::smoke dependency audit: PE parse of {0} failed ({1}) — the import closure of this module is UNVERIFIED; the audit classifies as ERROR" -f $mod, $_.Exception.Message)
+            Write-Output ("::warning::smoke dependency audit: parse-failure stack: {0}" -f ($_.ScriptStackTrace -replace "\r?\n", " | "))
+            $script:auditError = $true
+            continue
+        }
+        Write-Output ("--- {0}: {1} static import(s) ---" -f $mod, $imports.Count)
+        $seen = @{}
+        foreach ($dll in $imports) {
+            $key = $dll.ToLowerInvariant()
+            if ($seen.ContainsKey($key)) { continue }
+            $seen[$key] = $true
+            if ($dll -match '^(api-ms-|ext-ms-)') {
+                Write-Output ("  [API-SET] {0} (virtual API Set name — resolved by the OS schema, not file search)" -f $dll)
+                continue
+            }
+            $found = Resolve-InLoaderOrder -Name $dll -SearchDirs $searchDirs -ExeDirIndex $exeDirIndex
+            if ($found) {
+                Write-Output ("  [resolved] {0} -> {1}" -f $dll, $found)
+            } else {
+                Write-Output ("::error::smoke dependency audit: {0} imported by {1} has no resolvable copy (exe dir, System32, PATH)" -f $dll, $mod)
+                $script:sawMissing = $true
+            }
         }
     }
+} catch {
+    # Unexpected terminating error OUTSIDE the per-module parse guard:
+    # the audit could not run to completion — full diagnostics, ERROR.
+    Write-Output "::error::smoke dependency audit: unexpected terminating error — the audit could not complete (ERROR is never PASS)"
+    Write-Output ("::error::smoke dependency audit: exception: {0}" -f $_.Exception.Message)
+    Write-Output ("::error::smoke dependency audit: stack: {0}" -f ($_.ScriptStackTrace -replace "\r?\n", " | "))
+    Write-Output ("::error::smoke dependency audit: invocation: {0}" -f $_.InvocationInfo.PositionMessage)
+    exit 3
 }
 
+# Structured result: FAIL (missing dependency) > ERROR (audit incomplete)
+# > PASS. ERROR exits non-zero so "script ran without exception" can
+# never again masquerade as a verified dependency closure.
 if ($script:sawMissing) {
     Write-Output "smoke dependency audit: MISSING DEPENDENCIES — the launch would die at loader level with 0xC0000135"
     exit 2
 }
-Write-Output "smoke dependency audit: every named static import resolves (or is an OS API Set) — safe to launch"
+if ($script:auditError) {
+    Write-Output "smoke dependency audit: ERROR — at least one load-chain module could not be audited; the dependency closure is unverified"
+    exit 3
+}
+Write-Output "smoke dependency audit: PASS — every named static import resolves (or is an OS API Set); safe to launch"
 exit 0

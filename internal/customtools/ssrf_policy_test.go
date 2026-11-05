@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
 )
 
 func mustURL(t *testing.T, raw string) *url.URL {
@@ -95,5 +96,78 @@ func TestToolRedirectPolicy(t *testing.T) {
 	meta := &http.Request{URL: mustURL(t, "https://169.254.169.254/latest/meta-data/")}
 	if err := toolRedirectPolicy(meta, []*http.Request{{URL: privOrigin}}); err == nil {
 		t.Fatal("metadata redirect hop must be refused")
+	}
+}
+
+// TestValidateToolEndpointStructuralPolicy — v1.11.1 (run 41933333132,
+// work order §8.1): userinfo refusal, host-syntax validation and the
+// public-port policy are part of the endpoint trust boundary.
+func TestValidateToolEndpointStructuralPolicy(t *testing.T) {
+	allowed := []string{
+		"https://api.example.com/v1",       // https default port
+		"https://api.example.com:443/v1",   // explicit 443
+		"https://127.0.0.1:8080/local-api", // local-first keeps arbitrary ports
+		"https://192.168.1.10:9000/lan",    // private LAN keeps arbitrary ports
+	}
+	for _, u := range allowed {
+		if err := validateToolEndpoint(u); err != nil {
+			t.Errorf("endpoint %q must be allowed, got: %v", u, err)
+		}
+	}
+
+	refused := []string{
+		"https://user:pass@api.example.com/", // embedded userinfo
+		"https://api.example.com:8080/v1",    // public host, non-443 port
+		"https://api.example.com:22/v1",      // public host, ssh port
+		"https://exa mple.com/",              // whitespace in host
+		"https://example.com%2F@evil/",       // percent-escape tricks in the authority
+		"https://[fd00:ec2::254]:8080/x",     // metadata v6 with a non-443 port
+	}
+	for _, u := range refused {
+		if err := validateToolEndpoint(u); err == nil {
+			t.Errorf("endpoint %q must be refused", u)
+		}
+	}
+}
+
+// TestToolRedirectPolicyLimit — v1.11.1: a custom CheckRedirect REPLACES
+// net/http's default 10-hop cap, so the tool policy enforces its own
+// small limit: five hops are allowed, the sixth is refused.
+func TestToolRedirectPolicyLimit(t *testing.T) {
+	origin := mustURL(t, "https://api.example.com/start")
+
+	sameHop := func(n int) []*http.Request {
+		via := []*http.Request{{URL: origin}}
+		for i := 0; i < n; i++ {
+			via = append(via, &http.Request{URL: mustURL(t, "https://api.example.com/hop")})
+		}
+		return via
+	}
+
+	if err := toolRedirectPolicy(&http.Request{URL: mustURL(t, "https://api.example.com/next")}, sameHop(3)); err != nil {
+		t.Fatalf("the fifth hop (origin + 3 recorded + current) must be allowed, got: %v", err)
+	}
+	if err := toolRedirectPolicy(&http.Request{URL: mustURL(t, "https://api.example.com/next")}, sameHop(4)); err == nil {
+		t.Fatal("the sixth redirect hop must be refused (a custom CheckRedirect replaces the default 10-cap)")
+	}
+}
+
+// TestNewToolHTTPClientNoEnvironmentProxy — the tool client must never
+// inherit HTTP(S)_PROXY: a proxy is a second destination authority
+// outside every endpoint policy this tool enforces.
+func TestNewToolHTTPClientNoEnvironmentProxy(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://pivot.example.com:3128")
+	t.Setenv("HTTP_PROXY", "http://pivot.example.com:3128")
+
+	c := newToolHTTPClient(time.Second)
+	tr, ok := c.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport = %T, want *http.Transport", c.Transport)
+	}
+	if tr.Proxy != nil {
+		t.Fatal("the tool transport must not carry an environment proxy (Proxy must be nil)")
+	}
+	if c.CheckRedirect == nil {
+		t.Fatal("the tool client must enforce the redirect policy")
 	}
 }

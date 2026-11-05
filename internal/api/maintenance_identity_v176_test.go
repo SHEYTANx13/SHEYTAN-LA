@@ -83,7 +83,16 @@ func TestMaintenanceGateUntrustworthyIdentityRunsHonestTransaction(t *testing.T)
 				t.Errorf("transaction targeted %q, want %q", tag, latest)
 			}
 
-			commitEngineTransaction(t, h.cfg, tag)
+			// v1.11.1: the gate runs this callback on its own
+			// goroutine — a t.Fatalf here would Goexit the gate
+			// and the test would time out on a prewarm that can
+			// never fire. Surface the error, settle the gate
+			// (FAILED), fail immediately with the real cause.
+			if err := commitEngineTransactionErr(h.cfg, tag); err != nil {
+				t.Errorf("commit engine transaction %s: %v", tag, err)
+
+				return "", err
+			}
 
 			return "engine updated to llama.cpp " + tag, nil
 		},
@@ -139,7 +148,16 @@ func TestMaintenanceGateGenuinelyNewerTargetStillUpdatesCorruptState(t *testing.
 				t.Errorf("transaction targeted %q, want b12000", tag)
 			}
 
-			commitEngineTransaction(t, h.cfg, tag)
+			// v1.11.1: return the error instead of t.Fatalf — the
+			// gate goroutine must reach a terminal phase so the
+			// test fails on the REAL cause (the observed CI run
+			// degraded an ETXTBSY write failure into a misleading
+			// 15 s "timed out waiting for prewarm" second error).
+			if err := commitEngineTransactionErr(h.cfg, tag); err != nil {
+				t.Errorf("commit engine transaction %s: %v", tag, err)
+
+				return "", err
+			}
 
 			return "engine updated to llama.cpp " + tag, nil
 		},

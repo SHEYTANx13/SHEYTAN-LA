@@ -84,11 +84,32 @@ jobs:
   # ==========================================================================
   preflight:
     name: Preflight compile gate
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+      - name: Runner OS identity (Ubuntu 26.04 gate)
+        run: |
+          set -euo pipefail
+          uname -a
+          cat /etc/os-release
+          echo "dpkg arch: $(dpkg --print-architecture)"
+          echo "ImageOS=${ImageOS:-unknown} ImageVersion=${ImageVersion:-unknown}"
+          # v1.11.1 (run 41933333132, work order §7): the 24.04 -> 26.04
+          # migration is VERIFIED, not a YAML-only change — the exact OS
+          # release and architecture are asserted so later runner drift
+          # fails loudly here instead of surprising the build.
+          . /etc/os-release
+          if [ "${ID}" != "ubuntu" ] || [ "${VERSION_ID}" != "26.04" ]; then
+            echo "::error::runner identity: expected ubuntu-26.04, got ${ID}-${VERSION_ID} — the Linux lane is pinned to 26.04"
+            exit 1
+          fi
+          if [ "$(dpkg --print-architecture)" != "amd64" ]; then
+            echo "::error::runner identity: expected amd64 architecture, got $(dpkg --print-architecture)"
+            exit 1
+          fi
+
 
       - name: Setup Go
         uses: actions/setup-go@v7
@@ -166,12 +187,33 @@ jobs:
   # ==========================================================================
   audit:
     name: Core audit (headless)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: [preflight]
     timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+      - name: Runner OS identity (Ubuntu 26.04 gate)
+        run: |
+          set -euo pipefail
+          uname -a
+          cat /etc/os-release
+          echo "dpkg arch: $(dpkg --print-architecture)"
+          echo "ImageOS=${ImageOS:-unknown} ImageVersion=${ImageVersion:-unknown}"
+          # v1.11.1 (run 41933333132, work order §7): the 24.04 -> 26.04
+          # migration is VERIFIED, not a YAML-only change — the exact OS
+          # release and architecture are asserted so later runner drift
+          # fails loudly here instead of surprising the build.
+          . /etc/os-release
+          if [ "${ID}" != "ubuntu" ] || [ "${VERSION_ID}" != "26.04" ]; then
+            echo "::error::runner identity: expected ubuntu-26.04, got ${ID}-${VERSION_ID} — the Linux lane is pinned to 26.04"
+            exit 1
+          fi
+          if [ "$(dpkg --print-architecture)" != "amd64" ]; then
+            echo "::error::runner identity: expected amd64 architecture, got $(dpkg --print-architecture)"
+            exit 1
+          fi
+
 
       - name: Setup Go
         uses: actions/setup-go@v7
@@ -229,12 +271,33 @@ jobs:
   # ==========================================================================
   ui:
     name: Fyne UI gates (Linux)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: [preflight]
     timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+      - name: Runner OS identity (Ubuntu 26.04 gate)
+        run: |
+          set -euo pipefail
+          uname -a
+          cat /etc/os-release
+          echo "dpkg arch: $(dpkg --print-architecture)"
+          echo "ImageOS=${ImageOS:-unknown} ImageVersion=${ImageVersion:-unknown}"
+          # v1.11.1 (run 41933333132, work order §7): the 24.04 -> 26.04
+          # migration is VERIFIED, not a YAML-only change — the exact OS
+          # release and architecture are asserted so later runner drift
+          # fails loudly here instead of surprising the build.
+          . /etc/os-release
+          if [ "${ID}" != "ubuntu" ] || [ "${VERSION_ID}" != "26.04" ]; then
+            echo "::error::runner identity: expected ubuntu-26.04, got ${ID}-${VERSION_ID} — the Linux lane is pinned to 26.04"
+            exit 1
+          fi
+          if [ "$(dpkg --print-architecture)" != "amd64" ]; then
+            echo "::error::runner identity: expected amd64 architecture, got $(dpkg --print-architecture)"
+            exit 1
+          fi
+
 
       - name: Setup Go
         uses: actions/setup-go@v7
@@ -263,6 +326,12 @@ jobs:
             xauth \
             xvfb \
             x11-utils
+
+          # v1.11.1 (work order §7): the Fyne native prerequisites are
+          # re-verified on the 26.04 image — pkg-config must actually
+          # resolve gl, not merely have the package names installed.
+          echo "gl pkg-config version: $(pkg-config --modversion gl)"
+          echo "glx pkg-config version: $(pkg-config --modversion glx 2>/dev/null || echo 'n/a')"
 
       - name: Fyne UI contract + composition suite
         run: |
@@ -298,8 +367,11 @@ jobs:
           Xvfb :91 -screen 0 1280x800x24 >/dev/null 2>&1 &
           XVFB_PID=$!
           xvfb_ready=0
+          # v1.11.1 (work order §7): readiness is a REAL X-server probe
+          # (xdpyinfo answers only when the server accepts clients), not
+          # a lock file that can exist before the server is usable.
           for i in $(seq 1 20); do
-            [ -e "/tmp/.X91-lock" ] && { xvfb_ready=1; break; }
+            if DISPLAY=:91 xdpyinfo >/dev/null 2>&1; then xvfb_ready=1; break; fi
             sleep 0.5
           done
           if [ "$xvfb_ready" -ne 1 ]; then
@@ -729,6 +801,14 @@ jobs:
             throw
           }
 
+      # v1.11.1 (run 41933333132, P1-C): the audit decision contract is
+      # pinned by deterministic local fixtures BEFORE the real smoke
+      # depends on it — complete closure = PASS, missing module = FAIL(2),
+      # malformed/non-PE/parse/runtime = ERROR(3, never PASS).
+      - name: Dependency audit fixture contract
+        run: |
+          ./scripts/ci/ImportAudit.Tests.ps1
+
       # Pre-launch dependency audit (run #119): 0xC0000135 is raised by
       # the Windows loader while resolving the STATIC import chain at
       # process init — before main() runs, so nothing can log it and a
@@ -738,37 +818,47 @@ jobs:
       # real loader order (exe dir, System32, PATH) BEFORE launch. Any
       # unresolvable name fails the step with a named ::error, so a
       # future DLL red is diagnosable from the run page alone.
-      # Best-effort contract: the audit's own PE-parse failures are
-      # FAIL-OPEN (log + continue) — it adds signal, it never blocks a
-      # green smoke. Full output tees into
-      # ci-logs/win-smoke-dep-audit.log (consolidated run-log artifact).
-      - name: Pre-launch dependency audit (static imports, fail-open parser)
+      # v1.11.1 (run 41933333132) — the audit is a RELEASE GATE:
+      #   exit 0 = PASS, exit 2 = FAIL (named missing DLL) — throws here;
+      #   exit 3 = ERROR (audit could not complete: the script crashed OR
+      #   a load-chain module's PE parse failed) — NEVER a pass. The old
+      #   wrapper caught a script crash, set $auditExit = 0 and launched
+      #   with the audit UNKNOWN — the confirmed fail-open warning of
+      #   this run. Now: the crash is recorded as ERROR, the separate
+      #   launch-smoke step still runs (launch evidence stays valuable),
+      #   and the job is failed at the end of that step by the marker
+      #   written here. Full output tees into
+      #   ci-logs/win-smoke-dep-audit.log (consolidated run-log artifact).
+      - name: Pre-launch dependency audit (static imports, release gate)
         run: |
           $smokeRoot = Join-Path $env:RUNNER_TEMP "win-smoke\${{ env.WIN_PKG_ROOT }}"
           New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
-          # Fail-open enforced AT THE WRAPPER (run #120 fix 4): a script-level
-          # crash in ImportAudit.ps1 (parse error, unhandled terminating
-          # error) is caught here, emits a ::warning with the exception
-          # message and CONTINUES to the launch — the audit adds signal, it
-          # never blocks a healthy smoke, even if the script itself is
-          # broken. Only the script's OWN exit 2 (a named missing DLL) fails
-          # the step, via a titled ::error. Verified under pwsh 7.4.6: an
-          # 'exit 2' inside a child script invoked through a piped try/catch
-          # does NOT raise a catchable exception — $LASTEXITCODE carries it —
-          # while parse errors and unhandled throws ARE caught (ParseException
-          # / RuntimeException). The tee to ci-logs/win-smoke-dep-audit.log is
-          # unchanged.
+          if (Test-Path "ci-logs/win-dep-audit-ERROR.marker") { Remove-Item "ci-logs/win-dep-audit-ERROR.marker" -Force }
           $auditExit = 0
           try {
             & ./scripts/ci/ImportAudit.ps1 -ExeDir $smokeRoot -Modules @("SHEYTAN-LA.exe", "opengl32.dll", "libgallium_wgl.dll") 2>&1 | Tee-Object -FilePath "ci-logs/win-smoke-dep-audit.log"
             $auditExit = $LASTEXITCODE
           } catch {
-            Write-Host ("::warning::smoke dependency audit wrapper: ImportAudit.ps1 crashed before producing an exit code ({0}) — continuing to launch (the audit is fail-open even when the script itself is broken)" -f $_.Exception.Message)
-            $auditExit = 0
+            # A script-level crash (parse error, unhandled terminating
+            # error) is an UNKNOWN audit — classified as ERROR (exit 3
+            # semantics), never 0. Diagnostics go to the step log AND
+            # the tee'd audit log.
+            $diag = "ImportAudit.ps1 crashed before producing an exit code: {0} | stack: {1}" -f $_.Exception.Message, ($_.ScriptStackTrace -replace "\r?\n", " | ")
+            Write-Host ("::error::smoke dependency audit: {0} — the dependency closure is UNKNOWN (ERROR is never PASS)" -f $diag)
+            $diag | Tee-Object -FilePath "ci-logs/win-smoke-dep-audit.log" -Append
+            $auditExit = 3
           }
           if ($auditExit -eq 2) {
             Write-Host "::error::smoke dependency audit: unresolvable static import — the launch would die with 0xC0000135 (named DLL in ci-logs/win-smoke-dep-audit.log)"
             throw "smoke dependency audit failed: unresolvable static import (exit 2)"
+          }
+          if ($auditExit -ne 0) {
+            # ERROR (audit could not run / incomplete closure): record the
+            # gate decision; the launch smoke still executes in its own
+            # step and collects launch evidence, and ITS step fails the
+            # job at the end (marker gate below).
+            "audit exit $auditExit — dependency closure UNVERIFIED" | Set-Content "ci-logs/win-dep-audit-ERROR.marker"
+            Write-Host "::error::smoke dependency audit: audit exit $auditExit — dependency closure UNVERIFIED; launch smoke proceeds for evidence only, the job gate fails afterwards"
           }
 
       # Launch smoke (run #54 repair; #55 hardening): bounded polling of
@@ -874,6 +964,15 @@ jobs:
           Write-Host "SMOKE OK: window booted, event loop alive, closed (graceful=$closed)"
           Write-Host "--- application output tail ---"
           if (Test-Path $smokeLog) { Get-Content $smokeLog -Tail 20 }
+          # v1.11.1 dependency-audit gate (release gate, run 41933333132):
+          # the launch evidence above was collected even when the audit
+          # itself could not run (ERROR) — but ERROR is never PASS, so the
+          # job fails here, AFTER the separate smoke outcome was recorded.
+          if (Test-Path "ci-logs/win-dep-audit-ERROR.marker") {
+            Write-Host (Get-Content "ci-logs/win-dep-audit-ERROR.marker")
+            Write-Host "::error::job gate: the pre-launch dependency audit ended in ERROR — the Windows dependency closure is UNVERIFIED and this release candidate is blocked (see ci-logs/win-smoke-dep-audit.log)"
+            throw "dependency audit ERROR — dependency closure unverified (job gate)"
+          }
 
       # The smoke copy's own diagnostics must land in the consolidated
       # run-log artifact (run #117: zero diagnostics survived the step log). Red or
@@ -1328,7 +1427,7 @@ jobs:
   # ==========================================================================
   build-linux:
     name: Linux x64
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: [preflight]
     timeout-minutes: 45
     env:
@@ -1336,6 +1435,27 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+      - name: Runner OS identity (Ubuntu 26.04 gate)
+        run: |
+          set -euo pipefail
+          uname -a
+          cat /etc/os-release
+          echo "dpkg arch: $(dpkg --print-architecture)"
+          echo "ImageOS=${ImageOS:-unknown} ImageVersion=${ImageVersion:-unknown}"
+          # v1.11.1 (run 41933333132, work order §7): the 24.04 -> 26.04
+          # migration is VERIFIED, not a YAML-only change — the exact OS
+          # release and architecture are asserted so later runner drift
+          # fails loudly here instead of surprising the build.
+          . /etc/os-release
+          if [ "${ID}" != "ubuntu" ] || [ "${VERSION_ID}" != "26.04" ]; then
+            echo "::error::runner identity: expected ubuntu-26.04, got ${ID}-${VERSION_ID} — the Linux lane is pinned to 26.04"
+            exit 1
+          fi
+          if [ "$(dpkg --print-architecture)" != "amd64" ]; then
+            echo "::error::runner identity: expected amd64 architecture, got $(dpkg --print-architecture)"
+            exit 1
+          fi
+
 
       - name: Setup Go
         uses: actions/setup-go@v7
@@ -1618,7 +1738,7 @@ jobs:
   # ==========================================================================
   consolidate-logs:
     name: Consolidate logs
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: [preflight, audit, ui, build-windows, build-linux]
     if: always()
     timeout-minutes: 10
@@ -1703,7 +1823,7 @@ jobs:
   # ==========================================================================
   release:
     name: Release (tags only)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: [audit, ui, build-windows, build-linux, consolidate-logs]
     if: startsWith(github.ref, 'refs/tags/v')
     timeout-minutes: 15

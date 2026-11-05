@@ -971,6 +971,14 @@ func safeZipRel(name string) (string, error) {
 		return "", fmt.Errorf("zip path %q contains a volume", name)
 	}
 
+	// v1.11.1 (run 41933333132, work order §8.2.2): any REMAINING colon
+	// is Windows alternate-data-stream syntax ("file.txt:stream") — a
+	// name no legitimate release archive needs; reject it instead of
+	// letting a Windows host materialize a named stream.
+	if strings.ContainsRune(unified, ':') {
+		return "", fmt.Errorf("zip path %q contains a colon (alternate data stream syntax is not allowed)", name)
+	}
+
 	if unified == "." || unified == "" {
 		return "", fmt.Errorf("zip contains invalid path %q", name)
 	}

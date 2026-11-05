@@ -34,6 +34,37 @@ import (
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
 )
 
+// goalLogValue normalizes an untrusted value for the LOG sink (CodeQL
+// go/log-injection, alerts #215-#228): invalid UTF-8 is replaced, and
+// control characters — newlines, carriage returns, tabs, NUL and ANSI
+// escape bytes, plus the Unicode line separators — are escaped as \xNN
+// literals so one logical event always stays ONE log record and no
+// forged "[goal]" line or terminal sequence can be injected through a
+// goal ID or an error string. Structured evidence payloads (the
+// AppendEvidence calls) keep the original bounded text; this guard is
+// for the raw log stream only.
+func goalLogValue(v any) string {
+	s := strings.ToValidUTF8(fmt.Sprint(v), "\uFFFD")
+
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\n':
+			b.WriteString("\\n")
+		case r == '\r':
+			b.WriteString("\\r")
+		case r == '\t':
+			b.WriteString("\\t")
+		case r < 0x20 || r == 0x7f || r == 0x2028 || r == 0x2029:
+			fmt.Fprintf(&b, "\\x%02x", r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+
+	return b.String()
+}
+
 // goalRunFunc binds the goal engine's executor seam to the ONE
 // orchestrator. Every engine run carries the goal's frozen AI System
 // snapshot; the objective verification report maps into the engine's
@@ -142,7 +173,7 @@ func (s *Server) goalRunnerOptions() goal.RunnerOptions {
 				Objective: objective,
 			})
 			if grantErr != nil {
-				log.Printf("[goal] %s: approval grant not consumed at step %d: %v", goalID, stepIdx, grantErr)
+				log.Printf("[goal] %s: approval grant not consumed at step %d: %v", goalLogValue(goalID), stepIdx, goalLogValue(grantErr))
 			} else if granted {
 				return false, nil
 			}
@@ -260,12 +291,12 @@ func (s *Server) settleDriveError(goalID string, driveErr error) {
 	}
 	store := s.goalStore()
 	if store == nil {
-		log.Printf("[goal] %s drive %s: store unavailable — error not settled: %v", goalID, category, driveErr)
+		log.Printf("[goal] %s drive %s: store unavailable — error not settled: %v", goalLogValue(goalID), category, goalLogValue(driveErr))
 		return
 	}
 	g, err := store.Get(goalID)
 	if err != nil {
-		log.Printf("[goal] %s drive %s: the goal vanished before settlement: %v", goalID, category, driveErr)
+		log.Printf("[goal] %s drive %s: the goal vanished before settlement: %v", goalLogValue(goalID), category, goalLogValue(driveErr))
 		return
 	}
 	detail := redactDriveDetail(fmt.Sprintf("category=%s phase=%s error=%v", category, g.Phase, driveErr))
@@ -275,17 +306,17 @@ func (s *Server) settleDriveError(goalID string, driveErr error) {
 		Status: "error",
 		Detail: detail,
 	}); err != nil {
-		log.Printf("[goal] %s drive %s: evidence append failed: %v", goalID, category, err)
+		log.Printf("[goal] %s drive %s: evidence append failed: %v", goalLogValue(goalID), category, goalLogValue(err))
 	}
 	if category == "cancelled" {
-		log.Printf("[goal] %s drive cancelled at phase %s (status %s)", goalID, g.Phase, g.Status)
+		log.Printf("[goal] %s drive cancelled at phase %s (status %s)", goalLogValue(goalID), g.Phase, g.Status)
 		return
 	}
 	if _, err := store.SettleDriveFailure(goalID, "the drive failed — resume from the checkpoint or cancel"); err != nil {
-		log.Printf("[goal] %s drive %s: settlement failed: %v", goalID, category, err)
+		log.Printf("[goal] %s drive %s: settlement failed: %v", goalLogValue(goalID), category, goalLogValue(err))
 		return
 	}
-	log.Printf("[goal] %s drive %s settled at phase %s: status=blocked detail=%s", goalID, category, g.Phase, detail)
+	log.Printf("[goal] %s drive %s settled at phase %s: status=blocked detail=%s", goalLogValue(goalID), category, g.Phase, goalLogValue(detail))
 }
 
 // resumeAndDrive is the ONE serialized resume path (v1.10.13 RESUME-500
@@ -320,17 +351,17 @@ func (s *Server) resumeAndDrive(w http.ResponseWriter, store *goal.Store, id str
 			Status: "conflict",
 			Detail: err.Error(),
 		}); evErr != nil {
-			log.Printf("[goal] %s: resume rollback: conflict evidence append FAILED: %v", id, evErr)
+			log.Printf("[goal] %s: resume rollback: conflict evidence append FAILED: %v", goalLogValue(id), goalLogValue(evErr))
 		}
 		if _, pauseErr := store.Pause(id); pauseErr != nil {
-			log.Printf("[goal] %s: resume rollback: pause FAILED — the goal may sit active without a live drive (I6): %v", id, pauseErr)
+			log.Printf("[goal] %s: resume rollback: pause FAILED — the goal may sit active without a live drive (I6): %v", goalLogValue(id), goalLogValue(pauseErr))
 		}
 		if _, evErr := store.AppendEvidence(id, goal.Evidence{
 			Phase:  g.Phase,
 			Action: "goal parked — resume the goal to re-drive it",
 			Status: "paused",
 		}); evErr != nil {
-			log.Printf("[goal] %s: resume rollback: parked evidence append FAILED: %v", id, evErr)
+			log.Printf("[goal] %s: resume rollback: parked evidence append FAILED: %v", goalLogValue(id), goalLogValue(evErr))
 		}
 		writeGoalErr(w, err)
 		return
@@ -568,10 +599,10 @@ func (s *Server) handleGoalItem(w http.ResponseWriter, r *http.Request) {
 					Status: "conflict",
 					Detail: err.Error(),
 				}); evErr != nil {
-					log.Printf("[goal] %s: approve rollback: conflict evidence append FAILED: %v", id, evErr)
+					log.Printf("[goal] %s: approve rollback: conflict evidence append FAILED: %v", goalLogValue(id), goalLogValue(evErr))
 				}
 				if _, pauseErr := store.Pause(id); pauseErr != nil {
-					log.Printf("[goal] %s: approve rollback: pause FAILED — the goal may sit active without a live drive (I6): %v", id, pauseErr)
+					log.Printf("[goal] %s: approve rollback: pause FAILED — the goal may sit active without a live drive (I6): %v", goalLogValue(id), goalLogValue(pauseErr))
 				}
 				writeGoalErr(w, err)
 				return
