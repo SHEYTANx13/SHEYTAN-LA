@@ -296,8 +296,18 @@ func stressReleaseSurface() error {
 		return fmt.Errorf("Windows build lost its windows-latest runner")
 	}
 
-	if !strings.Contains(w, "runs-on: ubuntu-24.04") {
-		return fmt.Errorf("Linux build lost its ubuntu-24.04 runner")
+	// v1.11.1 (run 42127523923, work order §4): the Linux x64 runner
+	// contract is validated by the SHARED parser-based validator — the
+	// same function the release-contract tests run — against the PARSED
+	// runs-on field of the "Linux x64" job, the retired 24.04 image, and
+	// the runtime OS identity guard. The stale ubuntu-24.04 literal here
+	// was the release_surface red: the workflow correctly migrated to the
+	// pinned ubuntu-26.04 x64 runner with an explicit
+	// ID=ubuntu/VERSION_ID=26.04/amd64 guard, while this gate kept
+	// demanding the retired image (the gate-must-follow-the-current-
+	// contract defect class of run-#40 and run-38569081029).
+	if err := releasecontract.ValidateLinuxRunnerContract(w); err != nil {
+		return fmt.Errorf("Linux build runner contract: %w", err)
 	}
 
 	// 3c. The desktop workflow builds from main and supports manual execution.

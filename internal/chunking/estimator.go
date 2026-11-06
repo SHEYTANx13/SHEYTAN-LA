@@ -152,10 +152,9 @@ func EstimateTokens(s string) int {
 		ratio = st.ratio
 	}
 	cjk, other := countRunesCJK(s)
-	n := cjk + other
-	if n == 0 {
-		n = len(s)
-	}
+	// v1.11.1 (CodeQL go/useless-assignment-to-local #235): the vestigial
+	// `n` fallback block was dead — `n` was never read after it and the
+	// estimate below is computed from cjk/other directly.
 	est := cjk + int(float64(other)/ratio+0.999)
 	if est < 1 {
 		est = 1

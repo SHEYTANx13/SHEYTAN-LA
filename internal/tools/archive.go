@@ -17,13 +17,17 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/humanize"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/updater"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -240,7 +244,38 @@ func (t ArchiveTool) unzip(path, dest string) (string, error) {
 	}
 
 	ledger := newExtractionLedger()
+
+	// v1.11.1 (run 42127523923, work order §6.5/§6.6): STAGED
+	// transactional extraction. Every member is extracted into a
+	// unique staging directory INSIDE the root (exclusive creates —
+	// an in-flight extraction can never truncate a pre-existing
+	// file), and only after ALL members have been copied and
+	// verified are they moved to their final locations. On any
+	// failure the stage is removed (Root.RemoveAll) and the
+	// destination's prior content is untouched.
+	stageRel, err := freshStageDir(rooted)
+	if err != nil {
+		return "", err
+	}
+
+	committed := false
+
+	defer func() {
+		if !committed {
+			_ = rooted.RemoveAll(stageRel) // rollback: remove ONLY the stage
+		}
+	}()
+
+	stagePath := func(rel string) string {
+		return filepath.Join(stageRel, rel)
+	}
+
 	var total uint64
+
+	var stagedFiles []string
+
+	var stagedDirs []string
+
 	extracted := 0
 	for _, zf := range zr.File {
 		if zf.UncompressedSize64 > archiveMaxOut || total+zf.UncompressedSize64 > archiveMaxOut {
@@ -257,13 +292,14 @@ func (t ArchiveTool) unzip(path, dest string) (string, error) {
 			return "", err
 		}
 		if zf.FileInfo().IsDir() {
-			if err := rooted.MkdirAll(rel, 0o755); err != nil {
+			if err := rooted.MkdirAll(stagePath(rel), 0o755); err != nil {
 				return "", err
 			}
+			stagedDirs = append(stagedDirs, rel)
 			continue
 		}
 		if dirRel := filepath.Dir(rel); dirRel != "." {
-			if err := rooted.MkdirAll(dirRel, 0o755); err != nil {
+			if err := rooted.MkdirAll(stagePath(dirRel), 0o755); err != nil {
 				return "", err
 			}
 		}
@@ -271,7 +307,9 @@ func (t ArchiveTool) unzip(path, dest string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		dst, err := rooted.OpenFile(rel, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+		// Exclusive create inside the stage: a member can never
+		// collide with, or truncate, pre-existing content.
+		dst, err := rooted.OpenFile(stagePath(rel), os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o644)
 		if err != nil {
 			src.Close()
 			return "", err
@@ -293,15 +331,89 @@ func (t ArchiveTool) unzip(path, dest string) (string, error) {
 		if total > archiveRatioMin && total > uint64(archiveSize)*archiveMaxRatio {
 			return "", fmt.Errorf("archive decompression ratio exceeds %dx (%d bytes from a %d byte archive) — refusing suspected decompression bomb", archiveMaxRatio, total, archiveSize)
 		}
-		reportFileCreated(filepath.Join(root, rel))
+		stagedFiles = append(stagedFiles, rel)
 		extracted++
 	}
+
+	// Commit (§6.6): extraction + verification complete — move the
+	// staged tree into its final locations. Directory members first,
+	// then files (an intra-root rename, atomic per member).
+	for _, dirRel := range stagedDirs {
+		if err := rooted.MkdirAll(dirRel, 0o755); err != nil {
+			return "", err
+		}
+	}
+
+	for _, rel := range stagedFiles {
+		if dirRel := filepath.Dir(rel); dirRel != "." {
+			if err := rooted.MkdirAll(dirRel, 0o755); err != nil {
+				return "", err
+			}
+		}
+
+		if err := rooted.Rename(stagePath(rel), rel); err != nil {
+			return "", err
+		}
+
+		reportFileCreated(filepath.Join(root, rel))
+	}
+
+	committed = true
+	_ = rooted.RemoveAll(stageRel) // drop the now-empty stage tree
+
 	return fmt.Sprintf("unzipped %d file(s) from %s -> %s", extracted, path, destOrAuto(dest, root)), nil
 }
 
 // archiveRatioFloor keeps the ratio guard from dividing by a zero/absent
 // size when the archive cannot be stat'ed.
 func archiveRatioFloor() int64 { return 1 }
+
+// freshStageDir creates a UNIQUE staging directory directly inside the
+// extraction root (work order §6.5, run 42127523923): an exclusive Mkdir
+// with a random token, so two concurrent extractions into the same root
+// never share a stage, and every descendant operation stays under the
+// same rooted handle as the final writes. The stage lives INSIDE the
+// root (never beside it) so the os.Root boundary covers the whole
+// transaction.
+func freshStageDir(rooted *os.Root) (string, error) {
+	var token [8]byte
+
+	for attempt := 0; attempt < 5; attempt++ {
+		if _, err := cryptorand.Read(token[:]); err != nil {
+			return "", fmt.Errorf("stage token: %w", err)
+		}
+
+		rel := ".archive-stage-" + hex.EncodeToString(token[:])
+
+		err := rooted.Mkdir(rel, 0o700)
+		if err == nil {
+			return rel, nil
+		}
+
+		if !errors.Is(err, os.ErrExist) {
+			return "", err
+		}
+	}
+
+	return "", errors.New("could not allocate a unique extraction staging directory")
+}
+
+// sanitizeMemberName renders an archive member name for the LISTING
+// output (and every other place a member name is displayed): control
+// characters — which no legitimate member name needs and which would
+// smuggle terminal/log content into the tool result — are rendered as
+// Go escapes. Display-only: the listing never touches the filesystem
+// with the member name (alerts #175/#176, go/zipslip, at the list
+// sinks; the name is pure report text here).
+func sanitizeMemberName(name string) string {
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return strconv.Quote(name)
+		}
+	}
+
+	return name
+}
 
 // extractionLedger is the §8.2.4 overwrite/conflict authority for one
 // extraction: no duplicate members, no case-fold collisions, and no
@@ -465,9 +577,36 @@ func (t ArchiveTool) untar(path, dest string) (string, error) {
 	}
 
 	ledger := newExtractionLedger()
+
+	// v1.11.1 (run 42127523923, work order §6.5/§6.6): the same STAGED
+	// transactional extraction as unzip — unique stage inside the
+	// root, exclusive creates, commit only after the whole archive
+	// verified, rollback removes ONLY the stage.
+	stageRel, err := freshStageDir(rooted)
+	if err != nil {
+		return "", err
+	}
+
+	committed := false
+
+	defer func() {
+		if !committed {
+			_ = rooted.RemoveAll(stageRel) // rollback: remove ONLY the stage
+		}
+	}()
+
+	stagePath := func(rel string) string {
+		return filepath.Join(stageRel, rel)
+	}
+
 	tr := tar.NewReader(r)
 	extracted := 0
 	var total uint64
+
+	var stagedFiles []string
+
+	var stagedDirs []string
+
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -498,19 +637,21 @@ func (t ArchiveTool) untar(path, dest string) (string, error) {
 			if err := ledger.claim(rel, true); err != nil {
 				return "", err
 			}
-			if err := rooted.MkdirAll(rel, 0o755); err != nil {
+			if err := rooted.MkdirAll(stagePath(rel), 0o755); err != nil {
 				return "", err
 			}
+			stagedDirs = append(stagedDirs, rel)
 		case tar.TypeReg:
 			if err := ledger.claim(rel, false); err != nil {
 				return "", err
 			}
 			if dirRel := filepath.Dir(rel); dirRel != "." {
-				if err := rooted.MkdirAll(dirRel, 0o755); err != nil {
+				if err := rooted.MkdirAll(stagePath(dirRel), 0o755); err != nil {
 					return "", err
 				}
 			}
-			dst, err := rooted.OpenFile(rel, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+			// Exclusive create inside the stage (§6.5).
+			dst, err := rooted.OpenFile(stagePath(rel), os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o644)
 			if err != nil {
 				return "", err
 			}
@@ -530,10 +671,36 @@ func (t ArchiveTool) untar(path, dest string) (string, error) {
 			if total > archiveRatioMin && total > uint64(archiveSize)*archiveMaxRatio {
 				return "", fmt.Errorf("archive decompression ratio exceeds %dx (%d bytes from a %d byte archive) — refusing suspected decompression bomb", archiveMaxRatio, total, archiveSize)
 			}
-			reportFileCreated(filepath.Join(root, rel))
+			stagedFiles = append(stagedFiles, rel)
 			extracted++
 		}
 	}
+
+	// Commit (§6.6): the staged tree moves into its final locations —
+	// directory members first, then files, all intra-root.
+	for _, dirRel := range stagedDirs {
+		if err := rooted.MkdirAll(dirRel, 0o755); err != nil {
+			return "", err
+		}
+	}
+
+	for _, rel := range stagedFiles {
+		if dirRel := filepath.Dir(rel); dirRel != "." {
+			if err := rooted.MkdirAll(dirRel, 0o755); err != nil {
+				return "", err
+			}
+		}
+
+		if err := rooted.Rename(stagePath(rel), rel); err != nil {
+			return "", err
+		}
+
+		reportFileCreated(filepath.Join(root, rel))
+	}
+
+	committed = true
+	_ = rooted.RemoveAll(stageRel) // drop the now-empty stage tree
+
 	return fmt.Sprintf("untarred %d file(s) from %s -> %s", extracted, path, destOrAuto(dest, root)), nil
 }
 
@@ -555,7 +722,7 @@ func (t ArchiveTool) list(path string) (string, error) {
 				break
 			}
 			total += zf.UncompressedSize64
-			fmt.Fprintf(&b, "  %-40s %10s\n", zf.Name, humanize.Bytes(int64(zf.UncompressedSize64)))
+			fmt.Fprintf(&b, "  %-40s %10s\n", sanitizeMemberName(zf.Name), humanize.Bytes(int64(zf.UncompressedSize64)))
 		}
 		fmt.Fprintf(&b, "total uncompressed: %s\n", humanize.Bytes(int64(total)))
 		return b.String(), nil
@@ -588,7 +755,7 @@ func (t ArchiveTool) list(path string) (string, error) {
 		n++
 		total += hdr.Size
 		if n <= 50 {
-			fmt.Fprintf(&b, "  %-40s %10s\n", hdr.Name, humanize.Bytes(hdr.Size))
+			fmt.Fprintf(&b, "  %-40s %10s\n", sanitizeMemberName(hdr.Name), humanize.Bytes(hdr.Size))
 		}
 	}
 	if n > 50 {

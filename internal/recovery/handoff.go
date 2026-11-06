@@ -16,6 +16,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -179,9 +180,14 @@ func (s *Store) Save(h *Handoff) error {
 		return fmt.Errorf("recovery store: %w", err)
 	}
 	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return fmt.Errorf("recovery store: %w", err)
+		// v1.11.1 (CodeQL go/unhandled-writable-file-close #246): the
+		// write-failure path closes the handle and reports the write, the
+		// close and the cleanup outcome together.
+		return errors.Join(
+			fmt.Errorf("recovery store: %w", err),
+			f.Close(),
+			os.Remove(tmp),
+		)
 	}
 	_ = f.Sync()
 	if err := f.Close(); err != nil {

@@ -144,7 +144,10 @@ func ImportModel(modelsDir, src string, onProgress func(copied, total int64)) (*
 
 		// Different content under the same name: a fresh, collision-free
 		// name — never an overwrite of the user's existing model.
-		base, dest = nextFreeModelName(modelsDir, base)
+		// v1.11.1 (CodeQL go/useless-assignment-to-local #236): `base` is
+		// never read past this point — only the collision-free destination
+		// path is consumed below.
+		_, dest = nextFreeModelName(modelsDir, base)
 		renamedFrom = filepath.Base(abs)
 	}
 

@@ -316,7 +316,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	// Network — offline probe is cheap and cached by netcheck.
 	netState := "unknown"
-	netEvidence := netcheck.Note()
+	// v1.11.1 (CodeQL go/useless-assignment-to-local #232): the initial
+	// netEvidence value was dead — every switch branch assigns it.
+	var netEvidence string
 	switch {
 	case netcheck.IsOffline():
 		netState = "warn"

@@ -5,6 +5,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -317,12 +318,17 @@ func (s *Store) AppendEntry(entry Entry) error {
 		return err
 	}
 
-	defer f.Close()
-
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 
+	// v1.11.1 (CodeQL go/unhandled-writable-file-close #242): the append
+	// is not durable until the writable handle closes cleanly; the close
+	// error propagates on both the encode-failure and success paths.
 	if err := enc.Encode(entry); err != nil {
+		return errors.Join(err, f.Close())
+	}
+
+	if err := f.Close(); err != nil {
 		return err
 	}
 
@@ -379,12 +385,16 @@ func (s *Store) AppendEntryUnique(entry Entry) (bool, error) {
 		return false, err
 	}
 
-	defer f.Close()
-
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 
+	// v1.11.1 (CodeQL go/unhandled-writable-file-close #243): same durable-
+	// append contract as AppendEntry — close errors propagate.
 	if err := enc.Encode(entry); err != nil {
+		return false, errors.Join(err, f.Close())
+	}
+
+	if err := f.Close(); err != nil {
 		return false, err
 	}
 

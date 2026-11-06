@@ -3531,7 +3531,10 @@ func compactToolResults(messages []llm.Message, ceiling int) (int, int) {
 			room, old, content[:keep])
 
 		freed := old - chunking.EstimateMessagesTokens([]llm.Message{messages[lastTool]})
-		total -= freed
+		// v1.11.1 (CodeQL go/useless-assignment-to-local #231): the pass-2
+		// write to `total` was dead — total is never read after this block
+		// (the function returns elided/savedTokens). The subtraction is
+		// removed; the accounting reads remain.
 		savedTokens += freed
 		elided++
 	}

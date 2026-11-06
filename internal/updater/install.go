@@ -23,6 +23,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -952,9 +953,20 @@ func copyFileMode(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
+	// v1.11.1 (CodeQL go/unhandled-writable-file-close #252): the copy is
+	// not successful until the writable handle closes cleanly — buffered
+	// bytes can fail exactly at Close (ENOSPC/EIO). The close error
+	// propagates; a copy failure and a close failure are both reported.
 	_, err = io.Copy(out, in)
+
+	if cerr := out.Close(); cerr != nil {
+		if err != nil {
+			return errors.Join(err, cerr)
+		}
+
+		return cerr
+	}
 
 	return err
 }

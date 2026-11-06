@@ -1051,9 +1051,11 @@ func (s *Server) runResumed(rs *runState, rec *pausedRunRecord, ctx context.Cont
 	// UNDER it here (it must live for the run's duration, not the
 	// handler's).
 	genCtx := ctx
-	genCancel := cancel
-
+	// v1.11.1 (CodeQL go/useless-assignment-to-local #233): the initial
+	// genCancel write was dead — genCancel is only used (deferred) inside
+	// the budget branch, which re-assigns it first.
 	if budget := s.src.Load().EffectiveRunTimeout(); budget > 0 {
+		var genCancel context.CancelFunc
 		genCtx, genCancel = context.WithTimeout(ctx, budget)
 		defer genCancel()
 	}

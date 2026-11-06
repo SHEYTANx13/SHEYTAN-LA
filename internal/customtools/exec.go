@@ -412,17 +412,23 @@ func isLocalishHost(hostname string) bool {
 }
 
 // safeToolDialer is the connection-time SSRF guard (CodeQL
-// go/request-forgery, alert #288 at run 41901967798). The endpoint
+// go/request-forgery, alert #288 at run 41901967798; hardened per the
+// v1.11.1 work order §5.4, run 42127523923). The endpoint
 // validator sees HOSTNAMES; a hostile or model-influenced DNS answer can
 // still point a benign name at a forbidden address (DNS rebinding /
 // metadata pivot). Control runs on EVERY connection attempt with the
 // RESOLVED address after DNS and before any packet is sent, so the
-// blocked classes hold no matter how the name was spelled or resolved.
+// blocked classes hold no matter how the name was spelled or resolved —
+// the dial is pinned to an address that has passed the guard, so a
+// second lookup cannot rebind past it.
 //
-// The local-first trust boundary is preserved: loopback and
-// private-network destinations stay reachable (first-party local
-// services are a supported tool target); only the cloud-metadata /
-// link-local classes are refused at connect time.
+// The local-first trust boundary is preserved (the documented product
+// semantics — §5.2: decide from existing feature semantics): loopback,
+// RFC1918/unique-local and CGNAT shared-space destinations stay
+// reachable (first-party local services are a supported tool target);
+// the refused classes are cloud-metadata / link-local, ALL multicast,
+// the unspecified address and the non-routable reserved blocks — none
+// of which can ever be a legitimate HTTP tool endpoint.
 var safeToolDialer = &net.Dialer{
 	Timeout:   10 * time.Second,
 	KeepAlive: 30 * time.Second,
@@ -431,12 +437,57 @@ var safeToolDialer = &net.Dialer{
 	},
 }
 
+// reservedV4Ranges are the non-routable IPv4 blocks a tool connection
+// must never land on (beyond link-local/metadata): "this network"
+// 0.0.0.0/8, the IETF protocol-assignments block 192.0.0.0/24,
+// benchmarking 198.18.0.0/15, the three documentation testnets and the
+// reserved block 240.0.0.0/4 (which includes the limited-broadcast
+// address). CGNAT 100.64.0.0/10 is deliberately NOT here: it is shared
+// address space, not reserved, and locally administered CGNAT space
+// (e.g. overlay networks) is part of the local-first surface.
+var reservedV4Ranges = mustCIDRs(
+	"0.0.0.0/8",
+	"192.0.0.0/24",
+	"198.18.0.0/15",
+	"192.0.2.0/24",
+	"198.51.100.0/24",
+	"203.0.113.0/24",
+	"240.0.0.0/4",
+)
+
+// reservedV6Ranges are the non-routable IPv6 blocks beyond multicast and
+// unspecified: the documentation prefix and the discard-only range.
+var reservedV6Ranges = mustCIDRs(
+	"2001:db8::/32",
+	"100::/64",
+)
+
+// mustCIDRs parses the reserved-range table once at init; a malformed
+// entry is a programming error and panics loudly.
+func mustCIDRs(specs ...string) []*net.IPNet {
+	out := make([]*net.IPNet, 0, len(specs))
+
+	for _, spec := range specs {
+		_, network, err := net.ParseCIDR(spec)
+		if err != nil {
+			panic(fmt.Sprintf("reserved range table: %s: %v", spec, err))
+		}
+
+		out = append(out, network)
+	}
+
+	return out
+}
+
 // guardResolvedAddress refuses connections whose resolved IP belongs to
 // the forbidden classes: link-local unicast/multicast (169.254.0.0/16,
-// fe80::/10 — the cloud metadata range included) and the documented
-// IPv6 metadata unique-local endpoint. IPv4-mapped IPv6 forms are
-// normalized before classification, so ::ffff:169.254.169.254 cannot
-// smuggle a link-local target through.
+// fe80::/10 — the cloud metadata range included), ALL multicast, the
+// unspecified address, the non-routable reserved blocks (0.0.0.0/8,
+// 192.0.0.0/24, 198.18.0.0/15, documentation testnets, 240.0.0.0/4,
+// 2001:db8::/32, 100::/64) and the documented IPv6 metadata
+// unique-local endpoint. IPv4-mapped IPv6 forms are normalized before
+// classification, so ::ffff:169.254.169.254 (or any other mapped
+// forbidden class) cannot smuggle a target through.
 func guardResolvedAddress(address string) error {
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
@@ -452,21 +503,40 @@ func guardResolvedAddress(address string) error {
 		ip = v4
 	}
 
+	refuse := func(class string) error {
+		return fmt.Errorf(
+			"tool connection guard: resolved address %s is refused (%s targets are not reachable from tool execution)",
+			redactedURL(ip.String()), class,
+		)
+	}
+
 	// The documented IPv6 metadata endpoint is a unique-local address,
 	// not link-local: blocked explicitly (mirrors the endpoint-level
 	// name check, at connect time).
 	if ip.String() == "fd00:ec2::254" {
-		return fmt.Errorf(
-			"tool connection guard: resolved address %s is refused (cloud metadata targets are not reachable from tool execution)",
-			redactedURL(ip.String()),
-		)
+		return refuse("cloud metadata")
 	}
 
 	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return fmt.Errorf(
-			"tool connection guard: resolved address %s is refused (cloud metadata / link-local targets are not reachable from tool execution)",
-			redactedURL(ip.String()),
-		)
+		return refuse("cloud metadata / link-local")
+	}
+
+	// Multicast (any scope) and the unspecified address are never
+	// legitimate HTTP destinations.
+	if ip.IsMulticast() || ip.IsUnspecified() {
+		return refuse("multicast / unspecified")
+	}
+
+	reserved := reservedV4Ranges
+
+	if ip.To4() == nil {
+		reserved = reservedV6Ranges
+	}
+
+	for _, network := range reserved {
+		if network.Contains(ip) {
+			return refuse("reserved")
+		}
 	}
 
 	return nil

@@ -51,6 +51,123 @@ const (
 	LinuxPackageArtifactName   = "linux-x64-package"
 )
 
+// The Linux build lane runner identity (v1.11.1, run 42127523923, work
+// order §4): the desktop workflow's Linux x64 lane is pinned to the
+// Ubuntu 26.04 x64 runner image, and the workflow VERIFIES that image at
+// runtime with an explicit /etc/os-release + dpkg architecture guard.
+// ubuntu-24.04 is the RETIRED image — the stress gate's stale literal
+// kept demanding it after the correct workflow migration (the same
+// gate-must-follow-the-contract-forward defect class as the run-#40
+// Go-version pin and the run-38569081029 retired GTK dependency).
+const (
+	LinuxJobName       = "Linux x64"
+	LinuxRunnerLabel   = "ubuntu-26.04"
+	RetiredLinuxRunner = "ubuntu-24.04"
+)
+
+// ValidateLinuxRunnerContract enforces the Linux build lane runner
+// contract against the PARSED workflow — the actual runs-on fields and
+// the actual OS identity guard script, never a string literal:
+//
+//   - the "Linux x64" job's runs-on must be EXACTLY [ubuntu-26.04] —
+//     singular and pinned; the retired ubuntu-24.04 label, any other
+//     label, or an extra label (a non-x64 composite) all fail;
+//   - the retired ubuntu-24.04 image must not survive on ANY job of the
+//     desktop workflow (a second lane silently regressing back is the
+//     same contract break);
+//   - the Linux x64 job must carry the runtime OS identity guard — a run
+//     script asserting VERSION_ID=26.04 and the dpkg amd64 architecture —
+//     so a YAML-only relabel without the runtime verification fails.
+//
+// The check is symmetric with the shared upload-artifact validators: the
+// stress gate and the contract tests run the SAME function, so they can
+// never drift apart.
+func ValidateLinuxRunnerContract(workflowText string) error {
+	doc, err := parseWorkflow(workflowText)
+	if err != nil {
+		return err
+	}
+
+	jobKeys := make([]string, 0, len(doc.Jobs))
+
+	for key := range doc.Jobs {
+		jobKeys = append(jobKeys, key)
+	}
+
+	sort.Strings(jobKeys)
+
+	var linuxJob workflowJob
+
+	found := false
+
+	for _, key := range jobKeys {
+		if doc.Jobs[key].Name == LinuxJobName {
+			linuxJob = doc.Jobs[key]
+			found = true
+
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf(
+			"workflow has no %q job — the Linux build lane runner identity cannot be validated",
+			LinuxJobName,
+		)
+	}
+
+	if len(linuxJob.RunsOn) != 1 || linuxJob.RunsOn[0] != LinuxRunnerLabel {
+		return fmt.Errorf(
+			"Linux build lane runner contract violated: job %q runs-on is %v, want exactly [%s] — %s is the retired image and the lane is pinned to the %s x64 runner",
+			LinuxJobName, []string(linuxJob.RunsOn), LinuxRunnerLabel, RetiredLinuxRunner, LinuxRunnerLabel,
+		)
+	}
+
+	for _, key := range jobKeys {
+		job := doc.Jobs[key]
+
+		for _, label := range job.RunsOn {
+			if label == RetiredLinuxRunner {
+				return fmt.Errorf(
+					"retired runner image %q found on job %q — the desktop workflow is pinned to %s; the 24.04 image must not return on any lane",
+					RetiredLinuxRunner, key, LinuxRunnerLabel,
+				)
+			}
+		}
+	}
+
+	// The runtime assertions the 26.04 guard must contain — the exact
+	// spellings the workflow's "Runner OS identity" step verifies:
+	// the /etc/os-release VERSION_ID comparison and the dpkg
+	// architecture check. A YAML-only relabel without these runtime
+	// assertions fails the contract.
+	guardMarkers := []string{
+		`"${VERSION_ID}" != "26.04"`,
+		`"$(dpkg --print-architecture)" != "amd64"`,
+	}
+
+	var runScripts []string
+
+	for _, step := range linuxJob.Steps {
+		if step.Run != "" {
+			runScripts = append(runScripts, step.Run)
+		}
+	}
+
+	joined := strings.Join(runScripts, "\n")
+
+	for _, marker := range guardMarkers {
+		if !strings.Contains(joined, marker) {
+			return fmt.Errorf(
+				"Linux x64 OS identity guard is incomplete: no Linux x64 run script asserts %q — the %s pin must be VERIFIED at runtime (ID=ubuntu, VERSION_ID=26.04, dpkg arch=amd64), not just declared in YAML",
+				marker, LinuxRunnerLabel,
+			)
+		}
+	}
+
+	return nil
+}
+
 // UploadArtifactV7SHA is the official actions/upload-artifact v7.0.2
 // release commit — the verified immutable pin the desktop workflow uses
 // (verified: the tag v7.0.2 of actions/upload-artifact points at this
@@ -74,13 +191,45 @@ var uploadArtifactAllowlist = map[string]bool{
 type workflowStep struct {
 	Name string         `yaml:"name"`
 	Uses string         `yaml:"uses"`
+	Run  string         `yaml:"run"`
 	With map[string]any `yaml:"with"`
 }
 
 // workflowJob is the decoded subset of a job.
 type workflowJob struct {
-	Name  string         `yaml:"name"`
-	Steps []workflowStep `yaml:"steps"`
+	Name   string         `yaml:"name"`
+	RunsOn runnerLabels   `yaml:"runs-on"`
+	Steps  []workflowStep `yaml:"steps"`
+}
+
+// runnerLabels decodes a GitHub Actions runs-on field, which YAML may
+// spell as a single scalar ("ubuntu-26.04") or a sequence ("[ubuntu-26.04,
+// self-hosted]"). Both decode into the same label list so the contract
+// reasons about the ACTUAL runner selection instead of grepping text.
+type runnerLabels []string
+
+// UnmarshalYAML implements yaml.v3 custom decoding for both spellings.
+func (r *runnerLabels) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		*r = []string{node.Value}
+
+		return nil
+
+	case yaml.SequenceNode:
+		var out []string
+
+		if err := node.Decode(&out); err != nil {
+			return fmt.Errorf("runs-on: %w", err)
+		}
+
+		*r = out
+
+		return nil
+
+	default:
+		return fmt.Errorf("runs-on: unsupported YAML node kind %v", node.Kind)
+	}
 }
 
 // workflowDoc is the decoded subset of a GitHub Actions workflow.

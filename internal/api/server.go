@@ -2939,10 +2939,6 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		// summary (same goroutine — see the runTiming note above).
 		runTiming = res.Timing
 
-		// v1.9.4: publish the measured timeline for the settle
-		// summary (same goroutine — see the runTiming note above).
-		runTiming = res.Timing
-
 		// v1.7.4 PAUSE: the run stopped at a SAFE BOUNDARY — not an
 		// error, not a completion. The durable checkpoint is
 		// persisted BEFORE the state promises PAUSED, and the run

@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -271,9 +272,10 @@ func (f Files) Run(ctx context.Context, args json.RawMessage) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if _, err := fh.WriteString(p.Content); err != nil {
-			fh.Close()
-			return "", err
+		if _, werr := fh.WriteString(p.Content); werr != nil {
+			// v1.11.1 (CodeQL go/unhandled-writable-file-close #251): the
+			// write-failure path propagates the write AND the close error.
+			return "", errors.Join(werr, fh.Close())
 		}
 		if err := fh.Close(); err != nil {
 			return "", err

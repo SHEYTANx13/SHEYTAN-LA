@@ -291,12 +291,12 @@ func (s *Server) settleDriveError(goalID string, driveErr error) {
 	}
 	store := s.goalStore()
 	if store == nil {
-		log.Printf("[goal] %s drive %s: store unavailable — error not settled: %v", goalLogValue(goalID), category, goalLogValue(driveErr))
+		log.Printf("[goal] %s drive %s: store unavailable — error not settled: %v", goalLogValue(goalID), goalLogValue(category), goalLogValue(driveErr))
 		return
 	}
 	g, err := store.Get(goalID)
 	if err != nil {
-		log.Printf("[goal] %s drive %s: the goal vanished before settlement: %v", goalLogValue(goalID), category, goalLogValue(driveErr))
+		log.Printf("[goal] %s drive %s: the goal vanished before settlement: %v", goalLogValue(goalID), goalLogValue(category), goalLogValue(driveErr))
 		return
 	}
 	detail := redactDriveDetail(fmt.Sprintf("category=%s phase=%s error=%v", category, g.Phase, driveErr))
@@ -306,17 +306,17 @@ func (s *Server) settleDriveError(goalID string, driveErr error) {
 		Status: "error",
 		Detail: detail,
 	}); err != nil {
-		log.Printf("[goal] %s drive %s: evidence append failed: %v", goalLogValue(goalID), category, goalLogValue(err))
+		log.Printf("[goal] %s drive %s: evidence append failed: %v", goalLogValue(goalID), goalLogValue(category), goalLogValue(err))
 	}
 	if category == "cancelled" {
-		log.Printf("[goal] %s drive cancelled at phase %s (status %s)", goalLogValue(goalID), g.Phase, g.Status)
+		log.Printf("[goal] %s drive cancelled at phase %s (status %s)", goalLogValue(goalID), goalLogValue(g.Phase), goalLogValue(g.Status))
 		return
 	}
 	if _, err := store.SettleDriveFailure(goalID, "the drive failed — resume from the checkpoint or cancel"); err != nil {
-		log.Printf("[goal] %s drive %s: settlement failed: %v", goalLogValue(goalID), category, goalLogValue(err))
+		log.Printf("[goal] %s drive %s: settlement failed: %v", goalLogValue(goalID), goalLogValue(category), goalLogValue(err))
 		return
 	}
-	log.Printf("[goal] %s drive %s settled at phase %s: status=blocked detail=%s", goalLogValue(goalID), category, g.Phase, goalLogValue(detail))
+	log.Printf("[goal] %s drive %s settled at phase %s: status=blocked detail=%s", goalLogValue(goalID), goalLogValue(category), goalLogValue(g.Phase), goalLogValue(detail))
 }
 
 // resumeAndDrive is the ONE serialized resume path (v1.10.13 RESUME-500

@@ -556,6 +556,72 @@ func (r *portReservation) Release() {
 	_ = l.Close()
 }
 
+// ownEngineTempRoot is the fixture's deterministic teardown boundary for
+// the engine temp root (v1.11.1, run 42127523923, work order §3).
+//
+// Root cause (Windows x64, run 42127523923): the crash-budget test is the
+// ONLY fakeEngineConfig test whose final DataDir writes — the verified
+// engine-caps.json rename and the config.json compat stamp from the last
+// boot's persistBootOutcome — land ~550 ms before t.TempDir's RemoveAll
+// (every other engine test crosses a ~4 s deliberate-Stop window first,
+// because Stop() on a LIVE engine polls the full grace deadline before
+// killing). In that window the Windows runner's real-time content
+// scanners open the freshly written files; an unlink against a scanner-
+// held handle is marked DELETE-PENDING — DeleteFile reports success but
+// the directory entry remains until the foreign handle closes — so the
+// framework's RemoveDirectory on the root fails with ERROR_DIR_NOT_EMPTY,
+// surfacing as "TempDir RemoveAll cleanup: ... \001: The directory is not
+// empty". No code-owned writer, handle, process or goroutine survives the
+// test (lifecycle audit: exit watcher, watchdog timer, engine lease,
+// caps/config writes are all joined or closed before return, and
+// logging.Default() is the no-file bootstrap sink in headless tests — the
+// fix therefore owns the TEARDOWN, it does not change any lifecycle
+// behavior or assertion).
+//
+// Teardown order (work order §3.B.6): the caller's Stop() stopped and
+// reaped the engine; this boundary waits for foreign handles to clear and
+// removes the root. It runs BEFORE the framework's TempDir cleanup
+// (registered after it → LIFO): residue, if any, is walked and reported
+// honestly, then removal is retried on a bounded cadence (≤2 s) — that
+// bounded window is exactly the delete-pending grace external scanners
+// need. Residue that survives is left in place for the framework's
+// TempDir cleanup, which still fails the test with the exact path — no
+// error is swallowed, no assertion weakened, nothing is skipped.
+func ownEngineTempRoot(t *testing.T, root string) {
+	t.Cleanup(func() {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			return // root already removed — nothing to own
+		}
+
+		if len(entries) == 0 {
+			return // happy path: nothing was left behind, no wait, no rewrite
+		}
+
+		// Diagnostic (work order §3.A.3): name the residue so a future
+		// regression reports the leftover PATH, not just the root.
+		for _, e := range entries {
+			t.Logf("engine temp root residue at teardown: %s (dir=%v)", e.Name(), e.IsDir())
+		}
+
+		deadline := time.Now().Add(2 * time.Second)
+
+		for {
+			if err := os.RemoveAll(root); err == nil {
+				return
+			}
+
+			if time.Now().After(deadline) {
+				// Honest residue: the framework's TempDir cleanup still
+				// runs and still fails the test with the exact path.
+				return
+			}
+
+			time.Sleep(50 * time.Millisecond)
+		}
+	})
+}
+
 func fakeEngineConfig(t *testing.T, mode string) (*config.Config, string) {
 	t.Helper()
 
@@ -565,6 +631,11 @@ func fakeEngineConfig(t *testing.T, mode string) (*config.Config, string) {
 	}
 
 	dir := t.TempDir()
+
+	// v1.11.1 (run 42127523923, work order §3): the fixture OWNS its temp
+	// root deterministically — registered AFTER t.TempDir so LIFO runs it
+	// BEFORE the framework's TempDir removal. See ownEngineTempRoot.
+	ownEngineTempRoot(t, dir)
 
 	// v1.11.1 (run #41415240891 Failure B): OWN the engine port through
 	// the whole fixture — the held listener makes reassignment by a
@@ -1153,6 +1224,14 @@ func TestRepeatedCrashesExhaustBoundedBudget(t *testing.T) {
 
 	events, unsubscribe := srv.SubscribeEvents()
 	defer unsubscribe()
+
+	// v1.11.1 (run 42127523923, work order §3.B): the lifecycle is owned on
+	// EVERY exit path — the explicit Stop below stays for the happy path;
+	// this deferred Stop guarantees the engine, its children and its
+	// watchdog are stopped and reaped even when an assertion fails first.
+	// Stop is idempotent on the terminal failed state (no live process —
+	// the early path).
+	defer func() { _ = srv.Stop() }()
 
 	if err := srv.Start(); err != nil {
 		t.Fatalf("Start: %v", err)

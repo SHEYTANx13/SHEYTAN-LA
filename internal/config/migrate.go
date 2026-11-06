@@ -36,6 +36,7 @@ package config
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -412,9 +413,14 @@ func copyVerified(src, dst string) error {
 
 	in, err := os.Open(src)
 	if err != nil {
-		out.Close()
+		// v1.11.1 (CodeQL go/unhandled-writable-file-close #240): the
+		// source-open failure path closes the staging writable and
+		// reports both errors before removing the temp file.
+		joinErr := errors.Join(err, out.Close())
+
 		_ = os.Remove(tmp)
-		return err
+
+		return joinErr
 	}
 
 	written, copyErr := io.Copy(out, in)

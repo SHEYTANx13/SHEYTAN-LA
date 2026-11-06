@@ -15,6 +15,7 @@ package logging
 import (
 	"archive/zip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -199,8 +200,10 @@ func openAppend(path string) (*os.File, int64, error) {
 	}
 	st, err := f.Stat()
 	if err != nil {
-		f.Close()
-		return nil, 0, err
+		// v1.11.1 (CodeQL go/unhandled-writable-file-close #241): the
+		// Stat-failure path closes the writable handle and reports both
+		// errors — the close failure is never silently dropped.
+		return nil, 0, errors.Join(err, f.Close())
 	}
 	return f, st.Size(), nil
 }

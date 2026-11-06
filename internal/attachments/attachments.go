@@ -363,7 +363,14 @@ func (m *Manager) spool(name string, r io.Reader) (tmpPath string, size int64, s
 		return "", 0, nil, nil, fmt.Errorf("attachments: stage: %w", ferr)
 	}
 	defer func() {
-		f.Close()
+		// v1.11.1 (CodeQL go/unhandled-writable-file-close #239): the spool
+		// is not successful until the staged file closes cleanly — a close
+		// failure joins the flow error and still triggers the rollback
+		// (the staged temp file is removed, never promoted).
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("attachments: stage close: %w", cerr)
+		}
+
 		if err != nil {
 			_ = os.Remove(tmpPath)
 			tmpPath = ""

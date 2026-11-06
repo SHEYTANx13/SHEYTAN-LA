@@ -24,6 +24,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -240,8 +241,10 @@ func (e *Engine) SetFeedback(id string, fb int) error {
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(rec); err != nil {
-		f.Close()
-		return err
+		// v1.11.1 (CodeQL go/unhandled-writable-file-close #244): the
+		// encode-failure path closes the writable handle and propagates
+		// BOTH errors — the close failure is never silently dropped.
+		return errors.Join(err, f.Close())
 	}
 	if err := f.Close(); err != nil {
 		return err
@@ -315,8 +318,9 @@ func (e *Engine) IndexTurn(sessionID, title, query, answer string, tools []strin
 	enc := json.NewEncoder(f)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(c); err != nil {
-		f.Close()
-		return err
+		// v1.11.1 (CodeQL go/unhandled-writable-file-close #245): both the
+		// encode and the cleanup close error propagate.
+		return errors.Join(err, f.Close())
 	}
 	if err := f.Close(); err != nil {
 		return err

@@ -501,7 +501,11 @@ func cmdTouch(e *Engine, args []string, stdin string) string {
 			fmt.Fprintf(&b, "touch: cannot touch '%s': %v\n", a, err)
 			continue
 		}
-		f.Close()
+		// v1.11.1 (CodeQL go/unhandled-writable-file-close #249): the touch
+		// reports the close failure instead of dropping it.
+		if cerr := f.Close(); cerr != nil {
+			fmt.Fprintf(&b, "touch: '%s': close: %v\n", a, cerr)
+		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -733,11 +737,15 @@ func cmdGrep(e *Engine, args []string, stdin string) string {
 		}
 		text = b.String()
 	}
-	hay := text
+	// v1.11.1 (CodeQL go/useless-assignment-to-local #238): the dead `hay`
+	// variable was removed — the matching loop lowercases each line
+	// directly when ignoreCase is set; hay was never read. needle stays:
+	// it is the matched-against pattern (reassigned read below).
 	needle := pattern
 	if ignoreCase {
-		hay, needle = strings.ToLower(hay), strings.ToLower(pattern)
+		needle = strings.ToLower(pattern)
 	}
+
 	var b strings.Builder
 	for _, line := range readLines(text) {
 		cmp := line
