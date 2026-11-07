@@ -162,14 +162,21 @@ func taskRunner(s *Stack, orch *agent.Orchestrator, runner scheduler.Runner) sch
 			}
 		}
 
-		prompt := task.Prompt
-
 		// Task-scoped skills: linked JSON skills (the same Skill authority)
 		// + task SKILL.md packages matched on the prompt, injected as a
 		// bounded block (progressive disclosure — matched skills only).
-		block := taskSkillBlock(s, task, prompt)
-		if block != "" {
-			prompt = block + "\n\n" + prompt
+		//
+		// v1.11.1 (CodeQL go/useless-assignment-to-local, work order §6.3):
+		// the rendered block was assigned to a LOCAL `prompt` that
+		// nothing ever read — the run below received task.Prompt
+		// VERBATIM, so the documented task-scoped skill injection was
+		// silently dropped from every scheduled run. The intended
+		// value now flows to the run: the block is prepended to the
+		// task's prompt, the copy the runner consumes. Matching still
+		// sees the ORIGINAL prompt, and `task` is a per-invocation
+		// value copy, so the stored schedule definition is untouched.
+		if block := taskSkillBlock(s, task, task.Prompt); block != "" {
+			task.Prompt = block + "\n\n" + task.Prompt
 		}
 
 		output, err := runner(ctx, task)

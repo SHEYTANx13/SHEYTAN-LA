@@ -156,7 +156,7 @@ func (m *LiveMonitor) Last() Sample {
 // cadence (bounded — the runtime polls every 15 s during active runs).
 func (m *LiveMonitor) Poll() Sample {
 	s := m.sampler()
-	s.Level = m.classify(s)
+	s.Level, s.Reasons = m.classify(s)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -207,7 +207,15 @@ func (m *LiveMonitor) Poll() Sample {
 
 // classify maps one sample's measured facts to a level. Unmeasurable
 // facts never escalate the level (unknown stays unknown).
-func (m *LiveMonitor) classify(s Sample) PressureLevel {
+//
+// v1.11.1 (CodeQL go/useless-assignment-to-field, work order §6.3):
+// classify previously wrote the computed reasons into `s.Reasons` — but
+// `s` is a VALUE copy, so the write never reached the caller's sample:
+// every returned/stored/callback-delivered Sample carried an empty
+// Reasons even when a classification had produced them. The level and
+// the reasons now travel together as return values; Poll assigns both
+// to the real sample. The field's own json contract is unchanged.
+func (m *LiveMonitor) classify(s Sample) (PressureLevel, []string) {
 	level := PressureOK
 	var reasons []string
 
@@ -233,6 +241,5 @@ func (m *LiveMonitor) classify(s Sample) PressureLevel {
 		reasons = append(reasons, "swap pressure is high")
 	}
 
-	s.Reasons = reasons
-	return level
+	return level, reasons
 }
