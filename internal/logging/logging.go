@@ -284,7 +284,14 @@ func (m *Manager) log(level, category, format string, args ...interface{}) {
 }
 
 func (m *Manager) rotateAppLocked() {
-	m.appF.Close()
+	// v1.11.1 (CodeQL go/unhandled-writable-file-close #253): a failing
+	// close before rotation is surfaced on stderr — the Manager has no
+	// error-return channel to its callers (Write is best-effort by
+	// contract), and stderr is the ONE sink that survives a broken file
+	// logger (the bootstrap path uses the same channel).
+	if cerr := m.appF.Close(); cerr != nil {
+		fmt.Fprintf(os.Stderr, "sheytan-log: closing app.log before rotation failed: %v\n", cerr)
+	}
 	// shift app-3.log→app-4.log ... app.log→app-1.log
 	for i := appKeepFiles - 1; i >= 1; i-- {
 		src := m.rotatedPath(i)
@@ -478,7 +485,12 @@ func (m *Manager) appendJSONL(f **os.File, n *int64, path string, max int64, kee
 		*n += int64(len(data) + 1)
 	}
 	if *n >= max {
-		(*f).Close()
+		// v1.11.1 (CodeQL go/unhandled-writable-file-close #254): the
+		// pre-rotation close failure is surfaced on stderr (same
+		// propagation rationale as rotateAppLocked).
+		if cerr := (*f).Close(); cerr != nil {
+			fmt.Fprintf(os.Stderr, "sheytan-log: closing %s before rotation failed: %v\n", path, cerr)
+		}
 		for i := keep - 1; i >= 1; i-- {
 			src := fmt.Sprintf("%s.%d", path, i)
 			dst := fmt.Sprintf("%s.%d", path, i+1)

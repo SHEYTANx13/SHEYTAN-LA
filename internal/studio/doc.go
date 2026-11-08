@@ -32,6 +32,13 @@ var (
 // Update procedure: replace assets/three.core.js, assets/three.module.js
 // and assets/OrbitControls.js from the same npm release tag, update the
 // version here, and re-run the studio tests.
+//
+// LOCAL DIVERGENCE (v1.11.1): assets/three.core.js generateUUID() is
+// patched to source its four words from crypto.getRandomValues (with a
+// deterministic monotonic fallback for non-browser builds) — CodeQL
+// js/insecure-randomness remediation for internal instance/cache IDs.
+// Re-apply that patch after every vendor refresh (see the marked block
+// inside the file).
 const (
 	ThreeJSVersion = "0.182.0" // three.js r182, MIT — see assets/LICENSE-THREE.txt
 	ThreeJSLicense = "MIT"

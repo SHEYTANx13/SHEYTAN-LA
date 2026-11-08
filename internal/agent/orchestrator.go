@@ -2428,7 +2428,12 @@ func (o *Orchestrator) RunDetailed(
 
 			if cacheableCall(tc.Function.Name, tc.Function.Arguments) {
 				if cached, hit := globalResultCache.Get(cacheKey); hit {
-					result2, err = cached, error(nil)
+					// v1.11.1 (CodeQL go/useless-assignment-to-local #230):
+					// the dead `error(nil)` write to err is removed — this
+					// branch never reads err before `continue`, and err is
+					// reassigned (with result2) at the tool.Run below on
+					// every non-cached path, so the value was never live.
+					result2 = cached
 
 					runTask.ObserveToolEnd(tc.Function.Name, tc.Function.Arguments, cached, false)
 

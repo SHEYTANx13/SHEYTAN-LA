@@ -100,7 +100,7 @@ function renderInline(target, value) {
 function renderMarkdown(target, raw) {
   const box = el("div", "md");
   const lines = String(raw).split(/\r?\n/);
-  let para = null, list = null, fence = null, fenceLang = "";
+  let para = null, list = null, fence = null;
   const closePara = () => { para = null; };
   const closeList = () => { list = null; };
 

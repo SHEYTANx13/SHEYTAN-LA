@@ -45,6 +45,7 @@ func TestValidateToolEndpointPolicy(t *testing.T) {
 		"https://169.254.169.254/latest/meta-data/",            // AWS IMDS
 		"https://[fd00:ec2::254]/latest/meta-data/",            // IMDSv6
 		"https://metadata.google.internal/computeMetadata/v1/", // GCP metadata
+		"https://metadata.goog/computeMetadata/v1/",            // GCP metadata alias domain
 		"https://[fe80::1%25eth0]/x",                           // link-local v6
 		"https:///no-host",                                     // empty host
 	}

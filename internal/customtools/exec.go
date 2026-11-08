@@ -388,6 +388,12 @@ func isMetadataOrLinkLocalHost(hostname string) bool {
 	if strings.EqualFold(hostname, "metadata.google.internal") {
 		return true
 	}
+	// metadata.goog is Google's alternate cloud-metadata domain (same
+	// service as metadata.google.internal): an alias must never become
+	// the bypass.
+	if strings.EqualFold(hostname, "metadata.goog") {
+		return true
+	}
 	// AWS IMDSv6 is a unique-local address, not link-local: block the
 	// documented metadata endpoint explicitly.
 	if strings.EqualFold(hostname, "fd00:ec2::254") {

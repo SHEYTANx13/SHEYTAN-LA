@@ -3,6 +3,7 @@ package releasecontract
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -87,24 +88,54 @@ func TestNoLegacyUISourceRemains(t *testing.T) {
 	}
 }
 
-// findRepoRoot walks up from this package to the module root (the
-// directory containing go.mod).
+// findRepoRoot resolves the module root (the directory containing
+// go.mod) WITHOUT depending on the process working directory.
+//
+// Primary resolution: runtime.Caller(0) — this helper's own compiled
+// source path IS the releasecontract package directory, so the walk up
+// to go.mod works no matter where the test binary was launched from
+// (go test happens to set the package dir as CWD; a manually executed
+// test binary does not, and the run-42405993776 Windows investigation
+// requires loader resolution that is independent of both).
+//
+// Fallback: the historical getwd walk (covers rewritten Caller paths,
+// e.g. -trimpath builds, where the primary walk cannot find go.mod).
 func findRepoRoot(t *testing.T) string {
 	t.Helper()
+
+	if _, thisFile, _, ok := runtime.Caller(0); ok {
+		if root, found := walkUpToGoMod(filepath.Dir(thisFile), 8); found {
+			return root
+		}
+	}
+
 	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
-	for i := 0; i < 8; i++ {
+
+	if root, found := walkUpToGoMod(dir, 8); found {
+		return root
+	}
+
+	t.Fatal("go.mod not found above the test package (searched from the test source directory and from the working directory)")
+	return ""
+}
+
+// walkUpToGoMod walks up from dir at most max levels looking for go.mod.
+func walkUpToGoMod(dir string, max int) (string, bool) {
+	for i := 0; i < max; i++ {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
+			return dir, true
 		}
+
 		parent := filepath.Dir(dir)
 		if parent == dir {
 			break
 		}
+
 		dir = parent
 	}
-	t.Fatal("go.mod not found above the test package")
-	return ""
+
+	return "", false
 }

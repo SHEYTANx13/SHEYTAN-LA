@@ -26,6 +26,8 @@ func TestGoalLogValueNeutralizesInjection(t *testing.T) {
 		{"NUL", "goal\x00id", `goal\x00id`, 1},
 		{"ANSI escape", "\x1b[31mred\x1b[0m", `\x1b[31mred\x1b[0m`, 1},
 		{"unicode line separator", "a b", `a\x2028b`, 1},
+		{"NEL next line (U+0085)", "a\u0085b", `a\x85b`, 1},
+		{"paragraph separator", "a\u2029b", `a\x2029b`, 1},
 		{"invalid utf-8 replaced", "goal-\xff\xfe-id", "goal-\uFFFD-id", 1},
 	}
 

@@ -9,7 +9,9 @@ package tools
 // inside it.
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
 	"os"
 	"path/filepath"
 	"testing"
@@ -156,6 +158,115 @@ func TestUnzipStillExtractsValidMembers(t *testing.T) {
 
 		if len(data) == 0 {
 			t.Errorf("valid member %q extracted empty", name)
+		}
+	}
+}
+
+func buildHostileTarGz(t *testing.T, path string) {
+	t.Helper()
+
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	defer f.Close()
+
+	gz := gzip.NewWriter(f)
+
+	tw := tar.NewWriter(gz)
+
+	// The same hostile shapes the zip side pins, in tar spelling: an
+	// escaping traversal member, a symlink member and a hardlink member
+	// (all three link/traversal classes the untar path must refuse).
+	members := []struct {
+		name     string
+		typeflag byte
+		linkname string
+		data     string
+	}{
+		{name: "valid-inside.txt", typeflag: tar.TypeReg, data: "inside"},
+		{name: "../escape-tar.txt", typeflag: tar.TypeReg, data: "traversal"},
+		{name: "chain.txt", typeflag: tar.TypeSymlink, linkname: "../../outside-target", data: ""},
+		{name: "hard.txt", typeflag: tar.TypeLink, linkname: "../../../etc/passwd", data: ""},
+	}
+
+	for _, m := range members {
+		hdr := &tar.Header{
+			Name:     m.name,
+			Typeflag: m.typeflag,
+			Linkname: m.linkname,
+			Size:     int64(len(m.data)),
+			Mode:     0o644,
+		}
+
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("member header: %v", err)
+		}
+
+		if m.data != "" {
+			if _, err := tw.Write([]byte(m.data)); err != nil {
+				t.Fatalf("member body: %v", err)
+			}
+		}
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+
+	if err := f.Close(); err != nil {
+		t.Fatalf("close archive: %v", err)
+	}
+}
+
+// TestUntarRejectsHostileMembers pins the tar-side of the same Zip Slip
+// contract: traversal, symlink and hardlink members fail closed, nothing
+// materializes outside the destination root, and the rollback drops the
+// whole stage (the valid member that preceded the hostile one is NOT
+// committed).
+func TestUntarRejectsHostileMembers(t *testing.T) {
+	base := t.TempDir()
+	SetBaseDir(base)
+
+	root := filepath.Join(base, "extract-tar")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+
+	archive := filepath.Join(base, "hostile.tar.gz")
+	buildHostileTarGz(t, archive)
+
+	tool := ArchiveTool{}
+
+	if _, err := tool.untar("hostile.tar.gz", "extract-tar"); err == nil {
+		t.Fatal("a hostile tar (traversal/symlink/hardlink members) must be rejected")
+	}
+
+	// Nothing may exist outside the root ...
+	for _, hostile := range []string{
+		filepath.Join(base, "escape-tar.txt"),
+		filepath.Join(filepath.Dir(base), "escape-tar.txt"),
+	} {
+		if _, err := os.Stat(hostile); err == nil {
+			t.Errorf("hostile member materialized at %s", hostile)
+		}
+	}
+
+	// ... and the root must not contain any staged or committed member
+	// (including the valid member that preceded the hostile one — the
+	// transaction rolls the WHOLE stage back).
+	for _, banned := range []string{
+		filepath.Join(root, "valid-inside.txt"),
+		filepath.Join(root, "escape-tar.txt"),
+		filepath.Join(root, "chain.txt"),
+		filepath.Join(root, "hard.txt"),
+	} {
+		if _, err := os.Stat(banned); err == nil {
+			t.Errorf("member materialized at %s after a failed extraction", banned)
 		}
 	}
 }

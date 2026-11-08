@@ -37,7 +37,9 @@ import (
 // goalLogValue normalizes an untrusted value for the LOG sink (CodeQL
 // go/log-injection, alerts #215-#228): invalid UTF-8 is replaced, and
 // control characters — newlines, carriage returns, tabs, NUL and ANSI
-// escape bytes, plus the Unicode line separators — are escaped as \xNN
+// escape bytes, plus the Unicode line separators (U+2028 LINE
+// SEPARATOR, U+2029 PARAGRAPH SEPARATOR and U+0085 NEXT LINE — all
+// record-breaking characters in log viewers) — are escaped as \xNN
 // literals so one logical event always stays ONE log record and no
 // forged "[goal]" line or terminal sequence can be injected through a
 // goal ID or an error string. Structured evidence payloads (the
@@ -55,7 +57,7 @@ func goalLogValue(v any) string {
 			b.WriteString("\\r")
 		case r == '\t':
 			b.WriteString("\\t")
-		case r < 0x20 || r == 0x7f || r == 0x2028 || r == 0x2029:
+		case r < 0x20 || r == 0x7f || r == 0x85 || r == 0x2028 || r == 0x2029:
 			fmt.Fprintf(&b, "\\x%02x", r)
 		default:
 			b.WriteRune(r)

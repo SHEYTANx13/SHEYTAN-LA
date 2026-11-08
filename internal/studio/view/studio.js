@@ -85,9 +85,6 @@ function buildScene() {
 
 function layoutGraph() {
   // Deterministic radial layout: host at center, others ringed by kind.
-  const byKind = {};
-  topology.nodes.forEach(n => (byKind[n.kind] ||= []).push(n));
-  const kinds = Object.keys(byKind).sort();
   const host = topology.nodes.find(n => n.kind === 'host');
   let placed = 0;
 

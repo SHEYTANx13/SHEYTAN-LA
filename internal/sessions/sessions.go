@@ -25,6 +25,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -818,6 +819,16 @@ func (s *Store) AppendMessage(id string, msg llm.Message) (*Session, error) {
 
 // AppendActivity appends one activity-feed entry to the session's
 // sidecar (bounded) — O(1) in session size, no session rewrite.
+// appendLineClose writes one line and closes the file, preserving BOTH
+// the primary write failure and the cleanup close failure (errors.Join)
+// — the v1.11.1 E6 remediation for the unhandled writable-file close
+// (CodeQL #247). A nil is returned only when nothing failed.
+func appendLineClose(f *os.File, line []byte) error {
+	_, werr := f.Write(line)
+	cerr := f.Close()
+	return errors.Join(werr, cerr)
+}
+
 func (s *Store) AppendActivity(id string, entry ActivityEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -840,12 +851,11 @@ func (s *Store) AppendActivity(id string, entry ActivityEntry) error {
 	if err != nil {
 		return err
 	}
-	_, err = f.Write(append(line, '\n'))
-	if err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
+	// v1.11.1 (CodeQL go/unhandled-writable-file-close #247):
+	// appendLineClose owns write + close with JOINED error semantics —
+	// the cleanup close failure is never swallowed alongside a primary
+	// write failure.
+	if err := appendLineClose(f, append(line, '\n')); err != nil {
 		return err
 	}
 	// Refresh the sidecar cache identity (append-only write).
