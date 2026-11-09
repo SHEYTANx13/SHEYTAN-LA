@@ -355,8 +355,26 @@ func filepathExt(p string) string {
 // and returns an OpenAI-style inline data URL (data:image/<mime>;base64,…).
 // PNG sources stay PNG (screenshots keep their text crisp); everything else
 // re-encodes as JPEG quality 88 — the sweet spot for vision token counts.
+//
+// v1.11.1 path-injection remediation (user-owned absolute path class):
+// image paths are user-selected files (a desktop install may attach any
+// local image), so they cannot be contained to a store root — but the
+// hostile spellings fail closed BEFORE the read: empty paths, relative
+// paths and NUL bytes are rejected, and the read always runs over the
+// cleaned absolute form.
 func EncodeImage(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("vision: empty image path")
+	}
+	if strings.ContainsRune(path, 0) {
+		return "", fmt.Errorf("vision: invalid image path")
+	}
+	clean := filepath.Clean(path)
+	if !filepath.IsAbs(clean) {
+		return "", fmt.Errorf("vision: image path %q must be absolute", path)
+	}
+
+	data, err := os.ReadFile(clean)
 	if err != nil {
 		return "", err
 	}

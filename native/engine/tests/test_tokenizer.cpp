@@ -317,18 +317,18 @@ int main() {
 
         // --- idempotent init -------------------------------------------
         {
-            shtn_tokenizer_info ti{};
-            rc = shtn_engine_tokenizer_init(engine, &ti);
+            shtn_tokenizer_info ti_reinit{};
+            rc = shtn_engine_tokenizer_init(engine, &ti_reinit);
             CHECK(rc == SHTN_OK);
-            CHECK(ti.initialized == 1);
+            CHECK(ti_reinit.initialized == 1);
         }
 
         // --- info without re-init reports initialized ------------------
         {
-            shtn_tokenizer_info ti{};
-            rc = shtn_engine_tokenizer_info(engine, &ti);
+            shtn_tokenizer_info ti_info{};
+            rc = shtn_engine_tokenizer_info(engine, &ti_info);
             CHECK(rc == SHTN_OK);
-            CHECK(ti.initialized == 1);
+            CHECK(ti_info.initialized == 1);
         }
 
         shtn_engine_destroy(engine);

@@ -146,6 +146,14 @@ func verifyEditTx(data []byte) (*editTxRecord, error) {
 		return nil, fmt.Errorf("journal missing runId/sessionId")
 	}
 
+	// v1.11.1 path-injection: the journal's runId builds checkpoint and
+	// quarantine paths during recovery. An id outside the grammar makes
+	// the WHOLE journal untrustworthy — fail closed and let the caller
+	// quarantine it under its FILE name (never under this id).
+	if !validRunID(rec.RunID) {
+		return nil, fmt.Errorf("journal runId is not a valid run id")
+	}
+
 	want := editTxIntegrity(&rec)
 	if want == "" || want != rec.Integrity {
 		return nil, fmt.Errorf("journal integrity mismatch (want %s, recorded %s)", want, rec.Integrity)
@@ -164,14 +172,29 @@ func verifyEditTx(data []byte) (*editTxRecord, error) {
 	return &rec, nil
 }
 
-// editTxPath is the journal path for one run.
+// editTxPath is the journal path for one run. v1.11.1 path-injection:
+// the path is built ONLY from a run id inside the validRunID grammar —
+// any other id yields NO path (""), which every caller treats as an
+// error or an absent record, so a hostile request id can never leave the
+// paused directory. Writers with a real error contract validate
+// explicitly before touching the filesystem.
 func (s *Server) editTxPath(runID string) string {
+	if !validRunID(runID) {
+		return ""
+	}
 	return filepath.Join(s.pausedDir(), runID+editTxSuffix)
 }
 
 // saveEditTx persists one journal state ATOMICALLY (temp + rename) with a
 // freshly computed integrity hash.
 func (s *Server) saveEditTx(rec *editTxRecord) error {
+	// v1.11.1 path-injection: the journal name is built ONLY from a run id
+	// inside the validRunID grammar — a hostile id fails closed BEFORE the
+	// seam, the directory or a single byte is touched.
+	if !validRunID(rec.RunID) {
+		return fmt.Errorf("edit transaction: %w %q", errInvalidRunID, rec.RunID)
+	}
+
 	// Fault-injection seam: a non-nil error SIMULATES the failed write;
 	// nil falls through to the REAL durable write.
 	if editTxSaveSeam != nil {
@@ -209,9 +232,10 @@ func (s *Server) saveEditTx(rec *editTxRecord) error {
 	return nil
 }
 
-// loadEditTx reads one journal by run id; ok=false when absent.
+// loadEditTx reads one journal by run id; ok=false when absent. A run id
+// outside the validRunID grammar is never a readable journal (fail closed).
 func (s *Server) loadEditTx(runID string) (*editTxRecord, bool) {
-	if runID == "" {
+	if runID == "" || !validRunID(runID) {
 		return nil, false
 	}
 
@@ -228,9 +252,10 @@ func (s *Server) loadEditTx(runID string) (*editTxRecord, bool) {
 	return rec, true
 }
 
-// deleteEditTx removes a converged or aborted journal (idempotent).
+// deleteEditTx removes a converged or aborted journal (idempotent). A
+// run id outside the validRunID grammar never removes anything (fail closed).
 func (s *Server) deleteEditTx(runID string) {
-	if runID == "" {
+	if runID == "" || !validRunID(runID) {
 		return
 	}
 	_ = os.Remove(s.editTxPath(runID))
@@ -240,6 +265,16 @@ func (s *Server) deleteEditTx(runID string) {
 // nothing about that edit is guessed; the file stays on disk for
 // actionable recovery, every other session and run stays usable.
 func (s *Server) quarantineEditTx(runID string, reason string) {
+	// v1.11.1 path-injection: the quarantine destination is built from the
+	// run id too; an id outside the grammar is refused and the journal is
+	// kept EXACTLY where it is (the fail-closed default of this function).
+	if !validRunID(runID) {
+		logging.Default().Error("run",
+			"edit transaction quarantine REFUSED — journal name %q is outside the run-id grammar; the record is left in place unmodified",
+			runID+editTxSuffix)
+		return
+	}
+
 	src := s.editTxPath(runID)
 	dst := filepath.Join(s.pausedDir(), runID+editTxCorruptSuffx)
 

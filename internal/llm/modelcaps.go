@@ -368,7 +368,11 @@ func capsCacheStore(modelPath string, fiSize int64, fiMod time.Time, cfgFP strin
 // card for one model file. Nil when the file cannot be read — callers must
 // treat nil as "unknown model, fall back to config values".
 func ResolveModelCapabilities(cfg *config.Config, modelPath string) *ModelCapabilities {
-	if modelPath == "" {
+	// v1.11.1 path-injection: the model path may come from the config/API
+	// (user-selected) or from the models-root scan. Validate at the point
+	// of use; an unusable path degrades to "unknown model" (nil), never to
+	// a file-system probe on a hostile path.
+	if modelPath == "" || strings.ContainsRune(modelPath, '\x00') {
 		return nil
 	}
 

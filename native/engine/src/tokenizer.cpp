@@ -1106,16 +1106,22 @@ int32_t decode(const Vocab& v, const uint32_t* ids, size_t count,
             // For Llama-style BPE the token string already contains U+2581
             // markers — convert them back to ASCII space here.
             const std::string& tok = v.tokens[id];
-            for (size_t k = 0; k < tok.size(); ++k) {
+            // Explicit index instead of a for-counter mutated in the body:
+            // a U+2581 match consumes THREE source bytes (E2 96 81) for
+            // ONE output space, and that skip must stay visible at the
+            // single place the index advances.
+            size_t k = 0;
+            while (k < tok.size()) {
                 // U+2581 in UTF-8 is E2 96 81.
                 if (k + 2 < tok.size() &&
                     static_cast<unsigned char>(tok[k]) == 0xE2u &&
                     static_cast<unsigned char>(tok[k + 1]) == 0x96u &&
                     static_cast<unsigned char>(tok[k + 2]) == 0x81u) {
                     out.text.push_back(' ');
-                    k += 2;
+                    k += 3;
                 } else {
                     out.text.push_back(tok[k]);
+                    ++k;
                 }
             }
         }

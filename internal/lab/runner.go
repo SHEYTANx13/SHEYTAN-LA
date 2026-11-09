@@ -121,6 +121,17 @@ func (r *Runner) Run(
 		)
 	}
 
+	// v1.11.1 path-injection: re-verify containment of the resolved working
+	// directory against the ACTIVE workspace root at the point of use —
+	// lexical containment plus a symlink-escape check of its nearest
+	// existing ancestor — before it becomes the child process CWD.
+	if err := ensureInsideWorkspace(workspace, workingDir); err != nil {
+		return CommandResult{}, fmt.Errorf(
+			"lab: command working directory escapes the workspace: %w",
+			err,
+		)
+	}
+
 	if info, statErr := os.Stat(workingDir); statErr != nil {
 		return CommandResult{}, fmt.Errorf(
 			"lab: stat command working directory: %w",

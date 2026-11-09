@@ -2,6 +2,8 @@ package tools
 
 import (
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -22,6 +24,10 @@ var (
 	// ErrBaseDirUnset is returned when a safe path cannot be resolved because
 	// the canonical base directory has not been configured.
 	ErrBaseDirUnset = errors.New("tools: base directory is not configured")
+
+	// errInvalidArtifactName is returned (wrapped) for artifact names
+	// that fail validArtifactName.
+	errInvalidArtifactName = errors.New("invalid artifact name")
 )
 
 // SetBaseDir sets the canonical base directory that relative paths in ALL
@@ -62,6 +68,62 @@ func ResolvePath(p string) string {
 	return resolved
 }
 
+// toolPath is the ONE fail-closed chokepoint for tool-argument paths
+// (v1.11.1 path-injection remediation, work order §7 — class (a):
+// app-managed tool paths). Every untrusted path an agent hands to a tool
+// resolves through here: the returned absolute path is guaranteed to stay
+// inside BaseDir(), including through symlinks, and a hostile or malformed
+// path produces a wrapped error — never a filesystem operation outside the
+// base.
+func toolPath(p string) (string, error) {
+	resolved, err := ResolvePathChecked(p)
+	if err != nil {
+		return "", fmt.Errorf("tools: refusing path %q: %w", p, err)
+	}
+
+	return resolved, nil
+}
+
+// validArtifactName is the ONE grammar for a caller-supplied artifact name
+// used as a single filesystem path component (v1.11.1 path-injection
+// remediation, work order §7 — class (b): single-component identifier).
+// Names arrive from tool arguments (untrusted) and from dataset basenames;
+// every write built from one must land as a FLAT component beside its
+// dataset. Mirrors the sessions.validSessionID grammar and rejects: empty
+// and oversized names, path separators (POSIX and Windows), NUL,
+// volume/ADS colons, leading dots ("." and ".." included), trailing
+// dots/spaces (Windows reserved shapes), whitespace-padded names, "~" and
+// non-grammar characters.
+func validArtifactName(name string) bool {
+	if name == "" || len(name) > 128 {
+		return false
+	}
+	if strings.ContainsAny(name, "/\\") {
+		return false
+	}
+	if strings.ContainsAny(name, "\x00:") {
+		return false
+	}
+	if strings.HasPrefix(name, ".") {
+		return false
+	}
+	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
+		return false
+	}
+	if strings.TrimSpace(name) != name {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.', r == ' ':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // ResolvePathChecked resolves p and guarantees that the resulting path stays
 // inside BaseDir(), including through existing symlinks.
 func ResolvePathChecked(p string) (string, error) {
@@ -69,6 +131,14 @@ func ResolvePathChecked(p string) (string, error) {
 
 	if p == "" {
 		return "", errors.New("tools: path is empty")
+	}
+
+	// v1.11.1 path-injection remediation (work order §7): explicit
+	// fail-closed NUL rejection. A NUL-bearing path is never a valid tool
+	// path; without this guard it dies with an opaque syscall EINVAL at
+	// the sink (or is silently truncated by a C-host runtime).
+	if strings.ContainsRune(p, 0) {
+		return "", errors.New("tools: path contains a NUL byte")
 	}
 
 	base := BaseDir()
@@ -169,6 +239,12 @@ func ResolvePathWithinBase(base, p string) (string, error) {
 
 	if p == "" {
 		return "", errors.New("tools: path is empty")
+	}
+
+	// v1.11.1 path-injection remediation (work order §7): the same
+	// explicit NUL rejection as ResolvePathChecked.
+	if strings.ContainsRune(p, 0) {
+		return "", errors.New("tools: path contains a NUL byte")
 	}
 
 	baseAbs, err := filepath.Abs(base)
@@ -393,8 +469,21 @@ func UnsafeAbsolutePath(p string) bool {
 // dir (v1.1.4: screenshots previously accumulated without bound). Names
 // are timestamp-prefixed, so lexicographic descending order is recency
 // order.
+//
+// v1.11.1 path-injection remediation (work order §7): every removal is
+// ROOTED — the directory is opened as an os.Root and entries are removed
+// by their listing names through that handle. os.Root rejects separators,
+// ".." and symlink redirection at the OS layer, so no pruned name can ever
+// address anything outside dir. Failures stay ignored, exactly like the
+// previous os.Remove loop.
 func pruneScreenshots(dir string, keep int) {
-	entries, err := os.ReadDir(dir)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return
+	}
+	defer root.Close()
+
+	entries, err := fs.ReadDir(root.FS(), ".")
 	if err != nil || len(entries) <= keep {
 		return
 	}
@@ -414,6 +503,6 @@ func pruneScreenshots(dir string, keep int) {
 	sort.Sort(sort.Reverse(sort.StringSlice(names)))
 
 	for _, name := range names[keep:] {
-		_ = os.Remove(filepath.Join(dir, name))
+		_ = root.Remove(name)
 	}
 }

@@ -667,6 +667,89 @@ func toolRedirectPolicy(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
+// hostAllowed reports whether host matches one entry of the positive
+// destination allowlist: an exact host (case-insensitive, trailing dot
+// ignored) or a single-level wildcard subdomain entry "*.suffix" that
+// matches any ONE additional label ("sub.suffix"), never the bare
+// suffix host and never deeper multi-label prefixes beyond one label.
+func hostAllowed(host string, allowed []string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if host == "" {
+		return false
+	}
+	for _, entry := range allowed {
+		e := strings.ToLower(strings.TrimSpace(entry))
+		if e == "" {
+			continue
+		}
+		if strings.HasPrefix(e, "*.") {
+			suffix := e[2:]
+			if strings.HasSuffix(host, "."+suffix) {
+				prefix := strings.TrimSuffix(host, "."+suffix)
+				// Single-level wildcard: exactly one additional label,
+				// never the bare suffix host and never deeper names.
+				if prefix != "" && !strings.Contains(prefix, ".") {
+					return true
+				}
+			}
+			continue
+		}
+		if host == strings.TrimSuffix(e, ".") {
+			return true
+		}
+	}
+	return false
+}
+
+// enforceEndpointAllowlist is the positive destination policy for tool
+// HTTP execution (v1.11.1 SSRF remediation, work order §4.1 items 1-3):
+// the request URL's AUTHORITY is selected from a KNOWN, user-declared
+// set — never constructed from substituted parameter values alone.
+//
+//   - The template's own fixed host is the default authorized
+//     destination: "$param" substitution fills non-authority parts of
+//     the URL only.
+//   - A definition that genuinely needs parameter-selected destinations
+//     must declare them in HTTP.AllowedHosts at save time — the explicit
+//     policy object and approval boundary on the tool definition.
+//
+// The check runs on the SUBSTITUTED endpoint (after the structural
+// endpoint policy) and is re-applied by the request's redirect policy on
+// every hop, so neither substitution nor a redirect can move the request
+// outside the declared destinations. Misleading forms (userinfo,
+// percent-encoding tricks in the host, non-https schemes) are already
+// refused upstream by validateToolEndpoint.
+func enforceEndpointAllowlist(template, endpoint string, allowed []string) error {
+	tu, err := url.Parse(template)
+	if err != nil {
+		return fmt.Errorf("endpoint template parse: %w", err)
+	}
+	templateHost := tu.Hostname()
+	if templateHost == "" || strings.Contains(templateHost, "$") {
+		// The authority itself is parameterized: without an explicit
+		// declaration there is NO fixed authorized destination.
+		if len(allowed) == 0 {
+			return fmt.Errorf("endpoint authority is parameterized but no allowedHosts are declared — a custom tool must pin its destination hosts")
+		}
+	} else if hostAllowed(templateHost, allowed) {
+		return nil
+	}
+
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("endpoint parse: %w", err)
+	}
+	endHost := u.Hostname()
+	if hostAllowed(endHost, allowed) {
+		return nil
+	}
+	if templateHost != "" && !strings.Contains(templateHost, "$") &&
+		strings.EqualFold(strings.TrimSuffix(endHost, "."), strings.TrimSuffix(templateHost, ".")) {
+		return nil
+	}
+	return fmt.Errorf("endpoint host %s is not an authorized destination (allowed: the template host or the declared allowedHosts)", redactedURL(endHost))
+}
+
 // runHTTP performs the bounded HTTPS request.
 func (t *Tool) runHTTP(ctx context.Context, args map[string]any) ([]byte, error) {
 	cfg := t.def.HTTP
@@ -683,6 +766,14 @@ func (t *Tool) runHTTP(ctx context.Context, args map[string]any) ([]byte, error)
 	// this is a local-first application and tools legitimately call
 	// first-party local services.
 	if err := validateToolEndpoint(endpoint); err != nil {
+		return nil, err
+	}
+
+	// Positive destination allowlist (v1.11.1 SSRF remediation): the
+	// substituted endpoint's host must be the template's fixed host or a
+	// declared allowedHosts entry — substituted parameter values alone
+	// can never select the destination authority.
+	if err := enforceEndpointAllowlist(cfg.URL, endpoint, cfg.AllowedHosts); err != nil {
 		return nil, err
 	}
 
@@ -709,22 +800,29 @@ func (t *Tool) runHTTP(ctx context.Context, args map[string]any) ([]byte, error)
 		req.Header.Set("Content-Type", "application/json")
 	}
 
+	// toolRequestPolicy re-applies BOTH the structural/redirect policy
+	// AND the positive destination allowlist to every redirect hop.
+	toolRequestPolicy := func(req *http.Request, via []*http.Request) error {
+		if err := toolRedirectPolicy(req, via); err != nil {
+			return err
+		}
+		return enforceEndpointAllowlist(cfg.URL, req.URL.String(), cfg.AllowedHosts)
+	}
+
 	client := t.client
 	if client == nil {
 		// Default client: bounded timeout, the connection-time resolved-IP
 		// guard (DNS rebinding cannot pivot a benign name into the cloud
-		// metadata range) and the redirect policy on every hop.
+		// metadata range) and the combined request policy on every hop.
 		client = newToolHTTPClient(time.Duration(t.def.TimeoutSec) * time.Second)
 	} else {
 		// Keep the injected transport (tests) but impose the tool's
-		// redirect policy on every hop.
+		// combined request policy on every hop.
 		c := *client
-		c.CheckRedirect = toolRedirectPolicy
+		c.CheckRedirect = toolRequestPolicy
 		client = &c
 	}
-	if client.CheckRedirect == nil {
-		client.CheckRedirect = toolRedirectPolicy
-	}
+	client.CheckRedirect = toolRequestPolicy
 
 	resp, err := client.Do(req)
 	if err != nil {

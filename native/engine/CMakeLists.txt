@@ -90,9 +90,22 @@ target_compile_features(shtn_protocol PUBLIC cxx_std_17)
 # ---------------------------------------------------------------------------
 # shtn-engine-host: the supervised subprocess the Go core talks to.
 # Reads length-prefixed JSON requests on stdin, writes responses on stdout.
+#
+# The dispatch host implementation (host_main.cpp) is compiled ONCE as
+# shtn_host_core and linked into BOTH this executable (entry point in
+# host_entry.cpp) and the test suite (tests/test_host.cpp includes
+# host_main.h — never the implementation source).
 # ---------------------------------------------------------------------------
-add_executable(shtn-engine-host src/host_main.cpp)
-target_link_libraries(shtn-engine-host PRIVATE shtn_engine shtn_protocol)
+add_library(shtn_host_core STATIC
+    src/host_main.cpp)
+target_include_directories(shtn_host_core PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>)
+target_compile_features(shtn_host_core PUBLIC cxx_std_17)
+target_link_libraries(shtn_host_core PUBLIC shtn_engine shtn_protocol)
+
+add_executable(shtn-engine-host src/host_entry.cpp)
+target_link_libraries(shtn-engine-host PRIVATE shtn_host_core)
 if(WIN32)
     # Binary-safe stdio on Windows.
     target_compile_definitions(shtn-engine-host PRIVATE SHTN_WINDOWS_HOST=1)
@@ -113,7 +126,7 @@ if(SHTN_BUILD_TESTS)
     add_test(NAME protocol COMMAND test_protocol)
 
     add_executable(test_host tests/test_host.cpp)
-    target_link_libraries(test_host PRIVATE shtn_engine shtn_protocol)
+    target_link_libraries(test_host PRIVATE shtn_host_core shtn_engine shtn_protocol)
     target_compile_definitions(test_host PRIVATE
         SHTN_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
     add_test(NAME host COMMAND test_host)

@@ -31,6 +31,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -291,6 +292,59 @@ func (s *Server) pausedDir() string {
 	return filepath.Join(s.src.Load().DataDir, "runs", "paused")
 }
 
+// errInvalidRunID is returned (wrapped) for run ids that fail the grammar.
+var errInvalidRunID = errors.New("invalid run id")
+
+// validRunID is the ONE grammar for a run identifier used as a single
+// filesystem path component under <DataDir>/runs/paused (v1.11.1
+// path-injection remediation — the same defense as
+// internal/sessions.validSessionID). Run ids are minted server-side
+// (newRunID: 16 hex chars) but arrive UNTRUSTED from API request bodies
+// (pause/edit/resume/stop); every checkpoint and journal path built from
+// one must stay inside the paused directory. The grammar accepts both
+// minted forms (the hex id and the crypto-fallback timestamp) and
+// rejects: empty/oversized ids, path separators (POSIX and Windows),
+// NUL, volume/ADS colons, leading dots (".." included),
+// whitespace-padded ids and any character outside the grammar.
+func validRunID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	if strings.ContainsAny(id, "/\\") {
+		return false
+	}
+	if strings.ContainsAny(id, "\x00:") {
+		return false
+	}
+	if strings.HasPrefix(id, ".") {
+		return false
+	}
+	if strings.TrimSpace(id) != id {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// pausedRunPath builds the on-disk name for one paused-run checkpoint
+// ("<pausedDir>/<runId>.json") and FAILS CLOSED on a run id outside the
+// grammar: every os.* call in this store takes its path from this
+// builder, so a hostile request id can never leave the paused directory
+// — it yields no path, never a traversal.
+func (s *Server) pausedRunPath(runID string) (string, bool) {
+	if !validRunID(runID) {
+		return "", false
+	}
+	return filepath.Join(s.pausedDir(), runID+".json"), true
+}
+
 // pausedSaveSeam is the v1.7.5 fault-injection seam for the durable
 // checkpoint commit (the same pattern as internal/config's renameForTest):
 // tests substitute it to force a save failure AFTER the transcript edit —
@@ -300,6 +354,14 @@ var pausedSaveSeam func(rec *pausedRunRecord) error
 
 // savePausedRecord persists one checkpoint ATOMICALLY (temp + rename).
 func (s *Server) savePausedRecord(rec *pausedRunRecord) error {
+	// v1.11.1 path-injection: the checkpoint name is built ONLY from a run
+	// id inside the validRunID grammar — a hostile id fails closed before
+	// the seam, the directory or a single byte is touched.
+	path, ok := s.pausedRunPath(rec.RunID)
+	if !ok {
+		return fmt.Errorf("paused run: %w %q", errInvalidRunID, rec.RunID)
+	}
+
 	// v1.7.5 fault-injection seam: a non-nil error SIMULATES the failed
 	// commit; nil falls through to the REAL durable write (a seam that
 	// short-circuits on nil would skip the very persistence it guards).
@@ -320,7 +382,6 @@ func (s *Server) savePausedRecord(rec *pausedRunRecord) error {
 		return fmt.Errorf("marshal paused run: %w", err)
 	}
 
-	path := filepath.Join(dir, rec.RunID+".json")
 	tmp := path + ".tmp"
 
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
@@ -335,13 +396,15 @@ func (s *Server) savePausedRecord(rec *pausedRunRecord) error {
 	return nil
 }
 
-// loadPausedRecord reads one checkpoint by run id.
+// loadPausedRecord reads one checkpoint by run id. A run id outside the
+// validRunID grammar is never a recoverable record (fail closed).
 func (s *Server) loadPausedRecord(runID string) (*pausedRunRecord, bool) {
-	if runID == "" {
+	path, ok := s.pausedRunPath(runID)
+	if !ok {
 		return nil, false
 	}
 
-	data, err := os.ReadFile(filepath.Join(s.pausedDir(), runID+".json"))
+	data, err := os.ReadFile(path)
 	if err != nil || len(data) > 4*(1<<20) {
 		return nil, false
 	}
@@ -354,12 +417,14 @@ func (s *Server) loadPausedRecord(runID string) (*pausedRunRecord, bool) {
 	return &rec, true
 }
 
-// deletePausedRecord removes a consumed or aborted checkpoint.
+// deletePausedRecord removes a consumed or aborted checkpoint. A run id
+// outside the validRunID grammar never removes anything (fail closed).
 func (s *Server) deletePausedRecord(runID string) {
-	if runID == "" {
+	path, ok := s.pausedRunPath(runID)
+	if !ok {
 		return
 	}
-	_ = os.Remove(filepath.Join(s.pausedDir(), runID+".json"))
+	_ = os.Remove(path)
 }
 
 // completeRoundTail makes a paused round tail wire-valid: every tool call

@@ -633,13 +633,24 @@ func validBranchName(branch string) bool {
 // parent must exist and be a directory; the destination itself must not
 // exist, or be an EMPTY directory. Cloning over an unrelated non-empty
 // directory is refused here — never silently.
+//
+// v1.11.1 path-injection remediation (user-owned absolute path class):
+// the destination is the user's chosen clone target, so every
+// filesystem check below runs against the CLEANED ABSOLUTE form of the
+// request value, and the hostile spellings fail closed BEFORE any
+// filesystem call: empty paths, NUL bytes and non-absolute (relative,
+// drive-relative) destinations are rejected as invalid-destination.
 func ValidateDestination(dest string) error {
 	if strings.TrimSpace(dest) == "" {
 		return &Error{Kind: ErrInvalidDest, Message: "choose a destination folder for the clone"}
 	}
+	if strings.ContainsRune(dest, 0) {
+		return &Error{Kind: ErrInvalidDest, Message: "the destination path is invalid"}
+	}
 	if !filepath.IsAbs(dest) {
 		return &Error{Kind: ErrInvalidDest, Message: "the destination must be an absolute path"}
 	}
+	dest = filepath.Clean(dest)
 
 	parent := filepath.Dir(dest)
 	parentInfo, err := os.Stat(parent)

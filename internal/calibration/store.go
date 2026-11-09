@@ -79,10 +79,29 @@ const StoreFileName = "calibration.json"
 
 // ModelKey fingerprints a model file: absolute path + size + mtime (the
 // model identity AND its file state).
+//
+// v1.11.1 path-injection remediation (user-owned absolute path class):
+// the model path is a user-selected file (a desktop install may point at
+// any local GGUF), so it cannot be contained to a store root — but it
+// FAILS CLOSED on the hostile spellings before any filesystem call:
+// empty paths and NUL bytes are rejected, and the fingerprint is always
+// taken over the cleaned ABSOLUTE form (never a relative path resolved
+// against an arbitrary working directory).
 func ModelKey(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", fmt.Errorf("model key: empty model path")
+	}
+	if strings.ContainsRune(path, 0) {
+		return "", fmt.Errorf("model key: invalid model path")
+	}
+
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", fmt.Errorf("model key: %w", err)
+	}
+	abs = filepath.Clean(abs)
+	if !filepath.IsAbs(abs) {
+		return "", fmt.Errorf("model key: model path %q is not absolute", path)
 	}
 
 	fi, err := os.Stat(abs)

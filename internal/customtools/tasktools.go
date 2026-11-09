@@ -71,12 +71,30 @@ func NewTaskStore(dataDir string) (*TaskStore, error) {
 	return s, nil
 }
 
-func (s *TaskStore) taskDir(taskID string) string {
-	safe := safeID.ReplaceAllString(taskID, "")
-	if safe == "" {
-		safe = "task"
+// taskDir builds the task-scoped directory path
+// ("<root>/<taskID>") and FAILS CLOSED on a task id that is not a safe
+// single path component (v1.11.1 path-injection remediation): task ids
+// arrive from API callers (untrusted), so a hostile id produces an
+// error, never a path.
+func (s *TaskStore) taskDir(taskID string) (string, error) {
+	if !validToolID(taskID) {
+		return "", fmt.Errorf("task tools: %w task id %q", errInvalidToolID, taskID)
 	}
-	return filepath.Join(s.root, safe)
+	return filepath.Join(s.root, taskID), nil
+}
+
+// taskFilePath builds the on-disk name for one task-scoped tool
+// definition ("<root>/<taskID>/<id>.json"). Both ids fail closed
+// through the ONE tool-id grammar before any path is joined.
+func (s *TaskStore) taskFilePath(taskID, id string) (string, error) {
+	if !validToolID(id) {
+		return "", fmt.Errorf("task tools: %w %q", errInvalidToolID, id)
+	}
+	dir, err := s.taskDir(taskID)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, id+".json"), nil
 }
 
 func (s *TaskStore) reload() {
@@ -120,8 +138,13 @@ func (s *TaskStore) reload() {
 // result is ALWAYS disabled and unapproved — execution requires the
 // explicit approval gate.
 func (s *TaskStore) CreateTaskTool(taskID, runID string, d *Definition) (*TaskDefinition, error) {
+	// Fail closed BEFORE any path is built: the task id is a single
+	// path component under the task-scoped root and arrives untrusted.
 	if strings.TrimSpace(taskID) == "" {
 		return nil, fmt.Errorf("task tools need a task id")
+	}
+	if !validToolID(taskID) {
+		return nil, fmt.Errorf("task tools: %w task id %q", errInvalidToolID, taskID)
 	}
 	if d == nil {
 		return nil, fmt.Errorf("nil definition")
@@ -160,12 +183,18 @@ func (s *TaskStore) CreateTaskTool(taskID, runID string, d *Definition) (*TaskDe
 		return nil, fmt.Errorf("task tool definition too large")
 	}
 
-	dir := s.taskDir(taskID)
+	dir, err := s.taskDir(taskID)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("task tool dir: %w", err)
 	}
 
-	path := filepath.Join(dir, safeID.ReplaceAllString(td.ID, "")+".json")
+	path, err := s.taskFilePath(taskID, td.ID)
+	if err != nil {
+		return nil, err
+	}
 	tmp := path + ".tmp"
 
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
@@ -203,7 +232,10 @@ func (s *TaskStore) saveLocked(td *TaskDefinition) error {
 		return err
 	}
 
-	path := filepath.Join(s.taskDir(td.TaskID), safeID.ReplaceAllString(td.ID, "")+".json")
+	path, err := s.taskFilePath(td.TaskID, td.ID)
+	if err != nil {
+		return err
+	}
 	tmp := path + ".tmp"
 
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
@@ -258,7 +290,10 @@ func (s *TaskStore) Delete(id string) bool {
 	}
 
 	delete(s.cache, id)
-	_ = os.Remove(filepath.Join(s.taskDir(td.TaskID), safeID.ReplaceAllString(td.ID, "")+".json"))
+
+	if path, err := s.taskFilePath(td.TaskID, td.ID); err == nil {
+		_ = os.Remove(path)
+	}
 	return true
 }
 
@@ -273,7 +308,11 @@ func (s *TaskStore) CleanupTask(taskID string) error {
 		}
 	}
 
-	return os.RemoveAll(s.taskDir(taskID))
+	dir, err := s.taskDir(taskID)
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(dir)
 }
 
 // RegisterInto installs the task's APPROVED tools into the orchestrator's

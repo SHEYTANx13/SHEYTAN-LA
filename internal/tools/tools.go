@@ -176,7 +176,21 @@ func (Files) Parameters() any {
 
 // chunkCopy streams src → dst through a fixed 1 MB buffer (constant memory
 // regardless of file size — the v1.0.9 "manage data in chunks" contract).
+//
+// v1.11.1 path-injection remediation (work order §7 — class (a)): both
+// endpoints re-resolve through the fail-closed chokepoint, so the copy can
+// never open or create anything outside BaseDir() even if a future caller
+// forgets to resolve first. A refused malicious operation has touched
+// nothing — no source open, no destination MkdirAll, no create.
 func chunkCopy(src, dst string) (int64, error) {
+	src, err := toolPath(src)
+	if err != nil {
+		return 0, err
+	}
+	dst, err = toolPath(dst)
+	if err != nil {
+		return 0, err
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return 0, err
@@ -200,7 +214,14 @@ func chunkCopy(src, dst string) (int64, error) {
 
 // countLinesChunked counts lines through a streaming reader (never loads
 // the whole file).
+//
+// v1.11.1 path-injection remediation (work order §7): the path re-resolves
+// through the fail-closed chokepoint before the open.
 func countLinesChunked(path string) (int64, error) {
+	path, err := toolPath(path)
+	if err != nil {
+		return 0, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return 0, err
@@ -250,9 +271,20 @@ func (f Files) Run(ctx context.Context, args json.RawMessage) (string, error) {
 	}
 	switch strings.ToLower(p.Action) {
 	case "read":
-		return filesRead(ResolvePath(p.Path), p.OffsetLine, p.MaxLines)
+		// v1.11.1 path-injection remediation (work order §7): every
+		// files-tool path argument resolves through the ONE fail-closed
+		// chokepoint — a hostile path errors here and never reaches a
+		// filesystem sink.
+		path, err := toolPath(p.Path)
+		if err != nil {
+			return "", err
+		}
+		return filesRead(path, p.OffsetLine, p.MaxLines)
 	case "write":
-		dst := ResolvePath(p.Path)
+		dst, err := toolPath(p.Path)
+		if err != nil {
+			return "", err
+		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return "", err
 		}
@@ -264,7 +296,10 @@ func (f Files) Run(ctx context.Context, args json.RawMessage) (string, error) {
 		}
 		return fmt.Sprintf("wrote %d bytes to %s", len(p.Content), dst), nil
 	case "append":
-		dst := ResolvePath(p.Path)
+		dst, err := toolPath(p.Path)
+		if err != nil {
+			return "", err
+		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return "", err
 		}
@@ -285,24 +320,47 @@ func (f Files) Run(ctx context.Context, args json.RawMessage) (string, error) {
 		}
 		return fmt.Sprintf("appended %d bytes to %s", len(p.Content), dst), nil
 	case "combine":
-		return filesCombine(p.Sources, ResolvePath(p.Path), p.Separator)
+		dst, err := toolPath(p.Path)
+		if err != nil {
+			return "", err
+		}
+		return filesCombine(p.Sources, dst, p.Separator)
 	case "copy":
 		if p.Path == "" || p.Dest == "" {
 			return "", fmt.Errorf("copy needs 'path' (source) and 'dest'")
 		}
-		n, err := chunkCopy(ResolvePath(p.Path), ResolvePath(p.Dest))
+		src, err := toolPath(p.Path)
+		if err != nil {
+			return "", err
+		}
+		dst, err := toolPath(p.Dest)
+		if err != nil {
+			return "", err
+		}
+		n, err := chunkCopy(src, dst)
 		if err != nil {
 			return "", err
 		}
 		if OnFileCreated != nil {
-			OnFileCreated(ResolvePath(p.Dest))
+			OnFileCreated(dst)
 		}
 		return fmt.Sprintf("copied %s (%d bytes) → %s", p.Path, n, p.Dest), nil
 	case "move", "rename":
 		if p.Path == "" || p.Dest == "" {
 			return "", fmt.Errorf("move needs 'path' (source) and 'dest'")
 		}
-		src, dst := ResolvePath(p.Path), ResolvePath(p.Dest)
+		// v1.11.1 path-injection remediation (work order §7): BOTH
+		// endpoints fail closed before any rename/copy/delete — a
+		// refused malicious move leaves source and destination
+		// untouched.
+		src, err := toolPath(p.Path)
+		if err != nil {
+			return "", err
+		}
+		dst, err := toolPath(p.Dest)
+		if err != nil {
+			return "", err
+		}
 		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return "", err
 		}
@@ -318,10 +376,17 @@ func (f Files) Run(ctx context.Context, args json.RawMessage) (string, error) {
 		}
 		return fmt.Sprintf("moved %s → %s", p.Path, p.Dest), nil
 	case "mkdir":
-		dst := ResolvePath(p.Path)
+		dst, err := toolPath(p.Path)
+		if err != nil {
+			return "", err
+		}
 		return "created " + p.Path, os.MkdirAll(dst, 0o755)
 	case "list":
-		entries, err := os.ReadDir(ResolvePath(p.Path))
+		dir, err := toolPath(p.Path)
+		if err != nil {
+			return "", err
+		}
+		entries, err := os.ReadDir(dir)
 		if err != nil {
 			return "", err
 		}
@@ -337,16 +402,35 @@ func (f Files) Run(ctx context.Context, args json.RawMessage) (string, error) {
 		}
 		return b.String(), nil
 	case "tree":
-		return filesTree(ResolvePath(p.Path), p.Depth)
+		root, err := toolPath(p.Path)
+		if err != nil {
+			return "", err
+		}
+		return filesTree(root, p.Depth)
 	case "delete", "remove":
-		dst := ResolvePath(p.Path)
+		dst, err := toolPath(p.Path)
+		if err != nil {
+			return "", err
+		}
 		return fmt.Sprintf("deleted %s", dst), os.Remove(dst)
 	case "search":
-		return filesSearch(ResolvePath(p.Path), p.Pattern, p.MaxHits)
+		root, err := toolPath(p.Path)
+		if err != nil {
+			return "", err
+		}
+		return filesSearch(root, p.Pattern, p.MaxHits)
 	case "replace":
-		return filesReplace(ResolvePath(p.Path), p.Pattern, p.Replacement, p.Regex, p.DryRun)
+		path, err := toolPath(p.Path)
+		if err != nil {
+			return "", err
+		}
+		return filesReplace(path, p.Pattern, p.Replacement, p.Regex, p.DryRun)
 	case "info":
-		return fileInfo(ResolvePath(p.Path))
+		path, err := toolPath(p.Path)
+		if err != nil {
+			return "", err
+		}
+		return fileInfo(path)
 	default:
 		return "", fmt.Errorf("unknown action %q (read|write|append|combine|list|tree|copy|move|mkdir|delete|search|replace|info)", p.Action)
 	}
@@ -356,7 +440,14 @@ const filesReadCap = 2 << 20 // 2 MB per read call
 
 // filesRead reads a text file with an optional line window (chunked big
 // files: offsetLine + maxLines bound the payload the model receives).
+//
+// v1.11.1 path-injection remediation (work order §7): the path re-resolves
+// through the fail-closed chokepoint so the open is builder-derived.
 func filesRead(path string, offsetLine, maxLines int) (string, error) {
+	path, err := toolPath(path)
+	if err != nil {
+		return "", err
+	}
 	fh, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -403,12 +494,30 @@ func filesRead(path string, offsetLine, maxLines int) (string, error) {
 
 // filesCombine merges sources into dst through the chunked copier —
 // constant memory, ordered, with an optional separator between files.
+//
+// v1.11.1 path-injection remediation (work order §7 — class (a)): every
+// source AND the destination resolve through the fail-closed chokepoint
+// BEFORE the output file is created — a hostile source fails the whole
+// combine and leaves dst untouched (the previous spelling created and
+// truncated dst before discovering a bad source).
 func filesCombine(sources []string, dst, separator string) (string, error) {
 	if len(sources) == 0 {
 		return "", fmt.Errorf("combine needs 'sources' (a list of file paths)")
 	}
 	if dst == "" {
 		return "", fmt.Errorf("combine needs 'path' (the output file)")
+	}
+	dst, err := toolPath(dst)
+	if err != nil {
+		return "", err
+	}
+	srcs := make([]string, 0, len(sources))
+	for _, s := range sources {
+		resolved, err := toolPath(s)
+		if err != nil {
+			return "", fmt.Errorf("source %q: %w", s, err)
+		}
+		srcs = append(srcs, resolved)
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return "", err
@@ -422,10 +531,10 @@ func filesCombine(sources []string, dst, separator string) (string, error) {
 	buf := make([]byte, 1<<20)
 	var total int64
 	var merged []string
-	for i, src := range sources {
-		in, err := os.Open(ResolvePath(src))
+	for i, src := range srcs {
+		in, err := os.Open(src)
 		if err != nil {
-			return "", fmt.Errorf("source %d (%s): %w", i+1, src, err)
+			return "", fmt.Errorf("source %d (%s): %w", i+1, sources[i], err)
 		}
 		if i > 0 && separator != "" {
 			if _, err := w.WriteString(separator); err != nil {
@@ -436,10 +545,10 @@ func filesCombine(sources []string, dst, separator string) (string, error) {
 		n, err := io.CopyBuffer(w, in, buf)
 		in.Close()
 		if err != nil {
-			return "", fmt.Errorf("copying %s: %w", src, err)
+			return "", fmt.Errorf("copying %s: %w", sources[i], err)
 		}
 		total += n
-		merged = append(merged, filepath.Base(src))
+		merged = append(merged, filepath.Base(sources[i]))
 	}
 	if err := w.Flush(); err != nil {
 		return "", err
@@ -455,7 +564,18 @@ func filesCombine(sources []string, dst, separator string) (string, error) {
 
 // filesTree renders a bounded recursive listing (chunk-friendly caps keep
 // huge folders from flooding the model's context).
+//
+// v1.11.1 path-injection remediation (work order §7 — class (a)): the root
+// AND every descended directory re-resolve through the fail-closed
+// chokepoint. A symlink planted inside the tree can no longer redirect a
+// listing (or the recursion) outside the base — the previous spelling
+// listed and descended through os.ReadDir, which follows directory
+// symlinks anywhere.
 func filesTree(root string, depth int) (string, error) {
+	root, err := toolPath(root)
+	if err != nil {
+		return "", err
+	}
 	if depth <= 0 {
 		depth = 2
 	}
@@ -467,7 +587,11 @@ func filesTree(root string, depth int) (string, error) {
 	count := 0
 	var walk func(dir string, level int) error
 	walk = func(dir string, level int) error {
-		entries, err := os.ReadDir(dir)
+		checked, err := toolPath(dir)
+		if err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(checked)
 		if err != nil {
 			return err
 		}
@@ -486,7 +610,7 @@ func filesTree(root string, depth int) (string, error) {
 			}
 			fmt.Fprintf(&b, "%s%s%s\n", strings.Repeat("  ", level), e.Name(), suffix)
 			if e.IsDir() && level < depth-1 {
-				if err := walk(filepath.Join(dir, e.Name()), level+1); err == errStopWalk {
+				if err := walk(filepath.Join(checked, e.Name()), level+1); err == errStopWalk {
 					return err
 				}
 			}
@@ -504,7 +628,17 @@ var errStopWalk = fmt.Errorf("stop walk")
 
 // filesSearch regex-searches a file or a folder tree line by line (chunked
 // scanner, hard hit cap so a broad pattern cannot flood the context).
+//
+// v1.11.1 path-injection remediation (work order §7 — class (a)): the root
+// re-resolves through the fail-closed chokepoint, and every walked file is
+// re-checked before its open — a file reachable only through a symlink
+// escaping the base is skipped, exactly like the other unreadable-file
+// cases, so its content can never be leaked into the result.
 func filesSearch(root, pattern string, maxHits int) (string, error) {
+	root, err := toolPath(root)
+	if err != nil {
+		return "", err
+	}
 	if pattern == "" {
 		return "", fmt.Errorf("search needs 'pattern'")
 	}
@@ -522,6 +656,11 @@ func filesSearch(root, pattern string, maxHits int) (string, error) {
 	var filesScanned, linesScanned int64
 	truncated := false
 	scanFile := func(path string) error {
+		resolved, rerr := toolPath(path)
+		if rerr != nil {
+			return nil // escaping symlink (or hostile path): skip like an unreadable file
+		}
+		path = resolved
 		fh, err := os.Open(path)
 		if err != nil {
 			return nil // unreadable file: skip silently (permissions, lock)
@@ -596,9 +735,19 @@ func filesSearch(root, pattern string, maxHits int) (string, error) {
 // filesReplace applies literal or regex replacements. Dry-run (default)
 // only counts matches; the real write goes through a temp file + atomic
 // rename so a crash mid-write can never destroy the original.
+//
+// v1.11.1 path-injection remediation (work order §7 — class (a)): the
+// target re-resolves through the fail-closed chokepoint BEFORE the read —
+// the read, the temp file and the rename then all operate on one
+// builder-derived path. The temp file itself is a CreateTemp INSIDE the
+// target's (already checked) directory.
 func filesReplace(path, pattern, replacement string, useRegex bool, dryRun *bool) (string, error) {
 	if pattern == "" {
 		return "", fmt.Errorf("replace needs 'pattern'")
+	}
+	path, err := toolPath(path)
+	if err != nil {
+		return "", err
 	}
 	if dryRun == nil {
 		t := true
@@ -655,7 +804,14 @@ func filesReplace(path, pattern, replacement string, useRegex bool, dryRun *bool
 }
 
 // fileInfo reports size, mtime, chunked line count and a text/binary guess.
+//
+// v1.11.1 path-injection remediation (work order §7): the path re-resolves
+// through the fail-closed chokepoint before the stat/read pair.
 func fileInfo(path string) (string, error) {
+	path, err := toolPath(path)
+	if err != nil {
+		return "", err
+	}
 	fi, err := os.Stat(path)
 	if err != nil {
 		return "", err
@@ -695,7 +851,16 @@ func humanSize(n int64) string {
 }
 
 // sniffsTextPath is files tool's text sniffer (8 KB head, no NUL runs).
+//
+// v1.11.1 path-injection remediation (work order §7): the path re-resolves
+// through the fail-closed chokepoint; a refused path sniffs as
+// "not text" (the same answer an unreadable file gets).
 func sniffsTextPath(path string) bool {
+	resolved, err := toolPath(path)
+	if err != nil {
+		return false
+	}
+	path = resolved
 	fh, err := os.Open(path)
 	if err != nil {
 		return false

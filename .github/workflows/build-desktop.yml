@@ -809,6 +809,16 @@ jobs:
         run: |
           ./scripts/ci/ImportAudit.Tests.ps1
 
+      # v1.11.1 (run 42502043636 work order §3.3 item 6): the package gate
+      # decision contract is pinned by deterministic local fixtures BEFORE
+      # the real gate depends on it — all six package states (both missing,
+      # ZIP-only, installer-only, empty ZIP, empty installer, both valid)
+      # plus the exclusivity of the "package gate: reached" success line.
+      - name: Package gate fixture contract
+        run: |
+          ./scripts/ci/PackageGate.Tests.ps1
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::package gate fixture contract violated (exit $LASTEXITCODE) — the fail-closed gate truth table drifted"; throw "package gate fixture contract violated (exit $LASTEXITCODE)" }
+
       # Pre-launch dependency audit (run #119): 0xC0000135 is raised by
       # the Windows loader while resolving the STATIC import chain at
       # process init — before main() runs, so nothing can log it and a
@@ -1096,6 +1106,19 @@ jobs:
                   throw ("ZIP purity violation: retired root-level placeholder '{0}'" -f $name)
                 }
               }
+              # v1.11.1 Qt/QML retirement contract (run 42502043636 work
+              # order §3.3 items 3-4): no Qt runtime may ever ship inside
+              # the portable payload — the application is ONE Go/Fyne UI.
+              # Classic Qt deployment shapes are matched case-insensitively
+              # on the entry's leaf name under the app root: Qt5*/Qt6* and
+              # the Unix-style libQt* runtime DLLs (a windeployqt-style
+              # payload or a plugins/ tree carrying Qt DLLs fails here).
+              $leaf = if ($name.Contains('/')) { $name.Substring($name.LastIndexOf('/') + 1) } else { $name }
+              if ($name.StartsWith("${env:WIN_PKG_ROOT}/", [System.StringComparison]::OrdinalIgnoreCase) -and
+                  ($leaf -like 'Qt5*.dll' -or $leaf -like 'Qt6*.dll' -or $leaf -like 'libQt*.dll')) {
+                Write-Host ("::error::Verify Windows ZIP purity violation: Qt runtime DLL entry '{0}' — the application is one Go/Fyne UI and must never carry a Qt runtime" -f $name)
+                throw ("ZIP purity violation: Qt runtime DLL '{0}' present" -f $name)
+              }
             }
             Write-Host "ZIP OK: all contracted entries present; purity assertions passed (no data/ residue, no opengl32.dll, no libgallium_wgl.dll, no root-level models/workspace placeholders)"
           } finally { $archive.Dispose() }
@@ -1230,6 +1253,21 @@ jobs:
           if (-not (Test-Path $inst)) { Write-Host "::error::installer guard: installer missing at $inst (makensis reported success)"; throw "installer missing: $inst" }
           $size = (Get-Item $inst).Length
           if ($size -lt 1MB) { Write-Host "::error::installer guard: installer suspiciously small: $size bytes at $inst"; throw "installer suspiciously small: $size bytes" }
+          # v1.11.1 (run 42502043636 work order §3.3 item 6): installer PE
+          # identity is VALIDATED, never inferred from the .exe suffix. NSIS
+          # 3.x installer stubs are 32-bit PEs even when the payload they
+          # install is x64-only, so the machine type is accepted as i386
+          # (0x014C) or x86-64 (0x8664); the PAYLOAD's x64 identity is
+          # enforced separately by "Verify the PE" on SHEYTAN-LA.exe, and
+          # the installer's NSIS identity by the marker contract + the real
+          # install/uninstall round-trip below.
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $inst))
+          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { Write-Host "::error::installer guard: $inst is not a PE binary (missing MZ header)"; throw "installer is not a PE binary (missing MZ)" }
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+          if ($bytes[$peOffset] -ne 0x50 -or $bytes[$peOffset + 1] -ne 0x45) { Write-Host "::error::installer guard: PE signature missing in $inst (peOffset=$peOffset)"; throw "installer PE signature missing" }
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          if ($machine -ne 0x014C -and $machine -ne 0x8664) { Write-Host ("::error::installer guard: PE machine = 0x{0:X4}, want i386 (0x014C, NSIS stub) or x86-64 (0x8664) in {1}" -f $machine, $inst); throw ("installer PE machine = 0x{0:X4}, want i386 or x86-64" -f $machine) }
+          Write-Host ("installer PE OK (machine = 0x{0:X4}; NSIS 3.x stubs are i386, payload x64 enforced on SHEYTAN-LA.exe)" -f $machine)
           Write-Host "installer OK ($size bytes)"
 
       # ----------------------------------------------------------------------
@@ -1398,13 +1436,22 @@ jobs:
 
       # Package gate: the root failure is reported HERE (not by a vague
       # "no files found" upload error that buries the cause).
+      # v1.11.1 (run 42502043636 work order §3.3 item 6): the gate is now
+      # FAIL-CLOSED and independent — scripts/ci/PackageGate.ps1 requires
+      # BOTH distribution files to exist as regular, non-empty files and
+      # names the exact incomplete state otherwise (both missing / ZIP-only
+      # / installer-only / either empty). The retired inline predicate
+      # ("ZIP missing AND installer exists") printed "package gate: reached"
+      # with BOTH packages absent — the captured consolidated-log line 3313
+      # defect — so the success line now appears ONLY after every assertion
+      # succeeds. The truth table is pinned by PackageGate.Tests.ps1 (six
+      # states, run hosted by the "Package gate fixture contract" step) and
+      # by the releasecontract workflow-contract tests.
       - name: Package gate (root-cause reporter)
         if: always()
         run: |
-          $zip = "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip"
-          $inst = "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe"
-          if (-not (Test-Path $zip) -and (Test-Path $inst)) { Write-Host "::error::package gate: portable ZIP missing at $zip while the installer exists at $inst — packaging drifted"; throw "portable ZIP missing while the installer exists — packaging drifted" }
-          Write-Host "package gate: reached"
+          & ./scripts/ci/PackageGate.ps1 -Zip "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip" -Installer "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe" 2>&1 | Tee-Object -FilePath "ci-logs/win-package-gate.log"
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::package gate: Windows package contract violated (gate exit $LASTEXITCODE; named incomplete state in ci-logs/win-package-gate.log)"; throw "Windows package gate failed (exit $LASTEXITCODE)" }
 
       # v1.11.1 §7.4: the bundle uploads only on job success — never on
       # always() — and only when BOTH verified distribution files exist

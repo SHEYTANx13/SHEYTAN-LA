@@ -1066,6 +1066,20 @@ func truncateStr(s string, n int) string {
 // turns dozens of base64 encodings into one). Bounded by entry count AND by
 // total retained bytes (v1.2.4).
 func (c *Client) imageDataURL(path string) (string, error) {
+	// v1.11.1 path-injection: the image path is a USER-SELECTED attachment
+	// location. The read capability is kept, but the path is validated at
+	// the point of use — non-empty, NUL-free, absolute — and never
+	// reassembled from untrusted components.
+	if path == "" {
+		return "", fmt.Errorf("image path is empty")
+	}
+	if strings.ContainsRune(path, '\x00') {
+		return "", fmt.Errorf("image path contains NUL")
+	}
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("image path %q must be absolute", path)
+	}
+
 	fi, err := os.Stat(path)
 	if err != nil {
 		return "", err

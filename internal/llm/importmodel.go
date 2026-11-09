@@ -61,6 +61,112 @@ type ImportResult struct {
 // importCopyChunk is the streaming copy buffer size (1 MiB).
 const importCopyChunk = 1 << 20
 
+// --- path-injection guards (v1.11.1 remediation) -------------------------
+//
+// ImportModel mixes two distinct path classes and each gets its own rule:
+//
+//   - the USER-SELECTED source path is an explicit external file the user
+//     asked to import (a Downloads folder, an external drive). That
+//     capability is KEPT: the path is validated (non-empty, NUL-free,
+//     absolute once resolved) and then used VERBATIM — no untrusted
+//     component is ever appended to it and it is never written to.
+//   - APP-MANAGED storage under modelsDir. A name that originates from
+//     the outside world (the imported file's base name) must pass the
+//     strict single-component grammar validModelFileName and is joined
+//     ONLY through managedModelPath — the fail-closed chokepoint for the
+//     models root (the same shape as sessions.artifactPath). A hostile
+//     name produces an error, never a path outside modelsDir.
+
+// validImportSource validates a user-selected external model source path
+// at the point of use: it must be non-empty, NUL-free and absolute.
+func validImportSource(src string) error {
+	if src == "" {
+		return fmt.Errorf("import: source path is empty")
+	}
+	if strings.ContainsRune(src, '\x00') {
+		return fmt.Errorf("import: source path contains NUL")
+	}
+	if !filepath.IsAbs(src) {
+		return fmt.Errorf("import: source path %q must be absolute", src)
+	}
+	return nil
+}
+
+// validReadablePath is the minimal validation every file path handed to a
+// read/compare helper must pass (sameContent, fileSHA256): non-empty and
+// NUL-free. It fails closed on a path that could never name a real file.
+func validReadablePath(p string) error {
+	if p == "" {
+		return fmt.Errorf("import: empty file path")
+	}
+	if strings.ContainsRune(p, '\x00') {
+		return fmt.Errorf("import: file path contains NUL")
+	}
+	return nil
+}
+
+// validModelFileName is the ONE grammar for a file name placed into the
+// managed models directory. It accepts ordinary model file names and
+// rejects: empty/oversized names, path separators (POSIX and Windows),
+// NUL and the Windows volume/ADS colon, dot-prefixed names (they collide
+// with the import lock and staging files), names that are only dots or
+// spaces, trailing dot/space (stripped by Windows), control characters
+// and Windows reserved device names (with or without extension).
+func validModelFileName(name string) bool {
+	if name == "" || len(name) > 255 {
+		return false
+	}
+	if strings.ContainsAny(name, "/\\") || strings.ContainsAny(name, "\x00:") {
+		return false
+	}
+	if name == "." || name == ".." {
+		return false
+	}
+	if strings.HasPrefix(name, ".") {
+		return false
+	}
+	trimmed := strings.TrimRight(name, " .")
+	if trimmed == "" || trimmed != name {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	if windowsReservedDeviceName(trimmed) {
+		return false
+	}
+	return true
+}
+
+// windowsReservedDeviceName reports whether the stem (the part before the
+// first dot) is a Windows reserved device name — unusable as a managed
+// model name on Windows drives with or without an extension.
+func windowsReservedDeviceName(stem string) bool {
+	if i := strings.IndexByte(stem, '.'); i >= 0 {
+		stem = stem[:i]
+	}
+	switch strings.ToUpper(stem) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	}
+	return false
+}
+
+// managedModelPath builds the on-disk path for one managed model file and
+// FAILS CLOSED on a name that is not a safe single path component: the
+// result is always filepath.Join(modelsDir, name) and can never leave the
+// models root.
+func managedModelPath(modelsDir, name string) (string, error) {
+	if !validModelFileName(name) {
+		return "", fmt.Errorf("import: %q is not a safe model file name", name)
+	}
+	return filepath.Join(modelsDir, name), nil
+}
+
 // ImportModel validates and copies one GGUF file into the managed models
 // directory. The source path may be anywhere on disk (or an external
 // volume) — it is never modified. onProgress, when non-nil, receives the
@@ -81,6 +187,13 @@ func ImportModel(modelsDir, src string, onProgress func(copied, total int64)) (*
 	abs, err := filepath.Abs(src)
 	if err != nil {
 		return nil, fmt.Errorf("import: resolve %s: %w", src, err)
+	}
+
+	// v1.11.1 path-injection: the user-selected external source is
+	// validated at the point of first use (non-empty, NUL-free, absolute)
+	// and then used verbatim — never reassembled, never written to.
+	if err := validImportSource(abs); err != nil {
+		return nil, err
 	}
 
 	fi, err := os.Stat(abs)
@@ -121,8 +234,13 @@ func ImportModel(modelsDir, src string, onProgress func(copied, total int64)) (*
 	defer releaseLock()
 
 	// --- duplicate-safe destination naming ------------------------------
+	// The imported file's base name is an outside-world name: it reaches
+	// the models root ONLY through the managedModelPath chokepoint.
 	base := filepath.Base(abs)
-	dest := filepath.Join(modelsDir, base)
+	dest, err := managedModelPath(modelsDir, base)
+	if err != nil {
+		return nil, err
+	}
 	renamedFrom := ""
 
 	if _, statErr := os.Stat(dest); statErr == nil {
@@ -147,7 +265,11 @@ func ImportModel(modelsDir, src string, onProgress func(copied, total int64)) (*
 		// v1.11.1 (CodeQL go/useless-assignment-to-local #236): `base` is
 		// never read past this point — only the collision-free destination
 		// path is consumed below.
-		_, dest = nextFreeModelName(modelsDir, base)
+		_, candidatePath, nfErr := nextFreeModelName(modelsDir, base)
+		if nfErr != nil {
+			return nil, nfErr
+		}
+		dest = candidatePath
 		renamedFrom = filepath.Base(abs)
 	}
 
@@ -239,27 +361,51 @@ func ImportModel(modelsDir, src string, onProgress func(copied, total int64)) (*
 }
 
 // nextFreeModelName returns a collision-free (name, path) pair by suffixing
-// -1, -2, … before the .gguf extension.
-func nextFreeModelName(modelsDir, base string) (string, string) {
+// -1, -2, … before the .gguf extension. Every candidate is joined through
+// the managedModelPath chokepoint, so the search can never leave the
+// models root even when the incoming base name is hostile.
+func nextFreeModelName(modelsDir, base string) (string, string, error) {
 	ext := filepath.Ext(base)
 	stem := strings.TrimSuffix(base, ext)
 
 	for i := 1; i < 1000; i++ {
 		candidate := fmt.Sprintf("%s-%d%s", stem, i, ext)
-		if _, err := os.Stat(filepath.Join(modelsDir, candidate)); err != nil {
-			return candidate, filepath.Join(modelsDir, candidate)
+		candidatePath, err := managedModelPath(modelsDir, candidate)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(candidatePath); err != nil {
+			return candidate, candidatePath, nil
 		}
 	}
 
 	// Practically unreachable; fall back to a unique random suffix.
-	candidate := fmt.Sprintf("%s-%d%s", stem, rand.Int63n(1<<30), ext)
-	return candidate, filepath.Join(modelsDir, candidate)
+	for i := 0; i < 64; i++ {
+		candidate := fmt.Sprintf("%s-%d%s", stem, rand.Int63n(1<<30), ext)
+		candidatePath, err := managedModelPath(modelsDir, candidate)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(candidatePath); err != nil {
+			return candidate, candidatePath, nil
+		}
+	}
+
+	return "", "", fmt.Errorf("import: no collision-free name found for %q", base)
 }
 
 // sameContent reports whether two existing files are byte-identical
 // (size pre-check, then full SHA-256 — the same standard the data-root
-// migration uses).
+// migration uses). Both paths are validated (non-empty, NUL-free) before
+// any file-system use.
 func sameContent(a, b string) (bool, error) {
+	if err := validReadablePath(a); err != nil {
+		return false, err
+	}
+	if err := validReadablePath(b); err != nil {
+		return false, err
+	}
+
 	fa, err := os.Stat(a)
 	if err != nil {
 		return false, err
@@ -284,6 +430,10 @@ func sameContent(a, b string) (bool, error) {
 }
 
 func fileSHA256(path string) (string, error) {
+	if err := validReadablePath(path); err != nil {
+		return "", err
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err

@@ -26,6 +26,16 @@
 #include <thread>
 #include <vector>
 
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
+#else
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 static int failures = 0;
 
 #define CHECK(cond)                                                        \
@@ -38,6 +48,42 @@ static int failures = 0;
     } while (0)
 
 using namespace shtn;
+
+// open_private_wb — fopen(path, "wb") equivalent that creates the file
+// with OWNER-ONLY permissions at CREATION time (0600 on POSIX;
+// _S_IREAD|_S_IWRITE on Windows, which has no world permission bits).
+// A plain fopen(..., "wb") creates new files as 0666 & ~umask, so on a
+// permissive umask the synthetic fixture would be world-writable while
+// it exists (CodeQL cpp/world-writable-file-creation). The file is
+// always a uniquely-named member of this process's private TempDir.
+// The returned FILE* behaves exactly like an fopen handle (the callers
+// keep using stdio and close it with fclose); returns nullptr on
+// failure, like fopen — including fdopen failure (the descriptor is
+// closed instead of leaked).
+static FILE* open_private_wb(const std::string& path) {
+#if defined(_WIN32)
+    const int fd = ::_open(path.c_str(),
+                           _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY,
+                           _S_IREAD | _S_IWRITE);
+#else
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+#endif
+    if (fd < 0) {
+        return nullptr;
+    }
+#if defined(_WIN32)
+    FILE* f = ::_fdopen(fd, "wb");
+    if (f == nullptr) {
+        ::_close(fd);
+    }
+#else
+    FILE* f = ::fdopen(fd, "wb");
+    if (f == nullptr) {
+        ::close(fd);
+    }
+#endif
+    return f;
+}
 
 struct Sink {
     std::mutex mu;
@@ -585,7 +631,7 @@ int main() {
         b.resize(b.size() + 8 * 8 * 4, 0);
 
         const std::string path = tmpdir.file("not-llama.gguf");
-        FILE* f = std::fopen(path.c_str(), "wb");
+        FILE* f = open_private_wb(path);
         CHECK(f != nullptr);
         if (f != nullptr) {
             std::fwrite(b.data(), 1, b.size(), f);

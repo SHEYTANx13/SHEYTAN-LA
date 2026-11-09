@@ -174,13 +174,16 @@ func (s *speedometer) sample(bytes int64) float64 {
 	return s.ewmaBytes / s.ewmaSecs
 }
 
-// partPath is the in-progress file for Dest.
-func (j *Job) partPath() string {
-	return j.opts.Dest + ".part"
-}
-
 // attempt performs ONE full download attempt against src: open (with
 // Range when resuming), stream, verify, activate atomically.
+//
+// v1.11.1 path-injection remediation: every filesystem operation is
+// ROOTED. The attempt opens an os.Root on the destination directory and
+// resolves ALL names inside it — .part stat/remove/open, the rollback
+// backup rename, the atomic activation rename and the final chmod. A
+// hostile Dest component can never redirect a write outside the managed
+// directory, and a symlink planted at "<dest>.part" or "<dest>" pointing
+// elsewhere is refused by the root instead of followed.
 func (j *Job) attempt(ctx context.Context, src Source) (Result, error) {
 	// The attempt runs under a derivable context so Cancel() can unblock
 	// an in-flight body.Read immediately (network + file activity stop).
@@ -189,24 +192,31 @@ func (j *Job) attempt(ctx context.Context, src Source) (Result, error) {
 	j.attemptCancel.Store(context.CancelFunc(rcancel))
 	defer j.attemptCancel.Store(context.CancelFunc(nil))
 
-	part := j.partPath()
-	if err := os.MkdirAll(filepath.Dir(j.opts.Dest), 0o755); err != nil {
+	destDir := filepath.Dir(j.opts.Dest)
+	destBase := filepath.Base(j.opts.Dest)
+	part := destBase + ".part"
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return Result{}, err
 	}
+	root, err := os.OpenRoot(destDir)
+	if err != nil {
+		return Result{}, err
+	}
+	defer root.Close()
 
 	// Resume bookkeeping: how much valid data is already on disk?
 	var resumeFrom int64
 	if j.opts.Resume {
-		if fi, err := os.Stat(part); err == nil && fi.Size() > 0 {
+		if fi, err := root.Stat(part); err == nil && fi.Size() > 0 {
 			// A pinned size bounds how much of the .part can be sane.
 			if j.opts.SizeBytes <= 0 || fi.Size() < j.opts.SizeBytes {
 				resumeFrom = fi.Size()
 			} else {
-				_ = os.Remove(part) // oversized .part: restart clean
+				_ = root.Remove(part) // oversized .part: restart clean
 			}
 		}
 	} else {
-		_ = os.Remove(part)
+		_ = root.Remove(part)
 	}
 
 	req, err := http.NewRequestWithContext(rctx, http.MethodGet, src.URL, nil)
@@ -265,14 +275,15 @@ func (j *Job) attempt(ctx context.Context, src Source) (Result, error) {
 		p.SourceTrust = string(src.Trust)
 	})
 
-	// Open the .part for append (resume) or truncate (fresh).
+	// Open the .part for append (resume) or truncate (fresh) — ROOTED:
+	// the name resolves inside destDir or the open fails outright.
 	flag := os.O_CREATE | os.O_WRONLY
 	if resumeFrom > 0 {
 		flag |= os.O_APPEND
 	} else {
 		flag |= os.O_TRUNC
 	}
-	f, err := os.OpenFile(part, flag, 0o644)
+	f, err := root.OpenFile(part, flag, 0o644)
 	if err != nil {
 		return Result{}, err
 	}
@@ -296,7 +307,7 @@ func (j *Job) attempt(ctx context.Context, src Source) (Result, error) {
 
 	// --- verify --------------------------------------------------------
 	j.setProg(func(p *Progress) { p.Phase = PhaseVerifying })
-	res, err := j.verifyAndActivate(part, src, resumeFrom)
+	res, err := j.verifyAndActivate(root, part, destBase, destDir, src, resumeFrom)
 	if err != nil {
 		return Result{}, err
 	}
@@ -388,24 +399,34 @@ func (j *Job) streamToFile(ctx context.Context, f *os.File, body io.Reader, base
 
 // verifyAndActivate hashes the .part, checks the pinned digest/size and
 // atomically renames it to Dest (keeping a rollback backup when asked).
-func (j *Job) verifyAndActivate(part string, src Source, resumedFrom int64) (Result, error) {
-	got, err := hashFile(part)
+// Every name resolves INSIDE the attempt's os.Root (v1.11.1 path-injection
+// remediation) — see attempt.
+func (j *Job) verifyAndActivate(root *os.Root, part, destBase, destDir string, src Source, resumedFrom int64) (Result, error) {
+	hf, err := root.Open(part)
 	if err != nil {
 		return Result{}, err
+	}
+	got, hashErr := hashReader(hf)
+	closeErr := hf.Close()
+	if hashErr != nil {
+		return Result{}, hashErr
+	}
+	if closeErr != nil {
+		return Result{}, closeErr
 	}
 	if j.opts.SHA256 != "" && got != j.opts.SHA256 {
 		// Corrupt bytes: the .part is worthless — remove it so a retry
 		// starts clean instead of resuming garbage.
-		_ = os.Remove(part)
+		_ = root.Remove(part)
 		return Result{}, fmt.Errorf("%w: sha256 mismatch (got %s)", ErrUnverified, got[:16])
 	}
 
-	fi, err := os.Stat(part)
+	fi, err := root.Stat(part)
 	if err != nil {
 		return Result{}, err
 	}
 	if j.opts.MaxBytes > 0 && fi.Size() > j.opts.MaxBytes {
-		_ = os.Remove(part)
+		_ = root.Remove(part)
 		return Result{}, ErrTooLarge
 	}
 
@@ -417,27 +438,27 @@ func (j *Job) verifyAndActivate(part string, src Source, resumedFrom int64) (Res
 	// Preserve the previous working version for rollback.
 	keptBackup := ""
 	if j.opts.KeepBackup {
-		if _, err := os.Stat(j.opts.Dest); err == nil {
-			bak := j.opts.Dest + ".bak"
-			_ = os.Remove(bak)
-			if err := os.Rename(j.opts.Dest, bak); err == nil {
-				keptBackup = bak
+		if _, err := root.Stat(destBase); err == nil {
+			bak := destBase + ".bak"
+			_ = root.Remove(bak)
+			if err := root.Rename(destBase, bak); err == nil {
+				keptBackup = filepath.Join(destDir, bak)
 			}
 		}
 	}
 
-	// Atomic activation: same-directory rename, then fsync the dir so
-	// the entry survives a crash.
-	if err := os.Rename(part, j.opts.Dest); err != nil {
+	// Atomic activation: same-directory rename INSIDE the root, then
+	// fsync the dir so the entry survives a crash.
+	if err := root.Rename(part, destBase); err != nil {
 		if keptBackup != "" {
-			_ = os.Rename(keptBackup, j.opts.Dest) // roll back
+			_ = root.Rename(destBase+".bak", destBase) // roll back
 		}
 		return Result{}, err
 	}
-	if err := os.Chmod(j.opts.Dest, j.opts.FileMode); err != nil {
+	if err := root.Chmod(destBase, j.opts.FileMode); err != nil {
 		return Result{}, err
 	}
-	if d, err := os.Open(filepath.Dir(j.opts.Dest)); err == nil {
+	if d, err := root.Open("."); err == nil {
 		_ = d.Sync()
 		_ = d.Close()
 	}
@@ -462,15 +483,12 @@ func (j *Job) verifyAndActivate(part string, src Source, resumedFrom int64) (Res
 	}, nil
 }
 
-// hashFile streams a file through SHA-256 without loading it into RAM.
-func hashFile(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
+// hashReader streams r through SHA-256 without loading it into RAM.
+// Callers hand it a handle they already hold (an os.Root-opened .part or
+// artifact) so no path expression is evaluated a second time.
+func hashReader(r io.Reader) (string, error) {
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	if _, err := io.Copy(h, r); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil

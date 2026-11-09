@@ -168,14 +168,13 @@ func (r *TaskRegistry) Create(req CreateRequest) (*Meta, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	taskID := safeIDPat.ReplaceAllString(req.TaskID, "")
-	if taskID == "" {
-		return nil, fmt.Errorf("task id is not path-safe")
-	}
-	// Defense in depth: traversal-looking ids are REJECTED, not sanitized.
-	if strings.ContainsAny(req.TaskID, "/\\") || strings.Contains(req.TaskID, "..") {
+	// Fail closed BEFORE any path is built: the task id is a single
+	// path component under the task-artifacts root and arrives
+	// untrusted. Traversal-looking ids are REJECTED, not sanitized.
+	if !validTaskID(req.TaskID) {
 		return nil, fmt.Errorf("task id %q is not path-safe", req.TaskID)
 	}
+	taskID := req.TaskID
 
 	taskRoot := filepath.Join(r.root, taskID)
 	abs := filepath.Join(taskRoot, filepath.FromSlash(clean))
@@ -253,7 +252,42 @@ func (r *TaskRegistry) Create(req CreateRequest) (*Meta, error) {
 	return meta, nil
 }
 
-var safeIDPat = regexp.MustCompile(`[^A-Za-z0-9_-]`)
+// validTaskID is the ONE grammar for a task id used as a single
+// filesystem path component (v1.11.1 path-injection remediation —
+// single-component identifier class, same grammar as
+// internal/sessions). Task ids arrive from API callers and agent tool
+// arguments (untrusted); every path built from one must stay inside the
+// task-artifacts root. The grammar accepts the ordinary task ids the
+// store and runtime generate, and rejects: empty/oversized ids, path
+// separators (POSIX and Windows), NUL, volume/ADS colons, leading dots
+// (".." included), whitespace-padded ids and non-grammar characters.
+// Traversal-looking ids are REJECTED, never sanitized.
+func validTaskID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	if strings.ContainsAny(id, "/\\") {
+		return false
+	}
+	if strings.ContainsAny(id, "\x00:") {
+		return false
+	}
+	if strings.HasPrefix(id, ".") {
+		return false
+	}
+	if strings.TrimSpace(id) != id {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 func (r *TaskRegistry) persistLocked() {
 	if err := os.MkdirAll(r.root, 0o755); err != nil {
@@ -377,14 +411,15 @@ func (r *TaskRegistry) Delete(id string) bool {
 	return true
 }
 
-// CleanupTask removes a task's artifact scope (task teardown).
+// CleanupTask removes a task's artifact scope (task teardown). The
+// task id FAILS CLOSED through the task-id grammar before any path is
+// built — a hostile id is an error, never a path outside the root.
 func (r *TaskRegistry) CleanupTask(taskID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	safe := safeIDPat.ReplaceAllString(taskID, "")
-	if safe == "" {
-		return fmt.Errorf("task id required")
+	if !validTaskID(taskID) {
+		return fmt.Errorf("task id %q is not path-safe", taskID)
 	}
 
 	for id, m := range r.items {
@@ -394,7 +429,7 @@ func (r *TaskRegistry) CleanupTask(taskID string) error {
 	}
 	r.persistLocked()
 
-	return os.RemoveAll(filepath.Join(r.root, safe))
+	return os.RemoveAll(filepath.Join(r.root, taskID))
 }
 
 // --- small JSON helpers (avoid importing encoding/json twice in files) ---

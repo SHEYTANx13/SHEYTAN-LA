@@ -1,6 +1,8 @@
 package lab
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -99,7 +101,23 @@ func (t *Tool) ReadFile(task *Task, relPath string, offset, limit int) (FileRead
 		return FileReadResult{}, err
 	}
 
-	info, err := os.Stat(target)
+	// v1.11.1 path-injection: the actual I/O runs through an os.Root
+	// bound to the ACTIVE workspace root. PathFor has already jailed the
+	// name lexically and symlink-checked its existing prefix; the Root
+	// handle closes the remaining validate-then-use gap — a symlink that
+	// escapes the workspace is refused at open time, never followed.
+	root, err := task.Workspace.openRoot()
+	if err != nil {
+		return FileReadResult{}, err
+	}
+	defer root.Close()
+
+	rel, err := workspaceRelPath(task.Workspace, target)
+	if err != nil {
+		return FileReadResult{}, err
+	}
+
+	info, err := root.Stat(rel)
 	if err != nil {
 		return FileReadResult{}, fmt.Errorf("lab: read_file: %w", err)
 	}
@@ -118,7 +136,7 @@ func (t *Tool) ReadFile(task *Task, relPath string, offset, limit int) (FileRead
 		)
 	}
 
-	data, err := os.ReadFile(target)
+	data, err := root.ReadFile(rel)
 	if err != nil {
 		return FileReadResult{}, fmt.Errorf("lab: read_file: %w", err)
 	}
@@ -216,7 +234,22 @@ func (t *Tool) EditFile(task *Task, relPath, oldText, newText string) (EditResul
 		return EditResult{}, err
 	}
 
-	data, err := os.ReadFile(target)
+	// v1.11.1 path-injection: read, stage and rename all run through the
+	// os.Root bound to the ACTIVE workspace root — see ReadFile. The
+	// staging file and the final rename are Root-relative too, so a
+	// hostile symlink cannot redirect either out of the workspace.
+	root, err := task.Workspace.openRoot()
+	if err != nil {
+		return EditResult{}, err
+	}
+	defer root.Close()
+
+	rel, err := workspaceRelPath(task.Workspace, target)
+	if err != nil {
+		return EditResult{}, err
+	}
+
+	data, err := root.ReadFile(rel)
 	if err != nil {
 		return EditResult{}, fmt.Errorf("lab: edit_file: %w", err)
 	}
@@ -241,8 +274,9 @@ func (t *Tool) EditFile(task *Task, relPath, oldText, newText string) (EditResul
 
 	edited := content[:first] + newText + content[first+len(oldText):]
 
-	// Atomic write: temp file in the same directory, sync, rename.
-	if err := writeFileAtomic(target, []byte(edited)); err != nil {
+	// Atomic write: Root-relative temp file in the same directory,
+	// sync, rename — all through the workspace Root.
+	if err := writeFileAtomicInRoot(root, rel, []byte(edited)); err != nil {
 		return EditResult{}, fmt.Errorf("lab: edit_file: %w", err)
 	}
 
@@ -250,7 +284,7 @@ func (t *Tool) EditFile(task *Task, relPath, oldText, newText string) (EditResul
 	// expected content landed. Byte equality with the computed edit is the
 	// complete check — it implies the new text is present and the write did
 	// not tear. Anything else is a hard error, never a success.
-	check, err := os.ReadFile(target)
+	check, err := root.ReadFile(rel)
 	if err != nil {
 		return EditResult{}, fmt.Errorf("lab: edit_file verify read: %w", err)
 	}
@@ -271,22 +305,37 @@ func (t *Tool) EditFile(task *Task, relPath, oldText, newText string) (EditResul
 	}, nil
 }
 
-// writeFileAtomic writes data to path via a same-directory temp file,
-// fsync, and rename — a reader either sees the old or the new content,
-// never a partial write.
-func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
+// writeFileAtomicInRoot writes data to the Root-relative path rel via a
+// same-directory temp file, fsync, and rename — a reader either sees the
+// old or the new content, never a partial write. Every name is relative to
+// the workspace Root (Go 1.24+): neither the staging file nor the rename
+// can reach outside the workspace, even through a symlink created inside
+// it. The staging name keeps the ".sheytan-edit-" prefix the no-residue
+// contract test watches for.
+func writeFileAtomicInRoot(root *os.Root, rel string, data []byte) error {
+	var suffix [8]byte
 
-	tmp, err := os.CreateTemp(dir, ".sheytan-edit-*")
+	if _, err := rand.Read(suffix[:]); err != nil {
+		return fmt.Errorf("temp name: %w", err)
+	}
+
+	tmpRel := filepath.Join(
+		filepath.Dir(rel),
+		fmt.Sprintf(".sheytan-edit-%s", hex.EncodeToString(suffix[:])),
+	)
+
+	tmp, err := root.OpenFile(
+		tmpRel,
+		os.O_WRONLY|os.O_CREATE|os.O_EXCL,
+		0o600,
+	)
 	if err != nil {
 		return fmt.Errorf("create temp: %w", err)
 	}
 
-	tmpName := tmp.Name()
-
 	cleanup := func() {
 		_ = tmp.Close()
-		_ = os.Remove(tmpName)
+		_ = root.Remove(tmpRel)
 	}
 
 	if _, err := tmp.Write(data); err != nil {
@@ -302,13 +351,13 @@ func writeFileAtomic(path string, data []byte) error {
 	}
 
 	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
+		_ = root.Remove(tmpRel)
 
 		return fmt.Errorf("close temp: %w", err)
 	}
 
-	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
+	if err := root.Rename(tmpRel, rel); err != nil {
+		_ = root.Remove(tmpRel)
 
 		return fmt.Errorf("rename into place: %w", err)
 	}

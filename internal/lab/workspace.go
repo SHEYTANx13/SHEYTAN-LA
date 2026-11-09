@@ -96,6 +96,17 @@ func (m *WorkspaceManager) Create(
 		ctx = context.Background()
 	}
 
+	// v1.11.1 path-injection: the source is a USER-SELECTED repository
+	// location (an explicit external path — the capability is kept). It
+	// is only READ (copied from), validated here: non-empty and NUL-free,
+	// and never reassembled from untrusted components.
+	if source == "" || strings.ContainsRune(source, '\x00') {
+		return nil, fmt.Errorf(
+			"%w: source path is empty or contains NUL",
+			ErrInvalidSource,
+		)
+	}
+
 	sourceAbs, err := filepath.Abs(source)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -392,6 +403,12 @@ func (w *Workspace) PathFor(relative string) (string, error) {
 		return filepath.Abs(w.Path)
 	}
 
+	// v1.11.1 path-injection: refuse NUL-contaminated names outright —
+	// they can never be real workspace files.
+	if strings.ContainsRune(relative, '\x00') {
+		return "", ErrInvalidWorkspace
+	}
+
 	normalized := strings.ReplaceAll(
 		relative,
 		"\\",
@@ -683,10 +700,20 @@ func copyTree(
 				return nil
 			}
 
-			target := filepath.Join(
+			// v1.11.1 path-injection: the walk-derived rel is joined
+			// through the fail-closed containment builder — the target
+			// can never land outside the destination tree.
+			target, err := safeJoinInside(
 				dst,
 				rel,
 			)
+			if err != nil {
+				return fmt.Errorf(
+					"lab: copy target %q escapes %q",
+					rel,
+					dst,
+				)
+			}
 
 			if entry.IsDir() {
 				if err := os.MkdirAll(
@@ -724,6 +751,7 @@ func copyTree(
 			return copyFile(
 				path,
 				target,
+				dst,
 				info.Mode().Perm(),
 			)
 		},
@@ -770,10 +798,20 @@ func copyTreePreserveGit(
 				return nil
 			}
 
-			target := filepath.Join(
+			// v1.11.1 path-injection: the walk-derived rel is joined
+			// through the fail-closed containment builder — the
+			// snapshot can never land outside the snapshot root.
+			target, err := safeJoinInside(
 				dst,
 				rel,
 			)
+			if err != nil {
+				return fmt.Errorf(
+					"lab: snapshot target %q escapes %q",
+					rel,
+					dst,
+				)
+			}
 
 			if entry.IsDir() {
 				if err := os.MkdirAll(
@@ -811,6 +849,7 @@ func copyTreePreserveGit(
 			return copyFile(
 				path,
 				target,
+				dst,
 				info.Mode().Perm(),
 			)
 		},
@@ -868,10 +907,20 @@ func copyTreeContents(
 				return nil
 			}
 
-			target := filepath.Join(
+			// v1.11.1 path-injection: the walk-derived rel is joined
+			// through the fail-closed containment builder — promotion
+			// can never write outside the source tree.
+			target, err := safeJoinInside(
 				dst,
 				rel,
 			)
+			if err != nil {
+				return fmt.Errorf(
+					"lab: promote target %q escapes %q",
+					rel,
+					dst,
+				)
+			}
 
 			if entry.IsDir() {
 				if err := os.MkdirAll(
@@ -910,6 +959,7 @@ func copyTreeContents(
 			if err := copyFile(
 				path,
 				target,
+				dst,
 				info.Mode().Perm(),
 			); err != nil {
 				return err
@@ -923,8 +973,29 @@ func copyTreeContents(
 func copyFile(
 	src string,
 	dst string,
+	root string,
 	perm os.FileMode,
 ) error {
+	// v1.11.1 path-injection: the copy destination must be a real,
+	// NUL-free path INSIDE the tree the caller is filling. The callers
+	// build dst through safeJoinInside; this check keeps the sink
+	// itself fail-closed against a hostile or misplaced destination.
+	if src == "" || dst == "" || root == "" ||
+		strings.ContainsRune(src, '\x00') ||
+		strings.ContainsRune(dst, '\x00') {
+		return fmt.Errorf(
+			"lab: copy: empty or NUL-contaminated path",
+		)
+	}
+
+	if !sameOrWithin(dst, root) {
+		return fmt.Errorf(
+			"lab: copy %q escapes %q",
+			dst,
+			root,
+		)
+	}
+
 	in, err := os.Open(src)
 	if err != nil {
 		return fmt.Errorf(
@@ -1022,6 +1093,12 @@ func resolveExistingPrefix(
 func resolveExistingPrefixPair(
 	path string,
 ) (unresolved string, resolved string, err error) {
+	// v1.11.1 path-injection: refuse empty and NUL-contaminated probes —
+	// they can never name a real file.
+	if path == "" || strings.ContainsRune(path, '\x00') {
+		return "", "", ErrInvalidWorkspace
+	}
+
 	current := filepath.Clean(path)
 
 	for {
@@ -1129,6 +1206,150 @@ func sameWord(a, b string) bool {
 	}
 
 	return a == b
+}
+
+// --- path-injection guards (v1.11.1 remediation) -------------------------
+//
+// Every path that reaches a file-system sink inside this package is built
+// or re-verified through ONE of the guards below:
+//
+//      safeJoinInside(root, rel)  — build a child path of a managed root,
+//                                   failing closed on NUL and on any ".."
+//                                   that climbs above the root;
+//      ensureInsideWorkspace      — re-verify an already-built ABSOLUTE
+//                                   target against the ACTIVE workspace
+//                                   root (lexical containment plus a
+//                                   symlink-escape check of the nearest
+//                                   existing ancestor);
+//      openRoot + workspaceRelPath — perform the actual I/O through an
+//                                   os.Root bound to the workspace, so a
+//                                   symlink swapped in after validation
+//                                   still cannot leave the root.
+
+// safeJoinInside joins rel onto root and FAILS CLOSED unless the result
+// is guaranteed to stay inside root: rel must be non-empty and NUL-free,
+// and the cleaned join must satisfy the filepath.Rel containment check.
+func safeJoinInside(root, rel string) (string, error) {
+	if root == "" || rel == "" || strings.ContainsRune(rel, '\x00') {
+		return "", ErrInvalidWorkspace
+	}
+
+	target := filepath.Clean(
+		filepath.Join(
+			root,
+			rel,
+		),
+	)
+
+	if !sameOrWithin(target, root) {
+		return "", ErrInvalidWorkspace
+	}
+
+	return target, nil
+}
+
+// ensureInsideWorkspace re-verifies an already-built absolute target
+// against the ACTIVE workspace root: lexical containment first, then a
+// symlink-escape check — the nearest EXISTING ancestor of the target is
+// resolved (os.Lstat walk + EvalSymlinks) and must still be inside the
+// canonical root. A symlinked prefix pointing outside the workspace is
+// refused.
+func ensureInsideWorkspace(w *Workspace, target string) error {
+	if w == nil || w.Path == "" || target == "" ||
+		strings.ContainsRune(target, '\x00') {
+		return ErrInvalidWorkspace
+	}
+
+	root, err := canonicalPath(w.Path)
+	if err != nil {
+		return fmt.Errorf(
+			"lab: resolve workspace: %w",
+			err,
+		)
+	}
+
+	if !sameOrWithin(target, root) {
+		return ErrInvalidWorkspace
+	}
+
+	existing, err := resolveExistingPrefix(target)
+	if err != nil {
+		return err
+	}
+
+	if !sameOrWithin(existing, root) {
+		return ErrInvalidWorkspace
+	}
+
+	return nil
+}
+
+// openRoot binds an os.Root (Go 1.24+) to the CANONICAL workspace root.
+// All workspace file I/O in safeedit goes through this handle: Root
+// methods refuse any path that resolves outside the root, so a symlink
+// created inside the workspace can never redirect a read or a write
+// outside it — even one swapped in after PathFor validated the name.
+func (w *Workspace) openRoot() (*os.Root, error) {
+	if w == nil || w.Path == "" {
+		return nil, ErrInvalidWorkspace
+	}
+
+	root, err := canonicalPath(w.Path)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"lab: resolve workspace: %w",
+			err,
+		)
+	}
+
+	handle, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"lab: open workspace root %s: %w",
+			root,
+			err,
+		)
+	}
+
+	return handle, nil
+}
+
+// workspaceRelPath converts an absolute, already jail-validated target
+// into the root-relative form an os.Root needs, failing closed when the
+// target is not inside the root or contains NUL.
+func workspaceRelPath(w *Workspace, target string) (string, error) {
+	if w == nil || w.Path == "" || target == "" ||
+		strings.ContainsRune(target, '\x00') {
+		return "", ErrInvalidWorkspace
+	}
+
+	root, err := canonicalPath(w.Path)
+	if err != nil {
+		return "", fmt.Errorf(
+			"lab: resolve workspace: %w",
+			err,
+		)
+	}
+
+	rel, err := filepath.Rel(
+		root,
+		filepath.Clean(target),
+	)
+	if err != nil {
+		return "", ErrInvalidWorkspace
+	}
+
+	rel = filepath.Clean(rel)
+
+	if rel == ".." ||
+		strings.HasPrefix(
+			rel,
+			".."+string(filepath.Separator),
+		) {
+		return "", ErrInvalidWorkspace
+	}
+
+	return rel, nil
 }
 
 // canonicalPath resolves path to the single representation the OS itself

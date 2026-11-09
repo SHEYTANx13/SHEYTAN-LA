@@ -1,8 +1,13 @@
 // test_host.cpp — dispatch loop tests: malformed native requests never
 // crash the host; every valid op round-trips; shutdown exits cleanly.
+//
+// The host implementation (shtn_host_run) is compiled ONCE in
+// ../src/host_main.cpp and linked into this binary; the declaration
+// comes from the proper interface header. (This test used to
+// #include the implementation .cpp with SHTN_HOST_NO_MAIN — exactly the
+// source-inclusion anti-pattern CodeQL cpp/include-non-header flags.)
 
-#define SHTN_HOST_NO_MAIN
-#include "../src/host_main.cpp"
+#include "host_main.h"
 
 #include "gguf_writer.h"
 #include "temp_dir.h"
@@ -25,8 +30,9 @@ static int failures = 0;
         }                                                                  \
     } while (0)
 
-// gguf_test_quote wraps a path as a JSON string (paths are plain ASCII in
-// tests; the host's quote() is available via host_main.cpp's includes).
+// gguf_test_quote wraps a path as a JSON string (paths are plain ASCII
+// in tests; the host's shtn::json::quote is an implementation detail —
+// this local wrapper keeps the test self-contained).
 static std::string gguf_test_quote(const std::string& s) {
     std::string out = "\"";
     for (char c : s) {
@@ -539,6 +545,9 @@ int main() {
         const auto [out, rc] = run(input);
 
         CHECK(rc == 2); // protocol violation
+        // The frame size cannot be correlated to an id, so NOTHING is
+        // written to the response stream — only the stderr diagnostic.
+        CHECK(out.empty());
     }
 
     // --- shutdown: acknowledge and clean exit ---------------------------------
@@ -562,6 +571,11 @@ int main() {
         const auto [out, rc] = run(frame("{\"id\":60,\"op\":\"ping\"}"));
 
         CHECK(rc == 0);
+        // EOF exits 0 only AFTER serving the queued request — the ping
+        // response must be the last frame on the stream.
+        const std::string resp = last_frame(out);
+        CHECK(resp.find("\"id\":60") != std::string::npos);
+        CHECK(resp.find("\"ok\":true") != std::string::npos);
     }
 
     // --- Phase 5: streaming generation through the real dispatch loop ---

@@ -32,6 +32,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -42,13 +43,42 @@
 
 // GenWork is the per-request generation payload the scheduler executor
 // consumes (defined before the engine struct that stores it).
+//
+// Lifetime contract (CodeQL stack-address-escape): the registry below is
+// heap-held and shared with the scheduler worker thread, so it must never
+// store a raw pointer into the submitter's frame. Both caller-owned
+// surfaces are therefore re-shaped at registration time:
+//   * the streaming callback pair (emit, user) is captured INSIDE the
+//     owned `stream` closure — the raw context pointer lives only in the
+//     submitter's frame and in that closure, and the callback can only
+//     run while shtn_engine_generate() blocks in wait_terminal();
+//   * the generation result is written into the GenWork-OWNED `result`
+//     slot and copied back to the caller's shtn_generation_result after
+//     the blocking wait — a stale work entry, if one ever leaked, would
+//     hold owned data, never a pointer into a dead caller frame.
 struct GenWork {
     shtn::gen::Spec spec;
-    shtn_generation_emit_fn emit = nullptr;
-    void* user = nullptr;
-    shtn_generation_result* result = nullptr; // caller's slot
+    // Owned trampoline target: forwards chunks to the caller's emit
+    // callback (see the lifetime contract above).
+    std::function<int32_t(const shtn_generation_chunk*)> stream;
+    // Whether the caller passed an output slot (nullability is kept as a
+    // flag; the registry itself never needs the caller's pointer).
+    bool report_result = false;
+    // OWNED output slot the executor fills (copied back by the blocked
+    // submitter after the terminal transition).
+    shtn_generation_result result{};
     int32_t rc = SHTN_ERR_INTERNAL;
     std::string detail;
+
+    // emit_trampoline adapts the owned closure to the Runner's C-style
+    // (fn, context) emit interface. `self` is the GenWork instance the
+    // executor already holds via shared_ptr, so it is stable and alive
+    // for the whole synchronous execute() call.
+    static int32_t emit_trampoline(void* self,
+                                   const shtn_generation_chunk* c) {
+        auto* w = static_cast<GenWork*>(self);
+        return (w != nullptr && w->stream) ? w->stream(c) : 0;
+    }
 };
 
 // The error-code enum lives at global scope in engine.h (C linkage); the
@@ -655,9 +685,18 @@ int32_t shtn_engine_generate(shtn_engine* engine,
         opts->repeat_last_n == 0 ? shtn::gen::kDefaultRepeatLastN
                                  : opts->repeat_last_n;
     work->spec.seed = opts->seed;
-    work->emit = emit;
-    work->user = user;
-    work->result = out;
+
+    // Capture the caller's callback pair inside the owned closure; the
+    // raw emit/user pointers never enter the heap-held registry (they
+    // live in this frame and in the closure only). The callback runs
+    // only while this call is blocked below, so the caller's context
+    // outlives every consumer.
+    if (emit != nullptr) {
+        work->stream = [emit, user](const shtn_generation_chunk* c) -> int32_t {
+            return emit(user, c);
+        };
+    }
+    work->report_result = (out != nullptr);
 
     // Request id: caller-supplied or a deterministic synthetic one.
     std::string req_id = work->spec.request_id;
@@ -714,6 +753,13 @@ int32_t shtn_engine_generate(shtn_engine* engine,
         if (auto w = engine->find_work(req_id)) {
             rc = w->rc;
             det = w->detail;
+            if (out != nullptr) {
+                // Copy the executor's outcome out of the OWNED slot
+                // before the entry is erased (the executor filled it
+                // before the terminal transition woke us; the mutex
+                // acquire gives the necessary happens-before).
+                *out = w->result;
+            }
         }
         engine->erase_work(req_id);
     }
@@ -786,9 +832,19 @@ int32_t detail_runner_execute(shtn_engine* engine,
         engine->active_generations += 1;
     }
 
+    // The caller's surfaces are re-shaped into GenWork-owned storage
+    // (see the GenWork lifetime contract): the stream closure is exposed
+    // to the Runner through the C-style trampoline with the work entry
+    // itself as context (the executor holds its shared_ptr for the whole
+    // call), and the result goes into the owned slot. When the caller
+    // passed no callback (or no output slot) the nullptr shape the
+    // Runner expects is preserved exactly.
+    const bool has_stream = static_cast<bool>(work->stream);
     const int32_t rc = engine->generator.execute(
-        engine->model, work->spec, req->cancel_requested, work->emit,
-        work->user, work->result, work->detail);
+        engine->model, work->spec, req->cancel_requested,
+        has_stream ? &GenWork::emit_trampoline : nullptr,
+        has_stream ? static_cast<void*>(work.get()) : nullptr,
+        work->report_result ? &work->result : nullptr, work->detail);
 
     {
         std::lock_guard<std::mutex> lock(engine->gen_mu);

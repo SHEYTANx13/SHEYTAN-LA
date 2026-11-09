@@ -54,9 +54,21 @@ $(BUILD)/libshtn_protocol.a: src/protocol.cpp src/json.cpp src/protocol.h src/js
 
 host: $(BUILD)/shtn-engine-host
 
-$(BUILD)/shtn-engine-host: src/host_main.cpp $(BUILD)/libshtn_engine.a $(BUILD)/libshtn_protocol.a
+# The dispatch host implementation is compiled ONCE (host_main.o) and
+# linked into both the executable (entry point host_entry.o) and the
+# test binary — tests include host_main.h, never the implementation
+# source.
+$(BUILD)/host_main.o: src/host_main.cpp src/host_main.h src/json.h src/protocol.h $(ENGINE_HDRS)
 	mkdir -p $(BUILD)
-	$(CXX) $(CXXFLAGS) -Iinclude -Isrc src/host_main.cpp $(BUILD)/libshtn_engine.a $(BUILD)/libshtn_protocol.a -o $@
+	$(CXX) $(CXXFLAGS) -Iinclude -Isrc -c src/host_main.cpp -o $@
+
+$(BUILD)/host_entry.o: src/host_entry.cpp src/host_main.h $(ENGINE_HDRS)
+	mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) -Iinclude -Isrc -c src/host_entry.cpp -o $@
+
+$(BUILD)/shtn-engine-host: $(BUILD)/host_entry.o $(BUILD)/host_main.o $(BUILD)/libshtn_engine.a $(BUILD)/libshtn_protocol.a
+	mkdir -p $(BUILD)
+	$(CXX) $(CXXFLAGS) $(BUILD)/host_entry.o $(BUILD)/host_main.o $(BUILD)/libshtn_engine.a $(BUILD)/libshtn_protocol.a -o $@
 
 TESTS := test_engine test_protocol test_host test_gguf test_model \
 	test_tokenizer test_kv_cache test_scheduler test_sampler \
@@ -73,9 +85,9 @@ $(BUILD)/test_protocol: tests/test_protocol.cpp $(BUILD)/libshtn_protocol.a
 	mkdir -p $(BUILD)
 	$(CXX) $(CXXFLAGS) -Iinclude -Isrc tests/test_protocol.cpp $(BUILD)/libshtn_protocol.a -o $@
 
-$(BUILD)/test_host: tests/test_host.cpp $(BUILD)/libshtn_engine.a $(BUILD)/libshtn_protocol.a
+$(BUILD)/test_host: tests/test_host.cpp $(BUILD)/host_main.o $(BUILD)/libshtn_engine.a $(BUILD)/libshtn_protocol.a
 	mkdir -p $(BUILD)
-	$(CXX) $(CXXFLAGS) -Iinclude -Isrc -Itests -DSHTN_FIXTURES_DIR='"$(CURDIR)/tests/fixtures"' tests/test_host.cpp $(BUILD)/libshtn_engine.a $(BUILD)/libshtn_protocol.a -lpthread -o $@
+	$(CXX) $(CXXFLAGS) -Iinclude -Isrc -Itests -DSHTN_FIXTURES_DIR='"$(CURDIR)/tests/fixtures"' tests/test_host.cpp $(BUILD)/host_main.o $(BUILD)/libshtn_engine.a $(BUILD)/libshtn_protocol.a -lpthread -o $@
 
 $(BUILD)/test_gguf: tests/test_gguf.cpp $(BUILD)/libshtn_engine.a
 	mkdir -p $(BUILD)

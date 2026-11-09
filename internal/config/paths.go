@@ -206,6 +206,47 @@ func isMalformedRootPath(path string) bool {
 	return false
 }
 
+// safeRuntimePath validates ONE config-declared runtime path (v1.11.1
+// path-injection remediation). Config values are semi-trusted — they come
+// from a hand-editable file, the environment and the settings API — so a
+// usable value must be non-empty and bounded, carry no NUL or other
+// control character, no unresolved environment token, and — after
+// cleaning — no traversal that escapes the application root (relative
+// values anchor against AppRoot, never the CWD). The cleaned usable value
+// is returned unchanged in meaning; ok=false means the caller MUST fall
+// back to the canonical derivation for that field. Valid configurations
+// pass through byte-for-byte.
+func safeRuntimePath(value string) (string, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || len(trimmed) > 4096 {
+		return "", false
+	}
+
+	if HasEnvToken(trimmed) {
+		return "", false
+	}
+
+	for _, r := range trimmed {
+		if r < 0x20 || r == 0x7f {
+			return "", false // NUL and other control characters
+		}
+	}
+
+	cleaned := filepath.Clean(trimmed)
+	if filepath.IsAbs(cleaned) {
+		return cleaned, true
+	}
+
+	// A relative value resolves against the application root and must
+	// STAY inside it — traversal past the root is rejected, not resolved.
+	anchored := AbsAgainstAppRoot(cleaned)
+	rel, err := filepath.Rel(AppRoot(), anchored)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return anchored, true
+}
+
 // normalizeRuntimePaths canonicalizes every persisted path field of the
 // configuration IN PLACE:
 //
@@ -221,6 +262,16 @@ func isMalformedRootPath(path string) bool {
 // cmd.Root publishes them once logging is up).
 func normalizeRuntimePaths(cfg *Config) []string {
 	var reports []string
+
+	// v1.11.1 path-injection: the DECLARED values are snapshotted before
+	// the absolutizing steps below, so the fail-closed gate at the end can
+	// still see a relative traversal that absolutization would otherwise
+	// launder into a plain absolute path.
+	declaredDataDir := cfg.DataDir
+	declaredModelsDir := cfg.ModelsDir
+	declaredSessionsDir := cfg.SessionsDir
+	declaredLabRoot := cfg.LabWorkspaceRoot
+	declaredWorkspaceRoot := cfg.WorkspaceRoot
 
 	// --- DataDir ---------------------------------------------------------
 	if HasEnvToken(cfg.DataDir) {
@@ -276,6 +327,69 @@ func normalizeRuntimePaths(cfg *Config) []string {
 			cfg.WorkspaceRoot = ""
 		} else {
 			cfg.WorkspaceRoot = resolved
+		}
+	}
+
+	// v1.11.1 path-injection (fail-closed gate): a declared path that is
+	// NUL/control-tainted, still token-bearing after its expansion, or a
+	// traversal-shaped relative value escaping the application root is
+	// REJECTED here and falls back to its canonical derivation — the same
+	// contract the v1.3.0 token rejection established, extended to the
+	// control-byte and traversal shapes. Valid configurations are
+	// untouched. Token-bearing declarations are judged by their EXPANDED
+	// result (the v1.3.0 expand-once semantics); plain declarations are
+	// judged as written.
+	usable := func(declared, final string) bool {
+		if _, ok := safeRuntimePath(final); !ok {
+			return false
+		}
+		if !HasEnvToken(declared) {
+			if _, ok := safeRuntimePath(declared); !ok {
+				return false
+			}
+		}
+		return true
+	}
+
+	if !usable(declaredDataDir, cfg.DataDir) {
+		reports = append(reports, fmt.Sprintf(
+			"dataDir=%q is not a usable directory path (control character, unresolved token or traversal outside the application root); using the canonical install-local data root",
+			declaredDataDir,
+		))
+		cfg.DataDir = defaultDataRoot()
+	}
+
+	if !usable(declaredModelsDir, cfg.ModelsDir) {
+		reports = append(reports, fmt.Sprintf(
+			"modelsDir=%q is not a usable directory path (control character, unresolved token or traversal outside the application root); deriving models from the canonical root",
+			declaredModelsDir,
+		))
+		cfg.ModelsDir = filepath.Join(cfg.DataDir, "models")
+	}
+
+	if !usable(declaredSessionsDir, cfg.SessionsDir) {
+		reports = append(reports, fmt.Sprintf(
+			"sessionsDir=%q is not a usable directory path (control character, unresolved token or traversal outside the application root); deriving sessions from the canonical root",
+			declaredSessionsDir,
+		))
+		cfg.SessionsDir = filepath.Join(cfg.DataDir, "sessions")
+	}
+
+	if !usable(declaredLabRoot, cfg.LabWorkspaceRoot) {
+		reports = append(reports, fmt.Sprintf(
+			"labWorkspaceRoot=%q is not a usable directory path (control character, unresolved token or traversal outside the application root); deriving the lab workspace root from the canonical root",
+			declaredLabRoot,
+		))
+		cfg.LabWorkspaceRoot = filepath.Join(cfg.DataDir, "lab", "workspaces")
+	}
+
+	if strings.TrimSpace(declaredWorkspaceRoot) != "" {
+		if !usable(declaredWorkspaceRoot, cfg.WorkspaceRoot) {
+			reports = append(reports, fmt.Sprintf(
+				"workspaceRoot=%q is not a usable directory path (control character, unresolved token or traversal outside the application root); keeping the default workspace",
+				declaredWorkspaceRoot,
+			))
+			cfg.WorkspaceRoot = ""
 		}
 	}
 

@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -189,10 +190,102 @@ type Job struct {
 	done chan struct{} // closed when Run exits
 }
 
+// errUnsafeDest / errUnsafeCacheDir mark configuration that would place
+// downloads or sidecar files outside the intended destination root
+// (v1.11.1 path-injection remediation, work order §4.1 — downloader
+// boundary control). Dest is frequently derived from REMOTE identifiers
+// (release tags, manifest versions, asset names), so the final path
+// component is validated with a strict grammar before any job exists.
+var (
+	errsUnsafeDest     = errors.New("downloader: Dest is not a safe artifact file name")
+	errsUnsafeCacheDir = errors.New("downloader: CacheDir is not a safe directory path")
+)
+
+// validArtifactName is the ONE grammar for the FINAL path component of a
+// download destination. Every byte this package writes ("<dest>.part",
+// "<dest>.bak", "<dest>") is built from that component, so a hostile
+// identifier can never become a traversal, absolute, volume, ADS or
+// hidden name. The grammar accepts ordinary artifact names ("asset.bin",
+// "llama-b1234-bin-win-cpu-x64.zip", "SHEYTAN-LA-v1.11.1-staged.exe")
+// and rejects: empty/oversized names, path separators (POSIX and
+// Windows), NUL, volume/ADS colons, leading dots (".." included),
+// whitespace-padded names and non-grammar characters.
+func validArtifactName(name string) bool {
+	if name == "" || len(name) > 255 {
+		return false
+	}
+	if strings.ContainsAny(name, "/\\") {
+		return false
+	}
+	if strings.ContainsAny(name, "\x00:") {
+		return false
+	}
+	if strings.HasPrefix(name, ".") {
+		return false
+	}
+	if strings.TrimSpace(name) != name {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_', r == '+', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// validateDestPath fail-closes a caller-supplied Dest: after lexical
+// cleaning it may not climb above its base (a leading ".." component)
+// and its final component must satisfy validArtifactName. A hostile
+// identifier produces an error, never a job.
+func validateDestPath(dest string) error {
+	if dest == "" {
+		return errsUnsafeDest
+	}
+	clean := filepath.Clean(dest)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return errsUnsafeDest
+	}
+	if strings.ContainsRune(clean, 0) {
+		return errsUnsafeDest
+	}
+	if !validArtifactName(filepath.Base(clean)) {
+		return errsUnsafeDest
+	}
+	return nil
+}
+
+// validateCacheDir applies the same traversal bounds to the sidecar root
+// (source cache). It stays a DIRECTORY check: any leaf name inside it is
+// legal (the cache-file names themselves are validated in meta.go).
+func validateCacheDir(dir string) error {
+	if dir == "" {
+		return nil // optional; defaults to Dir(Dest)
+	}
+	clean := filepath.Clean(dir)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return errsUnsafeCacheDir
+	}
+	if strings.ContainsRune(clean, 0) {
+		return errsUnsafeCacheDir
+	}
+	return nil
+}
+
 // New validates options and returns a Job.
 func New(opts Options) (*Job, error) {
 	if opts.Dest == "" {
 		return nil, fmt.Errorf("downloader: Dest is required")
+	}
+	// v1.11.1 path-injection remediation: fail closed BEFORE any path is
+	// derived — .part/.bak sidecars and the activated artifact are all
+	// built from Dest's final component, so a hostile remote identifier
+	// must never reach one.
+	if err := validateDestPath(opts.Dest); err != nil {
+		return nil, err
 	}
 	if len(opts.Sources) == 0 {
 		return nil, fmt.Errorf("downloader: at least one source is required")
@@ -216,6 +309,11 @@ func New(opts Options) (*Job, error) {
 	}
 	if opts.CacheDir == "" {
 		opts.CacheDir = filepath.Dir(opts.Dest)
+	}
+	// v1.11.1 path-injection remediation: the sidecar cache root gets
+	// the same traversal bounds as Dest itself.
+	if err := validateCacheDir(opts.CacheDir); err != nil {
+		return nil, err
 	}
 	j := &Job{
 		opts:    opts,
@@ -415,14 +513,31 @@ func reorderSources(sources []Source, hit *cachedSource) []Source {
 
 // checkExisting detects an already-present verified artifact and skips
 // the download entirely.
+//
+// v1.11.1 path-injection remediation: the artifact is inspected through
+// an os.Root bound to the destination directory — the name resolves
+// inside the root or the artifact is simply not there (nothing usable),
+// never followed somewhere else.
 func (j *Job) checkExisting() (Result, bool, error) {
-	fi, err := os.Stat(j.opts.Dest)
+	root, err := os.OpenRoot(filepath.Dir(j.opts.Dest))
+	if err != nil {
+		return Result{}, false, nil // no destination directory — nothing usable present
+	}
+	defer root.Close()
+
+	destBase := filepath.Base(j.opts.Dest)
+	fi, err := root.Stat(destBase)
 	if err != nil || fi.IsDir() {
 		return Result{}, false, nil // nothing usable present
 	}
 	if j.opts.SHA256 != "" {
-		got, err := hashFile(j.opts.Dest)
-		if err != nil || got != j.opts.SHA256 {
+		f, err := root.Open(destBase)
+		if err != nil {
+			return Result{}, false, nil // unreadable/stale — redownload
+		}
+		got, hashErr := hashReader(f)
+		closeErr := f.Close()
+		if hashErr != nil || closeErr != nil || got != j.opts.SHA256 {
 			return Result{}, false, nil // unreadable/stale — redownload
 		}
 		return Result{

@@ -258,6 +258,29 @@ func openTerminalAt(dir string) error {
 	}
 }
 
+// validRequestDirPath is the boundary grammar for a request-supplied
+// directory path (v1.11.1 path-injection remediation). The value must be
+// a bounded, NUL-free, control-character-free filesystem path whose
+// cleaned form is ABSOLUTE — a relative value (including pure traversal
+// like ".." or "../escape") is rejected instead of being silently
+// resolved against the server's working directory. Containment to a
+// specific root is intentionally NOT enforced here: switching the active
+// project folder to any accessible directory is the endpoint's contract.
+func validRequestDirPath(p string) bool {
+	if p == "" || len(p) > 4096 {
+		return false
+	}
+
+	for _, r := range p {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+
+	cleaned := filepath.Clean(p)
+	return filepath.IsAbs(cleaned)
+}
+
 // handleWorkspaceSwitch changes the CURRENT PROJECT FOLDER. The whole flow
 // is refusal-first: an active run, a missing directory or a bad path never
 // leaves the app half-switched.
@@ -278,6 +301,18 @@ func (s *Server) handleWorkspaceSwitch(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSpace(body.Path)
 	if path == "" {
 		writeErr(w, http.StatusBadRequest, errString("path is required"))
+		return
+	}
+	// v1.11.1 path-injection: the switch feature legitimately accepts ANY
+	// accessible directory the local user picks, so the boundary enforces
+	// path WELL-FORMEDNESS before the value reaches the filesystem: a
+	// single, NUL-free, control-character-free path that resolves to a
+	// clean absolute location without surviving traversal. Anything else
+	// is rejected here — the request parameter can never smuggle control
+	// bytes or CWD-relative traversal into the workspace switch.
+	if !validRequestDirPath(path) {
+		writeErr(w, http.StatusBadRequest, errString(
+			"path must be a well-formed directory path (no control characters, no traversal)"))
 		return
 	}
 	abs, err := filepath.Abs(path)

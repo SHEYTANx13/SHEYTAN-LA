@@ -97,15 +97,12 @@ func (s *Server) startClone(req cloneRequest) (*gitclone.Job, *cloneStatusEnvelo
 
 	// 3. Destination resolution + validation. Default: the scratch
 	// workspace under the canonical root (<root>\workspace\<repo>).
-	dest := strings.TrimSpace(req.Destination)
-	if dest == "" {
-		dest = filepath.Join(cfg.WorkspaceDir(), target.Repo)
-	}
-	dest = filepath.Clean(dest)
-	if !filepath.IsAbs(dest) {
-		if abs, absErr := filepath.Abs(dest); absErr == nil {
-			dest = filepath.Clean(abs)
-		}
+	// v1.11.1 path-injection: the destination is REQUEST-controlled —
+	// it is constrained to the configured workspaces root by
+	// resolveCloneDestination before any clone job exists.
+	dest, destAPIErr := s.resolveCloneDestination(cfg, req.Destination, target.Repo)
+	if destAPIErr != nil {
+		return nil, nil, destAPIErr
 	}
 	if err := gitclone.ValidateDestination(dest); err != nil {
 		return nil, nil, &apiError{
@@ -161,6 +158,72 @@ func (s *Server) startClone(req cloneRequest) (*gitclone.Job, *cloneStatusEnvelo
 	go s.watchClone(job, envelope, openAfter)
 
 	return job, envelope, nil
+}
+
+// resolveCloneDestination validates the REQUEST-controlled clone
+// destination and constrains it to the configured workspaces root
+// (v1.11.1 path-injection remediation). Empty destinations default to
+// <workspacesRoot>/<repo>. A relative destination resolves INSIDE the
+// workspaces root — never against the server's working directory — and
+// any value that would land outside that root (traversal, an absolute
+// path elsewhere, a drive/UNC shape foreign to the root, NUL or control
+// characters) is rejected with a structured 400 before any clone starts.
+// The returned destination is the cleaned absolute path handed to the
+// clone job and the post-clone workspace switch.
+func (s *Server) resolveCloneDestination(cfg *config.Config, requested, repo string) (string, *apiError) {
+	const kind = "invalid-destination"
+
+	root := cfg.WorkspaceDir()
+
+	dest := strings.TrimSpace(requested)
+	if dest == "" {
+		return filepath.Join(root, repo), nil
+	}
+
+	for _, r := range dest {
+		if r < 0x20 || r == 0x7f {
+			return "", &apiError{
+				Status:  http.StatusBadRequest,
+				Kind:    kind,
+				Message: "the destination contains control characters and cannot be used as a folder path",
+			}
+		}
+	}
+
+	// A Windows drive or UNC destination can only ever be valid when the
+	// workspaces root itself lives on that same drive/share (a Windows
+	// host); on any other host it is refused outright. When the shapes
+	// match, the containment check below still decides.
+	if isDriveOrUNCPath(dest) && !isDriveOrUNCPath(root) {
+		return "", &apiError{
+			Status:  http.StatusBadRequest,
+			Kind:    kind,
+			Message: "the clone destination must stay inside the workspaces root (" + root + ")",
+		}
+	}
+
+	resolved, err := tools.ResolvePathWithinBase(root, dest)
+	if err != nil {
+		return "", &apiError{
+			Status:  http.StatusBadRequest,
+			Kind:    kind,
+			Message: "the clone destination must stay inside the workspaces root (" + root + ")",
+		}
+	}
+
+	return resolved, nil
+}
+
+// isDriveOrUNCPath reports whether p is spelled as a Windows drive path
+// ("C:\...", "C:/...") or a UNC share ("\\server\\share",
+// "//server/share") — shapes that are absolute-on-Windows regardless of
+// the host this server runs on.
+func isDriveOrUNCPath(p string) bool {
+	n := strings.ReplaceAll(p, "\\", "/")
+	if strings.HasPrefix(n, "//") {
+		return true
+	}
+	return len(n) >= 2 && n[0] != '/' && n[1] == ':'
 }
 
 // watchClone folds job progress into the served envelope and applies the

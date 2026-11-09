@@ -4205,7 +4205,17 @@ func ResolveModelPath(
 	name = strings.TrimSpace(name)
 
 	if name != "" {
-		if abs, err := filepath.Abs(name); err == nil {
+		// v1.11.1 path-injection: `name` is USER-SELECTED (config/API). The
+		// explicit-external-path capability is kept for ABSOLUTE paths —
+		// validated NUL-free and used verbatim, nothing appended. A
+		// relative name is never resolved against the process CWD anymore;
+		// it is matched against the models dir below (the documented
+		// resolution order: absolute path → exact → substring → fuzzy).
+		if strings.ContainsRune(name, '\x00') {
+			return "", fmt.Errorf("invalid model %q: contains NUL", name)
+		}
+		if filepath.IsAbs(name) {
+			abs := filepath.Clean(name)
 			if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
 				return abs, nil
 			}

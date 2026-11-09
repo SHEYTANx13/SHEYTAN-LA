@@ -15,6 +15,16 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
+#else
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 static int failures = 0;
 
 #define CHECK(cond)                                                          \
@@ -39,6 +49,42 @@ bool parse_file(const std::string& path, shtn::gguf::GgufHeader& out,
 }
 
 } // namespace
+
+// open_private_wb — fopen(path, "wb") equivalent that creates the file
+// with OWNER-ONLY permissions at CREATION time (0600 on POSIX;
+// _S_IREAD|_S_IWRITE on Windows, which has no world permission bits).
+// A plain fopen(..., "wb") creates new files as 0666 & ~umask, so on a
+// permissive umask the test artifact would be world-writable while it
+// exists in the temp root (CodeQL cpp/world-writable-file-creation).
+// Every path passed here is a uniquely-named member of this process's
+// private TempDir. The returned FILE* behaves exactly like an fopen
+// handle (the callers keep using stdio and close it with fclose);
+// returns nullptr on failure, like fopen — including fdopen failure
+// (the descriptor is closed instead of leaked).
+static FILE* open_private_wb(const std::string& path) {
+#if defined(_WIN32)
+    const int fd = ::_open(path.c_str(),
+                           _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY,
+                           _S_IREAD | _S_IWRITE);
+#else
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+#endif
+    if (fd < 0) {
+        return nullptr;
+    }
+#if defined(_WIN32)
+    FILE* f = ::_fdopen(fd, "wb");
+    if (f == nullptr) {
+        ::_close(fd);
+    }
+#else
+    FILE* f = ::fdopen(fd, "wb");
+    if (f == nullptr) {
+        ::close(fd);
+    }
+#endif
+    return f;
+}
 
 int main() {
     // Shared cross-platform temp-dir helper (v1.3.5 consolidation:
@@ -482,7 +528,7 @@ int main() {
         // loader itself uses (fopen/fwrite/fclose).
         const std::string plain = tmpdir.file("contract.gguf");
         {
-            FILE* f = std::fopen(plain.c_str(), "wb");
+            FILE* f = open_private_wb(plain);
             CHECK(f != nullptr);
             if (f != nullptr) {
                 const char payload[] = "GGUF-contract-payload";
@@ -518,7 +564,7 @@ int main() {
         // A path containing spaces round-trips through stdio.
         const std::string spaced = tmpdir.file("space dir name.gguf");
         {
-            FILE* f = std::fopen(spaced.c_str(), "wb");
+            FILE* f = open_private_wb(spaced);
             CHECK(f != nullptr);
             if (f != nullptr) {
                 const char payload[] = "spaces";
@@ -552,7 +598,7 @@ int main() {
             // dies (explicit remove() proves it inside the scope).
             shtn_test::TempDir c("scoped");
             const std::string inner = c.file("inner.gguf");
-            FILE* f = std::fopen(inner.c_str(), "wb");
+            FILE* f = open_private_wb(inner);
             CHECK(f != nullptr);
             if (f != nullptr) {
                 std::fputs("x", f);

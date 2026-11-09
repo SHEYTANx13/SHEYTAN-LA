@@ -15,6 +15,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -28,8 +29,15 @@ import (
 //	"tracked"   — known to git, clean in the working tree
 //
 // Everything else stays "" (unknown). Deterministic, bounded output.
+// The root FAILS CLOSED through validRoot (v1.11.1 path-injection
+// remediation): a hostile root yields no signals, never a filesystem
+// operation outside the workspace.
 func applyGitSignals(ctx context.Context, idx *Index, report *UpdateReport) {
 	idx.GitAvailable = false
+
+	if !validRoot(idx.Root) {
+		return
+	}
 
 	if !isGitWorktree(idx.Root) {
 		return
@@ -67,7 +75,7 @@ func applyGitSignals(ctx context.Context, idx *Index, report *UpdateReport) {
 // worktrees/submodules use a file) at the root. Real git availability
 // is proven by the commands below succeeding.
 func isGitWorktree(root string) bool {
-	return fileExists(root + "/.git")
+	return fileExists(filepath.Join(root, ".git"))
 }
 
 func fileExists(path string) bool {

@@ -23,6 +23,7 @@ package continuum
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -543,9 +544,57 @@ func maxInt(a, b int) int {
 // Persistence — per-session sidecar files
 // ---------------------------------------------------------------------------
 
-// frameworkPath returns sessions/<id>.framework.json.
-func frameworkPath(sessionsDir, sessionID string) string {
-	return filepath.Join(sessionsDir, sessionID+".framework.json")
+// errInvalidSidecarSessionID is returned (wrapped) for session ids that
+// fail the sidecar grammar.
+var errInvalidSidecarSessionID = errors.New("invalid session id")
+
+// validSidecarSessionID is the ONE grammar for a session id used as a
+// single filesystem path component under the sessions directory (v1.11.1
+// path-injection remediation — the same defense as
+// internal/sessions.validSessionID, which cannot be imported from here
+// without an import cycle). Ids are minted by the session store but this
+// package also receives them through chained Framework sidecars and
+// rollover records; every sidecar path built from one must stay inside
+// the sessions directory. The grammar accepts the store-generated form
+// and ordinary legacy ids, and rejects: empty/oversized ids, path
+// separators (POSIX and Windows), NUL, volume/ADS colons, leading dots
+// (".." included), whitespace-padded ids and non-grammar characters.
+func validSidecarSessionID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	if strings.ContainsAny(id, "/\\") {
+		return false
+	}
+	if strings.ContainsAny(id, "\x00:") {
+		return false
+	}
+	if strings.HasPrefix(id, ".") {
+		return false
+	}
+	if strings.TrimSpace(id) != id {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// frameworkPath builds "sessions/<id>.framework.json" and FAILS CLOSED on
+// an id outside the sidecar grammar: a hostile id produces an error,
+// never a path, so the sidecar os.* sinks can never leave the sessions
+// directory.
+func frameworkPath(sessionsDir, sessionID string) (string, error) {
+	if !validSidecarSessionID(sessionID) {
+		return "", fmt.Errorf("continuum: %w %q", errInvalidSidecarSessionID, sessionID)
+	}
+	return filepath.Join(sessionsDir, sessionID+".framework.json"), nil
 }
 
 // SaveFramework persists the framework sidecar for a session.
@@ -553,22 +602,34 @@ func SaveFramework(sessionsDir, sessionID string, fw *Framework) error {
 	if fw == nil {
 		return nil
 	}
+
+	path, err := frameworkPath(sessionsDir, sessionID)
+	if err != nil {
+		return err
+	}
+
 	fw.UpdatedAt = time.Now().UTC()
 	data, err := json.MarshalIndent(fw, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := frameworkPath(sessionsDir, sessionID) + ".tmp"
+	tmp := path + ".tmp"
 	if os.WriteFile(tmp, data, 0o644) != nil {
 		return os.ErrPermission
 	}
-	return os.Rename(tmp, frameworkPath(sessionsDir, sessionID))
+	return os.Rename(tmp, path)
 }
 
 // LoadFramework reads the framework sidecar for a session (nil when absent
-// or unreadable — the caller falls back to a fresh framework).
+// or unreadable — the caller falls back to a fresh framework; an id
+// outside the sidecar grammar is equally "absent": fail closed, no path
+// is ever built from it).
 func LoadFramework(sessionsDir, sessionID string) *Framework {
-	data, err := os.ReadFile(frameworkPath(sessionsDir, sessionID))
+	path, err := frameworkPath(sessionsDir, sessionID)
+	if err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}

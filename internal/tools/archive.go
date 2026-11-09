@@ -103,7 +103,13 @@ func (t ArchiveTool) zip_(sources []string, dest string) (string, error) {
 	if dest == "" {
 		return "", fmt.Errorf("path (output archive) is required")
 	}
-	out := ResolvePath(dest)
+	// v1.11.1 path-injection remediation (work order §7 — class (a)): the
+	// output archive resolves through the fail-closed chokepoint; a
+	// hostile dest fails here, before any MkdirAll/create.
+	out, err := toolPath(dest)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return "", err
 	}
@@ -140,6 +146,14 @@ func (t ArchiveTool) zip_(sources []string, dest string) (string, error) {
 }
 
 func addToZip(zw *zip.Writer, src, rel string, total *int64) error {
+	// v1.11.1 path-injection remediation (work order §7): the member
+	// source re-resolves through the fail-closed chokepoint before the
+	// stat/open pair — an unchecked caller can never make the archiver
+	// read outside the base.
+	src, err := toolPath(src)
+	if err != nil {
+		return err
+	}
 	fi, err := os.Stat(src)
 	if err != nil {
 		return err
@@ -166,7 +180,15 @@ func addToZip(zw *zip.Writer, src, rel string, total *int64) error {
 
 func collectSources(sources []string) (files []string, skipped int) {
 	for _, s := range sources {
-		abs := ResolvePath(s)
+		// v1.11.1 path-injection remediation (work order §7): each
+		// source resolves through the fail-closed chokepoint; a
+		// hostile source is SKIPPED (and counted), exactly like a
+		// missing one — it can never be opened outside the base.
+		abs, err := toolPath(s)
+		if err != nil {
+			skipped++
+			continue
+		}
 		fi, err := os.Stat(abs)
 		if err != nil {
 			skipped++
@@ -198,7 +220,14 @@ func relToBase(abs string) string {
 }
 
 func (t ArchiveTool) unzip(path, dest string) (string, error) {
-	abs := ResolvePath(path)
+	// v1.11.1 path-injection remediation (work order §7 — class (a)):
+	// the archive AND its extraction root resolve through the fail-closed
+	// chokepoint, so the rooted extraction below can never even SIT
+	// outside the base.
+	abs, err := toolPath(path)
+	if err != nil {
+		return "", err
+	}
 	zr, err := zip.OpenReader(abs)
 	if err != nil {
 		return "", fmt.Errorf("open zip: %w", err)
@@ -207,9 +236,15 @@ func (t ArchiveTool) unzip(path, dest string) (string, error) {
 	if len(zr.File) > archiveMaxN {
 		return "", fmt.Errorf("too many entries (%d > %d)", len(zr.File), archiveMaxN)
 	}
-	root := ResolvePath(dest)
+	root, err := toolPath(dest)
+	if err != nil {
+		return "", err
+	}
 	if dest == "" {
-		root = ResolvePath(strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)))
+		root, err = toolPath(strings.TrimSuffix(filepath.Base(abs), filepath.Ext(abs)))
+		if err != nil {
+			return "", err
+		}
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", err
@@ -398,21 +433,38 @@ func freshStageDir(rooted *os.Root) (string, error) {
 	return "", errors.New("could not allocate a unique extraction staging directory")
 }
 
-// sanitizeMemberName renders an archive member name for the LISTING
-// output (and every other place a member name is displayed): control
-// characters — which no legitimate member name needs and which would
-// smuggle terminal/log content into the tool result — are rendered as
-// Go escapes. Display-only: the listing never touches the filesystem
-// with the member name (alerts #175/#176, go/zipslip, at the list
-// sinks; the name is pure report text here).
-func sanitizeMemberName(name string) string {
+// displayArchiveMember renders an archive member name for the LISTING
+// output (and every other place a member name is displayed).
+//
+// v1.11.1 (run 42502043636 work order §4.3, zipslip alerts #175/#176 at
+// the list sinks): the rendered value is PROVABLY NOT a live filesystem
+// path. The raw member name is first put through the ONE shared lexical
+// archive-name validator (updater.SafeArchiveRel — the same rule set the
+// extractors use): absolute/Windows-rooted/UNC/drive forms, any ".."
+// traversal, ADS-colon spellings and NUL-bearing names FAIL validation
+// and are rendered as a Go-quoted escape of the raw bytes instead of the
+// name itself. Control characters and overlong names are escaped or
+// truncated as well, so no member name can smuggle terminal/log content
+// or an unbounded line into the tool result. Display-only: the listing
+// never touches the filesystem with the member name.
+func displayArchiveMember(name string) string {
+	const maxMemberDisplay = 200
+	render := func(s string) string {
+		if len(s) > maxMemberDisplay {
+			s = s[:maxMemberDisplay] + "…(truncated)"
+		}
+		return s
+	}
+	_, err := updater.SafeArchiveRel(name)
+	if err != nil {
+		return render(strconv.Quote(name))
+	}
 	for _, r := range name {
 		if r < 0x20 || r == 0x7f {
-			return strconv.Quote(name)
+			return render(strconv.Quote(name))
 		}
 	}
-
-	return name
+	return render(name)
 }
 
 // extractionLedger is the §8.2.4 overwrite/conflict authority for one
@@ -477,7 +529,13 @@ func (t ArchiveTool) tar_(sources []string, dest string) (string, error) {
 	if dest == "" {
 		return "", fmt.Errorf("path (output archive) is required")
 	}
-	out := ResolvePath(dest)
+	// v1.11.1 path-injection remediation (work order §7 — class (a)): the
+	// output archive resolves through the fail-closed chokepoint; a
+	// hostile dest fails here, before any MkdirAll/create.
+	out, err := toolPath(dest)
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return "", err
 	}
@@ -498,6 +556,12 @@ func (t ArchiveTool) tar_(sources []string, dest string) (string, error) {
 	added := 0
 	var total int64
 	for _, src := range files {
+		// v1.11.1 (work order §7): re-gate every member source before
+		// the stat/open pair (collectSources already returned
+		// builder-derived paths — this is the sink-adjacent guard).
+		if _, err := toolPath(src); err != nil {
+			return "", err
+		}
 		fi, err := os.Stat(src)
 		if err != nil {
 			continue
@@ -542,7 +606,13 @@ func (t ArchiveTool) tar_(sources []string, dest string) (string, error) {
 }
 
 func (t ArchiveTool) untar(path, dest string) (string, error) {
-	abs := ResolvePath(path)
+	// v1.11.1 path-injection remediation (work order §7 — class (a)):
+	// the archive AND its extraction root resolve through the fail-closed
+	// chokepoint (same shape as unzip).
+	abs, err := toolPath(path)
+	if err != nil {
+		return "", err
+	}
 	f, err := os.Open(abs)
 	if err != nil {
 		return "", fmt.Errorf("open tar: %w", err)
@@ -558,9 +628,15 @@ func (t ArchiveTool) untar(path, dest string) (string, error) {
 		defer gz.Close()
 		r = gz
 	}
-	root := ResolvePath(dest)
+	root, err := toolPath(dest)
+	if err != nil {
+		return "", err
+	}
 	if dest == "" {
-		root = ResolvePath(strings.TrimSuffix(strings.TrimSuffix(filepath.Base(abs), ".gz"), ".tar"))
+		root, err = toolPath(strings.TrimSuffix(strings.TrimSuffix(filepath.Base(abs), ".gz"), ".tar"))
+		if err != nil {
+			return "", err
+		}
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", err
@@ -705,7 +781,14 @@ func (t ArchiveTool) untar(path, dest string) (string, error) {
 }
 
 func (t ArchiveTool) list(path string) (string, error) {
-	abs := ResolvePath(path)
+	// v1.11.1 path-injection remediation (work order §7 — class (a)): the
+	// archive resolves through the fail-closed chokepoint — list opens
+	// archives with zip.OpenReader/os.Open, so a hostile path must fail
+	// before either sink.
+	abs, err := toolPath(path)
+	if err != nil {
+		return "", err
+	}
 	lower := strings.ToLower(path)
 	var b strings.Builder
 	if strings.HasSuffix(lower, ".zip") {
@@ -722,7 +805,7 @@ func (t ArchiveTool) list(path string) (string, error) {
 				break
 			}
 			total += zf.UncompressedSize64
-			fmt.Fprintf(&b, "  %-40s %10s\n", sanitizeMemberName(zf.Name), humanize.Bytes(int64(zf.UncompressedSize64)))
+			fmt.Fprintf(&b, "  %-40s %10s\n", displayArchiveMember(zf.Name), humanize.Bytes(int64(zf.UncompressedSize64)))
 		}
 		fmt.Fprintf(&b, "total uncompressed: %s\n", humanize.Bytes(int64(total)))
 		return b.String(), nil
@@ -755,7 +838,7 @@ func (t ArchiveTool) list(path string) (string, error) {
 		n++
 		total += hdr.Size
 		if n <= 50 {
-			fmt.Fprintf(&b, "  %-40s %10s\n", sanitizeMemberName(hdr.Name), humanize.Bytes(hdr.Size))
+			fmt.Fprintf(&b, "  %-40s %10s\n", displayArchiveMember(hdr.Name), humanize.Bytes(hdr.Size))
 		}
 	}
 	if n > 50 {

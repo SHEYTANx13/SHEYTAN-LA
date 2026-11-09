@@ -145,9 +145,16 @@ func isBinarySnip(b []byte) bool {
 // ParseFile extracts package/symbols/imports from one file within the
 // per-file bounds. Failures are silent-by-design at this layer: a file
 // that cannot be parsed is indexed without symbols (the record still
-// exists; nothing is invented).
+// exists; nothing is invented). The file path FAILS CLOSED through
+// repoJoin (v1.11.1 path-injection remediation — repository-relative
+// class): a hostile rel produces an empty result, never a path outside
+// the workspace root.
 func ParseFile(root, rel, language string) ParseResult {
-	f, err := os.Open(filepath.Join(root, filepath.FromSlash(rel)))
+	path, err := repoJoin(root, rel)
+	if err != nil {
+		return ParseResult{}
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		return ParseResult{}
 	}

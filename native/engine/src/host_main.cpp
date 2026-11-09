@@ -43,6 +43,7 @@
 #include "shtn/types.h"
 #include "shtn/version.h"
 
+#include "host_main.h"
 #include "json.h"
 #include "protocol.h"
 
@@ -1003,7 +1004,8 @@ int host_loop(std::istream& in, std::ostream& out, shtn_engine* engine) {
 
 } // namespace
 
-// Exposed for tests (tests/test_host.cpp).
+// Exposed for tests (declared in host_main.h; tests link this object —
+// they never include the implementation source).
 int shtn_host_run(std::istream& in, std::ostream& out) {
     shtn_engine* engine = nullptr;
 
@@ -1025,28 +1027,7 @@ int shtn_host_run(std::istream& in, std::ostream& out) {
     return exit_code;
 }
 
-#ifndef SHTN_HOST_NO_MAIN
-
-int main() {
-#if defined(_WIN32)
-    // Binary-safe stdio on Windows.
-    _setmode(_fileno(stdin), _O_BINARY);
-    _setmode(_fileno(stdout), _O_BINARY);
-    _setmode(_fileno(stderr), _O_BINARY);
-#endif
-
-    std::ios::sync_with_stdio(false);
-
-    std::cerr << "[shtn-host] "
-              << "engine=" << SHTN_ENGINE_NAME
-              << " abi=" << SHTN_ABI_VERSION
-              << " protocol=" << SHTN_PROTOCOL_VERSION
-              << " (phase 5: lifecycle, health, hardware, metrics, GGUF model"
-                 " loading, tokenizer, KV cache, scheduler, REAL native"
-                 " generation with streaming + cancellation)"
-              << std::endl;
-
-    return shtn_host_run(std::cin, std::cout);
-}
-
-#endif /* SHTN_HOST_NO_MAIN */
+// The process entry point lives in host_entry.cpp (compiled separately
+// and linked only into the shtn-engine-host executable, so the host
+// implementation above is compiled exactly once for the executable AND
+// the test suite).

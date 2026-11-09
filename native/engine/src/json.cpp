@@ -345,8 +345,38 @@ bool extract_encode_payload(const std::string& bytes, std::string& text,
     return true;
 }
 
-// extract_decode_payload parses {"ids": [int,...], "skipSpecial": bool,
-// "maxBytes": uint}. ids is required (may be empty).
+// extract_decode_payload parses the tokenizer_decode op payload:
+// {"ids": [int,...], "skipSpecial": bool, "maxBytes": uint}.
+//
+// Intent: split the payload member-by-member so the decode op handler
+// receives fully-typed, range-checked values without knowing any JSON.
+//
+// Parameters (all output-only unless noted):
+//   bytes         the raw "payload" member extracted by parse_request
+//                 (input; not modified; may be arbitrary bytes — the
+//                 scanner is bounds-checked and never reads past the
+//                 end);
+//   ids           receives the token ids; CLEARED first; may legitimately
+//                 end up empty ("ids": [] is valid — the caller decodes
+//                 to empty text);
+//   skip_special  1 when absent (BOS/EOS/control tokens are dropped by
+//                 default), else the boolean member's value;
+//   max_bytes     decode output cap in bytes; 1 MiB (1u << 20) when
+//                 absent;
+//   error         human-readable failure detail; only meaningful on a
+//                 false return (left untouched on success).
+//
+// Return: true if the payload was fully consumed and every member
+// parsed within range; false with `error` set on the first structural
+// or range problem (the scanner stops there — no partial results are
+// reported as success). "ids" is REQUIRED: an object without it (or an
+// empty object) fails with "decode payload has no ids". Unknown members
+// are skipped with skip_value(), so forward-compatible additions never
+// break the decoder.
+//
+// Ownership: nothing is retained — `ids` is the caller's vector and the
+// input string is only read. Invariants: on success `ids` holds at most
+// UINT32_MAX-bounded values, skip_special ∈ {0,1} and max_bytes > 0.
 bool extract_decode_payload(const std::string& bytes,
                             std::vector<uint32_t>& ids,
                             int32_t& skip_special, uint32_t& max_bytes,
@@ -505,6 +535,48 @@ std::string quote(const std::string& src) {
 namespace shtn {
 namespace json {
 
+// extract_generate_payload parses the generate op payload:
+// {"requestId": "...", "prompt": "...", "maxTokens": N, "temperature": f,
+//  "topK": n, "topP": f, "repetitionPenalty": f, "repeatLastN": n,
+//  "seed": n}.
+//
+// Intent: turn one JSON object into a fully-typed, range-checked
+// generation request so the engine's C ABI never sees raw wire data.
+// prompt and maxTokens are REQUIRED; every other member is optional and
+// falls back to the sampler defaults shown below.
+//
+// Parameters:
+//   bytes              the raw "payload" member (input; only read — the
+//                      scanner is bounds-checked);
+//   request_id         optional; cleared first; empty means the engine
+//                      synthesizes one; > 128 chars is rejected;
+//   prompt             required, non-empty, <= 1 MiB;
+//   max_tokens         required, in [1, UINT32_MAX];
+//   temperature        optional, default 1.0f, range [0, 100];
+//   top_k              optional, default 0 (= disabled), range
+//                      [0, INT32_MAX];
+//   top_p              optional, default 1.0f, range [0, 1];
+//   repetition_penalty optional, default 1.0f (= neutral), range
+//                      [0, 100];
+//   repeat_last_n      optional, default 0 (= the engine's
+//                      kDefaultRepeatLastN), range [0, UINT32_MAX];
+//   seed               optional, default 0, range [0, 1.8e19];
+//   error              human-readable failure detail; only written on a
+//                      false return.
+//
+// Return: true when the object was fully consumed and every present
+// member was in range (all outputs then hold their final values); false
+// with `error` set on the first problem (missing prompt / missing
+// maxTokens / any range violation / structural breakage). Unknown
+// members are skipped with skip_value() — forward-compatible by design.
+//
+// Ownership: nothing retained; all outputs are the caller's objects and
+// are fully overwritten (outputs are assigned before use so a false
+// return still leaves them in a defined state).
+//
+// Invariants on success: prompt non-empty and <= 1 MiB, max_tokens >= 1,
+// temperature/top_p/repetition_penalty within their sampling-safe
+// ranges above.
 bool extract_generate_payload(const std::string& bytes,
                               std::string& request_id, std::string& prompt,
                               uint32_t& max_tokens, float& temperature,

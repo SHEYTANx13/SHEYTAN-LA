@@ -67,8 +67,11 @@ type SessionSummary struct {
 	NextStep                 string   `json:"nextStep,omitempty"`
 }
 
-func (s *Store) summaryPath(id string) string {
-	return s.dir + string(os.PathSeparator) + id + ".summary.json"
+// summaryPath is the sessions-directory path of one summary sidecar.
+// It fails closed on an id that is not a safe single path component
+// (v1.11.1 path-injection remediation — same grammar as sessions.go).
+func (s *Store) summaryPath(id string) (string, error) {
+	return s.artifactPath(id, ".summary.json")
 }
 
 // SaveSummary persists the summary sidecar (atomic, like every session
@@ -91,7 +94,11 @@ func (s *Store) SaveSummary(sum *SessionSummary) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(s.summaryPath(sum.SessionID), data)
+	sp, spErr := s.summaryPath(sum.SessionID)
+	if spErr != nil {
+		return spErr
+	}
+	return writeAtomic(sp, data)
 }
 
 // Summary loads the session's summary sidecar (nil, nil when none exists
@@ -127,8 +134,10 @@ func (s *Store) existsLocked(id string) bool {
 			return true
 		}
 	}
-	if fi, err := os.Stat(s.path(id)); err == nil && !fi.IsDir() {
-		return true
+	if p, pErr := s.path(id); pErr == nil {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return true
+		}
 	}
 	return false
 }
@@ -151,7 +160,11 @@ func (s *Store) modeFromIndexLocked(id string) string {
 // summaryLocked reads the sidecar; missing file = no summary yet.
 // Caller holds mu.
 func (s *Store) summaryLocked(id string) *SessionSummary {
-	data, err := os.ReadFile(s.summaryPath(id))
+	sp, spErr := s.summaryPath(id)
+	if spErr != nil {
+		return nil
+	}
+	data, err := os.ReadFile(sp)
 	if err != nil {
 		return nil
 	}

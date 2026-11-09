@@ -162,6 +162,17 @@ func quantName(ft uint32) string {
 // for anything that is not a valid GGUF v2/v3 file — the caller falls back
 // to a plain filename card.
 func ReadModelCard(path string) (*ModelCard, error) {
+	// v1.11.1 path-injection: the model path may be user-selected (an
+	// explicit external GGUF) or app-managed (under the models root). The
+	// read is validated at the point of use: non-empty and NUL-free — a
+	// path that can never name a real file fails closed here.
+	if path == "" {
+		return nil, fmt.Errorf("gguf: model path is empty")
+	}
+	if strings.ContainsRune(path, '\x00') {
+		return nil, fmt.Errorf("gguf: model path contains NUL")
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err

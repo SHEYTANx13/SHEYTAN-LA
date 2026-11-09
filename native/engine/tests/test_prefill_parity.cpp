@@ -285,14 +285,15 @@ int main() {
         CHECK(spanned.token(next, static_cast<uint64_t>(ids.size()),
                             decode_logits.data(), ld.error) == SHTN_OK);
 
-        // Same state built purely serially.
-        fwd::Forward serial;
-        CHECK(serial.init(ld.model.weights(), h, 0, ld.error) == SHTN_OK);
-        std::vector<std::vector<float>> serial_logits;
-        CHECK(run_serial(serial, ids, 0, serial_logits, ld.error));
+        // Same state built purely serially. (`mixed_serial` — the plain
+        // `serial` name is taken by the parity run in section 1-4.)
+        fwd::Forward mixed_serial;
+        CHECK(mixed_serial.init(ld.model.weights(), h, 0, ld.error) == SHTN_OK);
+        std::vector<std::vector<float>> mixed_serial_logits;
+        CHECK(run_serial(mixed_serial, ids, 0, mixed_serial_logits, ld.error));
         std::vector<float> serial_decode(h.vocab_size);
-        CHECK(serial.token(next, static_cast<uint64_t>(ids.size()),
-                           serial_decode.data(), ld.error) == SHTN_OK);
+        CHECK(mixed_serial.token(next, static_cast<uint64_t>(ids.size()),
+                                 serial_decode.data(), ld.error) == SHTN_OK);
 
         CHECK(decode_logits == serial_decode);
     }

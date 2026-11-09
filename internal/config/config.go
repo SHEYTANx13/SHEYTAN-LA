@@ -977,6 +977,15 @@ func copyDir(src, dst string) error {
 // path: rename …: no such file or directory"). Same-directory unique
 // temps keep the atomic-rename semantics without the name collision.
 func Save(path string, cfg *Config) error {
+	// v1.11.1 path-injection: the config file path is itself configuration
+	// (CLI flag, environment, data-root derivation). A value that is
+	// empty, control-character-tainted, token-bearing or still carrying a
+	// ".." component is refused BEFORE anything is written — fail closed,
+	// never a traversal write of the runtime configuration.
+	if err := validConfigFilePath(path); err != nil {
+		return err
+	}
+
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -999,10 +1008,53 @@ func Save(path string, cfg *Config) error {
 	return nil
 }
 
+// validConfigFilePath is the boundary grammar for a configuration file
+// path (v1.11.1 path-injection remediation). The path is semi-trusted
+// configuration: a usable value is non-empty and bounded, carries no NUL
+// or other control character, no unresolved environment token, and no
+// ".." component that would traverse outside its directory. Plain
+// relative names keep their historical (CWD-relative) semantics; the
+// canonical runtime path is absolute (ConfigPath under DataDir).
+func validConfigFilePath(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("config: the configuration file path is empty")
+	}
+	if len(path) > 4096 {
+		return fmt.Errorf("config: the configuration file path is unreasonably long (%d bytes)", len(path))
+	}
+	for _, r := range path {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("config: the configuration file path contains a control character (U+%04X)", r)
+		}
+	}
+	if HasEnvToken(path) {
+		return fmt.Errorf("config: the configuration file path contains an unresolved environment reference")
+	}
+	for _, part := range strings.FieldsFunc(filepath.ToSlash(path), func(r rune) bool { return r == '/' }) {
+		if part == ".." {
+			return fmt.Errorf("config: the configuration file path must not traverse directories (..)")
+		}
+	}
+	return nil
+}
+
 // writeUniqueTemp writes data to a unique temp file in dir and returns
 // its path (the caller renames or removes it). The file is closed before
 // returning — the subsequent rename needs no open handles.
 func writeUniqueTemp(dir, prefix string, data []byte, mode os.FileMode) (string, error) {
+	// v1.11.1 path-injection: the temp directory is config-derived (every
+	// caller hands over filepath.Dir of a config path). An empty or
+	// control-character-tainted directory fails closed here — the last
+	// line of defense for the shared atomic-write sink.
+	if strings.TrimSpace(dir) == "" {
+		return "", fmt.Errorf("config: the write target directory is empty")
+	}
+	for _, r := range dir {
+		if r < 0x20 || r == 0x7f {
+			return "", fmt.Errorf("config: the write target directory contains a control character (U+%04X)", r)
+		}
+	}
+
 	f, err := os.CreateTemp(dir, prefix+"-*.tmp")
 	if err != nil {
 		return "", err
@@ -1205,34 +1257,58 @@ func parseBool(v string) bool {
 }
 
 // EnsureDirs creates all required portable directories.
+//
+// v1.11.1 path-injection: every directory comes from a SAFE derivation —
+// a config-declared root that is NUL/control-tainted, token-bearing or
+// traversal-shaped falls back to the canonical derivation under the
+// validated data root (the same contract as the Load-time
+// normalization). Valid configurations create exactly the same tree as
+// before.
 func (c *Config) EnsureDirs() error {
+	dataDir := c.safeDataRoot()
+
 	dirs := []string{
-		c.DataDir,
-		c.ModelsDir,
-		c.SessionsDir,
-		c.LogsDir(),
-		c.ScreenshotsDir(),
-		c.ChartsDir(),
-		c.BrowserProfileDir(),
-		c.SandboxDir(),
-		c.WorkspaceDir(),
-		c.LabWorkspaceRoot,
-		filepath.Join(c.DataDir, "lab"),
-		filepath.Join(c.DataDir, "research"),
-		filepath.Join(c.DataDir, "bin"),
+		dataDir,
+		c.safeDerivedDir(c.ModelsDir, "models", dataDir),
+		c.safeDerivedDir(c.SessionsDir, "sessions", dataDir),
+		filepath.Join(dataDir, "logs"),
+		filepath.Join(dataDir, "logs", "screenshots"),
+		filepath.Join(dataDir, "charts"),
+		filepath.Join(dataDir, "browser-profile"),
+		filepath.Join(dataDir, "sandbox"),
+		filepath.Join(dataDir, "workspace"),
+		c.safeDerivedDir(c.LabWorkspaceRoot, filepath.Join("lab", "workspaces"), dataDir),
+		filepath.Join(dataDir, "lab"),
+		filepath.Join(dataDir, "research"),
+		filepath.Join(dataDir, "bin"),
 	}
 
 	for _, path := range dirs {
-		if path == "" {
-			continue
-		}
-
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			return fmt.Errorf("mkdir %s: %w", path, err)
 		}
 	}
 
 	return nil
+}
+
+// safeDataRoot returns the config-declared data root when it is a usable
+// directory path and the canonical install-local root otherwise (the
+// EnsureDirs fallback — the same contract as normalizeRuntimePaths).
+func (c *Config) safeDataRoot() string {
+	if safe, ok := safeRuntimePath(c.DataDir); ok {
+		return safe
+	}
+	return defaultDataRoot()
+}
+
+// safeDerivedDir returns the declared value when it is a usable directory
+// path and the canonical derivation under dataDir otherwise.
+func (c *Config) safeDerivedDir(declared, sub, dataDir string) string {
+	if safe, ok := safeRuntimePath(declared); ok {
+		return safe
+	}
+	return filepath.Join(dataDir, sub)
 }
 
 // LogsDir returns the log directory.

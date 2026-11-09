@@ -301,6 +301,61 @@ func rootKey(root string) string {
 	return hex.EncodeToString(sum[:])[:16]
 }
 
+// validRoot is the fail-closed check for the workspace root every sink
+// derives from (v1.11.1 path-injection remediation — repository-root
+// class): the root must be a non-empty, NUL-free ABSOLUTE path. Roots
+// arrive from the workspace selection (config or the API clone-switch
+// path), so a hostile or ambiguous root is rejected before any
+// filesystem operation.
+func validRoot(root string) bool {
+	if root == "" || strings.ContainsRune(root, 0) {
+		return false
+	}
+	return filepath.IsAbs(root)
+}
+
+// errInvalidRelPath marks a repository-relative path that must never be
+// opened: absolute forms and escapes ("..") are rejected, never joined.
+var errInvalidRelPath = errors.New("repoindex: relative path escapes the workspace root")
+
+// repoJoin resolves one repository-relative path (slash form) against
+// the selected repository root and FAILS CLOSED on the hostile
+// spellings (v1.11.1 path-injection remediation, house style from
+// internal/updater.SafeArchiveRel): the backslash form is unified to
+// the slash separator first, then empty paths, absolute/UNC/volume
+// forms and anything that cleans to an escape ("..", "a/../..") produce
+// an error, never a path. Every file open under a workspace root
+// (ParseFile, contentDigest) takes its path from this builder, so a
+// hostile relative path can never leave the workspace.
+func repoJoin(root, rel string) (string, error) {
+	if !validRoot(root) {
+		return "", errors.New("repoindex: invalid workspace root")
+	}
+	if rel == "" {
+		return "", errInvalidRelPath
+	}
+
+	// Separator-canonical view: a backslash becomes a separator on every
+	// host, so rooted/UNC/volume/traversal shapes are visible everywhere.
+	unified := strings.ReplaceAll(rel, "\\", "/")
+
+	if strings.HasPrefix(unified, "/") {
+		return "", errInvalidRelPath // absolute / rooted / UNC
+	}
+	if len(unified) >= 2 && unified[1] == ':' {
+		return "", errInvalidRelPath // drive-letter volume
+	}
+	if strings.ContainsRune(unified, ':') {
+		return "", errInvalidRelPath // alternate-data-stream colon
+	}
+
+	clean := filepath.Clean(filepath.FromSlash(unified))
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", errInvalidRelPath // traversal escape
+	}
+	return filepath.Join(root, clean), nil
+}
+
 func (s *Store) indexPath(root string) string {
 	return filepath.Join(s.dir, rootKey(root)+".json")
 }
@@ -439,8 +494,10 @@ func (s *Store) Status(root string) Status {
 // next call resumes incrementally. ctx cancellation is honored at
 // every step boundary.
 func (s *Store) Update(ctx context.Context, root string) (UpdateReport, error) {
-	if root == "" {
-		return UpdateReport{}, errors.New("repoindex: empty workspace root")
+	// Fail closed BEFORE any filesystem operation: the workspace root is
+	// the anchor every file path in this package derives from.
+	if !validRoot(root) {
+		return UpdateReport{}, errors.New("repoindex: empty or non-absolute workspace root")
 	}
 
 	deadline := time.Now().Add(updateTimeBudget)
@@ -731,8 +788,15 @@ type fileStat struct {
 
 // contentDigest computes the bounded content digest: sha256(size ||
 // first maxDigestBytes bytes). Never reads more than maxDigestBytes.
+// The file path FAILS CLOSED through repoJoin (repository-relative
+// class): a hostile rel produces an error, never a path outside the
+// workspace root.
 func contentDigest(root, rel string, size int64) (string, error) {
-	f, err := os.Open(filepath.Join(root, filepath.FromSlash(rel)))
+	path, err := repoJoin(root, rel)
+	if err != nil {
+		return "", err
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}

@@ -5,6 +5,7 @@
 #include "shtn/engine.h"
 #include "fp16.h"
 
+#include <cassert>
 #include <cstring>
 
 namespace shtn {
@@ -253,7 +254,15 @@ int32_t Weights::row_span(const std::string& name, uint64_t row,
         return SHTN_ERR_UNSUPPORTED;
     }
 
+    // find(name) is guaranteed non-null here by contract: shape2d()
+    // above already resolved the SAME name and returned
+    // SHTN_ERR_MODEL_FORMAT on a miss, and the name→index map built in
+    // the constructor does not change for the duration of this call
+    // (const method; the mapped file is immutable). The assert pins the
+    // invariant for the t->offset dereference below instead of adding a
+    // dead defensive branch.
     const gguf::TensorInfo* t = find(name);
+    assert(t != nullptr && "shape2d() above guarantees the tensor exists");
 
     // Absolute offset: data section start + tensor offset + row offset.
     uint64_t row_off = 0;
@@ -421,6 +430,12 @@ int32_t Weights::row_f32(const std::string& name, uint64_t row,
     if (rc != SHTN_OK) return rc;
 
     const gguf::TensorInfo* t = find(name);
+    // Contract: row_span() above resolved the SAME name through
+    // shape2d() and returned its error on a miss, so find(name) cannot
+    // be null here (the name→index map is immutable during this call).
+    // The assert documents the invariant for the dereferences below
+    // instead of adding a dead defensive branch.
+    assert(t != nullptr && "row_span() above guarantees the tensor exists");
     const uint32_t ne0 = static_cast<uint32_t>(t->dims[0]);
 
     RowLayout layout{};
@@ -497,8 +512,11 @@ int32_t Weights::vec_f32(const std::string& name, uint32_t expected_elems,
     // tensor is one row).
     if (out.size() < n) out.resize(n);
 
-    switch (t->type) {
-    case 0: {
+    // Only F32 has a 1-D native access path; everything else (F16 and
+    // the quantized encodings) is rejected explicitly rather than
+    // reinterpreted — expressed as if/else because the dispatch has a
+    // single supported case.
+    if (t->type == 0) {
         const uint8_t* src = nullptr;
         // Manual span computation for the 1-D case.
         RowLayout layout{};
@@ -526,8 +544,7 @@ int32_t Weights::vec_f32(const std::string& name, uint32_t expected_elems,
             out[i] = load_f32_le(p);
         }
         return SHTN_OK;
-    }
-    default:
+    } else {
         // 1-D quantized vectors (norm weights are never quantized in
         // practice; still fail explicitly rather than reinterpret).
         error = "tensor '" + name + "' type id " + std::to_string(t->type) +

@@ -95,6 +95,16 @@ static bool close_enough(const std::vector<double>& ref, const float* got,
     return ok;
 }
 
+// same_token_id compares an integer token id against the reference value
+// with a relative tolerance instead of exact == (CodeQL
+// cpp/equality-on-floats). Both sides are INTEGRAL token ids, so any
+// genuine mismatch differs by at least 1 — the 1e-9 relative slack can
+// never mask a wrong token, it only absorbs representation noise. Test
+// sensitivity is unchanged.
+static bool same_token_id(double got, double want) {
+    return std::fabs(got - want) <= 1e-9 * std::max(1.0, std::fabs(want));
+}
+
 int main() {
     const std::string fixtures = SHTN_FIXTURES_DIR;
 
@@ -326,7 +336,7 @@ int main() {
         const double want = ref.at("argmax_token")[0];
         CHECK(sink.second != 0xFFFFFFFFu);
         if (sink.second != 0xFFFFFFFFu) {
-            CHECK(static_cast<double>(sink.second) == want);
+            CHECK(same_token_id(static_cast<double>(sink.second), want));
         }
 
         // Metrics: measured values present (1 prompt-window, 1 token).
@@ -381,12 +391,14 @@ int main() {
         close_enough(ref.at("logits_final"), logits.data(), h.vocab_size,
                      1e-3, "logits_final");
 
-        // Greedy argmax over the native logits == reference argmax.
+        // Greedy argmax over the native logits == reference argmax
+        // (integral ids compared through same_token_id — see above).
         uint32_t am = 0;
         for (uint32_t v = 1; v < h.vocab_size; ++v) {
             if (logits[v] > logits[am]) am = v;
         }
-        CHECK(static_cast<double>(am) == ref.at("argmax_token")[0]);
+        CHECK(same_token_id(static_cast<double>(am),
+                            ref.at("argmax_token")[0]));
     }
 
     shtn_engine_destroy(engine);

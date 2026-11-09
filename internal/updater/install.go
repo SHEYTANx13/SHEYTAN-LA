@@ -56,6 +56,78 @@ func WithInstallLock(fn func()) {
 	fn()
 }
 
+// errInvalidEngineTag is returned (wrapped) for tags that fail the grammar.
+var errInvalidEngineTag = errors.New("invalid engine release tag")
+
+// validEngineTag is the ONE grammar for a llama.cpp release tag used as
+// a filesystem/URL path component (v1.11.1 path-injection remediation,
+// work order §4.2 — single-component identifier class). Tags arrive from
+// the GitHub releases API and Atom feed (REMOTE data) and from callers;
+// each one is embedded in the release asset name, the download URL, the
+// staging paths and the download-manager cache key. The grammar accepts
+// ordinary upstream tags ("b1234", "v1.6.1", "b-variant") and rejects:
+// empty/oversized tags, path separators (POSIX and Windows), NUL,
+// volume/ADS colons, leading dots (".." included), whitespace-padded
+// tags and non-grammar characters. Valid upstream identifier syntax is
+// preserved in DATA (manifests, logs, state) — never in paths.
+func validEngineTag(tag string) bool {
+	if tag == "" || len(tag) > 128 {
+		return false
+	}
+	if strings.ContainsAny(tag, "/\\") {
+		return false
+	}
+	if strings.ContainsAny(tag, "\x00:") {
+		return false
+	}
+	if strings.HasPrefix(tag, ".") {
+		return false
+	}
+	if strings.TrimSpace(tag) != tag {
+		return false
+	}
+	for _, r := range tag {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_', r == '+', r == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// checkEngineTag fail-closes a tag BEFORE any path, URL or asset name is
+// derived from it. A hostile tag produces an error, never a download.
+func checkEngineTag(tag string) error {
+	if !validEngineTag(tag) {
+		return fmt.Errorf("updater: %w %q", errInvalidEngineTag, tag)
+	}
+	return nil
+}
+
+// safeLocalFileName validates ONE local file name (a single path
+// component) through the shared lexical validator before it is joined to
+// a directory (v1.11.1 path-injection remediation): SafeArchiveRel
+// rejects absolute/volume/UNC/".."/NUL/ADS spellings, and the additional
+// single-component requirement keeps the name from crossing directories
+// at all. Used wherever a remote URL's tail would once have been
+// trusted as a local file name.
+func safeLocalFileName(name string) (string, error) {
+	rel, err := SafeArchiveRel(name)
+	if err != nil {
+		return "", err
+	}
+	// rel must be a plain, single, non-hidden component: the shared
+	// lexical validator already rejected traversal/absolute/UNC/ADS/NUL
+	// spellings; the extra checks keep the name from crossing directories
+	// or hiding (dot-prefixed) inside the extraction directory.
+	if rel == "." || strings.HasPrefix(rel, ".") || strings.ContainsAny(rel, `/\`) {
+		return "", fmt.Errorf("updater: %q is not a safe single file name", name)
+	}
+	return rel, nil
+}
+
 // InstallResult reports what one install committed.
 type InstallResult struct {
 	Outcome string `json:"outcome"`
@@ -289,6 +361,12 @@ func InstallStagedDeferredWithVariant(
 	variant AssetVariant,
 	onProgress func(downloader.Progress),
 ) (*StagedInstall, error) {
+	// v1.11.1 path-injection remediation: the tag is REMOTE data (GitHub
+	// releases API / Atom feed). Fail closed before it can reach any path.
+	if err := checkEngineTag(tag); err != nil {
+		return nil, err
+	}
+
 	installMu <- struct{}{}
 	defer func() { <-installMu }()
 
@@ -346,6 +424,12 @@ func InstallStagedFromArchiveDeferredWithVariant(
 	variant AssetVariant,
 	archivePath string,
 ) (*StagedInstall, error) {
+	// v1.11.1 path-injection remediation: fail closed on a hostile tag
+	// before it can reach any path in the transaction below.
+	if err := checkEngineTag(tag); err != nil {
+		return nil, err
+	}
+
 	installMu <- struct{}{}
 	defer func() { <-installMu }()
 
@@ -383,6 +467,12 @@ func DownloadEngineArchiveStaged(
 	variant AssetVariant,
 	onProgress func(downloader.Progress),
 ) (string, error) {
+	// v1.11.1 path-injection remediation: the tag is REMOTE data and names
+	// the staged archive + cache key below. Fail closed first.
+	if err := checkEngineTag(tag); err != nil {
+		return "", err
+	}
+
 	url := AssetURLForVariant(tag, variant)
 	if url == "" {
 		return "", fmt.Errorf(
@@ -505,6 +595,12 @@ func refuseUnmanagedEngineDir(cfg *config.Config, binDir string) error {
 // CLEANUP are the caller's decision via StagedInstall.Commit/Rollback
 // (spec §7). Caller holds installMu and the install lease.
 func stageFromArchive(cfg *config.Config, tag, archive, url string, variant AssetVariant) (*StagedInstall, error) {
+	// v1.11.1 path-injection remediation: every tag entry point into the
+	// transaction re-checks the grammar — this is the shared body.
+	if err := checkEngineTag(tag); err != nil {
+		return nil, err
+	}
+
 	binDir := EngineBinDir(cfg)
 
 	// v1.3.7: the directory swap only ever touches SHEYTAN-owned
@@ -1144,6 +1240,12 @@ func downloadEngineArchiveStaged(
 	variant AssetVariant,
 	onProgress func(downloader.Progress),
 ) (string, error) {
+	// v1.11.1 path-injection remediation: the tag names the archive file
+	// and the cache key below — fail closed before either is built.
+	if err := checkEngineTag(tag); err != nil {
+		return "", err
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
@@ -1290,7 +1392,18 @@ func extractArchiveBySuffix(archivePath, url, dir string) error {
 			return err
 		}
 
-		return copyFileMode(archivePath, filepath.Join(dir, filepath.Base(url)), 0o755)
+		// v1.11.1 path-injection remediation: the fallback copy names the
+		// file after the LOCAL archive (the name the download manager
+		// already committed), never after the remote URL — a URL whose tail
+		// ends in a traversal component (".../..") could once pick the
+		// extraction directory's parent. The local name is validated with
+		// the shared lexical validator before any filesystem use.
+		base, err := safeLocalFileName(filepath.Base(archivePath))
+		if err != nil {
+			return err
+		}
+
+		return copyFileMode(archivePath, filepath.Join(dir, base), 0o755)
 	}
 }
 

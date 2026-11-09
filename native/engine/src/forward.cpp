@@ -170,9 +170,9 @@ int32_t Forward::init(const tensor::Weights* w, const llama::Hyper& h,
     }
 
     // --- resolved weight table (v1.9.2): once per binding -----------------
-    if (const int32_t rc = resolve_model(error); rc != SHTN_OK) {
+    if (const int32_t resolve_rc = resolve_model(error); resolve_rc != SHTN_OK) {
         kv_.release();
-        return rc;
+        return resolve_rc;
     }
 
     initialized_ = true;

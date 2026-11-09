@@ -30,6 +30,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -96,6 +97,25 @@ type HTTPExec struct {
 	// occurrences are replaced by the JSON-encoded value of that
 	// parameter.
 	BodyTemplate string `json:"bodyTemplate,omitempty"`
+	// AllowedHosts is the positive destination allowlist for the URL
+	// AUTHORITY (v1.11.1 SSRF remediation, work order §4.1 items 1-3).
+	// The endpoint host of every request — including after "$param"
+	// substitution and on every redirect hop — must either be the
+	// template's own fixed host or match one of these entries.
+	//
+	// Entries are exact host names ("api.example.com") or single-level
+	// wildcard subdomains ("*.api.example.com", which matches
+	// "sub.api.example.com" but not the bare suffix host). Entries carry
+	// no scheme, no port, no path, no userinfo. At most 16 entries.
+	//
+	// Empty means the template host ONLY: substituted parameter values
+	// may fill non-authority parts of the URL, but can never move the
+	// request to a different destination. This is the explicit policy
+	// object and approval boundary for flexible external URLs: a
+	// definition that genuinely needs parameter-selected destinations
+	// must declare them here, at save time, in the user-authored tool
+	// definition.
+	AllowedHosts []string `json:"allowedHosts,omitempty"`
 }
 
 // CommandExec is the local command/script execution configuration.
@@ -242,6 +262,14 @@ func (d *Definition) Validate() ValidationResult {
 		if totalHeaderBytes(d.HTTP.Headers) > maxHeaderBytes {
 			return ValidationResult{Owner: "http.headers", Error: "header block too large"}
 		}
+		if len(d.HTTP.AllowedHosts) > 16 {
+			return ValidationResult{Owner: "http.allowedHosts", Error: "at most 16 allowedHosts entries"}
+		}
+		for _, h := range d.HTTP.AllowedHosts {
+			if err := validateAllowedHostEntry(h); err != nil {
+				return ValidationResult{Owner: "http.allowedHosts", Error: err.Error()}
+			}
+		}
 		if d.Permission != PermNetwork {
 			return ValidationResult{Owner: "permission", Error: "HTTP tools require the explicit network permission"}
 		}
@@ -307,6 +335,53 @@ func totalHeaderBytes(h map[string]string) int {
 		total += len(k) + len(v) + 4
 	}
 	return total
+}
+
+// validateAllowedHostEntry checks one allowedHosts allowlist entry
+// (v1.11.1 SSRF remediation): either an exact host name or a
+// single-level wildcard subdomain ("*.api.example.com"). Entries carry
+// no scheme, port, path, query or userinfo, and are limited to the
+// characters of a legal DNS name (IPv6 literals included via ":[]").
+func validateAllowedHostEntry(entry string) error {
+	host := strings.TrimSpace(entry)
+	if host == "" {
+		return fmt.Errorf("allowedHosts entry is empty")
+	}
+	if len(host) > 253 {
+		return fmt.Errorf("allowedHosts entry %q is too long", entry)
+	}
+	wildcard := false
+	if strings.HasPrefix(host, "*.") {
+		wildcard = true
+		host = host[2:]
+		if host == "" {
+			return fmt.Errorf("allowedHosts wildcard entry %q has an empty suffix", entry)
+		}
+	}
+	for _, r := range host {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '.', r == '-', r == ':', r == '[', r == ']', r == '_':
+			// legal host-name characters
+		default:
+			return fmt.Errorf("allowedHosts entry %q contains the illegal character %q", entry, string(r))
+		}
+	}
+	if strings.ContainsAny(host, "/?#@$ ") {
+		return fmt.Errorf("allowedHosts entry %q must be a bare host (no scheme, port, path or userinfo)", entry)
+	}
+	// A port is never part of an allowlist entry: ':' is legal only in a
+	// bracketed IPv6 literal ("[2001:db8::1]"), never as host:port.
+	if strings.Contains(host, ":") &&
+		(!strings.HasPrefix(host, "[") || !strings.HasSuffix(host, "]")) {
+		return fmt.Errorf("allowedHosts entry %q must not carry a port (bare host only)", entry)
+	}
+	if wildcard && strings.Contains(host, "*") {
+		return fmt.Errorf("allowedHosts entry %q may use the single-level \"*.\" prefix only", entry)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -482,7 +557,11 @@ func (s *Store) Save(d *Definition) error {
 	}
 
 	// ATOMIC save: temp file in the same directory + rename (spec §8).
-	path := s.pathFor(d.ID)
+	// The path FAILS CLOSED on an id outside the tool-id grammar.
+	path, err := s.pathFor(d.ID)
+	if err != nil {
+		return err
+	}
 	tmp := path + ".tmp"
 
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
@@ -502,7 +581,9 @@ func (s *Store) Save(d *Definition) error {
 	return nil
 }
 
-// Delete removes a definition (missing id is a no-op).
+// Delete removes a definition (missing id is a no-op). A hostile id can
+// never be in the cache, but the removal still fails closed: no file path
+// is ever built from an id outside the grammar.
 func (s *Store) Delete(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -513,20 +594,63 @@ func (s *Store) Delete(id string) bool {
 
 	delete(s.cache, id)
 
-	_ = os.Remove(s.pathFor(id))
+	if path, err := s.pathFor(id); err == nil {
+		_ = os.Remove(path)
+	}
 	return true
 }
 
-var safeID = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
-
-func (s *Store) pathFor(id string) string {
-	// The id is generated (hex) — but persisted ids are never trusted on
-	// a filesystem path: anything path-like is stripped.
-	safe := safeID.ReplaceAllString(id, "")
-	if safe == "" {
-		safe = "tool"
+// validToolID is the ONE grammar for a custom-tool definition id and a
+// task-scoped tool/task id used as a single filesystem path component
+// (v1.11.1 path-injection remediation — single-component identifier
+// class, same grammar as internal/sessions). Ids arrive from API callers
+// (untrusted), from task ids and from persisted JSON documents; every
+// path built from one must stay inside the custom-tools store. The
+// grammar accepts the store-generated forms ("ct-<hex>") and ordinary
+// legacy ids, and rejects: empty/oversized ids, path separators (POSIX
+// and Windows), NUL, volume/ADS colons, leading dots (".." included),
+// whitespace-padded ids and non-grammar characters.
+func validToolID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
 	}
-	return filepath.Join(s.dir, safe+".json")
+	if strings.ContainsAny(id, "/\\") {
+		return false
+	}
+	if strings.ContainsAny(id, "\x00:") {
+		return false
+	}
+	if strings.HasPrefix(id, ".") {
+		return false
+	}
+	if strings.TrimSpace(id) != id {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// errInvalidToolID is returned (wrapped) for ids that fail the grammar.
+var errInvalidToolID = errors.New("invalid tool id")
+
+// pathFor builds the on-disk name for one tool definition
+// ("<dir>/<id>.json") and FAILS CLOSED on an id that is not a safe
+// single path component: every os.* call in this package takes its path
+// from this builder (or the TaskStore equivalents), so a hostile id can
+// never leave the custom-tools directory — it produces an error, never
+// a path.
+func (s *Store) pathFor(id string) (string, error) {
+	if !validToolID(id) {
+		return "", fmt.Errorf("custom tools: %w %q", errInvalidToolID, id)
+	}
+	return filepath.Join(s.dir, id+".json"), nil
 }
 
 func newID() string {

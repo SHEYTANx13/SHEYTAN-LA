@@ -284,7 +284,11 @@ func (s *Store) hotGetLocked(id string) (*Session, bool) {
 	if !ok {
 		return nil, false
 	}
-	fi, err := os.Stat(s.path(id))
+	p, pErr := s.path(id)
+	if pErr != nil {
+		return nil, false
+	}
+	fi, err := os.Stat(p)
 	if err != nil || fi.Size() != e.size || !fi.ModTime().Equal(e.mod) {
 		delete(s.hot, id) // stale (external write) — reload from disk
 		return nil, false
@@ -337,6 +341,57 @@ func newSessionID() string {
 	return fmt.Sprintf("s%d%s", time.Now().UnixMilli(), hex.EncodeToString(b[:]))
 }
 
+// validSessionID is the ONE grammar for a session id used as a single
+// filesystem path component (v1.11.1 path-injection remediation, work
+// order §4.2 — single-component identifier class). Ids arrive from API
+// callers (untrusted), from history references and from the on-disk
+// index; every path built from one must stay inside the sessions
+// directory. The grammar accepts the store-generated form and ordinary
+// legacy ids, and rejects: empty/oversized ids, path separators (POSIX
+// and Windows), NUL, volume/ADS colons, leading dots (".." included),
+// whitespace-padded ids and non-grammar characters.
+func validSessionID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	if strings.ContainsAny(id, "/\\") {
+		return false
+	}
+	if strings.ContainsAny(id, "\x00:") {
+		return false
+	}
+	if strings.HasPrefix(id, ".") {
+		return false
+	}
+	if strings.TrimSpace(id) != id {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// errInvalidSessionID is returned (wrapped) for ids that fail the grammar.
+var errInvalidSessionID = errors.New("invalid session id")
+
+// artifactPath builds the on-disk name for one session artifact
+// ("<dir>/<id><suffix>") and FAILS CLOSED on an id that is not a safe
+// single path component: every os.* call in this package takes its path
+// from this builder, so a hostile id can never leave the sessions
+// directory — it produces an error, never a path.
+func (s *Store) artifactPath(id, suffix string) (string, error) {
+	if !validSessionID(id) {
+		return "", fmt.Errorf("sessions: %w %q", errInvalidSessionID, id)
+	}
+	return filepath.Join(s.dir, id+suffix), nil
+}
+
 // Create returns a fresh in-memory session in the DEFAULT mode. It is
 // persisted by the first Save/Append*/Update* call (so "New chat" costs
 // nothing until the user actually types).
@@ -368,7 +423,7 @@ func (s *Store) CreateInMode(mode string) *Session {
 
 // --- persistence primitives ---------------------------------------------
 
-func (s *Store) path(id string) string { return filepath.Join(s.dir, id+".json") }
+func (s *Store) path(id string) (string, error) { return s.artifactPath(id, ".json") }
 
 // writeAtomic writes data to path via tmp+rename so a crash can never
 // leave a half-written session or index behind.
@@ -444,7 +499,12 @@ func (s *Store) reconcileLocked() {
 	// Drop entries whose file is gone (deleted behind our back).
 	kept := s.index[:0]
 	for _, st := range s.index {
-		if _, err := os.Stat(s.path(st.ID)); err == nil {
+		p, pErr := s.path(st.ID)
+		if pErr != nil {
+			changed = true // hostile/invalid id: drop the entry
+			continue
+		}
+		if _, err := os.Stat(p); err == nil {
 			kept = append(kept, st)
 		} else {
 			changed = true
@@ -460,7 +520,11 @@ func (s *Store) reconcileLocked() {
 // readLocked loads the full session with the given id from disk. Legacy
 // activities embedded in old session files migrate to the sidecar once.
 func (s *Store) readLocked(id string) (*Session, error) {
-	data, err := os.ReadFile(s.path(id))
+	p, pErr := s.path(id)
+	if pErr != nil {
+		return nil, pErr
+	}
+	data, err := os.ReadFile(p)
 	if err != nil {
 		return nil, err
 	}
@@ -490,7 +554,11 @@ func (s *Store) readLocked(id string) (*Session, error) {
 				if mErr != nil {
 					continue
 				}
-				f, oErr := os.OpenFile(s.activityPath(id), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+				ap, apErr := s.activityPath(id)
+				if apErr != nil {
+					break
+				}
+				f, oErr := os.OpenFile(ap, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 				if oErr != nil {
 					break
 				}
@@ -502,8 +570,10 @@ func (s *Store) readLocked(id string) (*Session, error) {
 	}
 	// v1.2.4: remember the parsed session in the bounded hot cache keyed
 	// by the exact disk identity we just read.
-	if fi, statErr := os.Stat(s.path(id)); statErr == nil {
-		s.touchHotLocked(id, &hotEntry{sess: &sess, size: fi.Size(), mod: fi.ModTime()})
+	if p, pErr := s.path(id); pErr == nil {
+		if fi, statErr := os.Stat(p); statErr == nil {
+			s.touchHotLocked(id, &hotEntry{sess: &sess, size: fi.Size(), mod: fi.ModTime()})
+		}
 	}
 	return &sess, nil
 }
@@ -583,7 +653,10 @@ func (s *Store) saveLocked(sess *Session) error {
 		sess.UpdatedAt = sess.CreatedAt
 	}
 	sess.MsgCount = len(sess.Messages)
-	path := s.path(sess.ID)
+	path, pErr := s.path(sess.ID)
+	if pErr != nil {
+		return pErr
+	}
 	tmp := path + ".tmp"
 	size, err := writeSessionFile(tmp, sess)
 	if err != nil {
@@ -650,8 +723,8 @@ func modTimeOf(path string) time.Time {
 // (pending), then the hot cache, then the file on disk, then a bare stub
 // if only the index knows the id (resilient against a lost file).
 func (s *Store) fetchLocked(id string) (*Session, error) {
-	if id == "" {
-		return nil, fmt.Errorf("empty session id")
+	if !validSessionID(id) {
+		return nil, fmt.Errorf("sessions: %w %q", errInvalidSessionID, id)
 	}
 	if sess, ok := s.pending[id]; ok {
 		return sess, nil
@@ -784,13 +857,21 @@ func (s *Store) Delete(id string) error {
 			break
 		}
 	}
-	if err := os.Remove(s.path(id)); err == nil {
+	p, pErr := s.path(id)
+	if pErr != nil {
+		return pErr
+	}
+	if err := os.Remove(p); err == nil {
 		found = true
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	_ = os.Remove(s.activityPath(id))
-	_ = os.Remove(s.summaryPath(id))
+	if ap, apErr := s.activityPath(id); apErr == nil {
+		_ = os.Remove(ap)
+	}
+	if sp, spErr := s.summaryPath(id); spErr == nil {
+		_ = os.Remove(sp)
+	}
 	delete(s.hot, id)
 	if !found {
 		return fmt.Errorf("session %s not found", id)
@@ -842,7 +923,10 @@ func (s *Store) AppendActivity(id string, entry ActivityEntry) error {
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return err
 	}
-	path := s.activityPath(id)
+	path, pErr := s.activityPath(id)
+	if pErr != nil {
+		return pErr
+	}
 	line, err := json.Marshal(entry)
 	if err != nil {
 		return err
@@ -882,7 +966,10 @@ func (s *Store) AppendActivity(id string, entry ActivityEntry) error {
 // count and byte cap) when it outgrows either — keep the newest half — one
 // read, one atomic rewrite, amortized over hundreds of appends.
 func (s *Store) rotateActivitiesLocked(id string) {
-	path := s.activityPath(id)
+	path, pErr := s.activityPath(id)
+	if pErr != nil {
+		return
+	}
 
 	fi, err := os.Stat(path)
 	if err != nil {
@@ -921,7 +1008,11 @@ func (s *Store) rotateActivitiesLocked(id string) {
 // Served from the hot entry's validated sidecar cache when unchanged.
 func (s *Store) loadActivitiesLocked(id string) []ActivityEntry {
 	if e := s.hot[id]; e != nil {
-		if fi, err := os.Stat(s.activityPath(id)); err == nil {
+		ap, apErr := s.activityPath(id)
+		if apErr != nil {
+			return nil
+		}
+		if fi, err := os.Stat(ap); err == nil {
 			if e.acts != nil && fi.Size() == e.actSize && fi.ModTime().Equal(e.actMod) {
 				return e.acts
 			}
@@ -929,7 +1020,11 @@ func (s *Store) loadActivitiesLocked(id string) []ActivityEntry {
 			return nil // no sidecar, cache agrees
 		}
 	}
-	data, err := os.ReadFile(s.activityPath(id))
+	ap, apErr := s.activityPath(id)
+	if apErr != nil {
+		return nil
+	}
+	data, err := os.ReadFile(ap)
 	if err != nil {
 		if e := s.hot[id]; e != nil {
 			e.acts, e.actSize, e.actMod = nil, 0, time.Time{}
@@ -948,14 +1043,22 @@ func (s *Store) loadActivitiesLocked(id string) []ActivityEntry {
 		}
 	}
 	if e := s.hot[id]; e != nil {
-		if fi, statErr := os.Stat(s.activityPath(id)); statErr == nil {
+		ap, apErr := s.activityPath(id)
+		if apErr != nil {
+			return nil
+		}
+		if fi, statErr := os.Stat(ap); statErr == nil {
 			e.acts, e.actSize, e.actMod = out, fi.Size(), fi.ModTime()
 		}
 	}
 	return out
 }
 
-func (s *Store) activityPath(id string) string { return filepath.Join(s.dir, id+".activities.jsonl") }
+// activityPath is the sessions-directory path of one activity sidecar.
+// It fails closed on an id that is not a safe single path component.
+func (s *Store) activityPath(id string) (string, error) {
+	return s.artifactPath(id, ".activities.jsonl")
+}
 
 // TrimHot sheds the loaded-session cache (v1.2.4 coordinated cleanup):
 // evicts entries until at most keep remain, keeping the MOST RECENTLY used

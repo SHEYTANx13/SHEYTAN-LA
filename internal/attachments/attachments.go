@@ -31,6 +31,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -233,13 +234,63 @@ func (m *Manager) ResourceUsage() ResourceStats {
 	}
 }
 
-// objectPath is the content-addressed object location.
-func (m *Manager) objectPath(id string) string {
-	return filepath.Join(m.dir, "objects", id)
+// validAttachmentID is the ONE grammar for an attachment id used as a
+// single filesystem path component (v1.11.1 path-injection
+// remediation — single-component identifier class, same grammar as
+// internal/sessions). Ids are store-generated ("a" + hex), but they
+// also arrive from API callers (Get/Delete/Associate/StagePath) and
+// from persisted metadata documents; every path built from one must
+// stay inside the attachment store. The grammar rejects: empty/oversized
+// ids, path separators (POSIX and Windows), NUL, volume/ADS colons,
+// leading dots (".." included), whitespace-padded ids and non-grammar
+// characters.
+func validAttachmentID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	if strings.ContainsAny(id, "/\\") {
+		return false
+	}
+	if strings.ContainsAny(id, "\x00:") {
+		return false
+	}
+	if strings.HasPrefix(id, ".") {
+		return false
+	}
+	if strings.TrimSpace(id) != id {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
-func (m *Manager) metaPath(id string) string {
-	return filepath.Join(m.dir, "meta", id+".json")
+// errInvalidAttachmentID is returned (wrapped) for ids outside the grammar.
+var errInvalidAttachmentID = errors.New("attachments: invalid id")
+
+// objectPath is the content-addressed object location. It FAILS CLOSED
+// on an id that is not a safe single path component: a hostile id
+// produces an error, never a path outside the object store.
+func (m *Manager) objectPath(id string) (string, error) {
+	if !validAttachmentID(id) {
+		return "", fmt.Errorf("%w %q", errInvalidAttachmentID, id)
+	}
+	return filepath.Join(m.dir, "objects", id), nil
+}
+
+// metaPath is the metadata sidecar location for one attachment. It
+// FAILS CLOSED like objectPath (same grammar, same reasoning).
+func (m *Manager) metaPath(id string) (string, error) {
+	if !validAttachmentID(id) {
+		return "", fmt.Errorf("%w %q", errInvalidAttachmentID, id)
+	}
+	return filepath.Join(m.dir, "meta", id+".json"), nil
 }
 
 // Add stages one uploaded file: it streams, bounds, hashes, stores, sniffs,
@@ -282,7 +333,10 @@ func (m *Manager) Add(
 	id := "a" + sha[:24]
 
 	// Content-addressed store: identical content under any name dedupes.
-	obj := m.objectPath(id)
+	obj, err := m.objectPath(id)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := commitObject(obj, tmpPath); err != nil {
 		return nil, err
@@ -600,12 +654,16 @@ func (m *Manager) Delete(id string) bool {
 	}
 	m.mu.Unlock()
 
-	if err := os.Remove(m.metaPath(id)); err == nil {
-		existed = true
+	if path, err := m.metaPath(id); err == nil {
+		if err := os.Remove(path); err == nil {
+			existed = true
+		}
 	}
 
-	if err := os.Remove(m.objectPath(id)); err == nil {
-		existed = true
+	if path, err := m.objectPath(id); err == nil {
+		if err := os.Remove(path); err == nil {
+			existed = true
+		}
 	}
 
 	m.cache.Invalidate(
@@ -637,14 +695,19 @@ func (m *Manager) Associate(id, sessionID string) {
 }
 
 // StagePath returns the on-disk path of the stored object (for the vision
-// pipeline and for the model's file tools). Returns "" when unknown.
+// pipeline and for the model's file tools). Returns "" when unknown or
+// when the id fails the attachment-id grammar (fail closed).
 func (m *Manager) StagePath(id string) string {
 	att, ok := m.Get(id)
 	if !ok {
 		return ""
 	}
 
-	return m.objectPath(att.ID)
+	path, err := m.objectPath(att.ID)
+	if err != nil {
+		return ""
+	}
+	return path
 }
 
 // RetrievalStats carries the measured outcomes of one retrieval call —
@@ -846,7 +909,10 @@ func (m *Manager) RetrieveWithStats(
 			}
 
 			writeAttHeader(att)
-			att2 := m.objectPath(att.ID)
+			att2, err := m.objectPath(att.ID)
+			if err != nil {
+				continue
+			}
 			fmt.Fprintf(&b, "full text available at %s\n\n", att2)
 			n++
 			used += 200
@@ -963,7 +1029,11 @@ func sliceChunk(data []byte, ch Chunk, fallback string) string {
 func (m *Manager) readObject(id string) ([]byte, error) {
 	m.res.objectReads.Add(1)
 
-	data, err := os.ReadFile(m.objectPath(id))
+	path, err := m.objectPath(id)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err == nil {
 		m.res.readBytes.Add(uint64(len(data)))
 	}
@@ -974,7 +1044,11 @@ func (m *Manager) readObject(id string) ([]byte, error) {
 // readObjectRange reads exactly [offset, offset+length) from the stored
 // object (counted). ok=false when the object is missing.
 func (m *Manager) readObjectRange(id string, offset, length int) (string, bool) {
-	f, err := os.Open(m.objectPath(id))
+	path, err := m.objectPath(id)
+	if err != nil {
+		return "", false
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		return "", false
 	}
@@ -1021,11 +1095,19 @@ func (m *Manager) saveMeta(att *Attachment) error {
 		return err
 	}
 
-	return writeAtomic(m.metaPath(att.ID), data)
+	path, err := m.metaPath(att.ID)
+	if err != nil {
+		return err
+	}
+	return writeAtomic(path, data)
 }
 
 func (m *Manager) loadMeta(id string) (*Attachment, error) {
-	data, err := os.ReadFile(m.metaPath(id))
+	path, err := m.metaPath(id)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}

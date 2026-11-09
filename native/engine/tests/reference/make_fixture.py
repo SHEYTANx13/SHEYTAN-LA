@@ -26,7 +26,6 @@ import json
 import math
 import os
 import struct
-import sys
 
 import numpy as np
 
@@ -449,6 +448,13 @@ def run_layer_full(l, pos, tokens, x, cache_k, cache_v):
 
 
 def main():
+    """Generate every fixture under tests/fixtures/.
+
+    Returns the process exit status: 0 on success. Fixture-generation
+    failures (missing numpy, an unwritable fixtures directory, ...) raise,
+    so the interpreter exits non-zero with the traceback — failure is
+    always explicit and testable, never a silent zero exit.
+    """
     os.makedirs(FIXTURES, exist_ok=True)
 
     gguf_path = os.path.join(FIXTURES, "tiny-llama-f32.gguf")
@@ -546,6 +552,8 @@ def main():
     size = write_gguf(app_path, ctx=2048)
     print(f"wrote {app_path} ({size} bytes)")
 
+    return 0
+
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

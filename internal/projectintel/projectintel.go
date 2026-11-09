@@ -163,6 +163,12 @@ func (s *Store) save(f Facts) error {
 // defaults, layout). Existing VERIFIED commands are never overwritten by
 // observation — measurement wins over inference, and verified beats guessed.
 func (s *Store) Observe(root string) (Facts, error) {
+	// Fail closed BEFORE any path work: an empty or NUL-bearing root
+	// would otherwise normalize to the process working directory and
+	// scan an unintended tree (v1.11.1 path-injection remediation).
+	if strings.TrimSpace(root) == "" || strings.ContainsRune(root, 0) {
+		return Facts{}, errors.New("projectintel: empty project root")
+	}
 	root = filepath.Clean(root)
 
 	s.mu.Lock()
@@ -325,8 +331,27 @@ type scanResult struct {
 // scanProject walks the project root within the observation bounds and
 // derives languages, build-system commands, and a layout summary from what
 // is actually on disk.
+//
+// v1.11.1 path-injection remediation (user-owned absolute path class):
+// the root IS the user's selected workspace, so it cannot be contained
+// to a store — but the hostile spellings fail closed BEFORE any
+// filesystem operation: empty paths and NUL bytes yield an empty scan,
+// and the walk always runs over the cleaned ABSOLUTE form (never a
+// relative path resolved against an arbitrary working directory).
 func scanProject(root string) scanResult {
 	var scan scanResult
+
+	if strings.TrimSpace(root) == "" || strings.ContainsRune(root, 0) {
+		return scan
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return scan
+	}
+	root = filepath.Clean(abs)
+	if !filepath.IsAbs(root) {
+		return scan
+	}
 
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {

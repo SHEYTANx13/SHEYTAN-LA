@@ -123,11 +123,11 @@ public:
     // the exact Phase 4 behaviour (queue only).
     int32_t start_worker(Executor exec);
 
-    // Submit enqueues a request. Returns:
-    //   SHTN_OK                enqueued;
-    //   SHTN_ERR_INVALID_ARG   id empty or request null;
-    //   SHTN_ERR_MODEL_STATE   scheduler is shutting down;
-    //   SHTN_ERR_UNSUPPORTED   queue is full.
+    // Submit enqueues a request for the bounded FIFO queue. On success
+    // it reports SHTN_OK. A failure reports exactly one of: an invalid
+    // argument (empty id or null request), SHTN_ERR_MODEL_STATE while
+    // the scheduler is shutting down, or SHTN_ERR_UNSUPPORTED when the
+    // queue is already full; `error` then carries the reason.
     int32_t submit(RequestPtr req, std::string& error);
 
     // Cancel a request. A QUEUED request is removed and marked cancelled.

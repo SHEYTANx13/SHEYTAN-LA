@@ -236,8 +236,56 @@ func Open(dataDir string) (*Store, error) {
 // Dir returns the persistence directory (diagnostics only).
 func (s *Store) Dir() string { return s.dir }
 
-func (s *Store) systemPath(id string) string {
-	return filepath.Join(s.dir, id+".json")
+// validSystemID is the ONE grammar for an AI System id used as a single
+// filesystem path component (v1.11.1 path-injection remediation —
+// single-component identifier class, same grammar as
+// internal/sessions). Ids arrive from API callers (untrusted) and from
+// the active pointer document; every path built from one must stay
+// inside the ai-systems directory. The grammar accepts the
+// store-generated forms and the reserved default id, and rejects:
+// empty/oversized ids, path separators (POSIX and Windows), NUL,
+// volume/ADS colons, leading dots (".." included), whitespace-padded
+// ids and non-grammar characters.
+func validSystemID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	if strings.ContainsAny(id, "/\\") {
+		return false
+	}
+	if strings.ContainsAny(id, "\x00:") {
+		return false
+	}
+	if strings.HasPrefix(id, ".") {
+		return false
+	}
+	if strings.TrimSpace(id) != id {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// errInvalidSystemID is returned (wrapped) for ids that fail the grammar.
+var errInvalidSystemID = errors.New("invalid system id")
+
+// systemPath builds the on-disk name for one system document
+// ("<dir>/<id>.json") and FAILS CLOSED on an id that is not a safe
+// single path component: every os.* call for a system document takes
+// its path from this builder, so a hostile id can never leave the
+// ai-systems directory — it produces an error, never a path.
+func (s *Store) systemPath(id string) (string, error) {
+	if !validSystemID(id) {
+		return "", fmt.Errorf("ai systems: %w %q", errInvalidSystemID, id)
+	}
+	return filepath.Join(s.dir, id+".json"), nil
 }
 
 func (s *Store) activePath() string {
@@ -296,7 +344,11 @@ func DefaultSystem() System {
 
 // ensureDefault creates the default system when missing (idempotent).
 func (s *Store) ensureDefault() error {
-	if _, err := os.Stat(s.systemPath(ReservedID)); err == nil {
+	defPath, err := s.systemPath(ReservedID)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(defPath); err == nil {
 		return nil
 	}
 	def := DefaultSystem()
@@ -304,7 +356,7 @@ func (s *Store) ensureDefault() error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(s.systemPath(ReservedID), data)
+	return writeAtomic(defPath, data)
 }
 
 // loadActiveOrMigrate resolves the active pointer. Migration rule for
@@ -338,12 +390,15 @@ func (s *Store) persistActive(id string) error {
 	return writeAtomic(s.activePath(), data)
 }
 
-// read loads one system document from disk.
+// read loads one system document from disk. The id FAILS CLOSED
+// through the system-id grammar before any path is built (a hostile id
+// is "not found", never a path).
 func (s *Store) read(id string) (System, error) {
-	if id == "" || strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
+	path, err := s.systemPath(id)
+	if err != nil {
 		return System{}, ErrNotFound
 	}
-	data, err := os.ReadFile(s.systemPath(id))
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return System{}, ErrNotFound
 	}
@@ -537,7 +592,11 @@ func (s *Store) write(sys System) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(s.systemPath(sys.SystemID), data)
+	path, err := s.systemPath(sys.SystemID)
+	if err != nil {
+		return err
+	}
+	return writeAtomic(path, data)
 }
 
 // Update applies a mutation to one system and increments its revision.
@@ -576,7 +635,11 @@ func (s *Store) Delete(id string) error {
 	if _, err := s.read(id); err != nil {
 		return err
 	}
-	if err := os.Remove(s.systemPath(id)); err != nil {
+	path, err := s.systemPath(id)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil {
 		return err
 	}
 	if s.active == id {

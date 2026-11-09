@@ -1146,10 +1146,39 @@ type modelCardEntry struct {
 // entries than this re-parses on demand (correct, just slower).
 const modelCardCacheCap = 512
 
+// validModelFilePath is the boundary grammar for a model file path
+// reaching modelCardFor (v1.11.1 path-injection remediation). Paths come
+// from the configured model selection and from llm.ResolveModelPath, whose
+// directory matches are always absolute; a value that is empty, NUL- or
+// control-tainted, relative, or not a clean absolute path (a surviving
+// ".." component) is not a resolvable model file and yields no card —
+// exactly the fail-soft contract of an unreadable GGUF header.
+func validModelFilePath(path string) bool {
+	if path == "" || len(path) > 4096 {
+		return false
+	}
+
+	for _, r := range path {
+		if r < 0x20 || r == 0x7f {
+			return false // NUL and other control characters
+		}
+	}
+
+	if !filepath.IsAbs(path) {
+		return false
+	}
+
+	return filepath.Clean(path) == path
+}
+
 // modelCardFor returns cached GGUF metadata and capability card for path
 // (nil card when unreadable — a broken header must not hide the file from
 // the picker; caps stay nil in that case).
 func modelCardFor(path string, cfg *config.Config) (*llm.ModelCard, *llm.ModelCapabilities) {
+	if !validModelFilePath(path) {
+		return nil, nil
+	}
+
 	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, nil
