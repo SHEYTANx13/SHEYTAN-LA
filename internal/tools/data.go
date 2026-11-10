@@ -37,7 +37,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -279,7 +278,7 @@ func checkDatasetSize(size int64) error {
 
 func (t *DataTool) load(path string) (*dataset, error) {
 	abs := ResolvePath(path)
-	fi, err := os.Stat(abs)
+	fi, err := toolStat(abs)
 	if err != nil {
 		return nil, fmt.Errorf("dataset not found: %s (relative paths resolve against the app folder)", abs)
 	}
@@ -344,7 +343,7 @@ func countUnquoted(s string, target byte) int {
 }
 
 func loadDelimited(path string) (*dataset, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := toolReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -434,7 +433,7 @@ func decodeJSONObject(dec *json.Decoder) (map[string]any, []string, error) {
 }
 
 func loadJSON(path string) (*dataset, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := toolReadFile(path)
 	if err != nil {
 		return nil, err
 	}

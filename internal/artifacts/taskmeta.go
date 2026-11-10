@@ -180,7 +180,14 @@ func (r *TaskRegistry) Create(req CreateRequest) (*Meta, error) {
 	abs := filepath.Join(taskRoot, filepath.FromSlash(clean))
 
 	// Defense in depth: the resolved path MUST stay under the task root.
-	if !strings.HasPrefix(abs, taskRoot+string(filepath.Separator)) {
+	// v1.11.1: the prefix check is tightened with filepath.Rel + an
+	// explicit filepath.IsLocal containment gate (a string prefix alone
+	// is not a boundary), and every sink below runs through the
+	// registry-root os.Root with the re-derived relative name.
+	relToRoot, relErr := filepath.Rel(r.root, abs)
+	if relErr != nil || relToRoot == ".." ||
+		strings.HasPrefix(relToRoot, ".."+string(filepath.Separator)) ||
+		!filepath.IsLocal(relToRoot) {
 		return nil, fmt.Errorf("artifact path escapes the task artifact root")
 	}
 
@@ -198,29 +205,45 @@ func (r *TaskRegistry) Create(req CreateRequest) (*Meta, error) {
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+	// The registry root is created by the first write (config-derived,
+	// never untrusted) — the rooted operations below require it.
+	if err := os.MkdirAll(r.root, 0o755); err != nil {
+		return nil, err
+	}
+	root, rootErr := os.OpenRoot(r.root)
+	if rootErr != nil {
+		return nil, rootErr
+	}
+	defer root.Close()
+
+	if err := root.MkdirAll(filepath.Dir(relToRoot), 0o755); err != nil {
 		return nil, fmt.Errorf("artifact dir: %w", err)
 	}
 
 	// ATOMIC write: temp file + rename. A REPLACEMENT first archives the
 	// superseded current file so every version stays readable.
 	if prevCurrent != nil {
-		vdir := filepath.Join(taskRoot, ".versions")
-		if err := os.MkdirAll(vdir, 0o755); err == nil {
+		// The archive lives under the TASK's own .versions directory
+		// (the first relToRoot component is the grammar-gated task id).
+		relTaskID := relToRoot[:strings.Index(relToRoot, "/")]
+		archiveDir := relTaskID + "/.versions"
+		if err := root.MkdirAll(archiveDir, 0o755); err == nil {
 			ext := filepath.Ext(abs)
 			base := strings.TrimSuffix(filepath.Base(abs), ext)
-			_ = os.Rename(abs, filepath.Join(vdir, fmt.Sprintf("%s.v%d%s", base, prevCurrent.Version, ext)))
-			prevCurrent.Path = filepath.Join(vdir, fmt.Sprintf("%s.v%d%s", base, prevCurrent.Version, ext))
+			versioned := fmt.Sprintf("%s/%s.v%d%s", archiveDir, base, prevCurrent.Version, ext)
+			if rmErr := root.Rename(relToRoot, versioned); rmErr == nil {
+				prevCurrent.Path = filepath.Join(r.root, versioned)
+			}
 			prevCurrent.IsCurrent = false
 		}
 	}
 
-	tmp := abs + ".tmp"
-	if err := os.WriteFile(tmp, req.Content, 0o644); err != nil {
+	tmpRel := relToRoot + ".tmp"
+	if err := root.WriteFile(tmpRel, req.Content, 0o644); err != nil {
 		return nil, fmt.Errorf("write artifact: %w", err)
 	}
-	if err := os.Rename(tmp, abs); err != nil {
-		_ = os.Remove(tmp)
+	if err := root.Rename(tmpRel, relToRoot); err != nil {
+		_ = root.Remove(tmpRel)
 		return nil, fmt.Errorf("commit artifact: %w", err)
 	}
 
@@ -429,7 +452,22 @@ func (r *TaskRegistry) CleanupTask(taskID string) error {
 	}
 	r.persistLocked()
 
-	return os.RemoveAll(filepath.Join(r.root, taskID))
+	// v1.11.1 sink-level rooting: the task-tree removal runs through the
+	// registry-root os.Root with the IsLocal-gated relative name. A
+	// missing root has nothing to remove (RemoveAll semantics).
+	if _, statErr := os.Stat(r.root); statErr != nil {
+		return nil
+	}
+	rel := taskID
+	if !filepath.IsLocal(rel) {
+		return fmt.Errorf("artifact path escapes the task artifact root")
+	}
+	root, rootErr := os.OpenRoot(r.root)
+	if rootErr != nil {
+		return rootErr
+	}
+	defer root.Close()
+	return root.RemoveAll(rel)
 }
 
 // --- small JSON helpers (avoid importing encoding/json twice in files) ---

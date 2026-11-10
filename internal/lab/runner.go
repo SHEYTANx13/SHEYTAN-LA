@@ -132,6 +132,14 @@ func (r *Runner) Run(
 		)
 	}
 
+	// v1.11.1 sink-level rooting: the containment-checked command working
+	// directory re-proves its rooted shape at the point of use.
+	if !hostPathShapeRe.MatchString(workingDir) {
+		return CommandResult{}, fmt.Errorf(
+			"lab: command working directory %q is not a well-formed absolute host path",
+			workingDir,
+		)
+	}
 	if info, statErr := os.Stat(workingDir); statErr != nil {
 		return CommandResult{}, fmt.Errorf(
 			"lab: stat command working directory: %w",

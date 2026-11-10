@@ -11,7 +11,6 @@ package repoindex
 
 import (
 	"bufio"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -154,7 +153,9 @@ func ParseFile(root, rel, language string) ParseResult {
 	if err != nil {
 		return ParseResult{}
 	}
-	f, err := os.Open(path)
+	// v1.11.1 sink-level rooting: the open runs through the workspace
+	// root with the re-derived relative name.
+	f, err := rootedOpen(root, path)
 	if err != nil {
 		return ParseResult{}
 	}

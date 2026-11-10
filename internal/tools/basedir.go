@@ -84,6 +84,233 @@ func toolPath(p string) (string, error) {
 	return resolved, nil
 }
 
+// --- sink-level rooting (v1.11.1, work order §4.4) ------------------------
+//
+// Every filesystem operation on a tool path runs THROUGH the BaseDir
+// os.Root with the base-relative name: the root refuses traversal, absolute
+// spellings and symlink escapes at the OS layer, on every call, regardless
+// of what any upstream check saw. toolRel derives the base-relative form
+// from a toolPath-resolved absolute path and gates it with
+// filepath.IsLocal (an explicit, recognized containment guard).
+
+// toolRel converts a toolPath-resolved absolute path into the
+// BaseDir-relative name the os.Root helpers accept.
+func toolRel(resolved string) (string, error) {
+	base := BaseDir()
+	if base == "" {
+		return "", ErrBaseDirUnset
+	}
+
+	baseAbs, err := filepath.Abs(base)
+	if err != nil {
+		return "", err
+	}
+	baseAbs = filepath.Clean(baseAbs)
+
+	rel, err := filepath.Rel(baseAbs, filepath.Clean(resolved))
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsLocal(rel) {
+		return "", ErrPathOutsideBase
+	}
+
+	return rel, nil
+}
+
+// toolRoot opens the BaseDir containment root.
+func toolRoot() (*os.Root, error) {
+	base := BaseDir()
+	if base == "" {
+		return nil, ErrBaseDirUnset
+	}
+	return os.OpenRoot(base)
+}
+
+// toolOpen opens (read-only) a tool-resolved path through the BaseDir root.
+func toolOpen(resolved string) (*os.File, error) {
+	rel, err := toolRel(resolved)
+	if err != nil {
+		return nil, err
+	}
+	root, err := toolRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.Open(rel)
+}
+
+// toolCreate creates/truncates a tool-resolved path through the BaseDir root.
+func toolCreate(resolved string) (*os.File, error) {
+	return toolOpenFileFlags(resolved, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
+}
+
+// toolOpenFileFlags opens a tool-resolved path with explicit flags through
+// the BaseDir root.
+func toolOpenFileFlags(resolved string, flags int, perm os.FileMode) (*os.File, error) {
+	rel, err := toolRel(resolved)
+	if err != nil {
+		return nil, err
+	}
+	root, err := toolRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.OpenFile(rel, flags, perm)
+}
+
+// toolMkdirAll creates a directory tree at a tool-resolved path through the
+// BaseDir root.
+func toolMkdirAll(resolved string, perm os.FileMode) error {
+	rel, err := toolRel(resolved)
+	if err != nil {
+		return err
+	}
+	root, err := toolRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return root.MkdirAll(rel, perm)
+}
+
+// toolStats stats a tool-resolved path through the BaseDir root.
+func toolStat(resolved string) (os.FileInfo, error) {
+	rel, err := toolRel(resolved)
+	if err != nil {
+		return nil, err
+	}
+	root, err := toolRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.Stat(rel)
+}
+
+// toolReadDir lists a tool-resolved directory through the BaseDir root
+// (via the root's fs.FS view — os.Root has no direct ReadDir).
+func toolReadDir(resolved string) ([]os.DirEntry, error) {
+	rel, err := toolRel(resolved)
+	if err != nil {
+		return nil, err
+	}
+	root, err := toolRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return fs.ReadDir(root.FS(), rel)
+}
+
+// toolWriteFile writes a file at a tool-resolved path through the BaseDir
+// root.
+func toolWriteFile(resolved string, data []byte, perm os.FileMode) error {
+	rel, err := toolRel(resolved)
+	if err != nil {
+		return err
+	}
+	root, err := toolRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return root.WriteFile(rel, data, perm)
+}
+
+// toolReadFile reads a file at a tool-resolved path through the BaseDir root.
+func toolReadFile(resolved string) ([]byte, error) {
+	rel, err := toolRel(resolved)
+	if err != nil {
+		return nil, err
+	}
+	root, err := toolRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.ReadFile(rel)
+}
+
+// toolRemove deletes a tool-resolved path through the BaseDir root.
+func toolRemove(resolved string) error {
+	rel, err := toolRel(resolved)
+	if err != nil {
+		return err
+	}
+	root, err := toolRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return root.Remove(rel)
+}
+
+// toolRemoveAll deletes a tool-resolved tree through the BaseDir root.
+func toolRemoveAll(resolved string) error {
+	rel, err := toolRel(resolved)
+	if err != nil {
+		return err
+	}
+	root, err := toolRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return root.RemoveAll(rel)
+}
+
+// toolRename moves within the BaseDir root: both operands must be
+// tool-resolved paths.
+func toolRename(oldResolved, newResolved string) error {
+	oldRel, err := toolRel(oldResolved)
+	if err != nil {
+		return err
+	}
+	newRel, err := toolRel(newResolved)
+	if err != nil {
+		return err
+	}
+	root, err := toolRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return root.Rename(oldRel, newRel)
+}
+
+// toolCreateTempIn creates a fresh exclusive temporary file inside the
+// directory of a tool-resolved path, through the BaseDir root (the os.Root
+// API has no CreateTemp — the exclusive O_EXCL create loop reproduces its
+// semantics inside the root).
+func toolCreateTempIn(resolvedDir string, prefix string) (*os.File, error) {
+	dirRel, err := toolRel(resolvedDir)
+	if err != nil {
+		return nil, err
+	}
+	root, err := toolRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+
+	var next uint64
+	for attempt := 0; attempt < 10000; attempt++ {
+		next++
+		name := fmt.Sprintf("%s%d", prefix, next)
+		f, err := root.OpenFile(filepath.Join(dirRel, name), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			return f, nil
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return nil, err
+		}
+	}
+	return nil, fs.ErrExist
+}
+
 // validArtifactName is the ONE grammar for a caller-supplied artifact name
 // used as a single filesystem path component (v1.11.1 path-injection
 // remediation, work order §7 — class (b): single-component identifier).
@@ -126,6 +353,15 @@ func validArtifactName(name string) bool {
 
 // ResolvePathChecked resolves p and guarantees that the resulting path stays
 // inside BaseDir(), including through existing symlinks.
+//
+// v1.11.1 sink-level rooting (work order §4.4/§7): the containment of the
+// EXISTING portion of the candidate is verified through an os.Root opened
+// on BaseDir — the root refuses traversal, separators and symlink escapes
+// at the OS layer for every component it resolves, so no validated path can
+// redirect a later operation outside the base even between validation and
+// use. The returned value remains the lexical absolute path (unchanged
+// contract); the actual filesystem operations of every tool run through the
+// tool* Root helpers below.
 func ResolvePathChecked(p string) (string, error) {
 	p = strings.TrimSpace(p)
 
@@ -178,57 +414,65 @@ func ResolvePathChecked(p string) (string, error) {
 		return "", ErrPathOutsideBase
 	}
 
-	// Resolve the real base where possible. This prevents a symlinked
-	// BaseDir itself from becoming an escape hatch.
-	realBase, err := existingRealPath(baseAbs)
-	if err != nil {
+	// Lexical containment passed: verify the candidate through the BaseDir
+	// root. Root.Stat refuses, at the OS layer, any candidate whose
+	// existing portion escapes the base (including intermediate symlink
+	// redirection); a not-yet-existing candidate is fine (create flows).
+	if err := verifyUnderToolRoot(candidateAbs); err != nil {
 		return "", err
-	}
-
-	// Validate the complete existing portion of the candidate path. This
-	// catches:
-	//
-	//   base/link/file
-	//
-	// when "link" points outside BaseDir, even if "file" does not exist yet.
-	realExistingPrefix, err := resolveExistingPrefix(candidateAbs)
-	if err != nil {
-		return "", err
-	}
-
-	if !pathWithinBase(realExistingPrefix, realBase) {
-		return "", ErrPathOutsideBase
-	}
-
-	// When the final path already exists, resolve it completely as a
-	// defense-in-depth check for a final symlink target.
-	if _, statErr := os.Lstat(candidateAbs); statErr == nil {
-		realCandidate, evalErr := filepath.EvalSymlinks(candidateAbs)
-		if evalErr != nil {
-			return "", evalErr
-		}
-
-		realCandidateAbs, absErr := filepath.Abs(realCandidate)
-		if absErr != nil {
-			return "", absErr
-		}
-
-		if !pathWithinBase(
-			filepath.Clean(realCandidateAbs),
-			realBase,
-		) {
-			return "", ErrPathOutsideBase
-		}
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return "", statErr
 	}
 
 	return candidateAbs, nil
 }
 
+// verifyUnderToolRoot proves the existing portion of a BaseDir-contained
+// lexical path resolves INSIDE the base through an os.Root. A missing
+// candidate is acceptable (create flows); an escaping symlink, a traversal
+// component or an inaccessible component is not.
+func verifyUnderToolRoot(candidateAbs string) error {
+	base := BaseDir()
+	if base == "" {
+		return ErrBaseDirUnset
+	}
+
+	baseAbs, err := filepath.Abs(base)
+	if err != nil {
+		return err
+	}
+	baseAbs = filepath.Clean(baseAbs)
+
+	rel, err := filepath.Rel(baseAbs, filepath.Clean(candidateAbs))
+	if err != nil {
+		return err
+	}
+
+	// filepath.IsLocal refuses absolute forms, separators-escaping shapes
+	// and anything that is not a plain relative path — a recognized,
+	// explicit containment gate in addition to the root itself.
+	if !filepath.IsLocal(rel) {
+		return ErrPathOutsideBase
+	}
+
+	root, err := os.OpenRoot(baseAbs)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	if _, err := root.Stat(rel); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+
+	return nil
+}
+
 // ResolvePathWithinBase resolves a caller-supplied path beneath an explicit
 // base directory. This is useful for isolated components such as Coding Lab
 // workspaces where BaseDir() is intentionally not the relevant root.
+//
+// v1.11.1 sink-level rooting: containment of the existing portion is
+// verified through an os.Root on the explicit base, exactly like
+// ResolvePathChecked does for BaseDir.
 func ResolvePathWithinBase(base, p string) (string, error) {
 	base = strings.TrimSpace(base)
 	p = strings.TrimSpace(p)
@@ -280,39 +524,25 @@ func ResolvePathWithinBase(base, p string) (string, error) {
 		return "", ErrPathOutsideBase
 	}
 
-	realBase, err := existingRealPath(baseAbs)
+	// Root-verify against the EXPLICIT base (not BaseDir): open the base,
+	// and refuse any candidate whose existing portion escapes it.
+	rel, err := filepath.Rel(baseAbs, candidateAbs)
 	if err != nil {
 		return "", err
 	}
 
-	realExistingPrefix, err := resolveExistingPrefix(candidateAbs)
-	if err != nil {
-		return "", err
-	}
-
-	if !pathWithinBase(realExistingPrefix, realBase) {
+	if !filepath.IsLocal(rel) {
 		return "", ErrPathOutsideBase
 	}
 
-	if _, statErr := os.Lstat(candidateAbs); statErr == nil {
-		realCandidate, evalErr := filepath.EvalSymlinks(candidateAbs)
-		if evalErr != nil {
-			return "", evalErr
-		}
+	root, err := os.OpenRoot(baseAbs)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
 
-		realCandidateAbs, absErr := filepath.Abs(realCandidate)
-		if absErr != nil {
-			return "", absErr
-		}
-
-		if !pathWithinBase(
-			filepath.Clean(realCandidateAbs),
-			realBase,
-		) {
-			return "", ErrPathOutsideBase
-		}
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return "", statErr
+	if _, err := root.Stat(rel); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
 	}
 
 	return candidateAbs, nil
@@ -352,76 +582,6 @@ func normalizePathSeparators(p string) string {
 		"\\",
 		string(filepath.Separator),
 	)
-}
-
-// existingRealPath resolves a path through symlinks when it exists.
-// The unresolved lexical path is retained only when the path itself does
-// not exist yet.
-func existingRealPath(path string) (string, error) {
-	real, err := filepath.EvalSymlinks(path)
-	if err == nil {
-		abs, absErr := filepath.Abs(real)
-		if absErr != nil {
-			return "", absErr
-		}
-
-		return filepath.Clean(abs), nil
-	}
-
-	if errors.Is(err, os.ErrNotExist) {
-		abs, absErr := filepath.Abs(path)
-		if absErr != nil {
-			return "", absErr
-		}
-
-		return filepath.Clean(abs), nil
-	}
-
-	return "", err
-}
-
-// resolveExistingPrefix finds the nearest existing ancestor of path and
-// resolves all symlinks in that ancestor. The remaining non-existent suffix
-// is intentionally ignored for containment purposes.
-//
-// Example:
-//
-//	base/link/new.txt
-//
-// If base/link is a symlink to /outside, the returned prefix is /outside and
-// containment fails before anything can be created there.
-func resolveExistingPrefix(path string) (string, error) {
-	current := filepath.Clean(path)
-
-	for {
-		_, err := os.Lstat(current)
-
-		if err == nil {
-			real, evalErr := filepath.EvalSymlinks(current)
-			if evalErr != nil {
-				return "", evalErr
-			}
-
-			abs, absErr := filepath.Abs(real)
-			if absErr != nil {
-				return "", absErr
-			}
-
-			return filepath.Clean(abs), nil
-		}
-
-		if !errors.Is(err, os.ErrNotExist) {
-			return "", err
-		}
-
-		parent := filepath.Dir(current)
-
-		if parent == current {
-			return "", ErrPathOutsideBase
-		}
-
-		current = parent
-	}
 }
 
 // SafeJoin is a convenience wrapper for code that needs to construct a path

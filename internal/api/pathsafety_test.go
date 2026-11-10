@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -332,5 +333,57 @@ func TestCloneRelativeDestinationStaysInsideWorkspacesRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "repo", "README.md")); err != nil {
 		t.Fatalf("relative destination did not land inside the workspaces root: %v", err)
+	}
+}
+
+// TestModelFilePathBoundaryWindowsShapes pins the selected-host-path
+// contract of validModelFilePath across host path syntaxes (v1.11.1
+// Windows repair): a POSIX-spelled absolute selection must be accepted
+// on Windows exactly where IsAbs refuses it, dots INSIDE a component
+// ("a..b.gguf") are an ordinary name, and genuine ".." components,
+// relatives, control bytes and volume tricks are refused on every host.
+func TestModelFilePathBoundaryWindowsShapes(t *testing.T) {
+	good := []string{
+		"/tmp/models/model.gguf", // POSIX-spelled absolute (rooted on Windows)
+		"/models/a..b.gguf",      // dots inside a component are a legal name
+		"/models/x_y-z 1.gguf",   // spaces are legal in filenames
+	}
+	if runtime.GOOS == "windows" {
+		good = append(good,
+			`C:\models\model.gguf`, // drive-absolute selection
+			`C:/models/model.gguf`, // drive-absolute, forward-slash spelling
+			`\models\model.gguf`,   // volume-rooted selection
+		)
+	}
+	for _, p := range good {
+		if !validModelFilePath(p) {
+			t.Errorf("model path %q must be accepted on %s", p, runtime.GOOS)
+		}
+	}
+
+	bad := []string{
+		"",                      // empty
+		"model.gguf",            // relative
+		"models/model.gguf",     // relative
+		"../model.gguf",         // traversal
+		"/models/../model.gguf", // surviving parent component
+		"a\x00b.gguf",           // NUL
+		"/models/a\nb.gguf",     // control character
+		strings.Repeat("a", 4097),
+	}
+	if runtime.GOOS == "windows" {
+		bad = append(bad,
+			`C:models\model.gguf`, // drive-relative
+			`C:models/model.gguf`, // drive-relative, forward-slash spelling
+		)
+	} else {
+		// On POSIX hosts a drive-prefixed string is not a host path at
+		// all: the selected-file contract keeps it refused.
+		bad = append(bad, `C:\models\model.gguf`)
+	}
+	for _, p := range bad {
+		if validModelFilePath(p) {
+			t.Errorf("hostile model path %q must be rejected on %s", p, runtime.GOOS)
+		}
 	}
 }

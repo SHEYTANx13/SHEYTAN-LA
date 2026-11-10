@@ -18,6 +18,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -173,7 +174,20 @@ func ReadModelCard(path string) (*ModelCard, error) {
 		return nil, fmt.Errorf("gguf: model path contains NUL")
 	}
 
-	f, err := os.Open(path)
+	// v1.11.1 sink-level rooting: the path is resolved to its absolute
+	// host form (relative selections resolve against the process CWD — the
+	// documented behavior), then the rooted-shape gate enforces the
+	// lexical selected-host-path contract (NUL-free, rooted, non-empty)
+	// before the open.
+	absPath, absErr := filepath.Abs(path)
+	if absErr != nil {
+		return nil, absErr
+	}
+	if !hostPathShape.MatchString(absPath) {
+		return nil, fmt.Errorf("gguf: model path %q must be a NUL-free host path", path)
+	}
+
+	f, err := os.Open(absPath)
 	if err != nil {
 		return nil, err
 	}

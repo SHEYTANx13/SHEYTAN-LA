@@ -24,6 +24,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -371,6 +372,109 @@ func TestLegitDestNamesStillAccepted(t *testing.T) {
 			AllowHTTP: true,
 		}); err != nil {
 			t.Fatalf("New(Dest=%q) must be accepted: %v", name, err)
+		}
+	}
+}
+
+// TestDestWindowsShapesRefusedOnEveryHost pins the Windows path-syntax
+// layer of the Dest boundary (v1.11.1 Windows repair): UNC shares,
+// device namespaces, drive-relative forms and volume-less rooted paths
+// are hostile Dest shapes wherever the process runs, and a drive-absolute
+// Dest is only accepted when its designated root (the destination
+// directory) was created by the caller before New — the contract every
+// real caller already follows. On Windows these run as native checks; on
+// Linux they prove Windows syntax cannot bypass validation lexically.
+func TestDestWindowsShapesRefusedOnEveryHost(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("a rejected job must never touch the network")
+	}))
+	defer srv.Close()
+
+	hostile := []string{
+		`\\srv\share\x.bin`, // UNC share
+		`\\.\device.bin`,    // device namespace
+		`\\?\extended.bin`,  // extended-length prefix
+		"C:evil.bin",        // drive-relative
+		"C:sub\\evil.bin",   // drive-relative with a component
+	}
+	if runtime.GOOS == "windows" {
+		// The designated-root rule is a real filesystem check: a
+		// drive-absolute Dest into a directory that does not exist must
+		// fail closed, while the same shape under a caller-created
+		// directory must be accepted.
+		hostile = append(hostile, `C:\evil\x.bin`)
+		dir := t.TempDir()
+		if _, err := New(Options{
+			Dest:      filepath.Join(dir, "asset.bin"),
+			Sources:   []Source{{URL: srv.URL}},
+			AllowHTTP: true,
+		}); err != nil {
+			t.Fatalf("caller-created staging root must be accepted: %v", err)
+		}
+	} else {
+		// On POSIX hosts the drive-prefixed spellings are not host paths:
+		// they still fail the boundary (colon/backslash bytes are hostile
+		// in the final component grammar or the drive-relative rule).
+		hostile = append(hostile, `C:\evil\x.bin`)
+	}
+	for _, dest := range hostile {
+		job, err := New(Options{
+			Dest:      dest,
+			Sources:   []Source{{URL: srv.URL}},
+			AllowHTTP: true,
+		})
+		if err == nil {
+			t.Fatalf("New(Dest=%q) must fail on %s", dest, runtime.GOOS)
+		}
+		if job != nil {
+			t.Fatalf("New(Dest=%q) must not return a job on %s", dest, runtime.GOOS)
+		}
+		if !errors.Is(err, errsUnsafeDest) {
+			t.Errorf("New(Dest=%q) refusal must be the typed unsafe-Dest cause, got: %v", dest, err)
+		}
+	}
+}
+
+// TestDestCleanRewrittenDirectoryRefused pins the climb-detection rule
+// and the containment rule: a Dest whose Clean form still climbs above
+// the caller's namespace ("../escape.bin", "a/../../../escape.bin") is
+// refused, while a climb that resolves BACK INSIDE the relative
+// namespace ("a/b/../../escape.bin" → "escape.bin", the documented
+// contained-accepted shape) never escapes it.
+func TestDestCleanRewrittenDirectoryRefused(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+
+	for _, dest := range []string{
+		"../escape.bin",         // Clean keeps the climb above the base
+		"a/../../../escape.bin", // nested climb survives cleaning
+	} {
+		if _, err := New(Options{
+			Dest:      dest,
+			Sources:   []Source{{URL: srv.URL}},
+			AllowHTTP: true,
+		}); err == nil {
+			t.Fatalf("New(Dest=%q) must fail closed: Clean kept a parent-directory climb", dest)
+		}
+	}
+
+	// A climb that resolves back INSIDE the namespace is contained, never
+	// an escape: the resolved destination stays a single legal component.
+	for _, dest := range []string{
+		"a/b/../../escape.bin", // Clean → "escape.bin"
+		"sub/../asset.bin",     // Clean → "asset.bin"
+	} {
+		job, err := New(Options{
+			Dest:      dest,
+			Sources:   []Source{{URL: srv.URL}},
+			AllowHTTP: true,
+		})
+		if err != nil {
+			t.Fatalf("New(Dest=%q) is a contained shape and must be accepted: %v", dest, err)
+		}
+		if resolved := filepath.Clean(job.opts.Dest); strings.ContainsRune(resolved, '\\') ||
+			strings.HasPrefix(filepath.Base(resolved), ".") {
+			t.Fatalf("contained dest %q resolved to an unsafe shape %q", dest, resolved)
 		}
 	}
 }

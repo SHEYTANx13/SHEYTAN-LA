@@ -4216,8 +4216,13 @@ func ResolveModelPath(
 		}
 		if filepath.IsAbs(name) {
 			abs := filepath.Clean(name)
-			if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
-				return abs, nil
+			// v1.11.1 sink-level rooting: the rooted-shape gate is the
+			// lexical half of the selected-host-path contract enforced
+			// at the point of use.
+			if hostPathShape.MatchString(abs) {
+				if fi, err := os.Stat(abs); err == nil && !fi.IsDir() {
+					return abs, nil
+				}
 			}
 		}
 	}

@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +33,11 @@ import (
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/hardware"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/recommendation"
 )
+
+// hostPathShapeRe is the inline lexical gate for user-selected host
+// paths (v1.11.1 sink-level rooting): rooted (POSIX root, Windows drive
+// prefix or Windows rooted form), NUL-free and control-free.
+var hostPathShapeRe = regexp.MustCompile(`^(?:[A-Za-z]:[\\/]|[\\/])[^\x00\x01-\x1f\x7f]*$`)
 
 // Record is one retained verified calibration result.
 type Record struct {
@@ -102,6 +108,11 @@ func ModelKey(path string) (string, error) {
 	abs = filepath.Clean(abs)
 	if !filepath.IsAbs(abs) {
 		return "", fmt.Errorf("model key: model path %q is not absolute", path)
+	}
+	// v1.11.1 sink-level rooting: the selected model path re-proves its
+	// rooted, NUL-free, control-free shape at the point of use.
+	if !hostPathShapeRe.MatchString(abs) {
+		return "", fmt.Errorf("model key: model path %q is not a well-formed absolute host path", path)
 	}
 
 	fi, err := os.Stat(abs)

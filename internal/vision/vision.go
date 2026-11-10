@@ -19,12 +19,18 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/anthonynsimon/bild/transform"
 	"golang.org/x/image/webp"
 )
+
+// hostPathShapeRe is the inline lexical gate for user-selected host
+// paths (v1.11.1 sink-level rooting): rooted (POSIX root, Windows drive
+// prefix or Windows rooted form), NUL-free and control-free.
+var hostPathShapeRe = regexp.MustCompile(`^(?:[A-Za-z]:[\\/]|[\\/])[^\x00\x01-\x1f\x7f]*$`)
 
 // MaxSide is the largest image dimension sent to the model. Gemma-class
 // vision encoders process at most ~1536-2048 px per side; anything bigger is
@@ -372,6 +378,11 @@ func EncodeImage(path string) (string, error) {
 	clean := filepath.Clean(path)
 	if !filepath.IsAbs(clean) {
 		return "", fmt.Errorf("vision: image path %q must be absolute", path)
+	}
+	// v1.11.1 sink-level rooting: the user-selected image path re-proves
+	// its rooted, NUL-free, control-free shape at the point of use.
+	if !hostPathShapeRe.MatchString(clean) {
+		return "", fmt.Errorf("vision: image path %q is not a well-formed absolute host path", path)
 	}
 
 	data, err := os.ReadFile(clean)

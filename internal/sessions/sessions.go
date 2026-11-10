@@ -288,7 +288,7 @@ func (s *Store) hotGetLocked(id string) (*Session, bool) {
 	if pErr != nil {
 		return nil, false
 	}
-	fi, err := os.Stat(p)
+	fi, err := s.storeStat(p)
 	if err != nil || fi.Size() != e.size || !fi.ModTime().Equal(e.mod) {
 		delete(s.hot, id) // stale (external write) — reload from disk
 		return nil, false
@@ -392,6 +392,119 @@ func (s *Store) artifactPath(id, suffix string) (string, error) {
 	return filepath.Join(s.dir, id+suffix), nil
 }
 
+// --- sink-level rooting (v1.11.1, work order §4.4) ------------------------
+//
+// Every filesystem operation on a session artifact runs THROUGH the
+// store-dir os.Root with the base-relative name: the root refuses
+// traversal, absolute spellings and symlink escapes at the OS layer on
+// every call. The relative name is re-derived from the artifactPath result
+// and gated with filepath.IsLocal (an explicit containment guard).
+
+// sessionRel derives the store-dir-relative name for an artifactPath
+// result (the final component) and refuses anything that is not a plain
+// relative name.
+func sessionRel(p string) (string, error) {
+	rel := filepath.Base(p)
+	if !filepath.IsLocal(rel) {
+		return "", errInvalidSessionID
+	}
+	return rel, nil
+}
+
+// storeRoot opens the store-dir containment root.
+func (s *Store) storeRoot() (*os.Root, error) {
+	return os.OpenRoot(s.dir)
+}
+
+// storeStat stats a session artifact through the store-dir root.
+func (s *Store) storeStat(p string) (os.FileInfo, error) {
+	rel, err := sessionRel(p)
+	if err != nil {
+		return nil, err
+	}
+	root, err := s.storeRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.Stat(rel)
+}
+
+// storeReadFile reads a session artifact through the store-dir root.
+func (s *Store) storeReadFile(p string) ([]byte, error) {
+	rel, err := sessionRel(p)
+	if err != nil {
+		return nil, err
+	}
+	root, err := s.storeRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.ReadFile(rel)
+}
+
+// storeWriteFile writes a session artifact through the store-dir root.
+func (s *Store) storeWriteFile(p string, data []byte, perm os.FileMode) error {
+	rel, err := sessionRel(p)
+	if err != nil {
+		return err
+	}
+	root, err := s.storeRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return root.WriteFile(rel, data, perm)
+}
+
+// storeOpenFileFlags opens a session artifact with explicit flags through
+// the store-dir root.
+func (s *Store) storeOpenFileFlags(p string, flags int, perm os.FileMode) (*os.File, error) {
+	rel, err := sessionRel(p)
+	if err != nil {
+		return nil, err
+	}
+	root, err := s.storeRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.OpenFile(rel, flags, perm)
+}
+
+// storeRemove deletes a session artifact through the store-dir root.
+func (s *Store) storeRemove(p string) error {
+	rel, err := sessionRel(p)
+	if err != nil {
+		return err
+	}
+	root, err := s.storeRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return root.Remove(rel)
+}
+
+// storeRename moves a session artifact within the store-dir root.
+func (s *Store) storeRename(oldPath, newPath string) error {
+	oldRel, err := sessionRel(oldPath)
+	if err != nil {
+		return err
+	}
+	newRel, err := sessionRel(newPath)
+	if err != nil {
+		return err
+	}
+	root, err := s.storeRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return root.Rename(oldRel, newRel)
+}
+
 // Create returns a fresh in-memory session in the DEFAULT mode. It is
 // persisted by the first Save/Append*/Update* call (so "New chat" costs
 // nothing until the user actually types).
@@ -426,13 +539,14 @@ func (s *Store) CreateInMode(mode string) *Session {
 func (s *Store) path(id string) (string, error) { return s.artifactPath(id, ".json") }
 
 // writeAtomic writes data to path via tmp+rename so a crash can never
-// leave a half-written session or index behind.
-func writeAtomic(path string, data []byte) error {
+// leave a half-written session or index behind. v1.11.1: rooted — both
+// steps run through the store-dir os.Root.
+func (s *Store) writeAtomic(path string, data []byte) error {
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := s.storeWriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return s.storeRename(tmp, path)
 }
 
 // loadIndexLocked reads index.json exactly once, then reconciles it with
@@ -524,7 +638,7 @@ func (s *Store) readLocked(id string) (*Session, error) {
 	if pErr != nil {
 		return nil, pErr
 	}
-	data, err := os.ReadFile(p)
+	data, err := s.storeReadFile(p)
 	if err != nil {
 		return nil, err
 	}
@@ -558,7 +672,7 @@ func (s *Store) readLocked(id string) (*Session, error) {
 				if apErr != nil {
 					break
 				}
-				f, oErr := os.OpenFile(ap, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+				f, oErr := s.storeOpenFileFlags(ap, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 				if oErr != nil {
 					break
 				}
@@ -571,7 +685,7 @@ func (s *Store) readLocked(id string) (*Session, error) {
 	// v1.2.4: remember the parsed session in the bounded hot cache keyed
 	// by the exact disk identity we just read.
 	if p, pErr := s.path(id); pErr == nil {
-		if fi, statErr := os.Stat(p); statErr == nil {
+		if fi, statErr := s.storeStat(p); statErr == nil {
 			s.touchHotLocked(id, &hotEntry{sess: &sess, size: fi.Size(), mod: fi.ModTime()})
 		}
 	}
@@ -584,7 +698,7 @@ func (s *Store) saveIndexLocked() error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(s.idxPath, data)
+	return s.writeAtomic(s.idxPath, data)
 }
 
 // sessionNewer is the TOTAL listing order (v1.10.13, W-FLAKE): UpdatedAt
@@ -658,24 +772,24 @@ func (s *Store) saveLocked(sess *Session) error {
 		return pErr
 	}
 	tmp := path + ".tmp"
-	size, err := writeSessionFile(tmp, sess)
+	size, err := s.writeSessionFile(tmp, sess)
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := s.storeRename(tmp, path); err != nil {
 		return err
 	}
-	if fi, statErr := os.Stat(path); statErr == nil {
+	if fi, statErr := s.storeStat(path); statErr == nil {
 		size = fi.Size()
 	}
 	delete(s.pending, sess.ID)
 	if e := s.hot[sess.ID]; e != nil && e.sess == sess {
 		// Same object we already cache — refresh identity in place.
-		e.size, e.mod = size, modTimeOf(path)
+		e.size, e.mod = size, s.modTimeOf(path)
 		e.touched = time.Now()
 		e.acts = nil // sidecar may have rotated; cheap to re-derive
 	} else {
-		s.touchHotLocked(sess.ID, &hotEntry{sess: sess, size: size, mod: modTimeOf(path)})
+		s.touchHotLocked(sess.ID, &hotEntry{sess: sess, size: size, mod: s.modTimeOf(path)})
 	}
 	if s.upsertIndexLocked(sess) {
 		return s.saveIndexLocked()
@@ -686,8 +800,10 @@ func (s *Store) saveLocked(sess *Session) error {
 // writeSessionFile streams sess into path as compact JSON via a buffered
 // encoder and returns the written size. Streaming avoids materializing the
 // full JSON document (≈2× the file size) in memory per save.
-func writeSessionFile(path string, sess *Session) (int64, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+// v1.11.1: rooted — the create, the cleanup remove and the final stat all
+// run through the store-dir os.Root.
+func (s *Store) writeSessionFile(path string, sess *Session) (int64, error) {
+	f, err := s.storeOpenFileFlags(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		return 0, err
 	}
@@ -702,18 +818,18 @@ func writeSessionFile(path string, sess *Session) (int64, error) {
 		err = closeErr
 	}
 	if err != nil {
-		_ = os.Remove(path)
+		_ = s.storeRemove(path)
 		return 0, err
 	}
-	fi, err := os.Stat(path)
+	fi, err := s.storeStat(path)
 	if err != nil {
 		return 0, err
 	}
 	return fi.Size(), nil
 }
 
-func modTimeOf(path string) time.Time {
-	if fi, err := os.Stat(path); err == nil {
+func (s *Store) modTimeOf(path string) time.Time {
+	if fi, err := s.storeStat(path); err == nil {
 		return fi.ModTime()
 	}
 	return time.Time{}
@@ -861,16 +977,16 @@ func (s *Store) Delete(id string) error {
 	if pErr != nil {
 		return pErr
 	}
-	if err := os.Remove(p); err == nil {
+	if err := s.storeRemove(p); err == nil {
 		found = true
 	} else if !os.IsNotExist(err) {
 		return err
 	}
 	if ap, apErr := s.activityPath(id); apErr == nil {
-		_ = os.Remove(ap)
+		_ = s.storeRemove(ap)
 	}
 	if sp, spErr := s.summaryPath(id); spErr == nil {
-		_ = os.Remove(sp)
+		_ = s.storeRemove(sp)
 	}
 	delete(s.hot, id)
 	if !found {
@@ -931,7 +1047,7 @@ func (s *Store) AppendActivity(id string, entry ActivityEntry) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := s.storeOpenFileFlags(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
@@ -947,7 +1063,7 @@ func (s *Store) AppendActivity(id string, entry ActivityEntry) error {
 		if e.acts != nil {
 			e.acts = append(e.acts, entry)
 		}
-		if fi, statErr := os.Stat(path); statErr == nil {
+		if fi, statErr := s.storeStat(path); statErr == nil {
 			e.actSize, e.actMod = fi.Size(), fi.ModTime()
 		}
 	}
@@ -971,14 +1087,14 @@ func (s *Store) rotateActivitiesLocked(id string) {
 		return
 	}
 
-	fi, err := os.Stat(path)
+	fi, err := s.storeStat(path)
 	if err != nil {
 		return
 	}
 
 	// The byte-cap check is free; the count check reads the (bounded) file.
 	if fi.Size() <= maxActivityKB*1024 {
-		data, err := os.ReadFile(path)
+		data, err := s.storeReadFile(path)
 		if err != nil {
 			return
 		}
@@ -989,7 +1105,7 @@ func (s *Store) rotateActivitiesLocked(id string) {
 		}
 	}
 
-	data, err := os.ReadFile(path)
+	data, err := s.storeReadFile(path)
 	if err != nil {
 		return
 	}
@@ -1001,7 +1117,7 @@ func (s *Store) rotateActivitiesLocked(id string) {
 	}
 
 	out := strings.Join(keep, "\n")
-	_ = writeAtomic(path, []byte(strings.TrimPrefix(out, "\n")))
+	_ = s.writeAtomic(path, []byte(strings.TrimPrefix(out, "\n")))
 }
 
 // loadActivitiesLocked reads the sidecar (missing file = empty feed).
@@ -1012,7 +1128,7 @@ func (s *Store) loadActivitiesLocked(id string) []ActivityEntry {
 		if apErr != nil {
 			return nil
 		}
-		if fi, err := os.Stat(ap); err == nil {
+		if fi, err := s.storeStat(ap); err == nil {
 			if e.acts != nil && fi.Size() == e.actSize && fi.ModTime().Equal(e.actMod) {
 				return e.acts
 			}
@@ -1024,7 +1140,7 @@ func (s *Store) loadActivitiesLocked(id string) []ActivityEntry {
 	if apErr != nil {
 		return nil
 	}
-	data, err := os.ReadFile(ap)
+	data, err := s.storeReadFile(ap)
 	if err != nil {
 		if e := s.hot[id]; e != nil {
 			e.acts, e.actSize, e.actMod = nil, 0, time.Time{}
@@ -1047,7 +1163,7 @@ func (s *Store) loadActivitiesLocked(id string) []ActivityEntry {
 		if apErr != nil {
 			return nil
 		}
-		if fi, statErr := os.Stat(ap); statErr == nil {
+		if fi, statErr := s.storeStat(ap); statErr == nil {
 			e.acts, e.actSize, e.actMod = out, fi.Size(), fi.ModTime()
 		}
 	}

@@ -293,6 +293,45 @@ func (m *Manager) metaPath(id string) (string, error) {
 	return filepath.Join(m.dir, "meta", id+".json"), nil
 }
 
+// attachRoot opens the attachments-root containment root (v1.11.1
+// sink-level rooting).
+func (m *Manager) attachRoot() (*os.Root, error) {
+	return os.OpenRoot(m.dir)
+}
+
+// metaRel derives the attachments-root-relative metadata name for a
+// grammar-validated id and gates it with filepath.IsLocal.
+func (m *Manager) metaRel(id string) (string, error) {
+	if !validAttachmentID(id) {
+		return "", fmt.Errorf("%w %q", errInvalidAttachmentID, id)
+	}
+	rel := "meta/" + id + ".json"
+	if !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("%w %q", errInvalidAttachmentID, id)
+	}
+	return rel, nil
+}
+
+// objectRel derives the attachments-root-relative object name for a
+// grammar-validated id and gates it with filepath.IsLocal.
+func (m *Manager) objectRel(id string) (string, error) {
+	if !validAttachmentID(id) {
+		return "", fmt.Errorf("%w %q", errInvalidAttachmentID, id)
+	}
+	rel, err := m.objectPath(id)
+	if err != nil {
+		return "", err
+	}
+	rel, err = filepath.Rel(m.dir, rel)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("%w %q", errInvalidAttachmentID, id)
+	}
+	return rel, nil
+}
+
 // Add stages one uploaded file: it streams, bounds, hashes, stores, sniffs,
 // and processes (chunks) the content. The returned Attachment is safe to
 // persist and display. `sessionID` records provenance (may be empty).
@@ -654,15 +693,23 @@ func (m *Manager) Delete(id string) bool {
 	}
 	m.mu.Unlock()
 
-	if path, err := m.metaPath(id); err == nil {
-		if err := os.Remove(path); err == nil {
-			existed = true
+	// v1.11.1 sink-level rooting: the removals run through the
+	// attachments-root os.Root with the grammar-gated relative names.
+	if rel, relErr := m.metaRel(id); relErr == nil {
+		if root, rootErr := m.attachRoot(); rootErr == nil {
+			if err := root.Remove(rel); err == nil {
+				existed = true
+			}
+			root.Close()
 		}
 	}
 
-	if path, err := m.objectPath(id); err == nil {
-		if err := os.Remove(path); err == nil {
-			existed = true
+	if rel, relErr := m.objectRel(id); relErr == nil {
+		if root, rootErr := m.attachRoot(); rootErr == nil {
+			if err := root.Remove(rel); err == nil {
+				existed = true
+			}
+			root.Close()
 		}
 	}
 
@@ -1103,11 +1150,18 @@ func (m *Manager) saveMeta(att *Attachment) error {
 }
 
 func (m *Manager) loadMeta(id string) (*Attachment, error) {
-	path, err := m.metaPath(id)
-	if err != nil {
-		return nil, err
+	// v1.11.1 sink-level rooting: the metadata read runs through the
+	// attachments-root os.Root with the grammar-gated relative name.
+	rel, relErr := m.metaRel(id)
+	if relErr != nil {
+		return nil, relErr
 	}
-	data, err := os.ReadFile(path)
+	root, rootErr := m.attachRoot()
+	if rootErr != nil {
+		return nil, rootErr
+	}
+	defer root.Close()
+	data, err := root.ReadFile(rel)
 	if err != nil {
 		return nil, err
 	}

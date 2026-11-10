@@ -191,15 +191,15 @@ func chunkCopy(src, dst string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	in, err := os.Open(src)
+	in, err := toolOpen(src)
 	if err != nil {
 		return 0, err
 	}
 	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := toolMkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return 0, err
 	}
-	out, err := os.Create(dst)
+	out, err := toolCreate(dst)
 	if err != nil {
 		return 0, err
 	}
@@ -222,7 +222,7 @@ func countLinesChunked(path string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	f, err := os.Open(path)
+	f, err := toolOpen(path)
 	if err != nil {
 		return 0, err
 	}
@@ -285,10 +285,10 @@ func (f Files) Run(ctx context.Context, args json.RawMessage) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		if err := toolMkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return "", err
 		}
-		if err := os.WriteFile(dst, []byte(p.Content), 0o644); err != nil {
+		if err := toolWriteFile(dst, []byte(p.Content), 0o644); err != nil {
 			return "", err
 		}
 		if OnFileCreated != nil {
@@ -300,10 +300,10 @@ func (f Files) Run(ctx context.Context, args json.RawMessage) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		if err := toolMkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return "", err
 		}
-		fh, err := os.OpenFile(dst, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		fh, err := toolOpenFileFlags(dst, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
 			return "", err
 		}
@@ -361,15 +361,15 @@ func (f Files) Run(ctx context.Context, args json.RawMessage) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		if err := toolMkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return "", err
 		}
-		if err := os.Rename(src, dst); err != nil {
+		if err := toolRename(src, dst); err != nil {
 			// Cross-device fallback: chunked copy + delete.
 			if _, cerr := chunkCopy(src, dst); cerr != nil {
 				return "", err
 			}
-			_ = os.Remove(src)
+			_ = toolRemove(src)
 		}
 		if OnFileCreated != nil {
 			OnFileCreated(dst)
@@ -380,13 +380,13 @@ func (f Files) Run(ctx context.Context, args json.RawMessage) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return "created " + p.Path, os.MkdirAll(dst, 0o755)
+		return "created " + p.Path, toolMkdirAll(dst, 0o755)
 	case "list":
 		dir, err := toolPath(p.Path)
 		if err != nil {
 			return "", err
 		}
-		entries, err := os.ReadDir(dir)
+		entries, err := toolReadDir(dir)
 		if err != nil {
 			return "", err
 		}
@@ -412,7 +412,7 @@ func (f Files) Run(ctx context.Context, args json.RawMessage) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("deleted %s", dst), os.Remove(dst)
+		return fmt.Sprintf("deleted %s", dst), toolRemove(dst)
 	case "search":
 		root, err := toolPath(p.Path)
 		if err != nil {
@@ -448,7 +448,7 @@ func filesRead(path string, offsetLine, maxLines int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	fh, err := os.Open(path)
+	fh, err := toolOpen(path)
 	if err != nil {
 		return "", err
 	}
@@ -519,10 +519,10 @@ func filesCombine(sources []string, dst, separator string) (string, error) {
 		}
 		srcs = append(srcs, resolved)
 	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := toolMkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return "", err
 	}
-	out, err := os.Create(dst)
+	out, err := toolCreate(dst)
 	if err != nil {
 		return "", err
 	}
@@ -532,7 +532,7 @@ func filesCombine(sources []string, dst, separator string) (string, error) {
 	var total int64
 	var merged []string
 	for i, src := range srcs {
-		in, err := os.Open(src)
+		in, err := toolOpen(src)
 		if err != nil {
 			return "", fmt.Errorf("source %d (%s): %w", i+1, sources[i], err)
 		}
@@ -591,7 +591,7 @@ func filesTree(root string, depth int) (string, error) {
 		if err != nil {
 			return err
 		}
-		entries, err := os.ReadDir(checked)
+		entries, err := toolReadDir(checked)
 		if err != nil {
 			return err
 		}
@@ -661,7 +661,7 @@ func filesSearch(root, pattern string, maxHits int) (string, error) {
 			return nil // escaping symlink (or hostile path): skip like an unreadable file
 		}
 		path = resolved
-		fh, err := os.Open(path)
+		fh, err := toolOpen(path)
 		if err != nil {
 			return nil // unreadable file: skip silently (permissions, lock)
 		}
@@ -692,7 +692,7 @@ func filesSearch(root, pattern string, maxHits int) (string, error) {
 		}
 		return nil
 	}
-	fi, err := os.Stat(root)
+	fi, err := toolStat(root)
 	if err != nil {
 		return "", err
 	}
@@ -753,7 +753,7 @@ func filesReplace(path, pattern, replacement string, useRegex bool, dryRun *bool
 		t := true
 		dryRun = &t
 	}
-	data, err := os.ReadFile(path)
+	data, err := toolReadFile(path)
 	if err != nil {
 		return "", err
 	}
@@ -779,22 +779,24 @@ func filesReplace(path, pattern, replacement string, useRegex bool, dryRun *bool
 		return fmt.Sprintf("replace (dry run): %d match(es) of %q in %s — call again with \"dryRun\":false to apply", count, pattern, filepath.Base(path)), nil
 	}
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".sheytan-replace-*")
+	tmp, err := toolCreateTempIn(dir, ".sheytan-replace-")
 	if err != nil {
 		return "", err
 	}
-	tmpPath := tmp.Name()
+	// The root-opened File reports its ROOT-RELATIVE name; the absolute
+	// spelling joins it with the resolved target directory.
+	tmpPath := filepath.Join(dir, filepath.Base(tmp.Name()))
 	if _, err := tmp.WriteString(out); err != nil {
 		tmp.Close()
-		os.Remove(tmpPath)
+		_ = toolRemove(tmpPath)
 		return "", err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
+		_ = toolRemove(tmpPath)
 		return "", err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+	if err := toolRename(tmpPath, path); err != nil {
+		_ = toolRemove(tmpPath)
 		return "", err
 	}
 	if OnFileCreated != nil {
@@ -812,7 +814,7 @@ func fileInfo(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	fi, err := os.Stat(path)
+	fi, err := toolStat(path)
 	if err != nil {
 		return "", err
 	}
@@ -821,7 +823,7 @@ func fileInfo(path string) (string, error) {
 	fmt.Fprintf(&b, "size     %s (%d bytes)\n", humanSize(fi.Size()), fi.Size())
 	fmt.Fprintf(&b, "modified %s\n", fi.ModTime().Format("2006-01-02 15:04:05"))
 	if fi.IsDir() {
-		entries, _ := os.ReadDir(path)
+		entries, _ := toolReadDir(path)
 		fmt.Fprintf(&b, "type     directory (%d entries)\n", len(entries))
 		return b.String(), nil
 	}
@@ -861,7 +863,7 @@ func sniffsTextPath(path string) bool {
 		return false
 	}
 	path = resolved
-	fh, err := os.Open(path)
+	fh, err := toolOpen(path)
 	if err != nil {
 		return false
 	}

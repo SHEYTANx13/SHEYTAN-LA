@@ -20,6 +20,23 @@
 #include <string>
 #include <vector>
 
+// simple_escape_char maps the eight single-character JSON escapes to
+// their decoded byte, and returns 0 for anything else (NUL is never a
+// valid escape byte, so 0 is an unambiguous "not simple" sentinel).
+// Focused helper for read_string's escape handling (v1.11.1 quality
+// remediation, cpp/long-switch #191).
+inline char simple_escape_char(char esc) {
+    if (esc == '"') return '"';
+    if (esc == '\\') return '\\';
+    if (esc == '/') return '/';
+    if (esc == 'b') return '\b';
+    if (esc == 'f') return '\f';
+    if (esc == 'n') return '\n';
+    if (esc == 'r') return '\r';
+    if (esc == 't') return '\t';
+    return '\0';
+}
+
 namespace shtn {
 namespace json {
 
@@ -145,15 +162,23 @@ public:
 
             const char esc = data_[pos_++];
 
+            // v1.11.1 quality remediation (cpp/long-switch #191): the
+            // eight single-character escapes decode through the small
+            // table below; \u keeps its dedicated branch. Decoded bytes
+            // and error outcomes are unchanged.
+            if (esc != 'u') {
+                if (esc == '\0') {
+                    return false; // invalid escape (the former default arm)
+                }
+                const char decoded = simple_escape_char(esc);
+                if (decoded == '\0') {
+                    return false; // invalid escape (the former default arm)
+                }
+                out.push_back(decoded);
+                continue;
+            }
+
             switch (esc) {
-            case '"': out.push_back('"'); break;
-            case '\\': out.push_back('\\'); break;
-            case '/': out.push_back('/'); break;
-            case 'b': out.push_back('\b'); break;
-            case 'f': out.push_back('\f'); break;
-            case 'n': out.push_back('\n'); break;
-            case 'r': out.push_back('\r'); break;
-            case 't': out.push_back('\t'); break;
             case 'u': {
                 if (pos_ + 4 > size_) {
                     return false;
@@ -191,7 +216,7 @@ public:
                 break;
             }
             default:
-                return false; // invalid escape
+                return false; // unreachable: esc != 'u' returned above
             }
         }
 

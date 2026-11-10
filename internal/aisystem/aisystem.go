@@ -294,26 +294,70 @@ func (s *Store) activePath() string {
 
 // writeAtomic writes a document via unique-temp + rename (the house
 // pattern — never a partial document on disk).
-func writeAtomic(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-aisystem-*")
+// writeAtomic writes a document via unique-temp + rename (the house
+// pattern — never a partial document on disk). v1.11.1 sink-level
+// rooting: the temp create, the rollback remove and the commit all run
+// through the ai-systems-dir os.Root with the grammar-gated relative
+// name.
+func (s *Store) writeAtomic(path string, data []byte) error {
+	rel := filepath.Base(path)
+	if !filepath.IsLocal(rel) {
+		return fmt.Errorf("ai systems: %q is not a safe document name", rel)
+	}
+	root, err := os.OpenRoot(s.dir)
 	if err != nil {
 		return err
 	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer root.Close()
 
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+	// Unique exclusive temp inside the root (os.Root has no CreateTemp).
+	var tmpFile *os.File
+	var tmpRel string
+	for attempt := 0; attempt < 100; attempt++ {
+		candidate := fmt.Sprintf(".tmp-aisystem-%d-%d", time.Now().UnixNano(), attempt)
+		f, ferr := root.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if ferr == nil {
+			tmpFile, tmpRel = f, candidate
+			break
+		}
+		if !errors.Is(ferr, os.ErrExist) {
+			return ferr
+		}
+	}
+	if tmpFile == nil {
+		return os.ErrExist
+	}
+	defer func() {
+		_ = root.Remove(tmpRel)
+	}()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
 		return err
 	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+	if err := tmpFile.Sync(); err != nil {
+		tmpFile.Close()
 		return err
 	}
-	if err := tmp.Close(); err != nil {
+	if err := tmpFile.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := root.Rename(tmpRel, rel); err != nil {
+		return err
+	}
+	root.Remove(tmpRel) // success: the deferred rollback remove is a no-op on the moved name
+	return nil
+}
+
+// systemRelOf derives the ai-systems-dir-relative document name for a
+// systemPath result and gates it with filepath.IsLocal (v1.11.1
+// sink-level rooting).
+func systemRelOf(path string) (string, error) {
+	rel := filepath.Base(path)
+	if !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("ai systems: %q is not a safe document name", rel)
+	}
+	return rel, nil
 }
 
 func newID() string {
@@ -356,7 +400,7 @@ func (s *Store) ensureDefault() error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(defPath, data)
+	return s.writeAtomic(defPath, data)
 }
 
 // loadActiveOrMigrate resolves the active pointer. Migration rule for
@@ -387,7 +431,7 @@ func (s *Store) persistActive(id string) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(s.activePath(), data)
+	return s.writeAtomic(s.activePath(), data)
 }
 
 // read loads one system document from disk. The id FAILS CLOSED
@@ -398,7 +442,18 @@ func (s *Store) read(id string) (System, error) {
 	if err != nil {
 		return System{}, ErrNotFound
 	}
-	data, err := os.ReadFile(path)
+	// v1.11.1 sink-level rooting: the read runs through the ai-systems
+	// os.Root with the grammar-gated relative name.
+	root, rootErr := os.OpenRoot(s.dir)
+	if rootErr != nil {
+		return System{}, ErrNotFound
+	}
+	defer root.Close()
+	rel, relErr := systemRelOf(path)
+	if relErr != nil {
+		return System{}, ErrNotFound
+	}
+	data, err := root.ReadFile(rel)
 	if err != nil {
 		return System{}, ErrNotFound
 	}
@@ -596,7 +651,7 @@ func (s *Store) write(sys System) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(path, data)
+	return s.writeAtomic(path, data)
 }
 
 // Update applies a mutation to one system and increments its revision.
@@ -639,7 +694,18 @@ func (s *Store) Delete(id string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil {
+	// v1.11.1 sink-level rooting: the removal runs through the
+	// ai-systems os.Root with the grammar-gated relative name.
+	root, rootErr := os.OpenRoot(s.dir)
+	if rootErr != nil {
+		return err
+	}
+	defer root.Close()
+	rel, relErr := systemRelOf(path)
+	if relErr != nil {
+		return relErr
+	}
+	if err := root.Remove(rel); err != nil {
 		return err
 	}
 	if s.active == id {

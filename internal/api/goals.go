@@ -49,6 +49,15 @@ import (
 func goalLogValue(v any) string {
 	s := strings.ToValidUTF8(fmt.Sprint(v), "\uFFFD")
 
+	// v1.11.1 log-injection remediation (work order §4.5/§7.4): CR and LF
+	// are neutralized AT THE SINK HEAD by explicit replacement, before any
+	// presentation formatting below — a request-borne value can never
+	// forge a second log record even if the per-rune rules change later.
+	// Output is unchanged: the rune loop below would have rendered the
+	// same "\r"/"\n" escapes.
+	s = strings.ReplaceAll(s, "\r", "\\r")
+	s = strings.ReplaceAll(s, "\n", "\\n")
+
 	var b strings.Builder
 	for _, r := range s {
 		switch {

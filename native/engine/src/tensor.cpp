@@ -430,12 +430,19 @@ int32_t Weights::row_f32(const std::string& name, uint64_t row,
     if (rc != SHTN_OK) return rc;
 
     const gguf::TensorInfo* t = find(name);
-    // Contract: row_span() above resolved the SAME name through
-    // shape2d() and returned its error on a miss, so find(name) cannot
-    // be null here (the name→index map is immutable during this call).
-    // The assert documents the invariant for the dereferences below
-    // instead of adding a dead defensive branch.
-    assert(t != nullptr && "row_span() above guarantees the tensor exists");
+    // Contract: row_span() above resolved the SAME name through shape2d()
+    // and returned its error on a miss, so find(name) cannot be null here
+    // (the name→index map is immutable during this call). v1.11.1
+    // (cpp/inconsistent-null-check #319): the invariant is now
+    // machine-checked with an explicit typed failure instead of a bare
+    // assert — assert() compiles out under NDEBUG, leaving the
+    // dereference unprotected in release builds; this branch keeps the
+    // same impossibility a documented, defined outcome instead of
+    // undefined behavior.
+    if (t == nullptr) {
+        error = "internal error: tensor vanished after row_span()";
+        return SHTN_ERR_INTERNAL;
+    }
     const uint32_t ne0 = static_cast<uint32_t>(t->dims[0]);
 
     RowLayout layout{};

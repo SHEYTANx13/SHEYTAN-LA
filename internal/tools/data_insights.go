@@ -37,7 +37,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -76,7 +75,7 @@ func outMode(p *dataParams) string {
 // columns, backend identity).
 func datasetMeta(d *dataset) string {
 	bytes := int64(0)
-	if fi, err := os.Stat(d.Path); err == nil {
+	if fi, err := toolStat(d.Path); err == nil {
 		bytes = fi.Size()
 	}
 
@@ -142,7 +141,7 @@ func materializeDataset(d *dataset, format, name, fallbackBase string) (string, 
 		return "", err
 	}
 
-	if werr := os.WriteFile(out, data, 0o644); werr != nil {
+	if werr := toolWriteFile(out, data, 0o644); werr != nil {
 		return "", werr
 	}
 

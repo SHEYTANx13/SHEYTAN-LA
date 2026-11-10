@@ -21,7 +21,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -104,14 +103,14 @@ func (t JSONTool) Run(ctx context.Context, args json.RawMessage) (string, error)
 // itself).
 func jsonLoadAny(path string) (any, int, error) {
 	abs := ResolvePath(path)
-	fi, err := os.Stat(abs)
+	fi, err := toolStat(abs)
 	if err != nil {
 		return nil, 0, fmt.Errorf("file not found: %s", abs)
 	}
 	if fi.Size() > 256<<20 {
 		return nil, 0, fmt.Errorf("file too large (>%d MB)", 256)
 	}
-	raw, err := os.ReadFile(abs)
+	raw, err := toolReadFile(abs)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -293,7 +292,7 @@ func (t JSONTool) where(path, field, op, value string, limit int, format, dest s
 		op = "eq"
 	}
 	abs := ResolvePath(path)
-	f, err := os.Open(abs)
+	f, err := toolOpen(abs)
 	if err != nil {
 		return "", fmt.Errorf("file not found: %s", abs)
 	}
@@ -361,7 +360,7 @@ func (t JSONTool) where(path, field, op, value string, limit int, format, dest s
 	}
 	if dest != "" && len(matches) > 0 {
 		dst := ResolvePath(dest)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		if err := toolMkdirAll(filepath.Dir(dst), 0o755); err != nil {
 			return b.String(), err
 		}
 		var out []byte
@@ -381,7 +380,7 @@ func (t JSONTool) where(path, field, op, value string, limit int, format, dest s
 				out = append(out, '\n')
 			}
 		}
-		if err := os.WriteFile(dst, out, 0o644); err != nil {
+		if err := toolWriteFile(dst, out, 0o644); err != nil {
 			return b.String(), err
 		}
 		fmt.Fprintf(&b, "matched rows written to %s\n", dest)
@@ -610,7 +609,7 @@ func (t JSONTool) keys(path string, limit int) (string, error) {
 
 func (t JSONTool) pretty(path, dest string) (string, error) {
 	abs := ResolvePath(path)
-	raw, err := os.ReadFile(abs)
+	raw, err := toolReadFile(abs)
 	if err != nil {
 		return "", fmt.Errorf("file not found: %s", abs)
 	}
@@ -626,7 +625,7 @@ func (t JSONTool) pretty(path, dest string) (string, error) {
 	if dest != "" {
 		out = ResolvePath(dest)
 	}
-	if err := os.WriteFile(out, append(indented, '\n'), 0o644); err != nil {
+	if err := toolWriteFile(out, append(indented, '\n'), 0o644); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("pretty-printed %d bytes -> %s (compact source was %d bytes)", len(indented), filepath.Base(out), len(raw)), nil
@@ -657,7 +656,7 @@ func (t JSONTool) flatten(path, dest string) (string, error) {
 	if dest == "" {
 		dst = ResolvePath(strings.TrimSuffix(filepath.Base(ResolvePath(path)), filepath.Ext(path)) + ".flat.json")
 	}
-	if err := os.WriteFile(dst, append(out, '\n'), 0o644); err != nil {
+	if err := toolWriteFile(dst, append(out, '\n'), 0o644); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("flattened %d object(s), %d byte(s) -> %s", len(flat), len(out), filepath.Base(dst)), nil

@@ -17,6 +17,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -122,5 +123,52 @@ func TestValidRootStillIndexes(t *testing.T) {
 	idx := s.Status(root)
 	if idx.Files != 1 {
 		t.Fatalf("status: %+v", idx)
+	}
+}
+
+// TestValidRootWindowsShapes pins the repository-root selection contract
+// across host syntaxes (v1.11.1 Windows repair): a root is a selected
+// directory value, so on Windows the rooted spellings "/" and "\home\z"
+// are valid root selections even though filepath.IsAbs refuses them,
+// while relatives, dot and NUL-tainted values stay refused on every
+// host. On POSIX hosts IsAbs already covers the slash form and the
+// backslash spellings are not roots.
+func TestValidRootWindowsShapes(t *testing.T) {
+	good := []string{t.TempDir(), "/"}
+	if runtime.GOOS == "windows" {
+		good = append(good, `\home\z`, `C:\repo`, `C:/repo`)
+	}
+	for _, root := range good {
+		if !validRoot(root) {
+			t.Errorf("root %q must be accepted on %s", root, runtime.GOOS)
+		}
+	}
+
+	bad := []string{"", "relative/path", ".", "..", "root\x00nul", "C:relative"}
+	for _, root := range bad {
+		if validRoot(root) {
+			t.Errorf("hostile root %q must be rejected on %s", root, runtime.GOOS)
+		}
+	}
+}
+
+// TestRepoJoinFailsClosedWindowsShapes pins the child-path containment
+// contract against Windows spellings on every host: drive-prefixed,
+// drive-relative, rooted and UNC child forms never resolve beneath the
+// workspace root.
+func TestRepoJoinFailsClosedWindowsShapes(t *testing.T) {
+	root := t.TempDir()
+
+	hostile := []string{
+		`C:\Windows\evil`,   // drive-absolute
+		"C:evil",            // drive-relative
+		`\\srv\share\evil`,  // UNC
+		`\rooted\evil`,      // rooted
+		"abs\\..\\..\\evil", // backslash traversal
+	}
+	for _, rel := range hostile {
+		if p, err := repoJoin(root, rel); err == nil {
+			t.Errorf("repoJoin(%q) must fail closed on %s, got %q", rel, runtime.GOOS, p)
+		}
 	}
 }

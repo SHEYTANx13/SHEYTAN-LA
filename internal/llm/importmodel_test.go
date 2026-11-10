@@ -69,7 +69,14 @@ func TestImportModelRealGGUF(t *testing.T) {
 	}
 
 	// Byte identity: the imported copy is the source, bit for bit.
-	same, err := sameContent(srcCopy, result.Path)
+	// v1.11.1: the managed side is read through the models root.
+	root, rootErr := os.OpenRoot(modelsDir)
+	if rootErr != nil {
+		t.Fatal(rootErr)
+	}
+	defer root.Close()
+	destRel := filepath.Base(result.Path)
+	same, err := sameContent(root, destRel, srcCopy)
 	if err != nil || !same {
 		t.Fatalf("imported copy must be byte-identical to the source (same=%t err=%v)", same, err)
 	}
@@ -181,7 +188,13 @@ func TestImportModelRenamesDifferentCollision(t *testing.T) {
 	}
 
 	// The ORIGINAL file is untouched (still the real fixture bytes).
-	same, _ := sameContent(src, filepath.Join(modelsDir, "collide.gguf"))
+	// v1.11.1: the managed side is read through the models root.
+	root, rootErr := os.OpenRoot(modelsDir)
+	if rootErr != nil {
+		t.Fatal(rootErr)
+	}
+	defer root.Close()
+	same, _ := sameContent(root, filepath.Base(filepath.Join(modelsDir, "collide.gguf")), src)
 	if !same {
 		t.Fatal("the pre-existing model must never be overwritten")
 	}

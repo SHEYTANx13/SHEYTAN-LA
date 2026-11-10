@@ -345,6 +345,20 @@ func (s *Server) pausedRunPath(runID string) (string, bool) {
 	return filepath.Join(s.pausedDir(), runID+".json"), true
 }
 
+// pausedRunRel derives the paused-dir-relative checkpoint name for a
+// grammar-validated run id and gates it with filepath.IsLocal (v1.11.1
+// sink-level rooting).
+func pausedRunRel(runID string) (string, error) {
+	if !validRunID(runID) {
+		return "", fmt.Errorf("paused run: %w %q", errInvalidRunID, runID)
+	}
+	rel := runID + ".json"
+	if !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("paused run: %w %q", errInvalidRunID, runID)
+	}
+	return rel, nil
+}
+
 // pausedSaveSeam is the v1.7.5 fault-injection seam for the durable
 // checkpoint commit (the same pattern as internal/config's renameForTest):
 // tests substitute it to force a save failure AFTER the transcript edit —
@@ -399,12 +413,23 @@ func (s *Server) savePausedRecord(rec *pausedRunRecord) error {
 // loadPausedRecord reads one checkpoint by run id. A run id outside the
 // validRunID grammar is never a recoverable record (fail closed).
 func (s *Server) loadPausedRecord(runID string) (*pausedRunRecord, bool) {
-	path, ok := s.pausedRunPath(runID)
-	if !ok {
+	if _, ok := s.pausedRunPath(runID); !ok {
 		return nil, false
 	}
 
-	data, err := os.ReadFile(path)
+	// v1.11.1 sink-level rooting: the checkpoint read runs through the
+	// paused-dir os.Root with the grammar-gated relative name.
+	rel, relErr := pausedRunRel(runID)
+	if relErr != nil {
+		return nil, false
+	}
+	root, rootErr := s.pausedRoot()
+	if rootErr != nil {
+		return nil, false
+	}
+	defer root.Close()
+
+	data, err := root.ReadFile(rel)
 	if err != nil || len(data) > 4*(1<<20) {
 		return nil, false
 	}

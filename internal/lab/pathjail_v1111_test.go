@@ -449,3 +449,49 @@ func TestCreateRefusesNULSource(t *testing.T) {
 		t.Fatal("empty source must be refused")
 	}
 }
+
+// TestPathForRefusesWindowsShapesOnWindows pins the Windows-native half
+// of the workspace jail (v1.11.1 Windows repair): POSIX-spelled rooted
+// paths, drive-absolute, drive-relative, UNC and device-namespace forms
+// are refused before the join, never re-anchored under the workspace
+// root by Join's separator handling.
+func TestPathForRefusesWindowsShapesOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows path-syntax jail — run natively on Windows")
+	}
+	ws, _ := newJailFixture(t, map[string]string{"main.txt": "inside\n"})
+
+	for _, rel := range []string{
+		"/etc/passwd",    // POSIX-spelled rooted
+		`\etc\passwd`,    // Windows rooted
+		`C:\evil.txt`,    // drive-absolute
+		"C:evil.txt",     // drive-relative
+		`C:sub\evil.txt`, // drive-relative with a component
+		`\\.\pipe\x`,     // device namespace
+		`\\srv\share\x`,  // UNC
+		"ads:name.txt",   // NTFS alternate data stream
+	} {
+		if _, err := ws.PathFor(rel); !errors.Is(err, ErrInvalidWorkspace) {
+			t.Fatalf("PathFor(%q) must be refused on Windows, got %v", rel, err)
+		}
+	}
+}
+
+// TestPathForRefusesBackslashRootedSpellings proves the backslash-spelled
+// rooted and traversal forms are refused on BOTH hosts (the jail unifies
+// separators before the join; on Windows the rooted-prefix and drive
+// rules add the native checks): Windows path syntax cannot bypass the
+// workspace jail on a POSIX host either.
+func TestPathForRefusesBackslashRootedSpellings(t *testing.T) {
+	ws, _ := newJailFixture(t, map[string]string{"main.txt": "inside\n"})
+
+	for _, rel := range []string{
+		`\etc\passwd`,   // backslash-spelled rooted → unified to a separator
+		`..\escape.txt`, // backslash-spelled traversal
+		`\\srv\share\x`, // UNC (absolute on Windows; unified rooted on POSIX)
+	} {
+		if _, err := ws.PathFor(rel); !errors.Is(err, ErrInvalidWorkspace) {
+			t.Fatalf("PathFor(%q) must be refused on %s, got %v", rel, runtime.GOOS, err)
+		}
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -75,8 +76,18 @@ func applyGitSignals(ctx context.Context, idx *Index, report *UpdateReport) {
 // worktrees/submodules use a file) at the root. Real git availability
 // is proven by the commands below succeeding.
 func isGitWorktree(root string) bool {
+	// v1.11.1 sink-level rooting: the selected workspace root is a root
+	// value — the inline rooted-shape gate runs at the point of use.
+	if !hostPathShapeRe.MatchString(filepath.Join(root, ".git")) {
+		return false
+	}
 	return fileExists(filepath.Join(root, ".git"))
 }
+
+// hostPathShapeRe is the inline lexical gate for the selected workspace
+// root (v1.11.1 sink-level rooting): rooted (POSIX root, Windows drive
+// prefix or Windows rooted form), NUL-free and control-free.
+var hostPathShapeRe = regexp.MustCompile(`^(?:[A-Za-z]:[\\/]|[\\/])[^\x00\x01-\x1f\x7f]*$`)
 
 func fileExists(path string) bool {
 	_, err := os.Stat(path)

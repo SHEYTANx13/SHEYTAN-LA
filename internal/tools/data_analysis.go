@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -512,7 +511,7 @@ func quoteCols(d *dataset, idx []int) []string {
 // writeCSVFile writes a dataset as RFC-4180 CSV (chunked through a
 // buffered writer — never materializes the whole file in memory).
 func writeCSVFile(d *dataset, dst string) error {
-	f, err := os.Create(dst)
+	f, err := toolCreate(dst)
 	if err != nil {
 		return err
 	}

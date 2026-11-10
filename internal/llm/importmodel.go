@@ -29,11 +29,13 @@ package llm
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
@@ -77,6 +79,17 @@ const importCopyChunk = 1 << 20
 //     models root (the same shape as sessions.artifactPath). A hostile
 //     name produces an error, never a path outside modelsDir.
 
+// sanitizeNULDiagnostics renders a tainted path safely for an error
+// message: every NUL byte becomes an escaped "\\x00" so the diagnostic
+// itself can never smuggle a raw control byte into a log file or a UI
+// field. Only the diagnostics change — the canonical value is untouched.
+func sanitizeNULDiagnostics(s string) string {
+	if !strings.ContainsRune(s, '\x00') {
+		return s
+	}
+	return strings.ReplaceAll(s, "\x00", "\\x00")
+}
+
 // validImportSource validates a user-selected external model source path
 // at the point of use: it must be non-empty, NUL-free and absolute.
 func validImportSource(src string) error {
@@ -88,6 +101,12 @@ func validImportSource(src string) error {
 	}
 	if !filepath.IsAbs(src) {
 		return fmt.Errorf("import: source path %q must be absolute", src)
+	}
+	// v1.11.1 sink-level rooting: the rooted-shape gate is the lexical
+	// half of the selected-host-path contract, enforced right here where
+	// the source enters the import pipeline (NUL-free, rooted, non-empty).
+	if !hostPathShape.MatchString(src) {
+		return fmt.Errorf("import: source path %q must be a NUL-free absolute host path", src)
 	}
 	return nil
 }
@@ -156,6 +175,14 @@ func windowsReservedDeviceName(stem string) bool {
 	return false
 }
 
+// hostPathShape is the lexical half of the user-selected-external-path
+// contract (v1.11.1, work order §4.4 class "selected host path"): a
+// NUL-free ABSOLUTE host path in either platform spelling — POSIX root,
+// Windows drive prefix or Windows rooted form. It is enforced alongside
+// filepath.IsAbs at every point of use, so a hostile or relative value
+// can never reach a filesystem sink through this package.
+var hostPathShape = regexp.MustCompile(`^(?:[A-Za-z]:[\\/]|[\\/])[^\x00]*$`)
+
 // managedModelPath builds the on-disk path for one managed model file and
 // FAILS CLOSED on a name that is not a safe single path component: the
 // result is always filepath.Join(modelsDir, name) and can never leave the
@@ -165,6 +192,25 @@ func managedModelPath(modelsDir, name string) (string, error) {
 		return "", fmt.Errorf("import: %q is not a safe model file name", name)
 	}
 	return filepath.Join(modelsDir, name), nil
+}
+
+// modelNameOf derives the models-root-relative name for a
+// managedModelPath result and gates it with filepath.IsLocal — the
+// explicit containment guard for the rooted operations below.
+func modelNameOf(dest string) (string, error) {
+	rel := filepath.Base(dest)
+	if !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("import: %q is not a safe model file name", rel)
+	}
+	return rel, nil
+}
+
+// modelsRoot opens the managed models-root containment root. Every write,
+// rename and stat on a managed model file runs THROUGH this root, so a
+// hostile name can neither leave the models root nor redirect through a
+// planted symlink.
+func modelsRoot(modelsDir string) (*os.Root, error) {
+	return os.OpenRoot(modelsDir)
 }
 
 // ImportModel validates and copies one GGUF file into the managed models
@@ -178,10 +224,31 @@ func managedModelPath(modelsDir, name string) (string, error) {
 // destination. The copy itself is unchanged: streaming, file-based,
 // atomically placed. Validation still happens BEFORE the lock (a bad
 // source fails fast without serializing behind a legitimate import).
+// errImportSourceNUL is the typed, deterministic refusal for a source
+// path carrying a NUL byte: it is returned BEFORE any filesystem call
+// (filepath.Abs, EvalSymlinks, os.Stat, os.Open), so a NUL-tainted
+// source can never surface an incidental OS "invalid argument" as the
+// primary diagnostic and can never touch a single file.
+var errImportSourceNUL = errors.New("import: source path contains a NUL byte (invalid path bytes)")
+
+// sourceNULOffset returns the byte offset of the first NUL in s, or -1.
+func sourceNULOffset(s string) int {
+	return strings.IndexByte(s, '\x00')
+}
+
 func ImportModel(modelsDir, src string, onProgress func(copied, total int64)) (*ImportResult, error) {
 	src = strings.TrimSpace(src)
 	if src == "" {
 		return nil, fmt.Errorf("import: source path is empty")
+	}
+
+	// v1.11.1: NUL is detected on the RAW source FIRST — before
+	// filepath.Abs, cleaning, EvalSymlinks, stat or open. A NUL byte is
+	// never a real filename byte: it is refused with the typed defect
+	// (errors.Is-able) naming the byte offset, and nothing on disk is
+	// created, changed or touched.
+	if off := sourceNULOffset(src); off >= 0 {
+		return nil, fmt.Errorf("%w at byte offset %d in %q", errImportSourceNUL, off, sanitizeNULDiagnostics(src))
 	}
 
 	abs, err := filepath.Abs(src)
@@ -243,8 +310,19 @@ func ImportModel(modelsDir, src string, onProgress func(copied, total int64)) (*
 	}
 	renamedFrom := ""
 
-	if _, statErr := os.Stat(dest); statErr == nil {
-		dup, dupErr := sameContent(dest, abs)
+	root, rootErr := modelsRoot(modelsDir)
+	if rootErr != nil {
+		return nil, rootErr
+	}
+	defer root.Close()
+
+	origRel, origRelErr := modelNameOf(dest)
+	if origRelErr != nil {
+		return nil, origRelErr
+	}
+
+	if _, statErr := root.Stat(origRel); statErr == nil {
+		dup, dupErr := sameContent(root, origRel, abs)
 		if dupErr == nil && dup {
 			logging.Default().Info("models",
 				"import skipped: %s already exists in the models directory (identical size + SHA-256)",
@@ -332,14 +410,22 @@ func ImportModel(modelsDir, src string, onProgress func(copied, total int64)) (*
 	}
 
 	// --- atomic final placement -----------------------------------------
-	if err := os.Rename(tmpName, dest); err != nil {
+	// destRel is derived AFTER the collision rename above finalized dest:
+	// the staged copy moves to the FINAL managed name, never the original
+	// spelling it was first joined under.
+	destRel, destRelErr := modelNameOf(dest)
+	if destRelErr != nil {
+		_ = os.Remove(tmpName)
+		return nil, destRelErr
+	}
+	if err := root.Rename(filepath.Base(tmpName), destRel); err != nil {
 		_ = os.Remove(tmpName)
 		return nil, fmt.Errorf("import: place model: %w", err)
 	}
 
 	// Drop any foreign write bits (a read-only source must not produce a
 	// read-only managed copy the updater cannot manage).
-	_ = os.Chmod(dest, 0o644)
+	_ = root.Chmod(destRel, 0o644)
 
 	renameNote := ""
 	if renamedFrom != "" {
@@ -368,13 +454,23 @@ func nextFreeModelName(modelsDir, base string) (string, string, error) {
 	ext := filepath.Ext(base)
 	stem := strings.TrimSuffix(base, ext)
 
+	root, err := modelsRoot(modelsDir)
+	if err != nil {
+		return "", "", err
+	}
+	defer root.Close()
+
 	for i := 1; i < 1000; i++ {
 		candidate := fmt.Sprintf("%s-%d%s", stem, i, ext)
 		candidatePath, err := managedModelPath(modelsDir, candidate)
 		if err != nil {
 			continue
 		}
-		if _, err := os.Stat(candidatePath); err != nil {
+		rel, relErr := modelNameOf(candidatePath)
+		if relErr != nil {
+			continue
+		}
+		if _, err := root.Stat(rel); err != nil {
 			return candidate, candidatePath, nil
 		}
 	}
@@ -386,7 +482,11 @@ func nextFreeModelName(modelsDir, base string) (string, string, error) {
 		if err != nil {
 			continue
 		}
-		if _, err := os.Stat(candidatePath); err != nil {
+		rel, relErr := modelNameOf(candidatePath)
+		if relErr != nil {
+			continue
+		}
+		if _, err := root.Stat(rel); err != nil {
 			return candidate, candidatePath, nil
 		}
 	}
@@ -394,23 +494,21 @@ func nextFreeModelName(modelsDir, base string) (string, string, error) {
 	return "", "", fmt.Errorf("import: no collision-free name found for %q", base)
 }
 
-// sameContent reports whether two existing files are byte-identical
-// (size pre-check, then full SHA-256 — the same standard the data-root
-// migration uses). Both paths are validated (non-empty, NUL-free) before
-// any file-system use.
-func sameContent(a, b string) (bool, error) {
-	if err := validReadablePath(a); err != nil {
-		return false, err
-	}
-	if err := validReadablePath(b); err != nil {
+// sameContent reports whether the managed destination and the external
+// source are byte-identical (size pre-check, then full SHA-256 — the same
+// standard the data-root migration uses). v1.11.1: the MANAGED side is
+// read through the models root; the external side is the shape-gated,
+// user-selected source path.
+func sameContent(root *os.Root, destRel, src string) (bool, error) {
+	if err := validReadablePath(src); err != nil {
 		return false, err
 	}
 
-	fa, err := os.Stat(a)
+	fa, err := root.Stat(destRel)
 	if err != nil {
 		return false, err
 	}
-	fb, err := os.Stat(b)
+	fb, err := os.Stat(src)
 	if err != nil {
 		return false, err
 	}
@@ -418,15 +516,30 @@ func sameContent(a, b string) (bool, error) {
 		return false, nil
 	}
 
-	ha, err := fileSHA256(a)
+	ha, err := rootFileSHA256(root, destRel)
 	if err != nil {
 		return false, err
 	}
-	hb, err := fileSHA256(b)
+	hb, err := fileSHA256(src)
 	if err != nil {
 		return false, err
 	}
 	return ha == hb, nil
+}
+
+// rootFileSHA256 hashes a managed model file through the models root.
+func rootFileSHA256(root *os.Root, nameRel string) (string, error) {
+	f, err := root.Open(nameRel)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func fileSHA256(path string) (string, error) {

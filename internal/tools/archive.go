@@ -110,10 +110,10 @@ func (t ArchiveTool) zip_(sources []string, dest string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+	if err := toolMkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return "", err
 	}
-	f, err := os.Create(out)
+	f, err := toolCreate(out)
 	if err != nil {
 		return "", err
 	}
@@ -154,7 +154,7 @@ func addToZip(zw *zip.Writer, src, rel string, total *int64) error {
 	if err != nil {
 		return err
 	}
-	fi, err := os.Stat(src)
+	fi, err := toolStat(src)
 	if err != nil {
 		return err
 	}
@@ -168,7 +168,7 @@ func addToZip(zw *zip.Writer, src, rel string, total *int64) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.Open(src)
+	f, err := toolOpen(src)
 	if err != nil {
 		return err
 	}
@@ -189,7 +189,7 @@ func collectSources(sources []string) (files []string, skipped int) {
 			skipped++
 			continue
 		}
-		fi, err := os.Stat(abs)
+		fi, err := toolStat(abs)
 		if err != nil {
 			skipped++
 			continue
@@ -246,7 +246,7 @@ func (t ArchiveTool) unzip(path, dest string) (string, error) {
 			return "", err
 		}
 	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := toolMkdirAll(root, 0o755); err != nil {
 		return "", err
 	}
 	// v1.11.1 (run 41901967798): ROOTED extraction. Every write goes
@@ -274,7 +274,7 @@ func (t ArchiveTool) unzip(path, dest string) (string, error) {
 	defer rooted.Close()
 
 	archiveSize := archiveRatioFloor()
-	if fi, statErr := os.Stat(abs); statErr == nil && fi.Size() > 0 {
+	if fi, statErr := toolStat(abs); statErr == nil && fi.Size() > 0 {
 		archiveSize = fi.Size()
 	}
 
@@ -536,10 +536,10 @@ func (t ArchiveTool) tar_(sources []string, dest string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+	if err := toolMkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return "", err
 	}
-	f, err := os.Create(out)
+	f, err := toolCreate(out)
 	if err != nil {
 		return "", err
 	}
@@ -562,7 +562,7 @@ func (t ArchiveTool) tar_(sources []string, dest string) (string, error) {
 		if _, err := toolPath(src); err != nil {
 			return "", err
 		}
-		fi, err := os.Stat(src)
+		fi, err := toolStat(src)
 		if err != nil {
 			continue
 		}
@@ -574,7 +574,7 @@ func (t ArchiveTool) tar_(sources []string, dest string) (string, error) {
 		if err := tw.WriteHeader(hdr); err != nil {
 			return "", err
 		}
-		sf, err := os.Open(src)
+		sf, err := toolOpen(src)
 		if err != nil {
 			return "", err
 		}
@@ -613,7 +613,7 @@ func (t ArchiveTool) untar(path, dest string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	f, err := os.Open(abs)
+	f, err := toolOpen(abs)
 	if err != nil {
 		return "", fmt.Errorf("open tar: %w", err)
 	}
@@ -638,7 +638,7 @@ func (t ArchiveTool) untar(path, dest string) (string, error) {
 			return "", err
 		}
 	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	if err := toolMkdirAll(root, 0o755); err != nil {
 		return "", err
 	}
 	rooted, err := os.OpenRoot(root)
@@ -648,7 +648,7 @@ func (t ArchiveTool) untar(path, dest string) (string, error) {
 	defer rooted.Close()
 
 	archiveSize := archiveRatioFloor()
-	if fi, statErr := os.Stat(abs); statErr == nil && fi.Size() > 0 {
+	if fi, statErr := toolStat(abs); statErr == nil && fi.Size() > 0 {
 		archiveSize = fi.Size()
 	}
 
@@ -810,7 +810,7 @@ func (t ArchiveTool) list(path string) (string, error) {
 		fmt.Fprintf(&b, "total uncompressed: %s\n", humanize.Bytes(int64(total)))
 		return b.String(), nil
 	}
-	f, err := os.Open(abs)
+	f, err := toolOpen(abs)
 	if err != nil {
 		return "", err
 	}

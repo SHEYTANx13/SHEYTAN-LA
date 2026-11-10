@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -69,11 +68,11 @@ func (Screenshot) Run(ctx context.Context, args json.RawMessage) (string, error)
 		return "", fmt.Errorf("base dir not configured")
 	}
 	shots := filepath.Join(dir, "logs", "screenshots")
-	if err := os.MkdirAll(shots, 0o755); err != nil {
+	if err := toolMkdirAll(shots, 0o755); err != nil {
 		return "", err
 	}
 	dst := filepath.Join(shots, "screen-"+time.Now().Format("20060102-150405")+".png")
-	if err := os.WriteFile(dst, png, 0o644); err != nil {
+	if err := toolWriteFile(dst, png, 0o644); err != nil {
 		return "", err
 	}
 

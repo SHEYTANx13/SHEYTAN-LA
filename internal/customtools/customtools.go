@@ -557,19 +557,26 @@ func (s *Store) Save(d *Definition) error {
 	}
 
 	// ATOMIC save: temp file in the same directory + rename (spec §8).
-	// The path FAILS CLOSED on an id outside the tool-id grammar.
-	path, err := s.pathFor(d.ID)
-	if err != nil {
-		return err
+	// The relative name FAILS CLOSED on an id outside the tool-id
+	// grammar, and the write runs through the store-dir root.
+	rel, relErr := toolFileRel(d.ID)
+	if relErr != nil {
+		return relErr
 	}
-	tmp := path + ".tmp"
+	tmpRel := rel + ".tmp"
 
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	root, rootErr := s.storeRoot()
+	if rootErr != nil {
+		return rootErr
+	}
+	defer root.Close()
+
+	if err := root.WriteFile(tmpRel, data, 0o644); err != nil {
 		return fmt.Errorf("write definition: %w", err)
 	}
 
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	if err := root.Rename(tmpRel, rel); err != nil {
+		_ = root.Remove(tmpRel)
 		return fmt.Errorf("commit definition: %w", err)
 	}
 
@@ -594,8 +601,11 @@ func (s *Store) Delete(id string) bool {
 
 	delete(s.cache, id)
 
-	if path, err := s.pathFor(id); err == nil {
-		_ = os.Remove(path)
+	if rel, err := toolFileRel(id); err == nil {
+		if root, rootErr := s.storeRoot(); rootErr == nil {
+			_ = root.Remove(rel)
+			root.Close()
+		}
 	}
 	return true
 }
@@ -651,6 +661,26 @@ func (s *Store) pathFor(id string) (string, error) {
 		return "", fmt.Errorf("custom tools: %w %q", errInvalidToolID, id)
 	}
 	return filepath.Join(s.dir, id+".json"), nil
+}
+
+// toolFileRel derives the store-dir-relative name of one tool definition
+// file ("<id>.json") and gates it with filepath.IsLocal — the explicit
+// containment guard for the rooted operations below (v1.11.1
+// sink-level rooting).
+func toolFileRel(id string) (string, error) {
+	if !validToolID(id) {
+		return "", fmt.Errorf("custom tools: %w %q", errInvalidToolID, id)
+	}
+	rel := id + ".json"
+	if !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("custom tools: %w %q", errInvalidToolID, id)
+	}
+	return rel, nil
+}
+
+// storeRoot opens the store-dir containment root.
+func (s *Store) storeRoot() (*os.Root, error) {
+	return os.OpenRoot(s.dir)
 }
 
 func newID() string {

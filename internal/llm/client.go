@@ -1079,6 +1079,11 @@ func (c *Client) imageDataURL(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		return "", fmt.Errorf("image path %q must be absolute", path)
 	}
+	// v1.11.1 sink-level rooting: the selected image path re-proves its
+	// rooted, NUL-free, control-free shape at the point of use.
+	if !hostPathShape.MatchString(path) {
+		return "", fmt.Errorf("image path %q is not a well-formed absolute host path", path)
+	}
 
 	fi, err := os.Stat(path)
 	if err != nil {

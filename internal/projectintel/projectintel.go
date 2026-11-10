@@ -32,11 +32,17 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 )
+
+// hostPathShapeRe is the inline lexical gate for user-selected host
+// paths (v1.11.1 sink-level rooting): rooted (POSIX root, Windows drive
+// prefix or Windows rooted form), NUL-free and control-free.
+var hostPathShapeRe = regexp.MustCompile(`^(?:[A-Za-z]:[\\/]|[\\/])[^\x00\x01-\x1f\x7f]*$`)
 
 const (
 	// maxObserveFiles bounds the structural walk.
@@ -350,6 +356,11 @@ func scanProject(root string) scanResult {
 	}
 	root = filepath.Clean(abs)
 	if !filepath.IsAbs(root) {
+		return scan
+	}
+	// v1.11.1 sink-level rooting: the selected workspace root re-proves
+	// its rooted, NUL-free, control-free shape at the point of use.
+	if !hostPathShapeRe.MatchString(root) {
 		return scan
 	}
 

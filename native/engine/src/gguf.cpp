@@ -477,15 +477,11 @@ bool read_string(Cursor& c, std::string& out) {
     return true;
 }
 
-// read_value parses one typed metadata value. Scalars are captured
-// (strings bounded by kMaxStringBytes); array ELEMENTS are never
-// materialized — the array is validated element-size-wise and skipped,
-// with only its element count recorded.
-bool read_value(Cursor& c, Scalar& out) {
-    if (!c.u32(out.type)) {
-        return false;
-    }
-
+// decode_meta_small_int reads the <=32-bit integer metadata group
+// (u8/i8/u16/i16/u32/i32) into the value's 64-bit slots. Focused helper
+// split from read_value's former single 12-case switch (v1.11.1 quality
+// remediation, cpp/long-switch #190); reads and error behavior unchanged.
+bool decode_meta_small_int(Cursor& c, Scalar& out) {
     switch (out.type) {
     case kTypeUint8: {
         uint8_t v = 0;
@@ -523,6 +519,44 @@ bool read_value(Cursor& c, Scalar& out) {
         out.i64_v = static_cast<int32_t>(v);
         return true;
     }
+    default:
+        return false;
+    }
+}
+
+// gguf_elem_size returns the fixed byte width of one non-string GGUF
+// metadata array element, or 0 when the element type has no fixed width
+// (nested arrays and unknown types — both invalid). Behavior identical
+// to the former inline elem-size switch (v1.11.1 quality remediation).
+inline uint64_t gguf_elem_size(uint32_t elem_type) {
+    if (elem_type == kTypeUint8 || elem_type == kTypeInt8 || elem_type == kTypeBool) return 1;
+    if (elem_type == kTypeUint16 || elem_type == kTypeInt16) return 2;
+    if (elem_type == kTypeUint32 || elem_type == kTypeInt32 || elem_type == kTypeFloat32) return 4;
+    if (elem_type == kTypeUint64 || elem_type == kTypeInt64 || elem_type == kTypeFloat64) return 8;
+    return 0;
+}
+
+// read_value parses one typed metadata value. Scalars are captured
+// (strings bounded by kMaxStringBytes); array ELEMENTS are never
+// materialized — the array is validated element-size-wise and skipped,
+// with only its element count recorded.
+bool read_value(Cursor& c, Scalar& out) {
+    if (!c.u32(out.type)) {
+        return false;
+    }
+
+    // v1.11.1 quality remediation (cpp/long-switch #190): the former
+    // single 12-case value switch is split into focused helpers —
+    // decode_meta_small_int for the <=32-bit integer group, and the
+    // remaining wide/scalar cases below. The dispatch order, the bytes
+    // consumed, and every error outcome are byte-for-byte identical.
+    if (out.type == kTypeUint8 || out.type == kTypeInt8 ||
+        out.type == kTypeUint16 || out.type == kTypeInt16 ||
+        out.type == kTypeUint32 || out.type == kTypeInt32) {
+        return decode_meta_small_int(c, out);
+    }
+
+    switch (out.type) {
     case kTypeFloat32:
         return c.f32(out.f64_v);
     case kTypeBool: {
@@ -561,20 +595,9 @@ bool read_value(Cursor& c, Scalar& out) {
                 }
             }
         } else {
-            uint64_t elem_size = 0;
-            switch (elem_type) {
-            case kTypeUint8: case kTypeInt8: case kTypeBool:
-                elem_size = 1; break;
-            case kTypeUint16: case kTypeInt16:
-                elem_size = 2; break;
-            case kTypeUint32: case kTypeInt32: case kTypeFloat32:
-                elem_size = 4; break;
-            case kTypeUint64: case kTypeInt64: case kTypeFloat64:
-                elem_size = 8; break;
-            case kTypeArray:
-                return false; // nested arrays are not valid GGUF
-            default:
-                return false; // unknown element type
+            const uint64_t elem_size = gguf_elem_size(elem_type);
+            if (elem_size == 0) {
+                return false; // nested arrays and unknown element types are not valid GGUF
             }
 
             uint64_t span = 0;

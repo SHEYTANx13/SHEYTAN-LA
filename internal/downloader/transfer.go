@@ -195,6 +195,13 @@ func (j *Job) attempt(ctx context.Context, src Source) (Result, error) {
 	destDir := filepath.Dir(j.opts.Dest)
 	destBase := filepath.Base(j.opts.Dest)
 	part := destBase + ".part"
+	// v1.11.1 sink-level rooting: the designated root is the destination
+	// directory — an absolute, NUL-free host path (the same rooted-shape
+	// contract validateDestPath enforces on Dest itself) — checked inline
+	// before the directory is created.
+	if !fsPathShape.MatchString(destDir) {
+		return Result{}, fmt.Errorf("downloader: destination directory %q is not an absolute host path", destDir)
+	}
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return Result{}, err
 	}

@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -949,7 +948,7 @@ func (t *DataTool) actionExport(ctx context.Context, p *dataParams) (string, err
 	}
 
 	size := int64(0)
-	if fi, ferr := os.Stat(artifact); ferr == nil {
+	if fi, ferr := toolStat(artifact); ferr == nil {
 		size = fi.Size()
 	}
 

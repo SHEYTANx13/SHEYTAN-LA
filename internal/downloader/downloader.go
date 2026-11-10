@@ -41,6 +41,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -237,14 +239,80 @@ func validArtifactName(name string) bool {
 	return true
 }
 
-// validateDestPath fail-closes a caller-supplied Dest: after lexical
-// cleaning it may not climb above its base (a leading ".." component)
-// and its final component must satisfy validArtifactName. A hostile
-// identifier produces an error, never a job.
+// fsPathShape is the inline lexical gate for the designated-root
+// directory (v1.11.1 sink-level rooting): an absolute host path in either
+// platform spelling, NUL-free and control-free. The downloader's
+// destination directory is always a caller-created absolute path, so the
+// anchored gate re-proves the shape at every sink-adjacent use.
+var fsPathShape = regexp.MustCompile(`^(?:[A-Za-z]:[\\/]|[\\/])[^\x00\x01-\x1f\x7f]*$`)
+
+// validateDestPath fail-closes a caller-supplied Dest. Dest is an
+// app-managed destination: every real caller joins ONE artifact name to
+// a staging directory it created beforehand (updater staging, engine
+// download stage, test TempDirs), and the final path component is
+// validated with a strict grammar before any job exists. The boundary
+// therefore enforces the whole shape, not just the final component:
+//
+//   - Windows path syntax cannot bypass validation on ANY host: UNC and
+//     device-namespace prefixes ("\\srv\share\x", "\\.\x", "\\?\x") and
+//     drive-relative forms ("C:name.bin") are refused lexically;
+//   - on Windows a drive-absolute Dest must point INTO A DIRECTORY THE
+//     CALLER ALREADY CREATED (the designated root): a hostile volume
+//     path such as "C:\evil\x.bin" whose directory does not exist fails
+//     closed before any I/O on the destination, while every legitimate
+//     staging destination (created by the caller before New) passes;
+//   - after lexical cleaning it may not climb above its base (a leading
+//     ".." component) and the cleaned directory must be the SAME path as
+//     the directory of the raw Dest — a Clean that rewrote WHERE the
+//     artifact would land (the "../.." engine-tag climb) is refused;
+//   - the final component must satisfy validArtifactName, so a hostile
+//     identifier can never become a traversal, absolute, volume, ADS or
+//     hidden name.
+//
+// A hostile identifier produces an error, never a job.
 func validateDestPath(dest string) error {
 	if dest == "" {
 		return errsUnsafeDest
 	}
+
+	// Windows path syntax must not bypass validation on any host.
+	if strings.HasPrefix(dest, `\\`) {
+		// UNC share, \\.\ device namespace or \\?\ extended-length prefix.
+		return errsUnsafeDest
+	}
+	if len(dest) >= 2 && dest[1] == ':' {
+		if len(dest) == 2 || (dest[2] != '\\' && dest[2] != '/') {
+			return errsUnsafeDest // drive-relative ("C:name.bin")
+		}
+		if runtime.GOOS == "windows" {
+			// Drive-absolute Dest: the designated root is the destination
+			// directory and the caller must have created it before New.
+			// os.OpenRoot fails closed on a directory that does not exist
+			// or cannot be opened — a hostile volume path such as
+			// "C:\evil\x.bin" is refused before any I/O on the destination
+			// itself, while every caller-created staging root passes.
+			dir := filepath.Dir(filepath.Clean(dest))
+			root, rootErr := os.OpenRoot(dir)
+			if rootErr != nil {
+				return errsUnsafeDest
+			}
+			root.Close()
+		}
+	} else if runtime.GOOS == "windows" &&
+		(strings.HasPrefix(dest, "/") || strings.HasPrefix(dest, "\\")) {
+		// Volume-less rooted path ("\x.bin", "/x.bin"): anchors outside
+		// any caller-designated staging directory.
+		return errsUnsafeDest
+	}
+
+	// A climb hidden in the directory part must not survive: the cleaned
+	// directory of the raw Dest and the directory of the cleaned Dest
+	// have to be the same path, otherwise Clean would rewrite where the
+	// artifact actually lands.
+	if filepath.Clean(filepath.Dir(dest)) != filepath.Dir(filepath.Clean(dest)) {
+		return errsUnsafeDest
+	}
+
 	clean := filepath.Clean(dest)
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return errsUnsafeDest

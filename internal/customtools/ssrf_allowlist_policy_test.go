@@ -229,3 +229,81 @@ func TestValidateAllowedHostEntries(t *testing.T) {
 		}
 	}
 }
+
+// TestEndpointAllowlistRegexpMatchesHostAllowed pins the v1.11.1 SSRF
+// #288 repair: the anchored authority regexp (the enforcement the request
+// URL is matched against) accepts EXACTLY the hosts the hostAllowed
+// equality policy accepts, and the full-URL anchored match refuses every
+// authority-pivot spelling.
+func TestEndpointAllowlistRegexpMatchesHostAllowed(t *testing.T) {
+	for _, allowed := range [][]string{
+		{"api.example.com"},
+		{"api.example.com", "*.cdn.example.com"},
+		{"*.example.com"},
+		{nil2str()},
+	} {
+		if allowed[0] == "" {
+			continue
+		}
+		re, err := endpointAllowlistRe("template.invalid", allowed)
+		if err != nil {
+			t.Fatalf("endpointAllowlistRe(%v): %v", allowed, err)
+		}
+		for _, h := range []string{
+			"api.example.com", "API.EXAMPLE.COM", "v2.cdn.example.com",
+			"evil.example.com", "cdn.example.com", "a.b.cdn.example.com",
+			"api.example.com.evil.tld", "evil.tld", "", "not-a-host",
+		} {
+			want := hostAllowed(h, allowed)
+			got := re.MatchString("https://" + h + "/x")
+			if got != want {
+				t.Errorf("regexp/hostAllowed disagreement for host %q allowlist %v: regexp=%v allowed=%v", h, allowed, got, want)
+			}
+		}
+	}
+}
+
+func nil2str() string { return "" }
+
+// TestEndpointAllowlistRegexpPinsAuthority proves the anchored match pins
+// the WHOLE authority: pivots spelled inside the URL cannot sneak past the
+// declared destinations.
+func TestEndpointAllowlistRegexpPinsAuthority(t *testing.T) {
+	re, err := endpointAllowlistRe("api.example.com", []string{"*.cdn.example.com"})
+	if err != nil {
+		t.Fatalf("endpointAllowlistRe: %v", err)
+	}
+	accepted := []string{
+		"https://api.example.com/v1/search?q=x",
+		"https://API.EXAMPLE.COM/v1/search?q=x",
+		"https://api.example.com",        // no path
+		"https://api.example.com:443/x",  // explicit https port
+		"https://v2.cdn.example.com/a/b", // declared wildcard subdomain
+	}
+	for _, ep := range accepted {
+		if !re.MatchString(ep) {
+			t.Errorf("endpoint %q must match the anchored allowlist", ep)
+		}
+	}
+	refused := []string{
+		"http://api.example.com/x",            // wrong scheme
+		"https://api.example.com.evil.tld/x",  // suffix confusion
+		"https://evil.com/?x=api.example.com", // host pivot (query decoy)
+		"https://api.example.com@evil.com/x",  // userinfo pivot
+		"https://evil.com/api.example.com",    // path decoy
+		"https://api.example.com.:443/x",      // trailing-dot authority
+		"https://[2001:db8::1]/x",             // undeclared IPv6 authority
+		"https://v3.cdn.example.com/x",        // wait — this one IS declared
+	}
+	// v3.cdn.example.com is a declared wildcard destination: it must be
+	// ACCEPTED, not refused — drop it from the refused list.
+	refused = refused[:len(refused)-1]
+	for _, ep := range refused {
+		if re.MatchString(ep) {
+			t.Errorf("endpoint %q must NOT match the anchored allowlist", ep)
+		}
+	}
+	if !re.MatchString("https://v3.cdn.example.com/x") {
+		t.Errorf("declared wildcard subdomain v3.cdn.example.com must be accepted")
+	}
+}

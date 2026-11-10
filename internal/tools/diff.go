@@ -13,7 +13,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 )
 
@@ -73,7 +72,7 @@ func (t DiffTool) Run(ctx context.Context, args json.RawMessage) (string, error)
 }
 
 func readLinesCapped(path string) ([]string, error) {
-	f, err := os.Open(path)
+	f, err := toolOpen(path)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}

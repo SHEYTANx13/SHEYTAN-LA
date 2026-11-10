@@ -39,6 +39,11 @@ import (
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc"
 )
 
+// hostPathShapeRe is the inline lexical gate for the selected clone
+// destination (v1.11.1 sink-level rooting): rooted, NUL-free and
+// control-free.
+var hostPathShapeRe = regexp.MustCompile(`^(?:[A-Za-z]:[\\/]|[\\/])[^\x00\x01-\x1f\x7f]*$`)
+
 // --- classified errors ----------------------------------------------------
 
 // ErrorKind is a stable machine-readable failure classification.
@@ -651,6 +656,13 @@ func ValidateDestination(dest string) error {
 		return &Error{Kind: ErrInvalidDest, Message: "the destination must be an absolute path"}
 	}
 	dest = filepath.Clean(dest)
+
+	// v1.11.1 sink-level rooting: the selected clone DESTINATION is a
+	// user-chosen host path — the inline rooted-shape gate (rooted,
+	// NUL-free, control-free) runs at the point of use.
+	if !hostPathShapeRe.MatchString(dest) {
+		return &Error{Kind: ErrInvalidDest, Message: "the destination is not a well-formed absolute host path: " + dest}
+	}
 
 	parent := filepath.Dir(dest)
 	parentInfo, err := os.Stat(parent)

@@ -185,6 +185,27 @@ func (s *Server) editTxPath(runID string) string {
 	return filepath.Join(s.pausedDir(), runID+editTxSuffix)
 }
 
+// editTxRel derives the paused-dir-relative journal name for a
+// grammar-validated run id and gates it with filepath.IsLocal — the
+// explicit containment guard for the rooted journal operations
+// (v1.11.1 sink-level rooting).
+func editTxRel(runID string) (string, error) {
+	if !validRunID(runID) {
+		return "", fmt.Errorf("edit transaction: %w %q", errInvalidRunID, runID)
+	}
+	rel := runID + editTxSuffix
+	if !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("edit transaction: %w %q", errInvalidRunID, runID)
+	}
+	return rel, nil
+}
+
+// pausedRoot opens the paused-dir containment root (the same directory
+// every run-scoped artifact is rooted under).
+func (s *Server) pausedRoot() (*os.Root, error) {
+	return os.OpenRoot(s.pausedDir())
+}
+
 // saveEditTx persists one journal state ATOMICALLY (temp + rename) with a
 // freshly computed integrity hash.
 func (s *Server) saveEditTx(rec *editTxRecord) error {
@@ -217,15 +238,25 @@ func (s *Server) saveEditTx(rec *editTxRecord) error {
 		return fmt.Errorf("marshal edit transaction: %w", err)
 	}
 
-	path := s.editTxPath(rec.RunID)
-	tmp := path + ".tmp"
+	// v1.11.1 sink-level rooting: the journal write runs through the
+	// paused-dir os.Root with the grammar-gated relative name.
+	rel, relErr := editTxRel(rec.RunID)
+	if relErr != nil {
+		return relErr
+	}
+	root, rootErr := s.pausedRoot()
+	if rootErr != nil {
+		return fmt.Errorf("edit transaction: %w", rootErr)
+	}
+	defer root.Close()
+	tmpRel := rel + ".tmp"
 
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := root.WriteFile(tmpRel, data, 0o644); err != nil {
 		return fmt.Errorf("write edit transaction: %w", err)
 	}
 
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	if err := root.Rename(tmpRel, rel); err != nil {
+		_ = root.Remove(tmpRel)
 		return fmt.Errorf("commit edit transaction: %w", err)
 	}
 
@@ -258,7 +289,12 @@ func (s *Server) deleteEditTx(runID string) {
 	if runID == "" || !validRunID(runID) {
 		return
 	}
-	_ = os.Remove(s.editTxPath(runID))
+	if rel, relErr := editTxRel(runID); relErr == nil {
+		if root, rootErr := s.pausedRoot(); rootErr == nil {
+			_ = root.Remove(rel)
+			root.Close()
+		}
+	}
 }
 
 // quarantineEditTx moves an UNTRUSTWORTHY journal aside (fail closed):

@@ -37,6 +37,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -303,20 +304,61 @@ func rootKey(root string) string {
 
 // validRoot is the fail-closed check for the workspace root every sink
 // derives from (v1.11.1 path-injection remediation — repository-root
-// class): the root must be a non-empty, NUL-free ABSOLUTE path. Roots
-// arrive from the workspace selection (config or the API clone-switch
-// path), so a hostile or ambiguous root is rejected before any
-// filesystem operation.
+// class). A ROOT is a selected directory value, not an untrusted child
+// name, so the contract is: non-empty, NUL-free, and an absolute host
+// directory — including the Windows rooted spellings "/" and
+// "\home\z" (a volume-rooted path without a drive prefix), which
+// filepath.IsAbs alone refuses on Windows even though they resolve as
+// absolute host paths. Containment of child paths beneath the root is a
+// separate contract (repoJoin); the root itself is never passed through
+// an IsLocal-style relative-name validator. A hostile or ambiguous root
+// is rejected before any filesystem operation.
 func validRoot(root string) bool {
 	if root == "" || strings.ContainsRune(root, 0) {
 		return false
 	}
-	return filepath.IsAbs(root)
+	if filepath.IsAbs(root) {
+		return true
+	}
+	// Windows rooted forms: "/" (current volume root) and "\home\z"
+	// (absolute on the current volume). On POSIX hosts IsAbs already
+	// covers the slash form and a backslash-prefixed value is not a
+	// directory root, so this branch only widens Windows semantics.
+	if runtime.GOOS == "windows" &&
+		(strings.HasPrefix(root, "/") || strings.HasPrefix(root, "\\")) {
+		return true
+	}
+	return false
 }
 
 // errInvalidRelPath marks a repository-relative path that must never be
 // opened: absolute forms and escapes ("..") are rejected, never joined.
 var errInvalidRelPath = errors.New("repoindex: relative path escapes the workspace root")
+
+// rootedOpen opens path (a repoJoin result) through the workspace root's
+// os.Root with the re-derived, IsLocal-gated relative name (v1.11.1
+// sink-level rooting): the root refuses traversal and symlink escapes at
+// the OS layer, so no joined path can read outside the workspace.
+func rootedOpen(root, path string) (*os.File, error) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	rootAbs = filepath.Clean(rootAbs)
+	rel, err := filepath.Rel(rootAbs, filepath.Clean(path))
+	if err != nil {
+		return nil, err
+	}
+	if !filepath.IsLocal(rel) {
+		return nil, errInvalidRelPath
+	}
+	r, err := os.OpenRoot(rootAbs)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	return r.Open(rel)
+}
 
 // repoJoin resolves one repository-relative path (slash form) against
 // the selected repository root and FAILS CLOSED on the hostile
@@ -796,7 +838,9 @@ func contentDigest(root, rel string, size int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	f, err := os.Open(path)
+	// v1.11.1 sink-level rooting: the open runs through the workspace
+	// root with the re-derived relative name.
+	f, err := rootedOpen(root, path)
 	if err != nil {
 		return "", err
 	}

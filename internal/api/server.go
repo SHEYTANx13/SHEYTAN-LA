@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	goruntime "runtime"
 	"slices"
 	"sort"
@@ -1146,13 +1147,27 @@ type modelCardEntry struct {
 // entries than this re-parses on demand (correct, just slower).
 const modelCardCacheCap = 512
 
+// hostPathShapeRe is the inline lexical gate for USER-SELECTED host
+// paths (v1.11.1 sink-level rooting, work order §4.4 "selected host
+// path"): rooted (POSIX root, Windows drive prefix or Windows rooted
+// form), NUL-free and control-free. Every remaining direct os.* sink on
+// a selected path runs behind this anchored gate as defense-in-depth
+// alongside its structural validator.
+var hostPathShapeRe = regexp.MustCompile(`^(?:[A-Za-z]:[\\/]|[\\/])[^\x00\x01-\x1f\x7f]*$`)
+
 // validModelFilePath is the boundary grammar for a model file path
-// reaching modelCardFor (v1.11.1 path-injection remediation). Paths come
-// from the configured model selection and from llm.ResolveModelPath, whose
-// directory matches are always absolute; a value that is empty, NUL- or
-// control-tainted, relative, or not a clean absolute path (a surviving
-// ".." component) is not a resolvable model file and yields no card —
-// exactly the fail-soft contract of an unreadable GGUF header.
+// reaching modelCardFor (v1.11.1 path-injection remediation). The
+// contract is a USER-SELECTED absolute host path: the model picker and
+// the import flow hand over a file the user already chose on disk, so a
+// legitimate absolute selection must be accepted on every host —
+// including POSIX-spelled paths ("/tmp/models/model.gguf") on Windows,
+// where filepath.IsAbs alone would refuse a rooted path without a
+// volume prefix and Clean would rewrite the separators. A value that is
+// empty, NUL- or control-tainted, relative, or carries a genuine
+// parent-directory component (a surviving ".." step — dots INSIDE a
+// component such as "a..b.gguf" are an ordinary legal name) is not a
+// resolvable model file and yields no card — exactly the fail-soft
+// contract of an unreadable GGUF header.
 func validModelFilePath(path string) bool {
 	if path == "" || len(path) > 4096 {
 		return false
@@ -1164,11 +1179,38 @@ func validModelFilePath(path string) bool {
 		}
 	}
 
-	if !filepath.IsAbs(path) {
+	// Absolute host path: drive-absolute/UNC as IsAbs reports it, plus
+	// rooted paths on Windows ("/..." and "\..." anchor at a volume root
+	// and resolve as host paths even without a drive prefix).
+	abs := filepath.IsAbs(path)
+	if !abs && goruntime.GOOS == "windows" &&
+		(strings.HasPrefix(path, "/") || strings.HasPrefix(path, "\\")) {
+		abs = true
+	}
+	if !abs {
 		return false
 	}
 
-	return filepath.Clean(path) == path
+	// A genuine parent-directory component is never a selected model
+	// file: reject any ".." path component BEFORE cleaning, on both
+	// separator spellings, so "/models/../model.gguf" is refused while
+	// "/models/a..b.gguf" (an ordinary component whose name contains
+	// dots) is accepted.
+	for _, comp := range strings.FieldsFunc(path, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
+		if comp == ".." {
+			return false
+		}
+	}
+
+	clean := filepath.Clean(path)
+	// On Windows Clean rewrites "/" separators to the volume's canonical
+	// form; FromSlash gives the same canonical spelling, so a
+	// POSIX-spelled selection compares equal after normalization. On
+	// POSIX hosts FromSlash is the identity and this is exactly the
+	// historical "Clean(path) == path" check.
+	return clean == path || clean == filepath.FromSlash(path)
 }
 
 // modelCardFor returns cached GGUF metadata and capability card for path
@@ -1176,6 +1218,11 @@ func validModelFilePath(path string) bool {
 // the picker; caps stay nil in that case).
 func modelCardFor(path string, cfg *config.Config) (*llm.ModelCard, *llm.ModelCapabilities) {
 	if !validModelFilePath(path) {
+		return nil, nil
+	}
+	// v1.11.1 sink-level rooting: the inline rooted-shape gate at the
+	// point of use (NUL-free, control-free, rooted).
+	if !hostPathShapeRe.MatchString(path) {
 		return nil, nil
 	}
 

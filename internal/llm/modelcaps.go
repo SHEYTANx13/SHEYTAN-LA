@@ -17,6 +17,7 @@ package llm
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -375,8 +376,20 @@ func ResolveModelCapabilities(cfg *config.Config, modelPath string) *ModelCapabi
 	if modelPath == "" || strings.ContainsRune(modelPath, '\x00') {
 		return nil
 	}
+	// v1.11.1 sink-level rooting: the path is resolved to its absolute
+	// host form (relative selections resolve against the process CWD —
+	// the documented behavior), then the rooted-shape gate enforces the
+	// lexical selected-host-path contract. An unusable path degrades to
+	// "unknown model", never to a filesystem probe on a hostile value.
+	absModelPath, absErr := filepath.Abs(modelPath)
+	if absErr != nil {
+		return nil
+	}
+	if !hostPathShape.MatchString(absModelPath) {
+		return nil
+	}
 
-	fi, err := os.Stat(modelPath)
+	fi, err := os.Stat(absModelPath)
 	if err != nil || fi.IsDir() {
 		return nil
 	}

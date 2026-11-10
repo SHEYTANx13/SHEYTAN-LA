@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -701,6 +702,47 @@ func hostAllowed(host string, allowed []string) bool {
 	return false
 }
 
+// endpointAllowlistRe compiles the ANCHORED destination allowlist for one
+// tool execution (v1.11.1 SSRF #288 remediation, work order §4.2): the
+// pattern pins the COMPLETE authority of the request URL — scheme
+// (https, literal), host (the template's fixed host plus every declared
+// allowedHosts entry, metacharacter-quoted, case-insensitive), optional
+// explicit port — and the first character after the authority must start
+// the path/query or end the URL. A substituted parameter value can never
+// select an authority outside the declared set: anything else fails the
+// anchored match. Single-level wildcard entries ("*.suffix") match
+// exactly one additional label.
+func endpointAllowlistRe(templateHost string, allowed []string) (*regexp.Regexp, error) {
+	alts := []string{}
+	if templateHost != "" && !strings.Contains(templateHost, "$") {
+		alts = append(alts, regexp.QuoteMeta(strings.ToLower(strings.TrimSuffix(templateHost, "."))))
+	}
+	for _, entry := range allowed {
+		e := strings.ToLower(strings.TrimSpace(entry))
+		if e == "" {
+			continue
+		}
+		e = strings.TrimSuffix(e, ".")
+		if strings.HasPrefix(e, "*.") {
+			// Single-level wildcard: exactly one extra label, then the
+			// quoted suffix — one alternative, never the bare suffix,
+			// never deeper names.
+			alts = append(alts, `[^.]+\.`+regexp.QuoteMeta(e[2:]))
+			continue
+		}
+		alts = append(alts, regexp.QuoteMeta(e))
+	}
+	if len(alts) == 0 {
+		return nil, fmt.Errorf("endpoint authority is parameterized but no allowedHosts are declared — a custom tool must pin its destination hosts")
+	}
+	pattern := `(?i)^https://(?:` + strings.Join(alts, `|`) + `)(?::[0-9]{1,5})?(?:[/?#]|$)`
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("allowedHosts compile: %w", err)
+	}
+	return re, nil
+}
+
 // enforceEndpointAllowlist is the positive destination policy for tool
 // HTTP execution (v1.11.1 SSRF remediation, work order §4.1 items 1-3):
 // the request URL's AUTHORITY is selected from a KNOWN, user-declared
@@ -713,41 +755,28 @@ func hostAllowed(host string, allowed []string) bool {
 //     must declare them in HTTP.AllowedHosts at save time — the explicit
 //     policy object and approval boundary on the tool definition.
 //
-// The check runs on the SUBSTITUTED endpoint (after the structural
-// endpoint policy) and is re-applied by the request's redirect policy on
-// every hop, so neither substitution nor a redirect can move the request
-// outside the declared destinations. Misleading forms (userinfo,
-// percent-encoding tricks in the host, non-https schemes) are already
-// refused upstream by validateToolEndpoint.
+// v1.11.1 (run 42652797487, SSRF #288): the whole endpoint string is
+// enforced against the ANCHORED allowlist regexp (see
+// endpointAllowlistRe) — the same declared destinations as before,
+// enforced as one exact match so neither substitution nor a redirect can
+// move the request outside the declared destinations. Misleading forms
+// (userinfo, percent-encoding tricks in the host, non-https schemes) are
+// already refused upstream by validateToolEndpoint.
 func enforceEndpointAllowlist(template, endpoint string, allowed []string) error {
 	tu, err := url.Parse(template)
 	if err != nil {
 		return fmt.Errorf("endpoint template parse: %w", err)
 	}
 	templateHost := tu.Hostname()
-	if templateHost == "" || strings.Contains(templateHost, "$") {
-		// The authority itself is parameterized: without an explicit
-		// declaration there is NO fixed authorized destination.
-		if len(allowed) == 0 {
-			return fmt.Errorf("endpoint authority is parameterized but no allowedHosts are declared — a custom tool must pin its destination hosts")
-		}
-	} else if hostAllowed(templateHost, allowed) {
-		return nil
-	}
 
-	u, err := url.Parse(endpoint)
+	re, err := endpointAllowlistRe(templateHost, allowed)
 	if err != nil {
-		return fmt.Errorf("endpoint parse: %w", err)
+		return err
 	}
-	endHost := u.Hostname()
-	if hostAllowed(endHost, allowed) {
-		return nil
+	if !re.MatchString(endpoint) {
+		return fmt.Errorf("endpoint host %s is not an authorized destination (allowed: the template host or the declared allowedHosts)", redactedURL(endpoint))
 	}
-	if templateHost != "" && !strings.Contains(templateHost, "$") &&
-		strings.EqualFold(strings.TrimSuffix(endHost, "."), strings.TrimSuffix(templateHost, ".")) {
-		return nil
-	}
-	return fmt.Errorf("endpoint host %s is not an authorized destination (allowed: the template host or the declared allowedHosts)", redactedURL(endHost))
+	return nil
 }
 
 // runHTTP performs the bounded HTTPS request.

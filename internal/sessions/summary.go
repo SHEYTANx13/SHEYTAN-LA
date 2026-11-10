@@ -98,7 +98,7 @@ func (s *Store) SaveSummary(sum *SessionSummary) error {
 	if spErr != nil {
 		return spErr
 	}
-	return writeAtomic(sp, data)
+	return s.writeAtomic(sp, data)
 }
 
 // Summary loads the session's summary sidecar (nil, nil when none exists
@@ -135,7 +135,7 @@ func (s *Store) existsLocked(id string) bool {
 		}
 	}
 	if p, pErr := s.path(id); pErr == nil {
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+		if fi, err := s.storeStat(p); err == nil && !fi.IsDir() {
 			return true
 		}
 	}
@@ -164,7 +164,7 @@ func (s *Store) summaryLocked(id string) *SessionSummary {
 	if spErr != nil {
 		return nil
 	}
-	data, err := os.ReadFile(sp)
+	data, err := s.storeReadFile(sp)
 	if err != nil {
 		return nil
 	}

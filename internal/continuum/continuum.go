@@ -603,21 +603,41 @@ func SaveFramework(sessionsDir, sessionID string, fw *Framework) error {
 		return nil
 	}
 
-	path, err := frameworkPath(sessionsDir, sessionID)
-	if err != nil {
-		return err
-	}
-
 	fw.UpdatedAt = time.Now().UTC()
 	data, err := json.MarshalIndent(fw, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if os.WriteFile(tmp, data, 0o644) != nil {
+	// v1.11.1 sink-level rooting: the sidecar write runs through the
+	// sessions-dir os.Root with the grammar-gated relative name.
+	root, rootErr := os.OpenRoot(sessionsDir)
+	if rootErr != nil {
 		return os.ErrPermission
 	}
-	return os.Rename(tmp, path)
+	defer root.Close()
+	rel, relErr := frameworkRel(sessionID)
+	if relErr != nil {
+		return relErr
+	}
+	tmpRel := rel + ".tmp"
+	if root.WriteFile(tmpRel, data, 0o644) != nil {
+		return os.ErrPermission
+	}
+	return root.Rename(tmpRel, rel)
+}
+
+// frameworkRel derives the sessions-dir-relative sidecar name for a
+// grammar-validated session id and gates it with filepath.IsLocal
+// (v1.11.1 sink-level rooting).
+func frameworkRel(sessionID string) (string, error) {
+	if !validSidecarSessionID(sessionID) {
+		return "", fmt.Errorf("continuum: %w %q", errInvalidSidecarSessionID, sessionID)
+	}
+	rel := sessionID + ".framework.json"
+	if !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("continuum: %w %q", errInvalidSidecarSessionID, sessionID)
+	}
+	return rel, nil
 }
 
 // LoadFramework reads the framework sidecar for a session (nil when absent
@@ -625,11 +645,18 @@ func SaveFramework(sessionsDir, sessionID string, fw *Framework) error {
 // outside the sidecar grammar is equally "absent": fail closed, no path
 // is ever built from it).
 func LoadFramework(sessionsDir, sessionID string) *Framework {
-	path, err := frameworkPath(sessionsDir, sessionID)
-	if err != nil {
+	// v1.11.1 sink-level rooting: the sidecar read runs through the
+	// sessions-dir os.Root with the grammar-gated relative name.
+	rel, relErr := frameworkRel(sessionID)
+	if relErr != nil {
 		return nil
 	}
-	data, err := os.ReadFile(path)
+	root, rootErr := os.OpenRoot(sessionsDir)
+	if rootErr != nil {
+		return nil
+	}
+	defer root.Close()
+	data, err := root.ReadFile(rel)
 	if err != nil {
 		return nil
 	}

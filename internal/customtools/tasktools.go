@@ -83,6 +83,42 @@ func (s *TaskStore) taskDir(taskID string) (string, error) {
 	return filepath.Join(s.root, taskID), nil
 }
 
+// taskRootRel derives the root-relative name for a grammar-validated
+// task id and gates it with filepath.IsLocal — the explicit containment
+// guard for the rooted operations below (v1.11.1 sink-level rooting).
+func taskRootRel(taskID string) (string, error) {
+	if !validToolID(taskID) {
+		return "", fmt.Errorf("task tools: %w task id %q", errInvalidToolID, taskID)
+	}
+	if !filepath.IsLocal(taskID) {
+		return "", fmt.Errorf("task tools: %w task id %q", errInvalidToolID, taskID)
+	}
+	return taskID, nil
+}
+
+// taskFileRel derives the root-relative name of one task-scoped tool
+// definition file ("<taskID>/<id>.json"), both ids gated through the ONE
+// tool-id grammar plus filepath.IsLocal.
+func taskFileRel(taskID, id string) (string, error) {
+	if !validToolID(id) {
+		return "", fmt.Errorf("task tools: %w %q", errInvalidToolID, id)
+	}
+	taskRel, err := taskRootRel(taskID)
+	if err != nil {
+		return "", err
+	}
+	rel := filepath.ToSlash(filepath.Join(taskRel, id+".json"))
+	if !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("task tools: %w %q", errInvalidToolID, id)
+	}
+	return rel, nil
+}
+
+// storeRoot opens the task-scoped root containment root.
+func (s *TaskStore) storeRoot() (*os.Root, error) {
+	return os.OpenRoot(s.root)
+}
+
 // taskFilePath builds the on-disk name for one task-scoped tool
 // definition ("<root>/<taskID>/<id>.json"). Both ids fail closed
 // through the ONE tool-id grammar before any path is joined.
@@ -95,6 +131,21 @@ func (s *TaskStore) taskFilePath(taskID, id string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, id+".json"), nil
+}
+
+// taskRootMkdirAll creates the task directory through the root (the
+// same grammar gate as taskDir, rooted).
+func taskRootMkdirAll(s *TaskStore, taskID string) error {
+	rel, err := taskRootRel(taskID)
+	if err != nil {
+		return err
+	}
+	root, err := s.storeRoot()
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return root.MkdirAll(rel, 0o755)
 }
 
 func (s *TaskStore) reload() {
@@ -183,25 +234,27 @@ func (s *TaskStore) CreateTaskTool(taskID, runID string, d *Definition) (*TaskDe
 		return nil, fmt.Errorf("task tool definition too large")
 	}
 
-	dir, err := s.taskDir(taskID)
-	if err != nil {
-		return nil, err
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := taskRootMkdirAll(s, taskID); err != nil {
 		return nil, fmt.Errorf("task tool dir: %w", err)
 	}
 
-	path, err := s.taskFilePath(taskID, td.ID)
+	rel, err := taskFileRel(taskID, td.ID)
 	if err != nil {
 		return nil, err
 	}
-	tmp := path + ".tmp"
+	tmpRel := rel + ".tmp"
 
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	root, rootErr := s.storeRoot()
+	if rootErr != nil {
+		return nil, rootErr
+	}
+	defer root.Close()
+
+	if err := root.WriteFile(tmpRel, data, 0o644); err != nil {
 		return nil, fmt.Errorf("write task tool: %w", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	if err := root.Rename(tmpRel, rel); err != nil {
+		_ = root.Remove(tmpRel)
 		return nil, fmt.Errorf("commit task tool: %w", err)
 	}
 
@@ -232,16 +285,23 @@ func (s *TaskStore) saveLocked(td *TaskDefinition) error {
 		return err
 	}
 
-	path, err := s.taskFilePath(td.TaskID, td.ID)
+	// v1.11.1 sink-level rooting: the save runs through the task-scoped
+	// root with the grammar-gated relative name.
+	rel, err := taskFileRel(td.TaskID, td.ID)
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
+	root, rootErr := s.storeRoot()
+	if rootErr != nil {
+		return rootErr
+	}
+	defer root.Close()
+	tmpRel := rel + ".tmp"
 
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := root.WriteFile(tmpRel, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return root.Rename(tmpRel, rel)
 }
 
 // ListForTask returns the task's tools (deterministic order).
@@ -308,11 +368,16 @@ func (s *TaskStore) CleanupTask(taskID string) error {
 		}
 	}
 
-	dir, err := s.taskDir(taskID)
-	if err != nil {
-		return err
+	rel, relErr := taskRootRel(taskID)
+	if relErr != nil {
+		return relErr
 	}
-	return os.RemoveAll(dir)
+	root, rootErr := s.storeRoot()
+	if rootErr != nil {
+		return rootErr
+	}
+	defer root.Close()
+	return root.RemoveAll(rel)
 }
 
 // RegisterInto installs the task's APPROVED tools into the orchestrator's

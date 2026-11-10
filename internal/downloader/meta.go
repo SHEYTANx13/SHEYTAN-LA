@@ -64,6 +64,25 @@ func sourceCachePath(cacheDir, key string) (string, error) {
 	return filepath.Join(cacheDir, "sheytan-source-cache", name+".json"), nil
 }
 
+// sourceCacheRel derives the cache-dir-relative name for one source-cache
+// entry (the slugged, grammar-checked name) and gates it with
+// filepath.IsLocal — the explicit containment guard for the rooted
+// operations above (v1.11.1 sink-level rooting).
+func sourceCacheRel(cacheDir, key string) (string, error) {
+	path, err := sourceCachePath(cacheDir, key)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(cacheDir, path)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsLocal(rel) {
+		return "", errUnsafeCacheKey
+	}
+	return rel, nil
+}
+
 func sanitizeKey(key string) string {
 	out := make([]rune, 0, len(key))
 	for _, r := range key {
@@ -117,11 +136,18 @@ func loadSourceCache(cacheDir, key string) *cachedSource {
 	if cacheDir == "" || key == "" {
 		return nil
 	}
-	path, err := sourceCachePath(cacheDir, key)
+	rel, err := sourceCacheRel(cacheDir, key)
 	if err != nil {
 		return nil // hostile key: no cache hit — fall through to the normal order
 	}
-	raw, err := os.ReadFile(path)
+	// v1.11.1 sink-level rooting: the cache read runs through the
+	// cache-dir os.Root with the slugged, IsLocal-gated relative name.
+	root, rootErr := os.OpenRoot(cacheDir)
+	if rootErr != nil {
+		return nil
+	}
+	defer root.Close()
+	raw, err := root.ReadFile(rel)
 	if err != nil {
 		return nil
 	}
@@ -139,7 +165,7 @@ func recordSourceCache(cacheDir, key string, src Source) {
 	if cacheDir == "" || key == "" || src.URL == "" {
 		return
 	}
-	path, err := sourceCachePath(cacheDir, key)
+	rel, err := sourceCacheRel(cacheDir, key)
 	if err != nil {
 		return // hostile key: the cache entry is never written anywhere
 	}
@@ -153,13 +179,20 @@ func recordSourceCache(cacheDir, key string, src Source) {
 	if err != nil {
 		return
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// v1.11.1 sink-level rooting: the sidecar directory creation, the
+	// temp write and the commit all run through the cache-dir os.Root
+	// with the slugged, IsLocal-gated relative name.
+	root, rootErr := os.OpenRoot(cacheDir)
+	if rootErr != nil {
 		return
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+	defer root.Close()
+	if err := root.MkdirAll("sheytan-source-cache", 0o755); err != nil {
 		return
 	}
-	_ = os.Rename(tmp, path)
+	tmpRel := rel + ".tmp"
+	if err := root.WriteFile(tmpRel, raw, 0o644); err != nil {
+		return
+	}
+	_ = root.Rename(tmpRel, rel)
 }

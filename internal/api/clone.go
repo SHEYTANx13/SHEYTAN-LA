@@ -363,6 +363,12 @@ func (s *Server) handleCloneCancel(w http.ResponseWriter, r *http.Request) {
 // post-switch summary. Extracted from handleWorkspaceSwitch so the clone
 // completion reuses the EXACT same implementation.
 func (s *Server) switchWorkspaceRoot(abs string) (*workspaceSummary, error) {
+	// v1.11.1 sink-level rooting: the selected WORKSPACE ROOT is a root
+	// value, never a child path — the inline rooted-shape gate (rooted,
+	// NUL-free, control-free) runs at the point of use.
+	if !hostPathShapeRe.MatchString(abs) {
+		return nil, errString("not a well-formed absolute directory path: " + abs)
+	}
 	fi, err := os.Stat(abs)
 	if err != nil || !fi.IsDir() {
 		return nil, errString("not an accessible directory: " + abs)

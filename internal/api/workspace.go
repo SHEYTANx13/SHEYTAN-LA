@@ -321,6 +321,13 @@ func (s *Server) handleWorkspaceSwitch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	abs = filepath.Clean(abs)
+	// v1.11.1 sink-level rooting: the selected WORKSPACE ROOT is a root
+	// value — the inline rooted-shape gate runs at the point of use.
+	if !hostPathShapeRe.MatchString(abs) {
+		writeErr(w, http.StatusBadRequest, errString(
+			"path must be a well-formed absolute directory path"))
+		return
+	}
 	fi, err := os.Stat(abs)
 	if err != nil || !fi.IsDir() {
 		writeErr(w, http.StatusBadRequest, errString(

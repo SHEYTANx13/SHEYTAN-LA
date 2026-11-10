@@ -16,6 +16,7 @@ package llm
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -306,5 +307,52 @@ func TestImageDataURLPathValidation(t *testing.T) {
 	}
 	if !strings.HasPrefix(url, "data:image/") {
 		t.Fatalf("unexpected data URL prefix: %q", url[:min(len(url), 32)])
+	}
+}
+
+// TestImportModelNULRefusalIsTypedAndDeterministic pins the v1.11.1
+// Windows repair contract: the NUL refusal fires BEFORE any filesystem
+// call (Abs, EvalSymlinks, Stat, Open), is errors.Is-able against a
+// typed sentinel, names the defect and the byte offset, never echoes a
+// raw NUL into the message, and the outside sentinel file plus the
+// models root stay byte-for-byte untouched.
+func TestImportModelNULRefusalIsTypedAndDeterministic(t *testing.T) {
+	outside := t.TempDir()
+	victim := filepath.Join(outside, "victim.txt")
+	if err := os.WriteFile(victim, []byte("DO NOT TOUCH"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	modelsDir := filepath.Join(outside, "models")
+
+	for _, src := range []string{"bad\x00name.gguf", "a\x00", "\x00", "x\x00\x00y.gguf"} {
+		err := func() (err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("panic: %v", r)
+				}
+			}()
+			_, err = ImportModel(modelsDir, src, nil)
+			return err
+		}()
+		if err == nil {
+			t.Fatalf("NUL source %q must be refused", src)
+		}
+		if !errors.Is(err, errImportSourceNUL) {
+			t.Errorf("NUL refusal for %q must match the typed sentinel, got: %v", src, err)
+		}
+		if !strings.Contains(err.Error(), "NUL") {
+			t.Errorf("NUL refusal must name the defect, got: %v", err)
+		}
+		if strings.ContainsRune(err.Error(), '\x00') {
+			t.Errorf("NUL refusal must not echo a raw NUL byte, got: %q", err.Error())
+		}
+	}
+
+	after, err := os.ReadFile(victim)
+	if err != nil || string(after) != "DO NOT TOUCH" {
+		t.Fatalf("outside sentinel disturbed: %q err=%v", after, err)
+	}
+	if _, statErr := os.Stat(modelsDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("a refused import must not create the models dir, stat err=%v", statErr)
 	}
 }

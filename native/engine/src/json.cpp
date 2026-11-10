@@ -374,9 +374,27 @@ bool extract_encode_payload(const std::string& bytes, std::string& text,
 // are skipped with skip_value(), so forward-compatible additions never
 // break the decoder.
 //
+// extract_decode_payload parses the host→engine decode request envelope.
+//
+// Parameters:
+//   bytes        — the raw request body (JSON); read-only, never stored.
+//   ids          — output; cleared first, then filled with the token ids
+//                  to decode (at most UINT32_MAX-bounded values on
+//                  success; untouched garbage-free state on failure).
+//   skip_special — output; 1 when special tokens participate in the
+//                  decode, 0 when they are skipped (∈ {0,1} on success).
+//   max_bytes    — output; the caller's decode byte budget (> 0 on
+//                  success).
+//   error        — output; a human-readable reason when the function
+//                  returns false, untouched on success.
+//
 // Ownership: nothing is retained — `ids` is the caller's vector and the
-// input string is only read. Invariants: on success `ids` holds at most
-// UINT32_MAX-bounded values, skip_special ∈ {0,1} and max_bytes > 0.
+// input string is only read.
+//
+// Returns true and leaves every output in the documented state when the
+// envelope is well-formed; returns false (with `error` set) otherwise.
+// Invariants on success: `ids` holds at most UINT32_MAX-bounded values,
+// skip_special ∈ {0,1} and max_bytes > 0.
 bool extract_decode_payload(const std::string& bytes,
                             std::vector<uint32_t>& ids,
                             int32_t& skip_special, uint32_t& max_bytes,
@@ -574,6 +592,33 @@ namespace json {
 // are fully overwritten (outputs are assigned before use so a false
 // return still leaves them in a defined state).
 //
+// extract_generate_payload parses the host→engine generate request
+// envelope.
+//
+// Parameters:
+//   bytes             — the raw request body (JSON); read-only, never
+//                       stored.
+//   request_id        — output; the caller's correlation id echoed by
+//                       the engine (cleared first; non-empty on success
+//                       when the envelope carries one).
+//   prompt            — output; the prompt text (non-empty and <= 1 MiB
+//                       on success).
+//   max_tokens        — output; the generation budget (>= 1 on success).
+//   temperature       — output; sampling temperature (within the
+//                       sampling-safe range on success).
+//   top_k             — output; top-k cutoff (>= 0; 0 disables).
+//   top_p             — output; nucleus cutoff (within the sampling-safe
+//                       range on success).
+//   repetition_penalty— output; repetition penalty (within the
+//                       sampling-safe range on success).
+//   repeat_last_n     — output; the repeat-penalty window (>= 0).
+//   seed              — output; the sampling seed (any uint64; the
+//                       sampler's own convention defines 0).
+//   error             — output; a human-readable reason when the
+//                       function returns false, untouched on success.
+//
+// Returns true and leaves every output in the documented state when the
+// envelope is well-formed; returns false (with `error` set) otherwise.
 // Invariants on success: prompt non-empty and <= 1 MiB, max_tokens >= 1,
 // temperature/top_p/repetition_penalty within their sampling-safe
 // ranges above.

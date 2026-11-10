@@ -31,7 +31,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -797,7 +796,7 @@ func (t *DataTool) actionConvert(p *dataParams) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if werr := os.WriteFile(out, data, 0o644); werr != nil {
+	if werr := toolWriteFile(out, data, 0o644); werr != nil {
 		return "", werr
 	}
 	logging.Default().Info("dataAnalysis", "converted %s → %s (%d bytes)", d.Path, out, len(data))

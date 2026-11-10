@@ -28,6 +28,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -38,6 +39,13 @@ import (
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/englease"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
 )
+
+// fsPathShape is the inline lexical gate for staging paths (v1.11.1
+// sink-level rooting): an absolute host path in either platform spelling,
+// NUL-free and control-free. Staging paths are always rooted, config-
+// anchored directories joined with grammar-checked members; the anchored
+// gate re-proves the shape at the remaining direct sinks.
+var fsPathShape = regexp.MustCompile(`^(?:[A-Za-z]:[\\/]|[\\/])[^\x00\x01-\x1f\x7f]*$`)
 
 // installMu serializes every provisioning operation process-wide: two
 // updaters (scheduled + manual) can never mutate the bin directory
@@ -401,7 +409,16 @@ func InstallStagedDeferredWithVariant(
 		return nil, fmt.Errorf("download engine %s: %w", tag, err)
 	}
 
-	defer os.Remove(archive)
+	// v1.11.1 sink-level rooting: the staging cleanup removes the archive
+	// THROUGH its own directory's os.Root (the name resolves inside the
+	// staged download directory or not at all).
+	stageDir := filepath.Dir(archive)
+	if cleanupRoot, openErr := os.OpenRoot(stageDir); openErr == nil {
+		defer func() {
+			_ = cleanupRoot.Remove(filepath.Base(archive))
+			cleanupRoot.Close()
+		}()
+	}
 
 	return stageFromArchive(cfg, tag, archive, url, variant)
 }
@@ -1035,6 +1052,12 @@ func isPackageMetadataName(base string) bool {
 }
 
 func copyFileMode(src, dst string, mode os.FileMode) error {
+	// v1.11.1 sink-level rooting: both staging operands are rooted host
+	// paths (the staging dir joined with grammar-checked members) — the
+	// anchored shape gate re-proves that at the direct sinks.
+	if !fsPathShape.MatchString(src) || !fsPathShape.MatchString(dst) {
+		return fmt.Errorf("updater: staging path is not a well-formed absolute host path")
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -1313,6 +1336,11 @@ func extractArchiveBySuffix(archivePath, url, dir string) error {
 		return extractZip(archivePath, dir)
 
 	case ".tar.gz", ".tgz":
+		// v1.11.1 sink-level rooting: the staged archive is a rooted host
+		// path — the anchored shape gate re-proves it at the open.
+		if !fsPathShape.MatchString(archivePath) {
+			return fmt.Errorf("updater: staged archive path is not a well-formed absolute host path")
+		}
 		f, err := os.Open(archivePath)
 		if err != nil {
 			return err

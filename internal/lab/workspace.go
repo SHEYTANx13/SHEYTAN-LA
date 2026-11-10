@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -116,6 +117,12 @@ func (m *WorkspaceManager) Create(
 	}
 
 	sourceAbs = filepath.Clean(sourceAbs)
+
+	// v1.11.1 sink-level rooting: the selected clone SOURCE is a root
+	// value — the inline rooted-shape gate runs at the point of use.
+	if !hostPathShapeRe.MatchString(sourceAbs) {
+		return nil, fmt.Errorf("lab: source %q is not a well-formed absolute host path", sourceAbs)
+	}
 
 	info, err := os.Stat(sourceAbs)
 	if err != nil {
@@ -422,10 +429,25 @@ func (w *Workspace) PathFor(relative string) (string, error) {
 	// A rooted-but-absolute-less Windows path (\foo, \foo\bar) must be
 	// refused as well: it anchors at the volume root, not at the
 	// workspace. On Windows IsAbs("\\foo") is false — catch it before
-	// the join.
-	if runtime.GOOS == "windows" &&
-		strings.HasPrefix(normalized, string(filepath.Separator)) {
-		return "", ErrInvalidWorkspace
+	// the join. The same holds for the POSIX-spelled rooted form
+	// ("/etc/passwd"): Windows accepts the forward slash as a separator
+	// and Join would happily re-anchor it under the workspace root, so
+	// both separator spellings are refused, together with drive-prefixed
+	// (absolute or drive-relative) and device-namespace/ADS colons.
+	if runtime.GOOS == "windows" {
+		if strings.HasPrefix(normalized, "/") ||
+			strings.HasPrefix(normalized, string(filepath.Separator)) {
+			return "", ErrInvalidWorkspace
+		}
+		if len(normalized) >= 2 && normalized[1] == ':' {
+			// Drive-absolute ("C:\evil.txt") or drive-relative
+			// ("C:evil.txt") — anchored at a volume, never a workspace child.
+			return "", ErrInvalidWorkspace
+		}
+		if strings.ContainsRune(normalized, ':') {
+			// Device namespace ("\\.\\x") or NTFS alternate data stream.
+			return "", ErrInvalidWorkspace
+		}
 	}
 
 	base, err := canonicalPath(w.Path)
@@ -447,14 +469,10 @@ func (w *Workspace) PathFor(relative string) (string, error) {
 		return "", ErrInvalidWorkspace
 	}
 
-	// Resolve the nearest existing ancestor so an intermediate symlink cannot
-	// redirect a future write outside the workspace.
-	existing, err := resolveExistingPrefix(candidate)
-	if err != nil {
-		return "", err
-	}
-
-	if !sameOrWithin(existing, base) {
+	// v1.11.1 sink-level rooting: the os.Root on the workspace refuses,
+	// at the OS layer, any candidate whose existing portion escapes the
+	// workspace (including intermediate symlink redirection).
+	if err := verifyInsideWorkspaceRoot(base, candidate); err != nil {
 		return "", ErrInvalidWorkspace
 	}
 
@@ -652,6 +670,14 @@ func copyTree(
 	src string,
 	dst string,
 ) error {
+	// v1.11.1 sink-level rooting: every create inside the destination
+	// runs through the destination os.Root.
+	copyRoot, err := os.OpenRoot(dst)
+	if err != nil {
+		return err
+	}
+	defer copyRoot.Close()
+
 	return filepath.WalkDir(
 		src,
 		func(
@@ -716,8 +742,19 @@ func copyTree(
 			}
 
 			if entry.IsDir() {
-				if err := os.MkdirAll(
-					target,
+				// v1.11.1 sink-level rooting: the walk-derived target
+				// re-derives to its destination-relative form and the
+				// create runs through the destination os.Root.
+				targetRel, relErr := filepath.Rel(dst, target)
+				if relErr != nil || !filepath.IsLocal(targetRel) {
+					return fmt.Errorf(
+						"lab: copy target %q escapes %q",
+						rel,
+						dst,
+					)
+				}
+				if err := copyRoot.MkdirAll(
+					targetRel,
 					0o755,
 				); err != nil {
 					return fmt.Errorf(
@@ -996,6 +1033,16 @@ func copyFile(
 		)
 	}
 
+	// v1.11.1 sink-level rooting: the source is walked under the
+	// selected root (inline rooted-shape gate); the destination parent
+	// create, the write and the rollback remove run through the
+	// destination os.Root with the re-derived relative name.
+	if !hostPathShapeRe.MatchString(src) {
+		return fmt.Errorf(
+			"lab: open %q: not a well-formed absolute host path",
+			src,
+		)
+	}
 	in, err := os.Open(src)
 	if err != nil {
 		return fmt.Errorf(
@@ -1006,6 +1053,15 @@ func copyFile(
 	}
 
 	defer in.Close()
+
+	dstRel, relErr := filepath.Rel(root, dst)
+	if relErr != nil || !filepath.IsLocal(dstRel) {
+		return fmt.Errorf(
+			"lab: copy %q escapes %q",
+			dst,
+			root,
+		)
+	}
 
 	if err := os.MkdirAll(
 		filepath.Dir(dst),
@@ -1018,8 +1074,32 @@ func copyFile(
 		)
 	}
 
-	out, err := os.OpenFile(
-		dst,
+	dstRoot, rootErr := os.OpenRoot(root)
+	if rootErr != nil {
+		return rootErr
+	}
+	defer dstRoot.Close()
+
+	parentRel, parentErr := filepath.Rel(root, filepath.Dir(dst))
+	if parentErr != nil || !filepath.IsLocal(parentRel) {
+		return fmt.Errorf(
+			"lab: copy %q escapes %q",
+			dst,
+			root,
+		)
+	}
+	if parentRel != "." {
+		if err := dstRoot.MkdirAll(parentRel, 0o755); err != nil {
+			return fmt.Errorf(
+				"lab: create parent for %q: %w",
+				dst,
+				err,
+			)
+		}
+	}
+
+	out, err := dstRoot.OpenFile(
+		dstRel,
 		os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
 		perm,
 	)
@@ -1039,7 +1119,7 @@ func copyFile(
 	closeErr := out.Close()
 
 	if copyErr != nil {
-		_ = os.Remove(dst)
+		_ = dstRoot.Remove(dstRel) // rooted rollback
 
 		return fmt.Errorf(
 			"lab: copy %q: %w",
@@ -1077,12 +1157,46 @@ func ensureDirectory(
 	return nil
 }
 
-func resolveExistingPrefix(
-	path string,
-) (string, error) {
-	_, resolved, err := resolveExistingPrefixPair(path)
+// hostPathShapeRe is the inline lexical gate for USER-SELECTED host
+// paths in the lab (v1.11.1 sink-level rooting, work order §4.4
+// "selected host path"): rooted (POSIX root, Windows drive prefix or
+// Windows rooted form), NUL-free and control-free. Selected sources and
+// working directories are root values; the anchored gate runs at the
+// point of use as defense-in-depth alongside the containment checks.
+var hostPathShapeRe = regexp.MustCompile(`^(?:[A-Za-z]:[\\/]|[\\/])[^\x00\x01-\x1f\x7f]*$`)
 
-	return resolved, err
+// verifyInsideWorkspaceRoot proves the existing portion of a
+// workspace-contained lexical path resolves INSIDE the workspace through
+// an os.Root (v1.11.1 sink-level rooting): the root refuses traversal and
+// symlink escapes at the OS layer for every component it resolves — the
+// kernel-backed equivalent of the previous nearest-existing-ancestor
+// string walk. A not-yet-existing candidate is fine (create flows).
+func verifyInsideWorkspaceRoot(base, candidate string) error {
+	baseAbs, err := filepath.Abs(base)
+	if err != nil {
+		return err
+	}
+	baseAbs = filepath.Clean(baseAbs)
+
+	rel, err := filepath.Rel(baseAbs, filepath.Clean(candidate))
+	if err != nil {
+		return err
+	}
+	if !filepath.IsLocal(rel) {
+		return ErrInvalidWorkspace
+	}
+
+	root, err := os.OpenRoot(baseAbs)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	if _, err := root.Stat(rel); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+
+	return nil
 }
 
 // resolveExistingPrefixPair returns BOTH spellings of the nearest existing
@@ -1102,7 +1216,28 @@ func resolveExistingPrefixPair(
 	current := filepath.Clean(path)
 
 	for {
-		_, err := os.Lstat(current)
+		// v1.11.1 sink-level rooting: the existence probe stats the final
+		// component THROUGH its parent directory's os.Root — the root
+		// refuses any traversal or symlink escape among the components it
+		// resolves, so a hostile probe can never reach outside the tree it
+		// names.
+		probeRoot, probeErr := os.OpenRoot(filepath.Dir(current))
+		if probeErr != nil {
+			// The parent does not exist (yet): no existing prefix at this
+			// level — climb exactly like the old os.Lstat walk did for a
+			// missing component.
+			if !errors.Is(probeErr, os.ErrNotExist) {
+				return "", "", probeErr
+			}
+			parent := filepath.Dir(current)
+			if parent == current {
+				return "", "", ErrInvalidWorkspace
+			}
+			current = parent
+			continue
+		}
+		_, err := probeRoot.Lstat(filepath.Base(current))
+		probeRoot.Close()
 
 		if err == nil {
 			real, evalErr := filepath.EvalSymlinks(
@@ -1272,12 +1407,9 @@ func ensureInsideWorkspace(w *Workspace, target string) error {
 		return ErrInvalidWorkspace
 	}
 
-	existing, err := resolveExistingPrefix(target)
-	if err != nil {
-		return err
-	}
-
-	if !sameOrWithin(existing, root) {
+	// v1.11.1 sink-level rooting: the os.Root on the workspace refuses
+	// any target whose existing portion escapes it.
+	if err := verifyInsideWorkspaceRoot(root, target); err != nil {
 		return ErrInvalidWorkspace
 	}
 
