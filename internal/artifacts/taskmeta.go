@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -153,9 +154,28 @@ func (r *TaskRegistry) Create(req CreateRequest) (*Meta, error) {
 		return nil, fmt.Errorf("artifact too large (%d bytes, max %d)", len(req.Content), MaxArtifactBytes)
 	}
 
+	// clean is the LOGICAL, slash-delimited path (stored as RelPath in
+	// manifests and the registry JSON). It is validated in the logical
+	// domain FIRST and only then converted to a native path — the two
+	// domains never share separator assumptions.
 	clean := filepath.ToSlash(filepath.Clean(strings.TrimSpace(req.Filename)))
 	if strings.HasPrefix(clean, "/") || strings.Contains(clean, "..") || clean == "." || clean == "" {
 		return nil, fmt.Errorf("artifact filename %q escapes the task artifact root", req.Filename)
+	}
+	// v1.11.1 (Windows path repair): Windows accepts BOTH "/" and "\\"
+	// as separators and treats a colon as drive/ADS syntax, so the
+	// Windows-hostile spellings are rejected in the logical domain
+	// before the filepath.FromSlash conversion below. On POSIX a colon
+	// or backslash is an ordinary filename byte and stays accepted —
+	// native OS semantics, unchanged POSIX behavior.
+	if runtime.GOOS == "windows" {
+		for _, comp := range strings.Split(clean, "/") {
+			if comp == "" || strings.Contains(comp, ":") ||
+				strings.HasSuffix(comp, ".") || strings.HasSuffix(comp, " ") ||
+				isWindowsReservedName(comp) {
+				return nil, fmt.Errorf("artifact filename %q is not path-safe on windows", req.Filename)
+			}
+		}
 	}
 
 	name := filepath.Base(clean)
@@ -225,12 +245,28 @@ func (r *TaskRegistry) Create(req CreateRequest) (*Meta, error) {
 	if prevCurrent != nil {
 		// The archive lives under the TASK's own .versions directory
 		// (the first relToRoot component is the grammar-gated task id).
-		relTaskID := relToRoot[:strings.Index(relToRoot, "/")]
-		archiveDir := relTaskID + "/.versions"
+		// v1.11.1 Windows fix: relToRoot is a NATIVE relative path
+		// (filepath.Rel output — backslash-separated on Windows, "/" on
+		// POSIX), so the first component is split with the helper below
+		// instead of a hard-coded "/" lookup. On Windows that lookup
+		// returned -1 and the unguarded slice panicked with
+		// "slice bounds out of range [:-1]" on every replacement write.
+		// The slice is taken only after the boundary is proven to exist
+		// and to match the grammar-gated task id; anything else fails
+		// closed with a controlled error, never a panic.
+		relTaskID, ok := firstRelComponent(relToRoot)
+		if !ok || relTaskID != taskID {
+			return nil, fmt.Errorf("artifact path escapes the task artifact root")
+		}
+		// archiveDir/versioned are NATIVE os.Root-relative names built
+		// with filepath.Join (native separators on every platform) —
+		// the previous hard-coded "/" spellings mixed the logical and
+		// native domains in metadata paths on Windows.
+		archiveDir := filepath.Join(relTaskID, ".versions")
 		if err := root.MkdirAll(archiveDir, 0o755); err == nil {
 			ext := filepath.Ext(abs)
 			base := strings.TrimSuffix(filepath.Base(abs), ext)
-			versioned := fmt.Sprintf("%s/%s.v%d%s", archiveDir, base, prevCurrent.Version, ext)
+			versioned := filepath.Join(archiveDir, fmt.Sprintf("%s.v%d%s", base, prevCurrent.Version, ext))
 			if rmErr := root.Rename(relToRoot, versioned); rmErr == nil {
 				prevCurrent.Path = filepath.Join(r.root, versioned)
 			}
@@ -273,6 +309,47 @@ func (r *TaskRegistry) Create(req CreateRequest) (*Meta, error) {
 	r.persistLocked()
 
 	return meta, nil
+}
+
+// firstRelComponent splits the first component off a cleaned RELATIVE
+// path inside the registry root (the filepath.Rel form). Both "/" and
+// backslash are considered boundaries because the first component here
+// is always the grammar-gated task id (validTaskID rejects both), so
+// the earliest boundary is the true one on every platform: Windows
+// Rel output is backslash-separated (and Windows APIs accept "/" too),
+// POSIX output is "/"-separated and a backslash is an ordinary filename
+// byte that cannot appear before the first "/" here. It reports false
+// when no component boundary exists (a single-component path is never
+// a valid artifact destination under a task directory) or the first
+// component would be empty — the caller fails closed instead of
+// slicing blindly.
+func firstRelComponent(p string) (string, bool) {
+	if p == "" {
+		return "", false
+	}
+	i := strings.IndexAny(p, `/\`)
+	if i <= 0 {
+		return "", false
+	}
+	return p[:i], true
+}
+
+// isWindowsReservedName reports whether a logical path component is a
+// Windows reserved device basename (with or without an extension),
+// which must never reach filesystem creation through the managed root.
+// Applied only on Windows hosts (see the runtime.GOOS gate in Create).
+func isWindowsReservedName(comp string) bool {
+	stem := comp
+	if i := strings.IndexByte(stem, '.'); i >= 0 {
+		stem = stem[:i]
+	}
+	switch strings.ToUpper(stem) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	}
+	return false
 }
 
 // validTaskID is the ONE grammar for a task id used as a single

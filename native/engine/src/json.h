@@ -178,49 +178,77 @@ public:
                 continue;
             }
 
-            switch (esc) {
-            case 'u': {
-                if (pos_ + 4 > size_) {
-                    return false;
-                }
-
-                unsigned code = 0;
-                for (int i = 0; i < 4; ++i) {
-                    code <<= 4;
-                    const char h = data_[pos_++];
-                    if (h >= '0' && h <= '9') {
-                        code |= static_cast<unsigned>(h - '0');
-                    } else if (h >= 'a' && h <= 'f') {
-                        code |= static_cast<unsigned>(h - 'a' + 10);
-                    } else if (h >= 'A' && h <= 'F') {
-                        code |= static_cast<unsigned>(h - 'A' + 10);
-                    } else {
-                        return false;
-                    }
-                }
-
-                // Encode BMP scalar as UTF-8 (surrogates pass through
-                // paired; a lone surrogate is tolerated as replacement).
-                if (code >= 0xD800u && code <= 0xDFFFu) {
-                    out.push_back('\xEF'); out.push_back('\xBF'); out.push_back('\xBD');
-                } else if (code < 0x80u) {
-                    out.push_back(static_cast<char>(code));
-                } else if (code < 0x800u) {
-                    out.push_back(static_cast<char>(0xC0u | (code >> 6)));
-                    out.push_back(static_cast<char>(0x80u | (code & 0x3Fu)));
-                } else {
-                    out.push_back(static_cast<char>(0xE0u | (code >> 12)));
-                    out.push_back(static_cast<char>(0x80u | ((code >> 6) & 0x3Fu)));
-                    out.push_back(static_cast<char>(0x80u | (code & 0x3Fu)));
-                }
-                break;
+            // v1.11.1 (CodeQL #363/#364): the former one-real-case
+            // switch was also trivial — the escape dispatch above
+            // already returned for every esc != 'u', so the selector
+            // had exactly one live value and the default arm was
+            // unreachable. The branch below states that typed
+            // condition directly, and the Unicode-escape logic moves
+            // to read_unicode_escape() with an explicit contract.
+            // Cursor consumption, hex validation, truncation handling,
+            // surrogate replacement and the UTF-8 encoding are
+            // byte-for-byte identical.
+            if (esc != 'u') {
+                return false; // unreachable: every other escape returned above
             }
-            default:
-                return false; // unreachable: esc != 'u' returned above
+            if (!read_unicode_escape(out)) {
+                return false;
             }
         }
 
         return false; // unterminated string
+    }
+
+    // read_unicode_escape decodes one \uXXXX escape into `out` as
+    // UTF-8. Contract:
+    //   - Precondition: the cursor sits just after the 'u' of "\u"
+    //     (read_string guarantees it before calling).
+    //   - On success: exactly four hex digits were consumed (the most
+    //     significant first, case-insensitive) and the encoded scalar
+    //     was appended to `out`; true is returned.
+    //   - On failure (fewer than four bytes left, or a non-hex digit):
+    //     false is returned and the cursor position is unspecified —
+    //     the string being read is abandoned either way.
+    //   - Encoding: BMP scalars below 0x80 / 0x800 emit 1 / 2 / 3 UTF-8
+    //     bytes. The surrogate range D800..DFFF has no Unicode scalar
+    //     value; every code in it (paired arrival or lone) emits the
+    //     U+FFFD replacement — the historical behavior the parser
+    //     tests pin, unchanged.
+    bool read_unicode_escape(std::string& out) {
+        if (pos_ + 4 > size_) {
+            return false; // truncated escape
+        }
+
+        unsigned code = 0;
+        for (int i = 0; i < 4; ++i) {
+            code <<= 4;
+            const char h = data_[pos_++];
+            if (h >= '0' && h <= '9') {
+                code |= static_cast<unsigned>(h - '0');
+            } else if (h >= 'a' && h <= 'f') {
+                code |= static_cast<unsigned>(h - 'a' + 10);
+            } else if (h >= 'A' && h <= 'F') {
+                code |= static_cast<unsigned>(h - 'A' + 10);
+            } else {
+                return false; // invalid hex digit
+            }
+        }
+
+        // Encode BMP scalar as UTF-8 (surrogates pass through
+        // paired; a lone surrogate is tolerated as replacement).
+        if (code >= 0xD800u && code <= 0xDFFFu) {
+            out.push_back('\xEF'); out.push_back('\xBF'); out.push_back('\xBD');
+        } else if (code < 0x80u) {
+            out.push_back(static_cast<char>(code));
+        } else if (code < 0x800u) {
+            out.push_back(static_cast<char>(0xC0u | (code >> 6)));
+            out.push_back(static_cast<char>(0x80u | (code & 0x3Fu)));
+        } else {
+            out.push_back(static_cast<char>(0xE0u | (code >> 12)));
+            out.push_back(static_cast<char>(0x80u | ((code >> 6) & 0x3Fu)));
+            out.push_back(static_cast<char>(0x80u | (code & 0x3Fu)));
+        }
+        return true;
     }
 
     // skip_value skips any JSON value (object/array/string/number/bool/

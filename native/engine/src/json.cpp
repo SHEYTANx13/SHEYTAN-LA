@@ -345,6 +345,46 @@ bool extract_encode_payload(const std::string& bytes, std::string& text,
     return true;
 }
 
+// read_ids_array consumes the decode payload's "ids" member value: a
+// JSON array of unsigned 32-bit integers.
+// Contract:
+//   - Precondition: the cursor sits at the value start ('[' expected).
+//   - On success: every element passed the 0..UINT32_MAX range check
+//     (doubles outside the uint32 range fail), ids received the values
+//     in order (an empty array succeeds with ids untouched), and the
+//     cursor sits after the closing ']'; true is returned.
+//   - On failure (missing '[', non-numeric or out-of-range element,
+//     missing ',' / ']' delimiter, truncation): false is returned with
+//     `error` carrying the exact historical message and the cursor
+//     position unspecified.
+bool read_ids_array(detail::Scanner& scanner, std::vector<uint32_t>& ids,
+                    std::string& error) {
+    if (!scanner.consume('[')) {
+        error = "ids is not an array";
+        return false;
+    }
+    scanner.skip_ws();
+    if (scanner.consume(']')) {
+        return true; // empty array: valid, ids stays empty
+    }
+    for (;;) {
+        scanner.skip_ws();
+        double value = 0;
+        if (!scanner.read_number(value) || value < 0 ||
+            value > static_cast<double>(UINT32_MAX)) {
+            error = "ids element is not a uint32";
+            return false;
+        }
+        ids.push_back(static_cast<uint32_t>(value));
+        scanner.skip_ws();
+        if (scanner.consume(',')) continue;
+        scanner.skip_ws();
+        if (scanner.consume(']')) return true;
+        error = "expected ',' or ']' in ids array";
+        return false;
+    }
+}
+
 // extract_decode_payload parses the tokenizer_decode op payload:
 // {"ids": [int,...], "skipSpecial": bool, "maxBytes": uint}.
 //
@@ -405,6 +445,9 @@ bool extract_decode_payload(const std::string& bytes,
 
     detail::Scanner scanner(bytes.data(), bytes.size());
 
+    // Envelope phase: the payload must be a JSON object; the member
+    // loop below walks it strictly (key ':' value, ','-separated,
+    // '}'-terminated) with no positional fallbacks.
     scanner.skip_ws();
     if (!scanner.consume('{')) {
         error = "decode payload is not a JSON object";
@@ -433,32 +476,14 @@ bool extract_decode_payload(const std::string& bytes,
         scanner.skip_ws();
 
         if (key == "ids") {
-            if (!scanner.consume('[')) {
-                error = "ids is not an array";
+            // v1.11.1 (CodeQL #213): the array walk moved to
+            // read_ids_array above; element range checks, bounds and
+            // error strings are unchanged. An empty array still counts
+            // as a present-but-empty ids member.
+            if (!read_ids_array(scanner, ids, error)) {
                 return false;
             }
-            scanner.skip_ws();
-            if (scanner.consume(']')) {
-                have_ids = true;
-            } else {
-                for (;;) {
-                    scanner.skip_ws();
-                    double value = 0;
-                    if (!scanner.read_number(value) || value < 0 ||
-                        value > static_cast<double>(UINT32_MAX)) {
-                        error = "ids element is not a uint32";
-                        return false;
-                    }
-                    ids.push_back(static_cast<uint32_t>(value));
-                    scanner.skip_ws();
-                    if (scanner.consume(',')) continue;
-                    scanner.skip_ws();
-                    if (scanner.consume(']')) break;
-                    error = "expected ',' or ']' in ids array";
-                    return false;
-                }
-                have_ids = true;
-            }
+            have_ids = true;
         } else if (key == "skipSpecial") {
             size_t start = scanner.position();
             double num;
@@ -479,6 +504,8 @@ bool extract_decode_payload(const std::string& bytes,
                 }
             }
         } else if (key == "maxBytes") {
+            // Output cap: a uint32 in range; 0 is not a meaningful cap
+            // and re-selects the documented 1 MiB default.
             double value = 0;
             if (!scanner.read_number(value) || value < 0 ||
                 value > static_cast<double>(UINT32_MAX)) {
@@ -496,6 +523,8 @@ bool extract_decode_payload(const std::string& bytes,
             }
         }
 
+        // Delimiter phase: ',' continues the member loop and '}'
+        // ends the envelope; any other byte is malformed.
         scanner.skip_ws();
         if (scanner.consume(',')) continue;
         scanner.skip_ws();
@@ -504,6 +533,8 @@ bool extract_decode_payload(const std::string& bytes,
         return false;
     }
 
+    // Post-condition: the ids member is mandatory even when empty —
+    // a decode request without it is rejected, never defaulted.
     if (!have_ids) {
         error = "decode payload has no ids";
         return false;
@@ -641,12 +672,20 @@ bool extract_generate_payload(const std::string& bytes,
 
     detail::Scanner scanner(bytes.data(), bytes.size());
 
+    // Envelope + member phase: the request must be a JSON object; the
+    // loop below parses exactly one key:value member per iteration and
+    // range-checks every numeric value AT PARSE TIME (there is no
+    // second validation pass — a false return never leaves a
+    // half-validated request behind). Unknown members are skipped
+    // without retention.
     scanner.skip_ws();
     if (!scanner.consume('{')) {
         error = "payload is not a JSON object";
         return false;
     }
 
+    // Required-member flags: prompt and maxTokens have no default; a
+    // missing flag after the envelope fails the post-condition below.
     bool have_prompt = false;
     bool have_max_tokens = false;
 
@@ -749,6 +788,8 @@ bool extract_generate_payload(const std::string& bytes,
             }
         }
 
+        // Delimiter phase: ',' continues the member loop and '}'
+        // ends the envelope; any other byte is malformed.
         scanner.skip_ws();
         if (scanner.consume(',')) {
             continue;
@@ -761,6 +802,9 @@ bool extract_generate_payload(const std::string& bytes,
         return false;
     }
 
+    // Post-condition: both required members were present. Optional
+    // members keep their documented defaults assigned up front, so a
+    // successful return always yields a fully-typed request.
     if (!have_prompt) {
         error = "payload has no prompt";
         return false;

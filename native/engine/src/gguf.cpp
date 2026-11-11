@@ -536,6 +536,68 @@ inline uint64_t gguf_elem_size(uint32_t elem_type) {
     return 0;
 }
 
+// read_array_value consumes one GGUF metadata array value: the element
+// type and the declared element count, then the element payload itself.
+// Contract:
+//   - Precondition: read_value already consumed the value-type tag and
+//     dispatched here; the cursor sits at the element-type field.
+//   - Element type kTypeString: each element carries its own u64 length
+//     prefix, walked (never materialized) under the kMaxStringBytes
+//     bound.
+//   - Fixed-width element types: the element width comes from
+//     gguf_elem_size; width 0 (nested arrays, unknown types — both
+//     invalid GGUF) fails. The declared count is bounded by
+//     kMaxArrayElements, the payload span is computed with
+//     checked_mul_u64 overflow protection, and the exact span is
+//     skipped.
+//   - On success: the cursor sits after the array payload and
+//     out.array_count records the declared element count; true is
+//     returned. On any failure (truncated header, oversized count,
+//     truncation inside the payload, overflow) false is returned and
+//     the cursor position is unspecified. The wire format is consumed
+//     exactly as before — no malformed or truncated payload is newly
+//     accepted.
+bool read_array_value(Cursor& c, Scalar& out) {
+    uint32_t elem_type = 0;
+    uint64_t count = 0;
+    if (!c.u32(elem_type) || !c.u64(count)) {
+        return false;
+    }
+    if (count > kMaxArrayElements) {
+        return false;
+    }
+
+    if (elem_type == kTypeString) {
+        // Array of strings: each element has its own length prefix;
+        // walk (not read) every element with the same bounds.
+        for (uint64_t i = 0; i < count; ++i) {
+            uint64_t len = 0;
+            if (!c.u64(len) || len > kMaxStringBytes) {
+                return false;
+            }
+            if (!c.skip(len)) {
+                return false;
+            }
+        }
+    } else {
+        const uint64_t elem_size = gguf_elem_size(elem_type);
+        if (elem_size == 0) {
+            return false; // nested arrays and unknown element types are not valid GGUF
+        }
+
+        uint64_t span = 0;
+        if (!checked_mul_u64(elem_size, count, span)) {
+            return false;
+        }
+        if (!c.skip(span)) {
+            return false;
+        }
+    }
+
+    out.array_count = count;
+    return true;
+}
+
 // read_value parses one typed metadata value. Scalars are captured
 // (strings bounded by kMaxStringBytes); array ELEMENTS are never
 // materialized — the array is validated element-size-wise and skipped,
@@ -572,46 +634,11 @@ bool read_value(Cursor& c, Scalar& out) {
         return c.u64(out.u64_v);
     case kTypeFloat64:
         return c.f64(out.f64_v);
-    case kTypeArray: {
-        uint32_t elem_type = 0;
-        uint64_t count = 0;
-        if (!c.u32(elem_type) || !c.u64(count)) {
-            return false;
-        }
-        if (count > kMaxArrayElements) {
-            return false;
-        }
-
-        if (elem_type == kTypeString) {
-            // Array of strings: each element has its own length prefix;
-            // walk (not read) every element with the same bounds.
-            for (uint64_t i = 0; i < count; ++i) {
-                uint64_t len = 0;
-                if (!c.u64(len) || len > kMaxStringBytes) {
-                    return false;
-                }
-                if (!c.skip(len)) {
-                    return false;
-                }
-            }
-        } else {
-            const uint64_t elem_size = gguf_elem_size(elem_type);
-            if (elem_size == 0) {
-                return false; // nested arrays and unknown element types are not valid GGUF
-            }
-
-            uint64_t span = 0;
-            if (!checked_mul_u64(elem_size, count, span)) {
-                return false;
-            }
-            if (!c.skip(span)) {
-                return false;
-            }
-        }
-
-        out.array_count = count;
-        return true;
-    }
+    case kTypeArray:
+        // v1.11.1 (CodeQL #362): the 39-line array body moves to
+        // read_array_value below — the branch stays a short delegation
+        // with identical cursor movement, bounds and error outcomes.
+        return read_array_value(c, out);
     default:
         return false; // unknown value type
     }
