@@ -33,7 +33,8 @@
 param(
     [string]$ExeDir,
     [string[]]$Modules,
-    [string]$SystemRoot = $env:SystemRoot
+    [string]$SystemRoot = $env:SystemRoot,
+    [string]$JsonReport
 )
 
 # Explicit parameter validation (no Mandatory attribute: that engages the
@@ -53,6 +54,26 @@ Set-StrictMode -Version Latest
 
 $script:sawMissing = $false
 $script:auditError = $false
+
+# Structured side-channel (v1.11.1, run 42928792246 §6 matrix): a
+# machine-readable audit report alongside the human log. Best-effort — a
+# report-write failure must never mask the audit verdict itself.
+$script:Report = [ordered]@{
+    modules      = New-Object System.Collections.Generic.List[object]
+    verdict      = $null
+    generatedUtc = [System.DateTime]::UtcNow.ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Add-JsonReport {
+    if (-not $JsonReport) { return }
+    try {
+        $script:Report.verdict = if ($script:sawMissing) { "FAIL" } elseif ($script:auditError) { "ERROR" } else { "PASS" }
+        $json = $script:Report | ConvertTo-Json -Depth 6
+        [System.IO.File]::WriteAllText($JsonReport, $json, (New-Object System.Text.UTF8Encoding($false)))
+    } catch {
+        Write-Output ("::warning::smoke dependency audit: could not write the JSON report '{0}': {1}" -f $JsonReport, $_.Exception.Message)
+    }
+}
 
 function Convert-RvaToOffset {
     param([UInt64]$Rva, $Sections)
@@ -166,6 +187,7 @@ try {
         $modPath = Join-Path $ExeDir $mod
         if (-not (Test-Path -LiteralPath $modPath)) {
             Write-Output ("::error::smoke dependency audit: {0} is absent from the smoke copy — a load-chain module is missing before launch" -f $mod)
+            $script:Report.modules.Add([ordered]@{ name = $mod; status = "MODULE_MISSING"; imports = @() })
             $script:sawMissing = $true
             continue
         }
@@ -178,10 +200,13 @@ try {
             # diagnostics here carry the exact parse failure.
             Write-Output ("::warning::smoke dependency audit: PE parse of {0} failed ({1}) — the import closure of this module is UNVERIFIED; the audit classifies as ERROR" -f $mod, $_.Exception.Message)
             Write-Output ("::warning::smoke dependency audit: parse-failure stack: {0}" -f ($_.ScriptStackTrace -replace "\r?\n", " | "))
+            $script:Report.modules.Add([ordered]@{ name = $mod; status = "PARSE_ERROR"; error = $_.Exception.Message; imports = @() })
             $script:auditError = $true
             continue
         }
         Write-Output ("--- {0}: {1} static import(s) ---" -f $mod, $imports.Count)
+        $modRecord = [ordered]@{ name = $mod; status = "OK"; imports = New-Object System.Collections.Generic.List[object] }
+        $script:Report.modules.Add($modRecord)
         $seen = @{}
         foreach ($dll in $imports) {
             $key = $dll.ToLowerInvariant()
@@ -189,13 +214,16 @@ try {
             $seen[$key] = $true
             if ($dll -match '^(api-ms-|ext-ms-)') {
                 Write-Output ("  [API-SET] {0} (virtual API Set name — resolved by the OS schema, not file search)" -f $dll)
+                $modRecord.imports.Add([ordered]@{ name = $dll; status = "API-SET"; resolvedPath = $null })
                 continue
             }
             $found = Resolve-InLoaderOrder -Name $dll -SearchDirs $searchDirs -ExeDirIndex $exeDirIndex
             if ($found) {
                 Write-Output ("  [resolved] {0} -> {1}" -f $dll, $found)
+                $modRecord.imports.Add([ordered]@{ name = $dll; status = "RESOLVED"; resolvedPath = $found })
             } else {
                 Write-Output ("::error::smoke dependency audit: {0} imported by {1} has no resolvable copy (exe dir, System32, PATH)" -f $dll, $mod)
+                $modRecord.imports.Add([ordered]@{ name = $dll; status = "MISSING"; resolvedPath = $null })
                 $script:sawMissing = $true
             }
         }
@@ -207,6 +235,8 @@ try {
     Write-Output ("::error::smoke dependency audit: exception: {0}" -f $_.Exception.Message)
     Write-Output ("::error::smoke dependency audit: stack: {0}" -f ($_.ScriptStackTrace -replace "\r?\n", " | "))
     Write-Output ("::error::smoke dependency audit: invocation: {0}" -f $_.InvocationInfo.PositionMessage)
+    $script:auditError = $true
+    Add-JsonReport
     exit 3
 }
 
@@ -215,11 +245,14 @@ try {
 # never again masquerade as a verified dependency closure.
 if ($script:sawMissing) {
     Write-Output "smoke dependency audit: MISSING DEPENDENCIES — the launch would die at loader level with 0xC0000135"
+    Add-JsonReport
     exit 2
 }
 if ($script:auditError) {
     Write-Output "smoke dependency audit: ERROR — at least one load-chain module could not be audited; the dependency closure is unverified"
+    Add-JsonReport
     exit 3
 }
+Add-JsonReport
 Write-Output "smoke dependency audit: PASS — every named static import resolves (or is an OS API Set); safe to launch"
 exit 0

@@ -27,11 +27,9 @@
 *.syso
 *.zip
 /local-agent
-# v1.10.8 (R-A): the local Qt-acceptance route builds the core EXPLICITLY
-# from its real entrypoint (verify-all.mjs: go build -o sheytan
-# ./cmd/sheytan-local-agent) — the reshape moved that entrypoint to
-# cmd/sheytan-local-agent and the produced binary is a build product.
-/sheytan
+# v1.11.1 (run 42928792246 residue audit): the retired v1.10.8 local
+# Qt-acceptance route (verify-all.mjs + its /sheytan build product) is
+# gone — *.exe and /local-agent already cover any local build product.
 /build.log
 /build1.log
 
@@ -80,5 +78,9 @@ Thumbs.db
 /e2e/.build/
 /e2e/.artifacts/
 
-# v1.10.1: the Qt host's local CMake build tree (CI builds it fresh).
-ui/qt/build/
+# v1.11.1 (run 42928792246 §12): local CI-output directory (the workflow
+# writes its persistent step logs here on the runner; a local run of the
+# fixture suites or packaging steps produces the same output — never a
+# source file). The Qt-host CMake build-tree ignore is retired with the
+# Qt host itself: no ui/qt tree exists.
+/ci-logs/
