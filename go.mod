@@ -1,6 +1,6 @@
 module github.com/SHEYTANx13/SHEYTAN-LA
 
-go 1.26
+go 1.26.0
 
 // One formatter everywhere (agent, CI, contributors): GOTOOLCHAIN=auto now
 // converges on this exact Go release, whose gofmt is also the one the
@@ -16,7 +16,7 @@ require (
 	github.com/tc-hib/winres v0.3.1
 	golang.org/x/image v0.45.0
 	golang.org/x/net v0.58.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.50.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
