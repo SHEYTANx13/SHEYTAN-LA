@@ -2148,7 +2148,7 @@ jobs:
           echo "--- SHA256SUMS.txt ---"; cat dist/SHA256SUMS.txt
 
       - name: Publish the release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3 (immutable SHA)
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3 (immutable SHA)
         with:
           files: |
             dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip
