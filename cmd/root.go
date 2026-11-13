@@ -8,6 +8,7 @@ import (
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/startup"
 )
 
 // RunWithDefaultFn dispatches to the right subcommand. If no command is
@@ -40,7 +41,21 @@ func RunWithDefaultFn(defaultFn func() int) int {
 		return code
 	}
 
+	// v1.11.1 (run 43008361835 §F2): the startup recorder's cold/warm
+	// classification is computed BEFORE config.Load can create anything:
+	// warm = the canonical config file already existed at process entry
+	// (a returning user); cold = a pristine data root (first launch or
+	// a fresh smoke copy). Only the boolean is stored — never the path.
+	su := startup.Default()
+	if _, statErr := os.Stat(configPath()); statErr == nil {
+		su.SetWarm(true)
+	} else {
+		su.SetWarm(false)
+	}
+	su.StartPhase(startup.PhaseConfigLoad)
 	cfg, err := config.Load(configPath())
+	su.EndPhase(startup.PhaseConfigLoad, err)
+	su.SetVersion(config.AppVersion)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config load:", err)
 		return 1
@@ -126,6 +141,7 @@ func RunWithDefaultFn(defaultFn func() int) int {
 	// root. Hash-verified, restart-safe, engine bundle as a unit,
 	// legacy root removed only after full verification. Runs ONLY
 	// when no explicit data-root override is set.
+	su.StartPhase(startup.PhaseDataMigrations)
 	appDataReport, appDataErr := config.MigrateLegacyAppDataRoot(cfg)
 	if appDataErr != nil {
 		logging.Default().Error("paths", "legacy AppData migration incomplete (will retry on next start): %v", appDataErr)
@@ -133,6 +149,7 @@ func RunWithDefaultFn(defaultFn func() int) int {
 	for _, line := range config.LogMigrationNotes(nil, appDataReport) {
 		logging.Default().Info("paths", "%s", line)
 	}
+	su.EndPhase(startup.PhaseDataMigrations, appDataErr)
 
 	if err := cfg.EnsureDirs(); err != nil {
 		logging.Default().Error("boot", "ensure dirs: %v", err)
@@ -141,12 +158,15 @@ func RunWithDefaultFn(defaultFn func() int) int {
 	// v1.7.4: migrations are done — only NOW open the canonical sinks
 	// (app.log, tools.jsonl, llm.jsonl, crashes/), with the FINAL config
 	// so a recovered/reloaded configuration drives the logs dir.
+	su.StartPhase(startup.PhaseLoggingInit)
 	mgr, err := logging.New(cfg.LogsDir())
 	if err != nil {
 		// Keep the bootstrap logger installed: diagnostics stay on
 		// stderr instead of vanishing into a no-op manager.
 		logging.Default().Error("boot", "log catcher: %v", err)
+		su.EndPhase(startup.PhaseLoggingInit, err)
 	} else {
+		su.EndPhase(startup.PhaseLoggingInit, nil)
 		logging.SetDefault(mgr)
 		defer mgr.Close()
 	}

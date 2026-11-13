@@ -137,27 +137,48 @@ func TestResponsiveLayoutBreakpoint(t *testing.T) {
 }
 
 // TestNavPolicySizeClasses pins the policy across the required window-size
-// classes: small laptop windows, 1280x800, 1440x900, 1920x1080 — plus the
-// exact breakpoint edges.
+// classes and the EXACT breakpoint edges of the v1.11.1 responsive contract
+// (compact <600 / medium 600–899 / desktop 900–1279 / wide >=1280):
+// small laptop windows, 1280x720, 1440x900, 1920x1080, plus one logical
+// unit below, at and above every breakpoint.
 func TestNavPolicySizeClasses(t *testing.T) {
 	cases := []struct {
 		width float32
-		want  navZone
+		zone  navZone
+		class sizeClass
 	}{
-		{360, navTopStrip},
-		{500, navTopStrip},
-		{639, navTopStrip},
-		{640, navRailCompact},
-		{800, navRailCompact},
-		{999, navRailCompact},
-		{1000, navRailWide},
-		{1280, navRailWide},
-		{1440, navRailWide},
-		{1920, navRailWide},
+		{0, navTopStrip, sizeCompact},
+		{320, navTopStrip, sizeCompact},
+		{360, navTopStrip, sizeCompact},
+		{430, navTopStrip, sizeCompact},
+		{568, navTopStrip, sizeCompact},
+		{599, navTopStrip, sizeCompact}, // one below the compact breakpoint
+		{600, navRailCompact, sizeMedium},
+		{601, navRailCompact, sizeMedium},
+		{720, navRailCompact, sizeMedium},
+		{800, navRailCompact, sizeMedium},
+		{844, navRailCompact, sizeMedium}, // phone LANDSCAPE width falls in the medium band
+		{899, navRailCompact, sizeMedium},
+		{900, navRailWide, sizeDesktop},
+		{901, navRailWide, sizeDesktop},
+		{1024, navRailWide, sizeDesktop},
+		{1279, navRailWide, sizeDesktop},
+		{1280, navRailWide, sizeWide},
+		{1281, navRailWide, sizeWide},
+		{1366, navRailWide, sizeWide},
+		{1440, navRailWide, sizeWide},
+		{1600, navRailWide, sizeWide},
+		{1920, navRailWide, sizeWide},
+		{2560, navRailWide, sizeWide},
+		{3440, navRailWide, sizeWide},
+		{3840, navRailWide, sizeWide},
 	}
 	for _, c := range cases {
-		if got := navPolicy(c.width); got != c.want {
-			t.Errorf("navPolicy(%v) = %v, want %v", c.width, got, c.want)
+		if got := navPolicy(c.width); got != c.zone {
+			t.Errorf("navPolicy(%v) = %v, want %v", c.width, got, c.zone)
+		}
+		if got := sizeClassFor(c.width); got != c.class {
+			t.Errorf("sizeClassFor(%v) = %v, want %v", c.width, got, c.class)
 		}
 	}
 }

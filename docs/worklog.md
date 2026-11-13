@@ -7,7 +7,17 @@ Direction → `ROADMAP.md`
 
 ---
 
-## Current focus (2026-10-26 / 1.11.0)
+## Current focus (2026-11-13 / 1.11.1 maintenance pass)
+
+**Run 43008361835 (run #144) reliability/UX maintenance work order**
+
+- Root-caused the run's final `failure` conclusion: all five build/test/package jobs passed; the Consolidate logs job failed ONLY at its "Collector verdict" step because the collector counted its own (necessarily in-progress) job as a coverage gap. Fixed with a dedicated SELF accounting category; pinned by fixtures.
+- Startup phase telemetry (internal/startup), one idempotent shutdown coordinator (ui/fyne/lifecycle.go), responsive size-class contract 600/900/1280 with the full logical-size matrix + structural goldens + a real Xvfb resize smoke, per-job diagnostics-index.json, setup-go cache scoping with recorded hit/miss evidence.
+- Full detail: docs/changelog.md (1.11.1 maintenance pass) and docs/ui-contract.md contracts #12/#13.
+
+---
+
+## Previous focus (2026-10-26 / 1.11.0)
 
 **Documentation overhaul (this session)**  
 - Full rewrite of README, SECURITY, ROADMAP, FEATURES, CONTRIBUTING, agent, UPDATE, 3dstudio, ARCHITECTURE.  

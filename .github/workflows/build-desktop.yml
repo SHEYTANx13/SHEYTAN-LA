@@ -112,16 +112,37 @@ jobs:
 
 
       - name: Setup Go
+        id: setup-go
         uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          # F1/F7 (run 43008361835): the cache key family is scoped to
+          # OS + Go version + the dependency lock (go.sum) — declared
+          # explicitly so dependency changes invalidate every lane's
+          # cache together and a hit/miss is reproducible.
+          cache-dependency-path: go.sum
 
       # Fyne native build prerequisites (Linux desktop path). This is the
       # HONEST dependency contract: a C compiler + pkg-config + the
       # X11/OpenGL/Wayland development libraries (including libxxf86vm-dev,
       # the linker failure that killed the run-#51 Fyne spike). No Qt, no
       # Node, no GTK.
+      # F7 (run 43008361835): cache hit/miss is recorded per job — a hit is
+      # a performance optimization, never a correctness condition. Only
+      # allowlisted toolchain facts; no environment dumps.
+      - name: Record Go cache/toolchain facts
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          {
+            echo "setup-go cache-hit: ${GO_CACHE_HIT:-unknown}"
+            go version
+            go env GOOS GOARCH GOMODCACHE GOCACHE
+          } | tee ci-logs/go-cache-facts.log
+        env:
+          GO_CACHE_HIT: ${{ steps.setup-go.outputs.cache-hit }}
+
       - name: Install Fyne build prerequisites
         run: |
           set -euo pipefail
@@ -175,8 +196,23 @@ jobs:
       - name: go vet ./...
         run: |
           set -euo pipefail
+          echo "RUN go vet ./..." >> ci-logs/gate-order.txt
           go vet ./... 2>&1 | tee ci-logs/preflight-vet.log
-          echo "gate OK: go vet ./..."
+          echo "gate OK: go vet ./..." >> ci-logs/gate-order.txt
+
+      # F6 (run 43008361835): the per-job machine-readable diagnostics
+      # index — always built, printed to the step log (so it reaches the
+      # consolidated run-log artifact) and written to
+      # ci-logs/diagnostics-index.json. Best-effort: a diagnostics failure
+      # must never mask the original job conclusion.
+      - name: Build the per-job diagnostics index (always run)
+        if: always()
+        run: |
+          set -uo pipefail
+          bash scripts/ci/diagnostics-index.sh --job "Preflight compile gate" \
+            || echo "::error::diagnostics index build failed (non-masking; original job conclusion stands)"
+        env:
+          DIAGNOSTICS_CACHE_HIT: ${{ steps.setup-go.outputs.cache-hit }}
 
   # ==========================================================================
   # Audit — the headless core suite, race gates and release-surface gates.
@@ -216,10 +252,16 @@ jobs:
 
 
       - name: Setup Go
+        id: setup-go
         uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          # F1/F7 (run 43008361835): the cache key family is scoped to
+          # OS + Go version + the dependency lock (go.sum) — declared
+          # explicitly so dependency changes invalidate every lane's
+          # cache together and a hit/miss is reproducible.
+          cache-dependency-path: go.sum
 
       - name: go test ./internal/... (headless)
         run: |
@@ -265,6 +307,29 @@ jobs:
           bash scripts/ci/consolidate-run-log-fixtures.sh 2>&1 | tee ci-logs/audit-log-fixtures.log
           echo "gate OK: log collector fixtures" >> ci-logs/gate-order.txt
 
+      # F6 (run 43008361835): the diagnostics-index builder is itself
+      # regression-tested here (schema, gate statuses, log inventory,
+      # redaction) before any job depends on it.
+      - name: Diagnostics-index fixture (self-test)
+        run: |
+          set -euo pipefail
+          echo "RUN bash scripts/ci/diagnostics-index.sh --self-test" >> ci-logs/gate-order.txt
+          bash scripts/ci/diagnostics-index.sh --self-test 2>&1 | tee ci-logs/audit-diagnostics-index-selftest.log
+          echo "gate OK: diagnostics-index self-test" >> ci-logs/gate-order.txt
+
+      # F6: the per-job machine-readable diagnostics index — always built,
+      # printed to the step log (so it reaches the consolidated run-log
+      # artifact) and written to ci-logs/diagnostics-index.json.
+      # Best-effort: never masks the original job conclusion.
+      - name: Build the per-job diagnostics index (always run)
+        if: always()
+        run: |
+          set -uo pipefail
+          bash scripts/ci/diagnostics-index.sh --job "Core audit (headless)" \
+            || echo "::error::diagnostics index build failed (non-masking; original job conclusion stands)"
+        env:
+          DIAGNOSTICS_CACHE_HIT: ${{ steps.setup-go.outputs.cache-hit }}
+
   # ==========================================================================
   # UI — the Fyne suite (real widget trees over a fake core), the full
   # non-headless sweep, and the Linux desktop smoke under Xvfb.
@@ -300,10 +365,16 @@ jobs:
 
 
       - name: Setup Go
+        id: setup-go
         uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          # F1/F7 (run 43008361835): the cache key family is scoped to
+          # OS + Go version + the dependency lock (go.sum) — declared
+          # explicitly so dependency changes invalidate every lane's
+          # cache together and a hit/miss is reproducible.
+          cache-dependency-path: go.sum
 
       - name: Install Fyne build prerequisites + smoke tooling
         run: |
@@ -378,7 +449,11 @@ jobs:
             echo "::error::desktop smoke: Xvfb never became ready within 10s"
             exit 1
           fi
-          DISPLAY=:91 ./SHEYTAN-LA > smoke-stdout.log 2>&1 &
+          # F2 (run 43008361835): the controlled startup-diagnostics mode
+          # rides along — monotonic phase timings land in the captured
+          # stdout even when the pristine smoke copy never creates a data
+          # root. Adds stdout evidence only; behavior is unchanged.
+          DISPLAY=:91 SHEYTAN_STARTUP_DIAGNOSTICS=1 ./SHEYTAN-LA > smoke-stdout.log 2>&1 &
           APP_PID=$!
           app_ready=0
           for i in $(seq 1 60); do
@@ -430,6 +505,71 @@ jobs:
           echo "SMOKE OK: window booted (observed in the X tree), event loop alive through the soak, clean SIGTERM shutdown with reap"
           mkdir -p "$GITHUB_WORKSPACE/ci-logs"
           cp smoke-stdout.log "$GITHUB_WORKSPACE/ci-logs/linux-smoke-stdout.log"
+          echo "RUN desktop launch smoke (Xvfb)" >> "$GITHUB_WORKSPACE/ci-logs/gate-order.txt"
+          echo "gate OK: desktop launch smoke (Xvfb)" >> "$GITHUB_WORKSPACE/ci-logs/gate-order.txt"
+
+      # F4/§5.3 (run 43008361835): the REAL desktop resize smoke — the
+      # same binary, a real GLFW window under Xvfb, resized through the
+      # logical-size matrix (phone portrait/landscape, tablets, breakpoint
+      # boundaries, laptops, desktop, wide) by the app's controlled
+      # SHEYTAN_UI_RESIZE_SMOKE mode. Every target must settle at its
+      # requested logical size, the resolved navigation zone is printed
+      # per size, and the app closes through the SAME graceful shutdown
+      # coordinator a user close exercises (exit code 0, never a kill).
+      - name: "Desktop resize smoke (Xvfb: logical-size matrix, graceful close)"
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/smoke"
+          rm -f resize-stdout.log
+          # The screen must fit the widest matrix target (2560x1440).
+          Xvfb :92 -screen 0 2560x1440x24 >/dev/null 2>&1 &
+          XVFB_PID=$!
+          xvfb_ready=0
+          for i in $(seq 1 20); do
+            if DISPLAY=:92 xdpyinfo >/dev/null 2>&1; then xvfb_ready=1; break; fi
+            sleep 0.5
+          done
+          if [ "$xvfb_ready" -ne 1 ]; then
+            echo "::error::resize smoke: Xvfb :92 never became ready within 10s"
+            kill "$XVFB_PID" 2>/dev/null || true
+            exit 1
+          fi
+          rc=0
+          DISPLAY=:92 SHEYTAN_UI_RESIZE_SMOKE=1 SHEYTAN_STARTUP_DIAGNOSTICS=1 ./SHEYTAN-LA > resize-stdout.log 2>&1 || rc=$?
+          cp resize-stdout.log "$GITHUB_WORKSPACE/ci-logs/linux-resize-smoke.log"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::resize smoke: the application exited with code $rc (see ci-logs/linux-resize-smoke.log)"
+            cat resize-stdout.log || true
+            kill "$XVFB_PID" 2>/dev/null || true
+            exit 1
+          fi
+          if ! grep -q "UI-RESIZE-SMOKE complete targets=" resize-stdout.log; then
+            echo "::error::resize smoke: no completion evidence line (see ci-logs/linux-resize-smoke.log)"
+            cat resize-stdout.log || true
+            kill "$XVFB_PID" 2>/dev/null || true
+            exit 1
+          fi
+          failed_targets=$(grep -c "ok=false" resize-stdout.log || true)
+          if [ "$failed_targets" -ne 0 ]; then
+            echo "::error::resize smoke: $failed_targets resize target(s) did not settle at the requested logical size (see ci-logs/linux-resize-smoke.log)"
+            grep "ok=false" resize-stdout.log || true
+            kill "$XVFB_PID" 2>/dev/null || true
+            exit 1
+          fi
+          echo "RESIZE SMOKE OK: every logical-size target settled, navigation zone recorded per size, graceful coordinator close (exit 0)"
+          kill "$XVFB_PID" 2>/dev/null || true
+          echo "RUN desktop resize smoke (Xvfb matrix)" >> "$GITHUB_WORKSPACE/ci-logs/gate-order.txt"
+          echo "gate OK: desktop resize smoke (Xvfb matrix)" >> "$GITHUB_WORKSPACE/ci-logs/gate-order.txt"
+
+      # F6: the per-job machine-readable diagnostics index (always run).
+      - name: Build the per-job diagnostics index (always run)
+        if: always()
+        run: |
+          set -uo pipefail
+          bash scripts/ci/diagnostics-index.sh --job "Fyne UI gates (Linux)" \
+            || echo "::error::diagnostics index build failed (non-masking; original job conclusion stands)"
+        env:
+          DIAGNOSTICS_CACHE_HIT: ${{ steps.setup-go.outputs.cache-hit }}
 
   # ==========================================================================
   # Windows x64 — the native build of SHEYTAN-LA.exe (MSYS2 UCRT64 CGO for
@@ -450,10 +590,32 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup Go
+        id: setup-go
         uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          # F1/F7 (run 43008361835): the cache key family is scoped to
+          # OS + Go version + the dependency lock (go.sum) — declared
+          # explicitly so dependency changes invalidate every lane's
+          # cache together and a hit/miss is reproducible.
+          cache-dependency-path: go.sum
+
+      # F7 (run 43008361835): cache hit/miss recorded per job (allowlisted
+      # toolchain facts only; PowerShell captures $LASTEXITCODE after each
+      # native command — the facts log is best-effort evidence, never a
+      # gate).
+      - name: Record Go cache/toolchain facts
+        run: |
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+          "setup-go cache-hit: ${env:GO_CACHE_HIT}" | Add-Content -Path ci-logs/win-go-cache-facts.log -Encoding utf8NoBOM
+          go version 2>&1 | Add-Content -Path ci-logs/win-go-cache-facts.log -Encoding utf8NoBOM
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::go version failed (exit $LASTEXITCODE)"; throw "cache facts: go version failed" }
+          go env GOOS GOARCH GOMODCACHE GOCACHE 2>&1 | Add-Content -Path ci-logs/win-go-cache-facts.log -Encoding utf8NoBOM
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::go env failed (exit $LASTEXITCODE)"; throw "cache facts: go env failed" }
+          Get-Content ci-logs/win-go-cache-facts.log
+        env:
+          GO_CACHE_HIT: ${{ steps.setup-go.outputs.cache-hit }}
 
       # APP_VERSION derives from the ONE Go authority (internal/config
       # AppVersion) via the CGO-free resolver — run #54 root cause: the
@@ -897,6 +1059,11 @@ jobs:
           # Explicit, deterministic software-GL driver choice (the proven
           # GPU-less runner pattern); Start-Process inherits this env.
           $env:GALLIUM_DRIVER = "llvmpipe"
+          # F2 (run 43008361835): the controlled startup-diagnostics mode
+          # rides along — monotonic phase timings land in the captured
+          # stdout even when the pristine smoke copy never creates a data
+          # root. Adds stdout evidence only; behavior is unchanged.
+          $env:SHEYTAN_STARTUP_DIAGNOSTICS = "1"
           $p = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru `
                  -RedirectStandardOutput $smokeLog -RedirectStandardError ($smokeLog + ".err")
           $bootDeadline = (Get-Date).AddSeconds(60)
@@ -1453,6 +1620,21 @@ jobs:
           & ./scripts/ci/PackageGate.ps1 -Zip "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip" -Installer "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe" 2>&1 | Tee-Object -FilePath "ci-logs/win-package-gate.log"
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::package gate: Windows package contract violated (gate exit $LASTEXITCODE; named incomplete state in ci-logs/win-package-gate.log)"; throw "Windows package gate failed (exit $LASTEXITCODE)" }
 
+      # F6 (run 43008361835): the per-job machine-readable diagnostics
+      # index — always built (bash via Git Bash), printed to the step log
+      # (so it reaches the consolidated run-log artifact) and written to
+      # ci-logs/diagnostics-index.json. Best-effort: never masks the
+      # original job conclusion.
+      - name: Build the per-job diagnostics index (always run)
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          bash scripts/ci/diagnostics-index.sh --job "Windows x64" \
+            || echo "::error::diagnostics index build failed (non-masking; original job conclusion stands)"
+        env:
+          DIAGNOSTICS_CACHE_HIT: ${{ steps.setup-go.outputs.cache-hit }}
+
       # v1.11.1 §7.4: the bundle uploads only on job success — never on
       # always() — and only when BOTH verified distribution files exist
       # (error on missing): no partial or placeholder package bundles.
@@ -1505,10 +1687,16 @@ jobs:
 
 
       - name: Setup Go
+        id: setup-go
         uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+          # F1/F7 (run 43008361835): the cache key family is scoped to
+          # OS + Go version + the dependency lock (go.sum) — declared
+          # explicitly so dependency changes invalidate every lane's
+          # cache together and a hit/miss is reproducible.
+          cache-dependency-path: go.sum
 
       # CGO-free resolution (run #54 root cause #2: the old step compiled
       # the Fyne UI before the graphics headers were installed and died in
@@ -1749,6 +1937,20 @@ jobs:
             echo "::error::the Linux portable package was not produced — see the FIRST failed step of this job for the root cause (this gate intentionally reports the missing package once, with cause context)"
           fi
           echo "package gate: reached"
+
+      # F6 (run 43008361835): the per-job machine-readable diagnostics
+      # index — always built, printed to the step log (so it reaches the
+      # consolidated run-log artifact) and written to
+      # ci-logs/diagnostics-index.json. Best-effort: never masks the
+      # original job conclusion.
+      - name: Build the per-job diagnostics index (always run)
+        if: always()
+        run: |
+          set -uo pipefail
+          bash scripts/ci/diagnostics-index.sh --job "Linux x64" \
+            || echo "::error::diagnostics index build failed (non-masking; original job conclusion stands)"
+        env:
+          DIAGNOSTICS_CACHE_HIT: ${{ steps.setup-go.outputs.cache-hit }}
 
       # v1.11.1 §7.4: the bundle uploads only on job success — never on
       # always() — and only when the verified portable archive exists

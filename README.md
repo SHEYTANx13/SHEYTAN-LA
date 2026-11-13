@@ -94,7 +94,7 @@ The following are implemented and verified in this repository:
 - Runtime Governor policy loop with deterministic explanations
 - Runtime self-model for capability questions, composed from the live registry and the parsed model card
 
-Windows CI runs the full Go build/test/smoke gates (MSYS2 UCRT64 CGO for the Fyne desktop binary). Linux CI runs the headless gates plus the Fyne UI suite and the real-window Xvfb smoke. **Neither is a claim of physical-PC runtime verification** — CI is CI. Every run consolidates all job logs into one plain-text artifact.
+Windows CI runs the full Go build/test/smoke gates (MSYS2 UCRT64 CGO for the Fyne desktop binary). Linux CI runs the headless gates plus the Fyne UI suite, the real-window Xvfb smoke and the real-window resize smoke (the full logical-size matrix through the same graceful close path). **Neither is a claim of physical-PC runtime verification** — CI is CI. Every run consolidates all job logs into one plain-text artifact, and every job emits a machine-readable `ci-logs/diagnostics-index.json` (gate sequence + log inventory).
 
 ---
 

@@ -1,0 +1,9 @@
+# CODEOWNERS — workflow and release-contract changes get owner review.
+# The CI pipeline, the log collector and the release-contract tests are the
+# shipped-artifact surface: they carry their own regression suites and any
+# change to them is reviewed by the repository owner.
+/.github/           @SHEYTANx13
+/scripts/ci/        @SHEYTANx13
+/internal/releasecontract/ @SHEYTANx13
+/packaging/         @SHEYTANx13
+/docs/changelog.md  @SHEYTANx13

@@ -24,12 +24,14 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/api"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/localipc"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/platform"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/startup"
 	fyneui "github.com/SHEYTANx13/SHEYTAN-LA/ui/fyne"
 )
 
@@ -70,43 +72,69 @@ func Run(cfg *config.Config) int {
 		return failBoot("config", errors.New("missing configuration"))
 	}
 
+	// v1.11.1 (run 43008361835 §F2): monotonic phase telemetry for the
+	// whole desktop launch. The summary is emitted to stderr at the END
+	// of Run (every path returns through here), so a pristine smoke
+	// copy that never creates a data root still leaves a complete,
+	// sanitized timing record. The controlled diagnostic mode adds the
+	// full JSON records on stdout.
+	su := startup.Default()
+	su.SetDiagnostic(startup.DiagnosticsEnabled())
+
 	// Taskbar/notification identity (no-op where the concept does not
 	// exist).
 	_ = platform.SetAppUserModelID(config.AppUserModelID)
 
+	su.StartPhase(startup.PhaseCoreInit)
 	srv, err := api.New(cfg)
 	if err != nil {
+		su.EndPhase(startup.PhaseCoreInit, err)
 		return failBoot("server init", err)
 	}
+	su.EndPhase(startup.PhaseCoreInit, nil)
 	// The core shutdown is VISIBLE. Close returns nothing
 	// (internal/api/lifecycle.go); the named Info line after the call is
-	// the record.
+	// the record. Deferred FIRST so it runs LAST: the shutdown phase
+	// (UI close → IPC stop → core close) is measured and the startup
+	// summary is emitted after the full teardown, in order.
+	shutdownStart := time.Now()
 	defer func() {
 		srv.Close()
 		logging.Default().Info("desktop", "server closed")
+		su.RecordPhase(startup.PhaseShutdown, time.Since(shutdownStart), nil)
+		su.Emit(os.Stderr)
 	}()
 
+	su.StartPhase(startup.PhaseCoreSetup)
 	if err := srv.EnsureSetup(); err != nil {
+		su.EndPhase(startup.PhaseCoreSetup, err)
 		return failBoot("setup", err)
 	}
+	su.EndPhase(startup.PhaseCoreSetup, nil)
 
 	// The ONE local channel to the UI client. A transport failure is a
 	// HARD, VISIBLE fault: the desktop exits non-zero instead of launching
 	// a UI that cannot reach the core. SHEYTAN_IPC_KEY presets the
 	// ephemeral key (acceptance/dev harnesses only — the production
 	// launcher generates one and never logs it).
+	su.StartPhase(startup.PhaseIPCKey)
 	key := os.Getenv(localipc.EnvKey)
 	if key == "" {
 		key, err = localipc.NewKey()
 		if err != nil {
+			su.EndPhase(startup.PhaseIPCKey, err)
 			return failBoot("ipc key", err)
 		}
 	}
+	su.EndPhase(startup.PhaseIPCKey, nil)
 
+	su.StartPhase(startup.PhaseIPCServe)
 	ipc, err := localipc.Serve(srv, cfg, key)
 	if err != nil {
+		su.EndPhase(startup.PhaseIPCServe, err)
 		return failBoot("ipc serve", err)
 	}
+	su.EndPhase(startup.PhaseIPCServe, nil)
 	defer func() {
 		ipc.Stop()
 		logging.Default().Info("desktop", "ipc stopped")
@@ -121,16 +149,21 @@ func Run(cfg *config.Config) int {
 	// endpoint the Qt host used, in-process. No child binary, no
 	// SHEYTAN_UI_EXECUTABLE spawn override — the one-Go-UI program
 	// removed the second implementation entirely.
+	su.StartPhase(startup.PhaseFyneApp)
 	client := fyneui.NewCoreClient(ipc.Endpoint(), key)
 	app := fyneui.NewDesktopApp(client)
+	su.EndPhase(startup.PhaseFyneApp, nil)
 
-	// Termination signals close the window; the deferred shutdowns above
-	// then stop the IPC and the core in order.
+	// Termination signals close the window through the SAME idempotent
+	// shutdown coordinator as the user's window close (one funnel:
+	// interceptor, signal and programmatic paths all converge there);
+	// the deferred shutdowns above then stop the IPC and the core in
+	// order after the UI has closed.
 	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		sig := <-sigCh
-		logging.Default().Info("desktop", "signal %v — closing the window and stopping the core", sig)
+		logging.Default().Info("desktop", "signal %v — closing through the shutdown coordinator", sig)
 		fmt.Println("desktop: signal", sig, "— stopping")
 		app.Close()
 	}()

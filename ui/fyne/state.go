@@ -35,6 +35,7 @@ type Runtime struct {
 	onSessions func() // UI callback for list changes
 	subMu      sync.Mutex
 	subCancel  context.CancelFunc
+	pumps      sync.WaitGroup // active activity pump goroutines (bounded shutdown wait)
 }
 
 // NewRuntime builds the runtime over a client.
@@ -422,6 +423,10 @@ func (r *Runtime) AttachActivity(ctx context.Context, sessionID string) error {
 	r.subCancel = cancel
 	r.subMu.Unlock()
 
+	// The pump is an app-owned worker: tracked so the shutdown coordinator
+	// can wait (bounded) for cancellation to be observed (§5.2).
+	r.pumps.Add(1)
+	defer r.pumps.Done()
 	return r.pumpActivity(sctx, sessionID)
 }
 
@@ -511,9 +516,29 @@ func (r *Runtime) pumpActivity(ctx context.Context, sessionID string) error {
 }
 
 // Shutdown cancels subscriptions and detaches callbacks (window close).
+// Idempotent: safe to call from both the shutdown coordinator and the
+// post-Run bookkeeping path.
 func (r *Runtime) Shutdown() {
 	r.DetachActivity()
 	r.mu.Lock()
 	r.onStream, r.onSettled, r.onSessions = nil, nil, nil
 	r.mu.Unlock()
+}
+
+// ShutdownWait waits (bounded by ctx) for the active activity pumps to
+// observe cancellation. A pump that starts after Shutdown is harmless: its
+// context is already cancelled (the app root context), so it returns
+// immediately.
+func (r *Runtime) ShutdownWait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		r.pumps.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

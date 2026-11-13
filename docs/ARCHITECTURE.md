@@ -51,8 +51,11 @@ The product desktop is a **single Go executable**:
 - Handshake: strict `sheytan-ipc/1` + ephemeral key header on every request.
 - No TCP listener, no embedded web frontend, no Qt runtime, no React/Vite.
 - Launcher (`internal/desktop`) owns the full lifecycle: bind IPC → attach Fyne window → clean teardown on close/signal.
+- **One shutdown coordinator** (v1.11.1 maintenance pass, run 43008361835): the user's window close, SIGINT/SIGTERM and programmatic closes all funnel through one idempotent running→closing→closed coordinator; teardown is bounded (deadline-bounded activity-pump drain, workspace listener release) and a deadline-exceeded teardown is recorded INCOMPLETE — never graceful. The core/IPC servers close in reverse order after the UI closes.
+- **Startup phase telemetry** (`internal/startup`): one monotonic recorder measures every bootstrap phase (config, migrations, logging, core, IPC, Fyne app, shell, first view, first-interactive, handshake, sessions, background readiness, shutdown) with sanitized stable fields only; the summary lands on stderr even when no data root is ever created. Controlled diagnostic mode `SHEYTAN_STARTUP_DIAGNOSTICS=1` adds JSON records to stdout (CI smoke capture).
+- **Responsive size-class policy** (v1.11.1 maintenance pass): one `sizeClassFor` function resolves compact <600 / medium 600–899 / desktop 900–1279 / wide ≥1280 logical canvas units; navigation derives from it (top strip + More menu / compact rail / persistent wide rail). The full logical-size matrix and five structural goldens are pinned by tests; a real-window resize smoke walks the matrix under Xvfb in CI.
 - Behavioral contracts (zero-session send, session-list generation guard, live streaming that cannot wedge, reasoning ladder, settings IA) are pinned by Go tests under `ui/fyne`.
-- Linux desktop smoke runs the real binary under Xvfb in CI.
+- Linux desktop smoke runs the real binary under Xvfb in CI (launch/soak/SIGTERM smoke plus the resize-matrix smoke).
 
 ### 3.1 Hybrid presentation: on-demand Web Workspace
 

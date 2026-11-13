@@ -1,0 +1,27 @@
+*fyne.Container pos=(0,0) size=(120x1008) visible
+  *widget.Button text=Chat pos=(0,0) size=(120x35) visible
+  *widget.Button text=Agent pos=(0,43) size=(120x35) visible
+  *widget.Button text=Workspace pos=(0,86) size=(120x35) visible
+  *widget.Button text=Coding Lab pos=(0,129) size=(120x35) visible
+  *widget.Button text=Automation pos=(0,172) size=(120x35) visible
+  *widget.Button text=System pos=(0,215) size=(120x35) visible
+  *widget.Button text=Settings pos=(0,258) size=(120x35) visible
+  *widget.Button text=3D Studio pos=(0,302) size=(120x35) visible
+  *widget.Separator pos=(0,345) size=(120x1) visible
+  *widget.RichText segments=1 pos=(0,354) size=(120x31) visible
+  *widget.Button text=History pos=(0,393) size=(120x35) visible
+  *widget.Button text=Models pos=(0,436) size=(120x35) visible
+  *widget.Button text=My Tools pos=(0,479) size=(120x35) visible
+  *widget.Button text=Logs pos=(0,522) size=(120x35) visible
+--- topNav ---
+*widget.Scroll pos=(0,0) size=(0x0) hidden
+  *fyne.Container pos=(0,0) size=(758x35) visible
+    *widget.Button text=Chat pos=(0,0) size=(49x35) visible
+    *widget.Button text=Agent pos=(57,0) size=(58x35) visible
+    *widget.Button text=Workspace pos=(123,0) size=(93x35) visible
+    *widget.Button text=Coding Lab pos=(223,0) size=(94x35) visible
+    *widget.Button text=Automation pos=(325,0) size=(100x35) visible
+    *widget.Button text=System pos=(433,0) size=(67x35) visible
+    *widget.Button text=Settings pos=(508,0) size=(73x35) visible
+    *widget.Button text=3D Studio pos=(589,0) size=(83x35) visible
+    *widget.Button text=More pos=(680,0) size=(78x35) visible

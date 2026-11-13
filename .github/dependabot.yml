@@ -1,0 +1,19 @@
+# Dependabot — keeps the pinned third-party actions and Go modules current.
+# The build workflow pins actions/upload-artifact (and friends) to full
+# immutable SHAs; this config gives those pins a reviewed update path.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns:
+          - "*"
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

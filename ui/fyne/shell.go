@@ -287,29 +287,92 @@ const (
 	navTopStrip                   // below compactBreakpoint: top strip
 )
 
-// Responsive breakpoints and zone dimensions. One policy, three zones:
-// the product adapts to the ACTUAL available width rather than a single
-// preset breakpoint (360-wide laptop windows through 1920+ desktops and
-// high-DPI scaling all resolve through the same pure function).
+func (z navZone) String() string {
+	switch z {
+	case navRailWide:
+		return "navRailWide"
+	case navRailCompact:
+		return "navRailCompact"
+	default:
+		return "navTopStrip"
+	}
+}
+
+// sizeClass is the v1.11.1 responsive contract's four logical-width
+// classes (work order for run 43008361835 §F4/§5.3). ONE policy definition
+// shared by navigation and views — never duplicated thresholds.
+type sizeClass int
+
 const (
-	compactBreakpoint = float32(640)
-	wideBreakpoint    = float32(1000)
+	// sizeCompact: phone/narrow windows (<600) — mobile-style top strip
+	// with reachable compact navigation and one primary content column; no
+	// permanent sidebars.
+	sizeCompact sizeClass = iota
+	// sizeMedium: tablets (600–899) — collapsible compact navigation rail;
+	// one main pane.
+	sizeMedium
+	// sizeDesktop: laptops/standard desktops (900–1279) — persistent
+	// wide navigation rail.
+	sizeDesktop
+	// sizeWide: wide desktops (>=1280) — same persistent rail; the shell
+	// has no inspector/side panel surface in v1.11.1, so wide keeps the
+	// desktop navigation policy (documented, not a hidden fourth layout).
+	sizeWide
+)
+
+func (c sizeClass) String() string {
+	switch c {
+	case sizeCompact:
+		return "compact"
+	case sizeMedium:
+		return "medium"
+	case sizeDesktop:
+		return "desktop"
+	default:
+		return "wide"
+	}
+}
+
+// Responsive breakpoints and zone dimensions. ONE policy, adopted from the
+// v1.11.1 responsive contract: compact <600 (top strip), 600–899 medium
+// (compact rail), >=900 desktop/wide (wide rail). The product adapts to the
+// ACTUAL available LOGICAL width (Fyne canvas units — never physical
+// framebuffer pixels) through the same pure functions on every platform.
+const (
+	compactBreakpoint = float32(600)
+	wideBreakpoint    = float32(900)
 	railWidthWide     = float32(170)
 	railWidthCompact  = float32(120)
 	topStripHeight    = float32(44)
 )
 
-// navPolicy is the SINGLE responsive decision — a pure function over the
-// available width so the layout policy is unit-testable independently of
-// widget trees and window systems.
-func navPolicy(width float32) navZone {
+// sizeClassFor is the SINGLE size-class decision — a pure function over the
+// logical canvas width.
+func sizeClassFor(width float32) sizeClass {
 	switch {
+	case width >= 1280:
+		return sizeWide
 	case width >= wideBreakpoint:
-		return navRailWide
+		return sizeDesktop
 	case width >= compactBreakpoint:
-		return navRailCompact
+		return sizeMedium
 	default:
+		return sizeCompact
+	}
+}
+
+// navPolicy is the SINGLE responsive navigation decision — derived from the
+// size class so navigation and views can never disagree about thresholds.
+// It is a pure function over the available width so the layout policy is
+// unit-testable independently of widget trees and window systems.
+func navPolicy(width float32) navZone {
+	switch sizeClassFor(width) {
+	case sizeCompact:
 		return navTopStrip
+	case sizeMedium:
+		return navRailCompact
+	default: // sizeDesktop, sizeWide
+		return navRailWide
 	}
 }
 

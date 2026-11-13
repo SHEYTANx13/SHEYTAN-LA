@@ -35,7 +35,13 @@
 #  15. same-named steps in different jobs — never flattened
 #  16. workflow shape — exactly ONE log upload (stable name, no
 #      attempt/run-id suffix), package uploads success-gated, immutable
-#      SHA pin on the log upload, job-scoped actions:read
+#      SHA pin on the log upload, job-scoped actions:read, and the
+#      consolidate-logs display name normalizes to its YAML key (so the
+#      runner's GITHUB_JOB self-detection keeps working)
+#  22. collector's OWN job in progress (run #144 production shape) — the
+#      self job is accounted as SELF, reported honestly and does NOT fail
+#      the verdict (the run #144 root cause: it used to)
+#  23. a NON-self in-progress job — still a coverage gap, verdict fails
 #
 # No fixture may assume a missing log means success: the missing-source
 # and hard-error cases must FAIL the collector AFTER the report exists,
@@ -101,10 +107,15 @@ mk_jobcode() {  # $1 = fixture dir; $2 = job id; $3 = forced API HTTP code
 
 run_collector() {  # $1 = fixture dir; extra args passed through
   local f="$1"; shift
-  CONSOLIDATE_FIXTURE_DIR="$f" CONSOLIDATE_REPO="SHEYTANx13/SHEYTAN-LA" \
+  env ${COLLECTOR_ENV:+$COLLECTOR_ENV} \
+    CONSOLIDATE_FIXTURE_DIR="$f" CONSOLIDATE_REPO="SHEYTANx13/SHEYTAN-LA" \
     bash "$collector" --out "$f/SHEYTAN-LA-all-logs.txt" \
     --run-id 41851100943 --commit 4a46f5baf4866e99fbb9834d53c35c2df49203e4 \
     --ref refs/heads/main --workflow build-desktop --trigger push "$@"
+}
+
+norm_name() {  # same normalization the collector applies to job names
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d ' -_'
 }
 
 # 1. all desktop jobs successful (six jobs reconciled) ---------------------
@@ -123,7 +134,7 @@ EXIT_CODE: 0 PASS
 gofmt OK
 EOF
 mk_joblog "$f" "${ids[1]}" <<'EOF'
-fixtures: 16 pass / 0 fail
+fixtures: 24 pass / 0 fail
 stress: 47 pass / 0 fail
 EOF
 mk_joblog "$f" "${ids[2]}" <<'EOF'
@@ -140,7 +151,7 @@ out="$f/SHEYTAN-LA-all-logs.txt"
 if [ $rc -eq 0 ] && [ "$(basename "$out")" = "SHEYTAN-LA-all-logs.txt" ] \
   && grep -q "jobs with captured logs: 5" "$out" \
   && grep -q "jobs NEVER_STARTED (skipped): 1" "$out" \
-  && grep -q "accounting: captured=5 missing=0 skipped=1 in_progress=0 total=6 (sum=6)" "$out" \
+  && grep -q "accounting: captured=5 missing=0 skipped=1 in_progress=0 self=0 total=6 (sum=6)" "$out" \
   && ! grep -q "^=== MISSING LOG SOURCE ===" "$out" \
   && [ "$(grep -c '^===== JOB ' "$out")" = "6" ] \
   && grep -q "PE checks OK" "$out" && grep -q "ELF checks OK" "$out"; then
@@ -338,7 +349,7 @@ inv_ok=1
 grep -q 'coverage accounting invariant violated' "$collector" || inv_ok=0
 grep -q 'refusing to report empty coverage' "$collector" || inv_ok=0
 # And the accounting line always reconciles the categories to the jobs list.
-grep -q 'sum=\$((CAPTURED+MISSING+NEVER_STARTED+IN_PROGRESS))' "$collector" || inv_ok=0
+grep -q 'sum=\$((CAPTURED+MISSING+NEVER_STARTED+IN_PROGRESS+SELF_IN_PROGRESS))' "$collector" || inv_ok=0
 if [ "$inv_ok" = 1 ]; then
   ok "accounting invariant: captured=0 with missing=0/skipped=0/in_progress=0 and jobs present is a hard failure; category totals reconcile to the paginated jobs list"
 else
@@ -457,6 +468,14 @@ needsline="$(grep -A4 '^  consolidate-logs:' "$workflow" | grep 'needs:')"
 for dep in preflight audit ui build-windows build-linux; do
   printf '%s' "$needsline" | grep -q "$dep" || yml_ok=0
 done
+# SELF-detection invariant (run #144 root cause fix): the collector
+# identifies its own job by normalizing the runner's GITHUB_JOB (the YAML
+# job key "consolidate-logs") against the API display name — the workflow
+# must keep the display name normalizing to the YAML key.
+self_display="$(awk '/^  consolidate-logs:/{f=1; next} f && /^    name:/{sub(/^ +name: +/,""); gsub(/[\"\r]/,""); print; exit}' "$workflow")"
+[ -n "$self_display" ] || yml_ok=0
+[ "$(norm_name "$self_display")" = "$(norm_name "consolidate-logs")" ] || yml_ok=0
+grep -q 'is_self_job' "$collector" || yml_ok=0
 if [ "$yml_ok" = 1 ]; then
   ok "workflow shape: one SHA-pinned plain-text log upload (stable name, archive:false), zero part/smoke uploads, success-gated package uploads, job-scoped actions:read, collector needs every upstream job"
 else
@@ -571,6 +590,73 @@ if [ $rc -eq 0 ] \
   ok "a successful job with dozens of echoed error-string literals remains success: 0 failed jobs, 0 annotations, all 40 source lines excluded"
 else
   bad "success job with echoed literals (rc=$rc)"
+fi
+
+# 22. collector's OWN job in progress — SELF, verdict stays green ---------
+# Production shape of run #144 (43008361835): the jobs API lists the five
+# terminal upstream jobs plus the collector's own consolidate-logs job as
+# in_progress (it IS running). GITHUB_JOB carries the YAML key. The self
+# job must be accounted as SELF and the verdict must stay rc=0.
+f="$work/case22"; mkdir -p "$f"
+ids=($(mk_jobs "$f" \
+  "Preflight compile gate|completed|success" \
+  "Core audit (headless)|completed|success" \
+  "Fyne UI gates (Linux)|completed|success" \
+  "Windows x64|completed|success" \
+  "Linux x64|completed|success" \
+  "Consolidate logs|in_progress|null"
+))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+gofmt OK
+EOF
+mk_joblog "$f" "${ids[1]}" <<'EOF'
+fixtures: 24 pass / 0 fail
+EOF
+mk_joblog "$f" "${ids[2]}" <<'EOF'
+ok  github.com/SHEYTANx13/SHEYTAN-LA/ui/fyne
+EOF
+mk_joblog "$f" "${ids[3]}" <<'EOF'
+PE checks OK
+EOF
+mk_joblog "$f" "${ids[4]}" <<'EOF'
+ELF checks OK
+EOF
+COLLECTOR_ENV="GITHUB_JOB=consolidate-logs" run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-all-logs.txt"
+if [ $rc -eq 0 ] \
+  && grep -q "jobs IN_PROGRESS (collector self, expected): 1" "$out" \
+  && grep -q "jobs IN_PROGRESS (no terminal state): 0" "$out" \
+  && grep -q "jobs with captured logs: 5" "$out" \
+  && grep -q "accounting: captured=5 missing=0 skipped=0 in_progress=0 self=1 total=6 (sum=6)" "$out" \
+  && grep -q "^=== SELF (collector's own job, expected in progress) ===" "$out" \
+  && grep -q "the collector's own job — still in progress while this report is written" "$out" \
+  && grep -q "the collector's OWN job — SELF (expected in progress while the collector runs)" "$out" \
+  && ! grep -q "^=== MISSING LOG SOURCE ===" "$out" \
+  && [ "$(grep -c '^===== JOB ' "$out")" = "6" ]; then
+  ok "self job in progress (run #144 shape): SELF accounted, report complete, verdict rc=0 — a green run stays green"
+else
+  bad "self job SELF accounting (rc=$rc)"
+fi
+
+# 23. a NON-self in-progress job — still a coverage gap, verdict fails ------
+f="$work/case23"; mkdir -p "$f"
+ids=($(mk_jobs "$f" \
+  "Preflight compile gate|completed|success" \
+  "Windows x64|in_progress|null"
+))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+gofmt OK
+EOF
+COLLECTOR_ENV="GITHUB_JOB=consolidate-logs" run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-all-logs.txt"
+if [ $rc -eq 1 ] \
+  && grep -q "jobs IN_PROGRESS (no terminal state): 1" "$out" \
+  && grep -q "jobs IN_PROGRESS (collector self, expected): 0" "$out" \
+  && grep -q "non-self job had no terminal state" "$out" \
+  && grep -q "coverage gap" "$out"; then
+  ok "non-self in-progress job remains a coverage gap: report written, exit 1 — the SELF fix does not weaken the contract"
+else
+  bad "non-self in-progress coverage gap (rc=$rc)"
 fi
 
 printf '\nfixtures: %d pass / %d fail\n' "$pass" "$fail"

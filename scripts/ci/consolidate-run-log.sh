@@ -29,8 +29,22 @@
 #       CAPTURED (terminal job, full log retrieved via jobs/{id}/logs),
 #       SKIPPED/NEVER_STARTED (conclusion "skipped" — no log exists),
 #       COLLECTOR SELF-LOG (this collector's local diagnostics),
-#       IN_PROGRESS (no terminal state yet — only where topology permits),
+#       SELF IN_PROGRESS (the collector's OWN job — the only job that can
+#              legitimately lack a terminal state while the collector runs;
+#              its GitHub-hosted step log is by construction unavailable and
+#              its progress is embedded as the COLLECTOR SELF-LOG),
+#       IN_PROGRESS (a NON-self job without a terminal state — a coverage
+#              gap: the consolidate-logs job `needs:` every upstream job, so
+#              any other still-running job means the report cannot be
+#              complete),
 #       MISSING LOG SOURCE (terminal job whose log endpoint failed).
+#
+#   Run #144 (43008361835) root cause, fixed here: the collector used to
+#   count its OWN in-progress job as a plain IN_PROGRESS coverage gap, so
+#   the "Collector verdict" step failed EVERY green run after the report
+#   was written. The self job is now reconciled separately (SELF), reported
+#   honestly, and no longer fails the verdict. A NON-self in-progress job
+#   still fails closed exactly as before.
 #   - Invariant: a jobs list with at least one job but zero CAPTURED,
 #     zero MISSING, zero SKIPPED and zero IN_PROGRESS is impossible and
 #     is treated as a collector integrity failure.
@@ -87,6 +101,29 @@ TOKEN="${GH_TOKEN:-}"
 FIXTURE_DIR="${CONSOLIDATE_FIXTURE_DIR:-}"
 JOBLOG_MAX_BYTES=268435456      # 256 MiB cap per job log
 
+# --- collector self-job identity (run #144 root cause) -------------------
+# The collector runs INSIDE the consolidate-logs job, so the jobs API always
+# lists that job itself as in_progress. It is identified by name and
+# accounted as SELF (expected, never a coverage gap). Identification:
+#   1. CONSOLIDATE_SELF_JOB_NAME — explicit display-name override;
+#   2. GITHUB_JOB — the runner-provided YAML job key (e.g. "consolidate-logs"),
+#      matched against the API display name with a normalized comparison
+#      (case-insensitive, spaces/dashes/underscores stripped) so
+#      "consolidate-logs" == "Consolidate logs".
+# If neither is set (manual post-run use), nothing can be SELF and the
+# collector keeps the strict pre-fix semantics: every in-progress job is a
+# coverage gap that fails the verdict.
+SELF_JOB_NAME="${CONSOLIDATE_SELF_JOB_NAME:-${GITHUB_JOB:-}}"
+
+normalize_job_name() {  # lowercase, strip spaces/dashes/underscores
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -d ' -_'
+}
+
+is_self_job() {  # $1 = job display name from the jobs API
+  [ -n "$SELF_JOB_NAME" ] \
+    && [ "$(normalize_job_name "$1")" = "$(normalize_job_name "$SELF_JOB_NAME")" ]
+}
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT="$2"; shift 2;;
@@ -110,7 +147,7 @@ RAW="$WORK/report-raw.txt"
 diag() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >>"$DIAG"; }
 
 # --- controlled exit: report first, then the verdict -------------------
-HARD_ERROR=0; CAPTURED=0; MISSING=0; NEVER_STARTED=0; IN_PROGRESS=0
+HARD_ERROR=0; CAPTURED=0; MISSING=0; NEVER_STARTED=0; IN_PROGRESS=0; SELF_IN_PROGRESS=0
 # v1.11.1 (run 41933333132, P1-D): failures come from METADATA, not from
 # grepping log text. The old "files/lines with failed commands" count
 # grepped every log line for ::error:: — including the runner's ECHOED
@@ -373,9 +410,15 @@ if [ -s "$WORK/jobs.ndjson" ]; then
     fi
 
     if [ "$jconc" = "null" ] || [ "$jstatus" != "completed" ]; then
-      IN_PROGRESS=$((IN_PROGRESS+1))
-      JOB_SECTIONS+=("$jname|$jstatus|$jconc|$jid|IN_PROGRESS")
-      diag "job '$jname' (id $jid): status=$jstatus conclusion=$jconc — IN_PROGRESS, no terminal log yet"
+      if is_self_job "$jname"; then
+        SELF_IN_PROGRESS=$((SELF_IN_PROGRESS+1))
+        JOB_SECTIONS+=("$jname|$jstatus|$jconc|$jid|SELF")
+        diag "job '$jname' (id $jid): the collector's OWN job — SELF (expected in progress while the collector runs); its step log is embedded above as the COLLECTOR SELF-LOG"
+      else
+        IN_PROGRESS=$((IN_PROGRESS+1))
+        JOB_SECTIONS+=("$jname|$jstatus|$jconc|$jid|IN_PROGRESS")
+        diag "job '$jname' (id $jid): status=$jstatus conclusion=$jconc — IN_PROGRESS, no terminal log yet"
+      fi
       continue
     fi
 
@@ -411,10 +454,11 @@ fi
 # no category assignment at all is impossible and must fail closed.
 if [ "$TOTAL_JOBS" -gt 0 ] \
    && [ "$CAPTURED" -eq 0 ] && [ "$MISSING" -eq 0 ] \
-   && [ "$NEVER_STARTED" -eq 0 ] && [ "$IN_PROGRESS" -eq 0 ]; then
+   && [ "$NEVER_STARTED" -eq 0 ] && [ "$IN_PROGRESS" -eq 0 ] \
+   && [ "$SELF_IN_PROGRESS" -eq 0 ]; then
   hard_fail "coverage accounting invariant violated: $TOTAL_JOBS job(s) listed but zero captured, zero missing, zero skipped, zero in-progress — refusing to report empty coverage"
 fi
-diag "accounting: captured=$CAPTURED missing=$MISSING skipped=$NEVER_STARTED in_progress=$IN_PROGRESS total=$TOTAL_JOBS (sum=$((CAPTURED+MISSING+NEVER_STARTED+IN_PROGRESS)))"
+diag "accounting: captured=$CAPTURED missing=$MISSING skipped=$NEVER_STARTED in_progress=$IN_PROGRESS self=$SELF_IN_PROGRESS total=$TOTAL_JOBS (sum=$((CAPTURED+MISSING+NEVER_STARTED+IN_PROGRESS+SELF_IN_PROGRESS)))"
 
 # --- assemble the raw report ---------------------------------------------
 {
@@ -433,6 +477,7 @@ diag "accounting: captured=$CAPTURED missing=$MISSING skipped=$NEVER_STARTED in_
   echo "jobs with MISSING LOG SOURCE: $MISSING"
   echo "jobs NEVER_STARTED (skipped): $NEVER_STARTED"
   echo "jobs IN_PROGRESS (no terminal state): $IN_PROGRESS"
+  echo "jobs IN_PROGRESS (collector self, expected): $SELF_IN_PROGRESS"
   echo "collector self-log sections: 1"
   echo ""
   echo "=== AUTHORITATIVE FAILURE SUMMARY (job/step metadata from the paginated jobs API) ==="
@@ -470,7 +515,12 @@ diag "accounting: captured=$CAPTURED missing=$MISSING skipped=$NEVER_STARTED in_
   fi
   if [ "$IN_PROGRESS" -gt 0 ]; then
     echo "=== IN_PROGRESS (no terminal state) ==="
-    echo "these jobs had not reached a terminal state when the collector read the jobs API; the collector does not wait or poll — their logs are not part of this report."
+    echo "these NON-self jobs had not reached a terminal state when the collector read the jobs API — the consolidate-logs job needs every upstream job, so this is a coverage gap; the collector does not wait or poll."
+    echo ""
+  fi
+  if [ "$SELF_IN_PROGRESS" -gt 0 ]; then
+    echo "=== SELF (collector's own job, expected in progress) ==="
+    echo "this is the collector's own job: it is still running while this report is written, so it can have no terminal state and no GitHub-hosted step log yet. Its progress is embedded above as the COLLECTOR SELF-LOG. This is expected on every run and is NOT a coverage gap."
     echo ""
   fi
   echo "=== COLLECTOR SELF-LOG ==="
@@ -498,8 +548,10 @@ for spec in "${JOB_SECTIONS[@]:-}"; do
         [ -f "$WORK/job-$jid.log" ] && cat "$WORK/job-$jid.log";;
       SKIPPED)
         echo "(job was skipped — no log exists)";;
+      SELF)
+        echo "(the collector's own job — still in progress while this report is written; its progress is the COLLECTOR SELF-LOG above, and its GitHub-hosted step log becomes available only after the run completes)";;
       IN_PROGRESS)
-        echo "(job had no terminal state when the collector read the jobs API — no log collected)";;
+        echo "(non-self job had no terminal state when the collector read the jobs API — coverage gap; no log collected)";;
       MISSING*)
         echo "(no logs recovered from the job-specific log endpoint — MISSING LOG SOURCE)";;
     esac
@@ -511,11 +563,13 @@ done
 redact_stream "$RAW" > "$OUT"
 
 # --- verdict --------------------------------------------------------------
+# SELF never fails: the collector's own job cannot be terminal while the
+# collector runs. Everything else keeps the strict fail-closed semantics.
 if [ "$HARD_ERROR" -ne 0 ] || [ "$MISSING" -gt 0 ] || [ "$IN_PROGRESS" -gt 0 ]; then
-  diag "verdict: FAIL (hard_error=$HARD_ERROR, missing=$MISSING, in_progress=$IN_PROGRESS, captured=$CAPTURED, never_started=$NEVER_STARTED)"
-  echo "consolidate-run-log: INCOMPLETE report written to $OUT (hard_error=$HARD_ERROR missing=$MISSING in_progress=$IN_PROGRESS captured=$CAPTURED)" >&2
+  diag "verdict: FAIL (hard_error=$HARD_ERROR, missing=$MISSING, in_progress=$IN_PROGRESS, self=$SELF_IN_PROGRESS, captured=$CAPTURED, never_started=$NEVER_STARTED)"
+  echo "consolidate-run-log: INCOMPLETE report written to $OUT (hard_error=$HARD_ERROR missing=$MISSING in_progress=$IN_PROGRESS self=$SELF_IN_PROGRESS captured=$CAPTURED)" >&2
   exit 1
 fi
-diag "verdict: OK (captured=$CAPTURED, never_started=$NEVER_STARTED)"
-echo "consolidate-run-log: complete report ($CAPTURED jobs captured) → $OUT"
+diag "verdict: OK (captured=$CAPTURED, never_started=$NEVER_STARTED, self=$SELF_IN_PROGRESS)"
+echo "consolidate-run-log: complete report ($CAPTURED jobs captured, $SELF_IN_PROGRESS self) → $OUT"
 exit 0
