@@ -10,7 +10,7 @@ toolchain go1.27.3
 require (
 	fyne.io/fyne/v2 v2.8.2
 	github.com/anthonynsimon/bild v0.17.0
-	github.com/chromedp/cdproto v0.0.0-20260804232424-e85f50dbfd32
+	github.com/chromedp/cdproto v0.159.3
 	github.com/chromedp/chromedp v0.16.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/tc-hib/winres v0.3.1
@@ -24,7 +24,6 @@ require (
 	fyne.io/systray v1.12.3-0.20260810170012-af4e8e793ec4 // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/FyshOS/fancyfs v0.0.1 // indirect
-	github.com/chromedp/sysutil v1.1.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.2.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
