@@ -9,7 +9,7 @@ toolchain go1.27.3
 
 require (
 	fyne.io/fyne/v2 v2.8.2
-	github.com/anthonynsimon/bild v0.17.0
+	github.com/anthonynsimon/bild v0.17.1
 	github.com/chromedp/cdproto v0.0.0-20260804232424-e85f50dbfd32
 	github.com/chromedp/chromedp v0.16.0
 	github.com/gorilla/websocket v1.5.3
