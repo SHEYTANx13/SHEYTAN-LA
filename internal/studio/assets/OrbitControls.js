@@ -391,6 +391,8 @@ class OrbitControls extends Controls {
 		 */
 		this.zoom0 = this.object.zoom;
 
+		this._cursorStyle = 'auto';
+
 		// the target DOM element for key events
 		this._domElementKeyEvents = null;
 
@@ -462,6 +464,34 @@ class OrbitControls extends Controls {
 
 	}
 
+	/**
+	 * Defines the visual representation of the cursor.
+	 *
+	 * @type {('auto'|'grab')}
+	 * @default 'auto'
+	 */
+	set cursorStyle( type ) {
+
+		this._cursorStyle = type;
+
+		if ( type === 'grab' ) {
+
+			this.domElement.style.cursor = 'grab';
+
+		} else {
+
+			this.domElement.style.cursor = 'auto';
+
+		}
+
+	}
+
+	get cursorStyle() {
+
+		return this._cursorStyle;
+
+	}
+
 	connect( element ) {
 
 		super.connect( element );
@@ -472,14 +502,15 @@ class OrbitControls extends Controls {
 		this.domElement.addEventListener( 'contextmenu', this._onContextMenu );
 		this.domElement.addEventListener( 'wheel', this._onMouseWheel, { passive: false } );
 
-		const document = this.domElement.getRootNode(); // offscreen canvas compatibility
-		document.addEventListener( 'keydown', this._interceptControlDown, { passive: true, capture: true } );
+		this.domElement.ownerDocument.addEventListener( 'keydown', this._interceptControlDown, { passive: true, capture: true } );
 
-		this.domElement.style.touchAction = 'none'; // disable touch scroll
+		this.domElement.style.touchAction = 'none'; // Disable touch scroll
 
 	}
 
 	disconnect() {
+
+		this.state = _STATE.NONE;
 
 		this.domElement.removeEventListener( 'pointerdown', this._onPointerDown );
 		this.domElement.ownerDocument.removeEventListener( 'pointermove', this._onPointerMove );
@@ -491,10 +522,16 @@ class OrbitControls extends Controls {
 
 		this.stopListenToKeyEvents();
 
-		const document = this.domElement.getRootNode(); // offscreen canvas compatibility
-		document.removeEventListener( 'keydown', this._interceptControlDown, { capture: true } );
+		this.domElement.ownerDocument.removeEventListener( 'keydown', this._interceptControlDown, { capture: true } );
+		this.domElement.ownerDocument.removeEventListener( 'keyup', this._interceptControlUp, { capture: true } );
 
-		this.domElement.style.touchAction = 'auto';
+		this._controlActive = false;
+
+		this._pointers.length = 0;
+		this._pointerPositions = {};
+
+		this.domElement.style.touchAction = ''; // Restore touch scroll
+		this.domElement.style.cursor = 'auto';
 
 	}
 
@@ -591,6 +628,67 @@ class OrbitControls extends Controls {
 		this.update();
 
 		this.state = _STATE.NONE;
+
+	}
+
+	/**
+	 * Programmatically pan the camera.
+	 *
+	 * @param {number} deltaX - The horizontal pan amount in pixels.
+	 * @param {number} deltaY - The vertical pan amount in pixels.
+	 */
+	pan( deltaX, deltaY ) {
+
+		this._pan( deltaX, deltaY );
+		this.update();
+
+	}
+
+	/**
+	 * Programmatically dolly in (zoom in for perspective camera).
+	 *
+	 * @param {number} dollyScale - The dolly scale factor.
+	 */
+	dollyIn( dollyScale ) {
+
+		this._dollyIn( dollyScale );
+		this.update();
+
+	}
+
+	/**
+	 * Programmatically dolly out (zoom out for perspective camera).
+	 *
+	 * @param {number} dollyScale - The dolly scale factor.
+	 */
+	dollyOut( dollyScale ) {
+
+		this._dollyOut( dollyScale );
+		this.update();
+
+	}
+
+	/**
+	 * Programmatically rotate the camera left (around the vertical axis).
+	 *
+	 * @param {number} angle - The rotation angle in radians.
+	 */
+	rotateLeft( angle ) {
+
+		this._rotateLeft( angle );
+		this.update();
+
+	}
+
+	/**
+	 * Programmatically rotate the camera up (around the horizontal axis).
+	 *
+	 * @param {number} angle - The rotation angle in radians.
+	 */
+	rotateUp( angle ) {
+
+		this._rotateUp( angle );
+		this.update();
 
 	}
 
@@ -996,7 +1094,7 @@ class OrbitControls extends Controls {
 
 	_handleMouseDownDolly( event ) {
 
-		this._updateZoomParameters( event.clientX, event.clientX );
+		this._updateZoomParameters( event.clientX, event.clientY );
 		this._dollyStart.set( event.clientX, event.clientY );
 
 	}
@@ -1042,6 +1140,15 @@ class OrbitControls extends Controls {
 		}
 
 		this._dollyStart.copy( this._dollyEnd );
+
+		if ( this.zoomToCursor ) {
+
+			// update() resets the cursor zoom, so keep zooming towards the position where the drag started
+
+			this._performCursorZoom = true;
+			this._dollyDirection.set( this._mouse.x, this._mouse.y, 1 ).unproject( this.object ).sub( this.object.position ).normalize();
+
+		}
 
 		this.update();
 
@@ -1481,6 +1588,12 @@ function onPointerDown( event ) {
 
 	}
 
+	if ( this._cursorStyle === 'grab' ) {
+
+		this.domElement.style.cursor = 'grabbing';
+
+	}
+
 }
 
 function onPointerMove( event ) {
@@ -1515,6 +1628,12 @@ function onPointerUp( event ) {
 			this.dispatchEvent( _endEvent );
 
 			this.state = _STATE.NONE;
+
+			if ( this._cursorStyle === 'grab' ) {
+
+				this.domElement.style.cursor = 'grab';
+
+			}
 
 			break;
 
@@ -1695,7 +1814,12 @@ function onTouchStart( event ) {
 
 				case TOUCH.ROTATE:
 
-					if ( this.enableRotate === false ) return;
+					if ( this.enableRotate === false ) {
+
+						this.state = _STATE.NONE;
+						break;
+
+					}
 
 					this._handleTouchStartRotate( event );
 
@@ -1705,7 +1829,12 @@ function onTouchStart( event ) {
 
 				case TOUCH.PAN:
 
-					if ( this.enablePan === false ) return;
+					if ( this.enablePan === false ) {
+
+						this.state = _STATE.NONE;
+						break;
+
+					}
 
 					this._handleTouchStartPan( event );
 
@@ -1835,9 +1964,7 @@ function interceptControlDown( event ) {
 
 		this._controlActive = true;
 
-		const document = this.domElement.getRootNode(); // offscreen canvas compatibility
-
-		document.addEventListener( 'keyup', this._interceptControlUp, { passive: true, capture: true } );
+		this.domElement.ownerDocument.addEventListener( 'keyup', this._interceptControlUp, { passive: true, capture: true } );
 
 	}
 
@@ -1849,9 +1976,7 @@ function interceptControlUp( event ) {
 
 		this._controlActive = false;
 
-		const document = this.domElement.getRootNode(); // offscreen canvas compatibility
-
-		document.removeEventListener( 'keyup', this._interceptControlUp, { passive: true, capture: true } );
+		this.domElement.ownerDocument.removeEventListener( 'keyup', this._interceptControlUp, { passive: true, capture: true } );
 
 	}
 

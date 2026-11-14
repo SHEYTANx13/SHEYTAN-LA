@@ -22,7 +22,9 @@ You will receive an acknowledgment. Fixes ship through the normal release proces
 SHEYTAN-LA runs entirely on the user's machine. The managed data root lives under the application folder. The following principles govern the threat model and what constitutes a reportable defect:
 
 ### Local Attack Surface
-The HTTP and WebSocket API bind to `127.0.0.1` by default. They are not internet-facing services. Reports about the local API are still valid, but the threat model is another local process or a malicious page that can reach the port.
+The desktop application has no network listener at all: the Fyne UI is an in-process client of the core over a per-user local IPC channel (`internal/localipc`) — a named pipe restricted by a current-user DACL with a post-connect SID check on Windows, or a 0700-directory Unix domain socket with SO_PEERCRED uid verification on Linux/macOS — plus an authenticated, versioned handshake. Any weakening of that boundary (TCP fallback, DACL/peer-credential changes, key or protocol bypass) is a security defect.
+
+The browser/headless serving modes bind the HTTP and WebSocket API to `127.0.0.1` only. They are not internet-facing services. Reports about the local API are still valid, but the threat model is another local process or a malicious page that can reach the port.
 
 ### Agent-Executed Commands
 The agent can run shell, file, browser, git, and network operations on the user's behalf under a sandbox policy that fails closed (resource-governed; network disabled by default in the Lab). You remain solely responsible for what you allow the agent to do. A sandbox escape, path traversal, or command-injection defect in our tool implementations is a security bug we want reported immediately.

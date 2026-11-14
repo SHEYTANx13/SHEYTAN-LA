@@ -19,17 +19,38 @@ import (
 
 // PageHeader is the standard view header: title, optional subtitle, right
 // slot for view actions.
+// PageHeader builds the page title row. v1.11.1 fit repair: the
+// subtitle WRAPS below the title (the former side-by-side HBox placed
+// the header's minimum width past every compact viewport — header text
+// clipped, actions pushed out).
 func PageHeader(title, subtitle string, actions ...fyne.CanvasObject) fyne.CanvasObject {
 	t := widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	row := container.NewHBox(t)
+	var head fyne.CanvasObject = t
 	if subtitle != "" {
 		s := widget.NewLabel(subtitle)
+		s.Wrapping = fyne.TextWrapWord
 		s.TextStyle = fyne.TextStyle{Italic: true}
 		s.Importance = widget.MediumImportance
-		row.Add(s)
+		head = container.NewVBox(t, s)
 	}
-	head := container.NewBorder(nil, nil, nil, container.NewHBox(actions...), row)
-	return container.NewVBox(head, widget.NewSeparator())
+	row := container.NewBorder(nil, nil, nil, container.NewHBox(actions...), head)
+	return container.NewVBox(row, widget.NewSeparator())
+}
+
+// cardFit builds a titled card whose explanatory caption is a WRAPPED
+// label INSIDE the content. widget.NewCard subtitles never wrap: a long
+// subtitle drives the card's MinSize past every compact width, clipping
+// the card content (the v1.11.1 fit-matrix defect class). The caption
+// keeps its explanatory value directly adjacent to the controls.
+func cardFit(title, caption string, content fyne.CanvasObject) *widget.Card {
+	if caption != "" {
+		cap := widget.NewLabel(caption)
+		cap.Wrapping = fyne.TextWrapWord
+		cap.TextStyle = fyne.TextStyle{Italic: true}
+		cap.Importance = widget.MediumImportance
+		content = container.NewVBox(cap, content)
+	}
+	return widget.NewCard(title, "", content)
 }
 
 // LoadingSurface is the visible in-flight state.

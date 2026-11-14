@@ -1,46 +1,22 @@
 # Worklog
 
-Session log for engineering work on SHEYTAN-LA.  
-Architecture truth → `ARCHITECTURE.md`  
-Release history → `changelog.md`  
-Direction → `ROADMAP.md`
+Short factual chronology of notable engineering events that
+[`changelog.md`](changelog.md) does not already capture. One line per
+event: date, work item, outcome, evidence reference, remaining follow-up.
+
+Architecture truth → [`ARCHITECTURE.md`](ARCHITECTURE.md). Release
+history → [`changelog.md`](changelog.md). Direction →
+[`ROADMAP.md`](ROADMAP.md). Current work order →
+[`Dev-Notes.md`](Dev-Notes.md).
 
 ---
 
-## Current focus (2026-11-13 / 1.11.1 maintenance pass)
+| Date | Event | Outcome | Evidence |
+|------|-------|---------|----------|
+| 2026-11-14 | v1.11.1 Windows IPC maintenance candidate assembled on local branch `maintenance/v1.11.1-windows-ipc` (5 commits on `c8fc15e`) | Local verification green (build, vet, gofmt, headless core suite, Fyne suite incl. button-fit matrix, localipc + logging suites; Windows tree cross-compiled with mingw); hosted NOT RUN — no push authorized | `note.md` beside the delivery ZIP |
+| 2026-11-13 | Run 43455711025 green on main — the last baseline before the maintenance candidate | Window-only Windows smoke passed while the production client could still not dial the named pipe; the gap motivated the IPC gate rework | Actions run 43455711025; supplied app(3).log |
+| 2026-11-13 | Run 43008361835 remediation landed on main (collector self-accounting, startup telemetry, shutdown coordinator, responsive contract) | Green baseline for the v1.11.1 maintenance line | changelog 1.11.1 maintenance entry |
+| 2026-10-26 | One-Go-UI documentation overhaul | Product docs matched the Fyne reality | git history |
 
-**Run 43008361835 (run #144) reliability/UX maintenance work order**
-
-- Root-caused the run's final `failure` conclusion: all five build/test/package jobs passed; the Consolidate logs job failed ONLY at its "Collector verdict" step because the collector counted its own (necessarily in-progress) job as a coverage gap. Fixed with a dedicated SELF accounting category; pinned by fixtures.
-- Startup phase telemetry (internal/startup), one idempotent shutdown coordinator (ui/fyne/lifecycle.go), responsive size-class contract 600/900/1280 with the full logical-size matrix + structural goldens + a real Xvfb resize smoke, per-job diagnostics-index.json, setup-go cache scoping with recorded hit/miss evidence.
-- Full detail: docs/changelog.md (1.11.1 maintenance pass) and docs/ui-contract.md contracts #12/#13.
-
----
-
-## Previous focus (2026-10-26 / 1.11.0)
-
-**Documentation overhaul (this session)**  
-- Full rewrite of README, SECURITY, ROADMAP, FEATURES, CONTRIBUTING, agent, UPDATE, 3dstudio, ARCHITECTURE.  
-- Removed all historical version numbers from product-facing docs.  
-- Minimized changelog and worklog to essential current state.  
-- All titles are proper document titles (no filename-as-title).  
-- Reflects the completed one-Go + Fyne reality and current product surface.
-
-**Product state at HEAD**  
-- One Go process + in-process Fyne UI over secured local IPC.  
-- Optional 3D Studio.  
-- Runtime Governor, Goal engine, AI System Builder, dataAnalysis authority, execution/evidence ladder all in place.  
-- CI: UCRT64 Windows, Xvfb Linux desktop smoke, consolidated run-log artifact, headless-safe stress gate.
-
----
-
-## Recent cycles (summary)
-
-| Task | Outcome |
-|------|---------|
-| 48   | CI root-cause fixes (stress headless, printversion, BUILD-INFO, consolidated logs, UCRT64, responsive shell) |
-| 47   | Workflow parse fix + 3D Studio shipped + Fyne threading contract |
-| 46–45| Path / link / configure class fixes during late Qt retirement |
-| ≤ 44 | One-Go-UI migration, transport hardening, Governor, Goal engine, packaging contracts |
-
-Full historical narratives remain in the git history of this file.
+No speculative future to-do list here — open work lives in
+[`Dev-Notes.md`](Dev-Notes.md).

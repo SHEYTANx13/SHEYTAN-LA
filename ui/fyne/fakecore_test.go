@@ -66,6 +66,17 @@ type fakeCore struct {
 	engineUpdPosts     int            // number of POST /api/engine/update handled
 	engineUpdBlock     chan struct{}  // non-nil: POST blocks until closed
 
+	// v1.11.1 Logs panel test surface: the honest-state contract (error
+	// vs empty vs refreshed, directory + sink-health display, and the
+	// no-overlapping-requests guard).
+	logsMux     sync.Mutex
+	logsFail    bool
+	logsBlock   chan struct{} // non-nil: GET /api/logs blocks until closed
+	logsGets    int
+	logsEntries []LogEntry
+	logsDir     string
+	logsSink    map[string]any
+
 	// v1.11.1 Model Studio test surface: the AI Systems store mirror the
 	// binding card edits (PUT /api/systems/<id> round-trips the full
 	// editable surface; systemsPuts counts the store writes).
@@ -107,6 +118,7 @@ func newFakeCore(t *testing.T) *fakeCore {
 	mux.HandleFunc("/api/systems", f.handleSystems)
 	mux.HandleFunc("/api/systems/", f.handleSystemItem)
 	mux.HandleFunc("/api/studio/state", f.handleStudioState)
+	mux.HandleFunc("/api/logs", f.handleLogs)
 	f.srv = httptest.NewServer(mux)
 	// Point the unix-socket dialer at the TCP test server (test seam).
 	host := strings.TrimPrefix(f.srv.URL, "http://")
@@ -565,7 +577,46 @@ func (f *fakeCore) handleStudioState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"enabled": true,
 		"running": false,
-		"version": "0.182.0",
+		"version": "0.187.0",
 		"license": "MIT",
 	})
+}
+
+// handleLogs serves the fake /api/logs contract: the REAL response shape
+// (entries + limit + dir + sinkHealth), with fail/block/count controls
+// for the Logs panel's honest-state tests.
+func (f *fakeCore) handleLogs(w http.ResponseWriter, r *http.Request) {
+	if !f.authed(w, r) {
+		return
+	}
+	f.logsMux.Lock()
+	block, fail := f.logsBlock, f.logsFail
+	entries := append([]LogEntry{}, f.logsEntries...)
+	dir, sink := f.logsDir, f.logsSink
+	f.logsGets++
+	f.logsMux.Unlock()
+
+	if block != nil {
+		<-block
+	}
+	if fail {
+		writeJSON(w, 503, map[string]string{"error": "logs ring unavailable"})
+		return
+	}
+	if sink == nil {
+		sink = map[string]any{"sinksReady": true, "emergencyLines": 0}
+	}
+	writeJSON(w, 200, map[string]any{
+		"entries":    entries,
+		"limit":      200,
+		"dir":        dir,
+		"sinkHealth": sink,
+	})
+}
+
+// logsGetCount reads the /api/logs request count under the lock.
+func (f *fakeCore) logsGetCount() int {
+	f.logsMux.Lock()
+	defer f.logsMux.Unlock()
+	return f.logsGets
 }

@@ -292,8 +292,11 @@ func stressReleaseSurface() error {
 		return fmt.Errorf("Linux x64 build job is missing")
 	}
 
-	if !strings.Contains(w, "runs-on: windows-latest") {
-		return fmt.Errorf("Windows build lost its windows-latest runner")
+	// v1.11.1 maintenance: the EXPLICIT supported label (windows-2025)
+	// replaces the moving windows-latest alias (verified against the
+	// actions/runner-images label list on 2026-11-14).
+	if !strings.Contains(w, "runs-on: windows-2025") {
+		return fmt.Errorf("Windows build must pin the explicit windows-2025 runner label (the moving windows-latest alias was replaced by policy)")
 	}
 
 	// v1.11.1 (run 42127523923, work order §4): the Linux x64 runner
@@ -341,19 +344,13 @@ func stressReleaseSurface() error {
 	// v8.0.2 (2026-10-07) is the verified latest major; the stale @v6
 	// floors here would fail the gate on a correct workflow (the
 	// run-#40 red's twin defect).
-	// v1.11.1 (run 41901967798 Failure A): upload-artifact left this
-	// literal list — the workflow pins it to the official v7.0.2
-	// immutable commit SHA, which the old `Contains(...@v7)` spelling
-	// rejected. It is validated below by the SHARED allowlist validator
-	// (the exact functions the release-contract tests run), so the
-	// stress gate and the contract tests can never drift apart again.
-	// v1.11.1 (run 41901967798, Failure A defect class): presence is
-	// checked by PARSING the uses: reference — a moving major tag OR its
-	// verified immutable commit SHA both satisfy the gate. The literal
-	// full-spelling Contains rejected a CORRECT workflow once
-	// action-gh-release/setup-msys2 migrated to immutable SHA pins
-	// (same defect the upload-artifact check exposed; the list stops at
-	// the first miss, so CI only ever named the first one).
+	// v1.11.1 maintenance (2026-11-14, operator-directed policy change):
+	// external action references use ORDINARY UPSTREAM RELEASE TAGS —
+	// the immutable-SHA allowlist was retired with the policy, and the
+	// shared validator below now REJECTS commit-hash/branch refs on
+	// every external uses: line. Presence is still checked by PARSING
+	// the uses: reference (the run-41901967798 defect class: literal
+	// Contains spelling rejected a CORRECT workflow).
 	for _, required := range []struct {
 		id   string
 		refs []string
@@ -361,28 +358,22 @@ func stressReleaseSurface() error {
 		{id: "actions/checkout", refs: []string{"v7"}},
 		{id: "actions/setup-go", refs: []string{"v7"}},
 		{id: "actions/download-artifact", refs: []string{"v8"}},
-		{id: "softprops/action-gh-release", refs: []string{
-			"v3",
-			"efb35369e0ad2afab669f228072c1b0d510eae64", // v3 (immutable SHA)
-		}},
-		{id: "msys2/setup-msys2", refs: []string{
-			"v2",
-			"ec48f7c5447b3140e2b088413ae3a55687bccb6e", // v2 (immutable SHA)
-		}},
+		{id: "softprops/action-gh-release", refs: []string{"v3"}},
+		{id: "msys2/setup-msys2", refs: []string{"v2"}},
 	} {
 		if !workflowHasAction(w, required.id, required.refs...) {
 			return fmt.Errorf(
-				"workflow missing required action %s (accepted: moving tag or verified immutable SHA)",
+				"workflow missing required action %s (accepted: upstream release tag)",
 				required.id,
 			)
 		}
 	}
 
-	// 3d-v2 (v1.11.1): the shared upload-artifact pin + contract
-	// validators — immutable-SHA allowlist, per-job/per-step scoping,
+	// 3d-v2 (v1.11.1): the shared action release-tag policy + upload
+	// contract validators — release tags only, per-job/per-step scoping,
 	// exactly one consolidated log upload, exact package payloads.
 	if err := releasecontract.ValidateUploadArtifactPins(w); err != nil {
-		return fmt.Errorf("upload-artifact pin policy: %w", err)
+		return fmt.Errorf("action release-tag policy: %w", err)
 	}
 
 	if err := releasecontract.ValidateUploadArtifactContract(w); err != nil {

@@ -158,8 +158,13 @@ func RunWithDefaultFn(defaultFn func() int) int {
 	// v1.7.4: migrations are done — only NOW open the canonical sinks
 	// (app.log, tools.jsonl, llm.jsonl, crashes/), with the FINAL config
 	// so a recovered/reloaded configuration drives the logs dir.
+	// v1.11.1: a canonical dir that cannot be opened falls back to the
+	// documented per-user location — the failure is recorded first and
+	// the fallback is never presented as the canonical sink. When even
+	// the fallback fails, the bootstrap logger (stderr + bounded memory)
+	// stays installed as the last-resort sink.
 	su.StartPhase(startup.PhaseLoggingInit)
-	mgr, err := logging.New(cfg.LogsDir())
+	mgr, err := logging.NewWithFallback(cfg.LogsDir())
 	if err != nil {
 		// Keep the bootstrap logger installed: diagnostics stay on
 		// stderr instead of vanishing into a no-op manager.
@@ -176,6 +181,17 @@ func RunWithDefaultFn(defaultFn func() int) int {
 	// entries (e.g. v0.8.0) previously mixed indistinguishably with the
 	// current run. Everything above a banner is verifiably historical.
 	logging.Default().SessionBanner(brand.FullName, config.AppVersion)
+
+	// v1.11.1 (observability repair): ONE explicit startup record naming
+	// the RESOLVED log directory and the active sink names, emitted after
+	// successful logger initialization (below the banner: current run).
+	// A fallback is announced as a fallback, never silently swapped in.
+	if err == nil && mgr != nil {
+		if h := mgr.Health(); h.FallbackReason != "" {
+			logging.Default().Warn("logging", "log sink fallback active: %s", h.FallbackReason)
+		}
+		logging.Default().Info("logging", "log directory: %s (sinks: app.log, tools.jsonl, llm.jsonl, crashes/)", mgr.Dir())
+	}
 
 	// v1.7.4: bootstrap replay — the pre-canonical lines (path notes,
 	// sampling repairs, migration decisions) land in app.log right

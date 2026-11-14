@@ -1,3 +1,8 @@
+# v1.11.1 maintenance: external action references use ordinary upstream
+# RELEASE TAGS (@v7 / @v4), never commit-hash pins — the repo-wide
+# action-reference policy (maintainability over immutability; the risk is
+# mitigated by official upstream sources, least-privilege permissions and
+# the single weekly Dependabot update group).
 # SHEYTAN-LA: full CodeQL security + quality analysis.
 # Each language gets an independent CodeQL database and analysis category.
 # Go and C++ use explicit manual builds so CodeQL observes the real compilers.
@@ -60,7 +65,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -88,7 +93,7 @@ jobs:
 
       - name: Set up Go
         if: matrix.language == 'go'
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@v7
         with:
           # Matches build-desktop.yml; go.mod's toolchain directive selects 1.27.3.
           go-version: "1.27"
@@ -109,7 +114,7 @@ jobs:
           go vet ./...
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -156,7 +161,7 @@ jobs:
           ctest --test-dir "$RUNNER_TEMP/shtn-native-codeql" --output-on-failure
 
       - name: Analyze and upload CodeQL results
-        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
 
@@ -410,7 +415,7 @@ jobs:
           PY
 
       - name: Upload plain-text report (not ZIP-compressed)
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7
         with:
           path: reports/code-scanning-alerts.txt
           archive: false

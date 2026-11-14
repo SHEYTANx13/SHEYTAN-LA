@@ -6,6 +6,7 @@
 package localipc
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -14,7 +15,10 @@ import (
 )
 
 func dialEndpoint(endpoint string) (net.Conn, error) {
-	return net.Dial("unix", endpoint)
+	// v1.11.1 Windows IPC repair: dialEndpoint delegates to the ONE
+	// canonical context-aware dial (background semantics for the probe
+	// paths); production clients call the public DialContext.
+	return dialContext(context.Background(), endpoint)
 }
 
 // listenEndpoint binds the per-user Unix socket in SOCK_STREAM mode with

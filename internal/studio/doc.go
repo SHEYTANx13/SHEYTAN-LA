@@ -40,6 +40,6 @@ var (
 // Re-apply that patch after every vendor refresh (see the marked block
 // inside the file).
 const (
-	ThreeJSVersion = "0.182.0" // three.js r182, MIT — see assets/LICENSE-THREE.txt
+	ThreeJSVersion = "0.187.0" // three.js r187, MIT — see assets/LICENSE-THREE.txt
 	ThreeJSLicense = "MIT"
 )

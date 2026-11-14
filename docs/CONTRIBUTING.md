@@ -21,15 +21,24 @@ SHEYTAN-LA uses a **conservative mixed licensing model**. The complete picture â
 The repository enforces its contracts in CI; run them locally first:
 
 ```bash
-# Go: build, tests, static analysis (headless tag covers non-GUI hosts)
+# Go toolchain: any go1.27.x >= go.mod's toolchain directive (the exact
+# patch is pinned in go.mod and every CI lane; see docs/UPDATE.md).
+#
+# Build, tests, static analysis (the headless tag covers non-GUI hosts):
 go build -tags headless ./...
 go test ./internal/... -tags headless -count=1
 go test ./... -count=1
 go vet ./...
-gofmt -l .
+gofmt -l cmd internal ui
 
-# Desktop (requires Fyne graphics development libraries)
+# Desktop (requires CGO + the Fyne graphics development libraries:
+# gcc, pkg-config, libgl1-mesa-dev, libegl1-mesa-dev, libxcursor-dev,
+# libxrandr-dev, libxinerama-dev, libxi-dev, libxxf86vm-dev,
+# libwayland-dev, libxkbcommon-dev, xorg-dev on Debian/Ubuntu)
 go test ./ui/fyne/ -count=1
+
+# Windows cross-compile evidence from Linux (mingw-w64 UCRT64 target):
+# GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc go build ./...
 ```
 
 Beyond green CI, the projectâ€™s core rules:

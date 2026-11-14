@@ -74,24 +74,29 @@ func buildAgentView(ap *App) fyne.CanvasObject {
 
 	v.live = widget.NewLabel("")
 	v.live.Wrapping = fyne.TextWrapWord
+	v.live.Wrapping = fyne.TextWrapWord
 	v.live.TextStyle = fyne.TextStyle{Italic: true}
 	// The live surface is PROVISIONAL (settlement rule); its Stop lives in
 	// the composer's single primary slot.
-	liveBox := container.NewVBox(widget.NewLabelWithStyle("Live — provisional, settled below on completion", fyne.TextAlignLeading, fyne.TextStyle{Bold: true, Italic: true}), v.live)
+	liveBox := container.NewVBox(liveCaption(), v.live)
 	var emptyBox *fyne.Container
 
 	v.activity = widget.NewLabel("")
+	v.activity.Wrapping = fyne.TextWrapWord
 	v.activity.Wrapping = fyne.TextWrapWord
 	v.activity.TextStyle = fyne.TextStyle{Monospace: true}
 	activityBox := container.NewVBox(widget.NewLabelWithStyle("Activity (observed evidence)", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), v.activity)
 
 	v.taskPanel = widget.NewLabel("Select a goal to see its observed plan.")
 	v.taskPanel.Wrapping = fyne.TextWrapWord
+	v.taskPanel.Wrapping = fyne.TextWrapWord
 
 	v.maint = widget.NewLabel("")
 	v.maint.Wrapping = fyne.TextWrapWord
+	v.maint.Wrapping = fyne.TextWrapWord
 	v.maint.Hide()
 	v.download = widget.NewLabel("")
+	v.download.Wrapping = fyne.TextWrapWord
 	v.download.Wrapping = fyne.TextWrapWord
 	v.download.Hide()
 	v.cancelDl = widget.NewButton("Stop download", func() {
@@ -134,8 +139,12 @@ func buildAgentView(ap *App) fyne.CanvasObject {
 	v.errLabel.Wrapping = fyne.TextWrapWord
 	v.errLabel.Hide()
 
+	// v1.11.1 button-fit repair: the single HBox (options + spacer +
+	// action + primary slot) could overflow at phone widths; the composer
+	// stacks by role so every control keeps its full MinSize.
 	composer := container.NewVBox(
-		container.NewHBox(v.netSearch, layoutSpacer(), v.wsBtn, v.slot.canvas()),
+		container.NewHBox(v.netSearch, v.wsBtn),
+		v.slot.canvas(),
 		v.input,
 	)
 
@@ -151,8 +160,10 @@ func buildAgentView(ap *App) fyne.CanvasObject {
 	)
 
 	mid := container.NewBorder(nil, composer, nil, nil, center)
-	split := container.NewHSplit(goalsPane, mid)
-	split.Offset = 0.26
+	// v1.11.1 compact repair: the adaptive dual pane stacks the goals pane
+	// above the conversation below the compact breakpoint and keeps the
+	// 0.26 side-by-side split above it.
+	split := newAdaptiveDualPane(0.26, goalsPane, mid)
 
 	root := container.NewBorder(
 		container.NewVBox(PageHeader("Agent", "Goals, tasks and net-search runs"), v.maint, v.download),

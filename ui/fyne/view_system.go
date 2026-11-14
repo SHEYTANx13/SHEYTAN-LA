@@ -43,10 +43,10 @@ func buildSystemView(ap *App) fyne.CanvasObject {
 		PageHeader("System", "Hardware, engine and runtime evidence", v.refreshB),
 		v.errLabel, nil, nil,
 		container.NewScroll(container.NewVBox(
-			widget.NewCard("Hardware", "Detected by the core's probe — not inferred", v.hardware),
-			widget.NewCard("Engine", "Selected, executed and verified states only", v.engine),
-			widget.NewCard("Governor", "Policy envelope (read-only)", v.governor),
-			widget.NewCard("Maintenance", "Explicit phases; never a generic spinner", v.maint),
+			cardFit("Hardware", "Detected by the core's probe — not inferred", v.hardware),
+			cardFit("Engine", "Selected, executed and verified states only", v.engine),
+			cardFit("Governor", "Policy envelope (read-only)", v.governor),
+			cardFit("Maintenance", "Explicit phases; never a generic spinner", v.maint),
 		)),
 	)
 	v.refreshAll()

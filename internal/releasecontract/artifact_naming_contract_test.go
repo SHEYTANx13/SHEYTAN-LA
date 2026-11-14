@@ -266,7 +266,7 @@ const fixtureWithDuplicateLogUpload = `jobs:
     name: Windows x64
     steps:
       - name: Upload Windows package
-        uses: actions/upload-artifact@` + UploadArtifactV7SHA + `
+        uses: actions/upload-artifact@` + "v7" + `
         with:
           name: windows-x64-package
           path: |
@@ -277,7 +277,7 @@ const fixtureWithDuplicateLogUpload = `jobs:
     name: Consolidate logs
     steps:
       - name: Upload the consolidated run log (single plain-text artifact)
-        uses: actions/upload-artifact@` + UploadArtifactV7SHA + `
+        uses: actions/upload-artifact@` + "v7" + `
         with:
           name: SHEYTAN-LA-all-logs.txt
           path: SHEYTAN-LA-all-logs.txt
@@ -287,7 +287,7 @@ const fixtureWithDuplicateLogUpload = `jobs:
     name: Debug logs
     steps:
       - name: Upload the consolidated run log AGAIN (contract breach)
-        uses: actions/upload-artifact@` + UploadArtifactV7SHA + `
+        uses: actions/upload-artifact@` + "v7" + `
         with:
           name: SHEYTAN-LA-all-logs.txt
           path: SHEYTAN-LA-all-logs.txt
@@ -302,7 +302,7 @@ const fixtureWithExtraUpload = `jobs:
     name: Windows x64
     steps:
       - name: Upload Windows package
-        uses: actions/upload-artifact@` + UploadArtifactV7SHA + `
+        uses: actions/upload-artifact@` + "v7" + `
         with:
           name: windows-x64-package
           path: dist/SHEYTAN-LA-v1.11.1-windows-x64.zip
@@ -311,7 +311,7 @@ const fixtureWithExtraUpload = `jobs:
     name: Consolidate logs
     steps:
       - name: Upload the consolidated run log (single plain-text artifact)
-        uses: actions/upload-artifact@` + UploadArtifactV7SHA + `
+        uses: actions/upload-artifact@` + "v7" + `
         with:
           name: SHEYTAN-LA-all-logs.txt
           path: SHEYTAN-LA-all-logs.txt
@@ -321,7 +321,7 @@ const fixtureWithExtraUpload = `jobs:
     name: Linux x64
     steps:
       - name: Upload Linux package
-        uses: actions/upload-artifact@` + UploadArtifactV7SHA + `
+        uses: actions/upload-artifact@` + "v7" + `
         with:
           name: linux-x64-package
           path: dist/SHEYTAN-LA-v1.11.1-linux-x64.zip
@@ -330,7 +330,7 @@ const fixtureWithExtraUpload = `jobs:
     name: Extra
     steps:
       - name: Upload something else
-        uses: actions/upload-artifact@` + UploadArtifactV7SHA + `
+        uses: actions/upload-artifact@` + "v7" + `
         with:
           name: debug-bundle
           path: debug/
@@ -342,8 +342,7 @@ const fixtureWithExtraUpload = `jobs:
 // CRLF materialization, the exact shape the retired scanner broke on —
 // and both negative fixtures FAIL with the contract message.
 func TestUploadArtifactContractFixtures(t *testing.T) {
-	good := fmt.Sprintf(fixtureUploadWorkflow,
-		UploadArtifactV7SHA, UploadArtifactV7SHA, UploadArtifactV7SHA)
+	good := fmt.Sprintf(fixtureUploadWorkflow, "v7", "v7", "v7")
 
 	if err := ValidateUploadArtifactContract(good); err != nil {
 		t.Fatalf("the contracted three-upload fixture must pass: %v", err)
@@ -375,7 +374,7 @@ func TestUploadArtifactContractFixtures(t *testing.T) {
   build-windows:
     steps:
       - name: Upload Windows package
-        uses: actions/upload-artifact@` + UploadArtifactV7SHA + `
+        uses: actions/upload-artifact@` + "v7" + `
         with:
           name: windows-x64-package
           path: dist/SHEYTAN-LA-v1.11.1-windows-x64.zip
@@ -386,39 +385,46 @@ func TestUploadArtifactContractFixtures(t *testing.T) {
 	}
 }
 
-// TestUploadArtifactPinPolicyFixtures: the v7.0.2 immutable SHA is
-// accepted (with or without a trailing comment); a moving @v7 tag, a
-// version tag, @main, a partial hash and an unapproved SHA are all
-// rejected under the current pin policy.
+// TestUploadArtifactPinPolicyFixtures: under the v1.11.1 release-tag
+// policy every external uses: ref must be an upstream release tag —
+// major tags (@v7) and exact version tags (@v7.0.2) are accepted;
+// commit hashes (full or partial), branch refs, and malformed refs are
+// rejected.
 func TestUploadArtifactPinPolicyFixtures(t *testing.T) {
 	fixture := func(ref string) string {
 		return fmt.Sprintf(fixtureUploadWorkflow, ref, ref, ref)
 	}
 
-	// Accepted: the exact reviewed immutable SHA.
-	if err := ValidateUploadArtifactPins(fixture(UploadArtifactV7SHA)); err != nil {
-		t.Fatalf("the verified v7.0.2 SHA pin must be accepted: %v", err)
+	// Accepted: the maintained major release tag (the workflow's
+	// spelling since the v1.11.1 maintenance policy change).
+	if err := ValidateUploadArtifactPins(fixture("v7")); err != nil {
+		t.Fatalf("the v7 release tag must be accepted: %v", err)
 	}
 
-	// Accepted: the same SHA with the workflow's trailing comment shape.
+	// Accepted: an exact version release tag.
+	if err := ValidateUploadArtifactPins(fixture("v7.0.2")); err != nil {
+		t.Fatalf("an exact version release tag must be accepted: %v", err)
+	}
+
+	// Accepted: the tag with the workflow's trailing comment shape.
 	// (YAML strips comments before the value reaches the validator —
 	// asserted here so a comment regression cannot reappear.)
-	withComment := fixture(UploadArtifactV7SHA + ` # v7 (immutable SHA)`)
+	withComment := fixture("v7" + ` # release tag`)
 	if err := ValidateUploadArtifactPins(withComment); err != nil {
-		t.Fatalf("the SHA pin with a trailing comment must be accepted: %v", err)
+		t.Fatalf("the release tag with a trailing comment must be accepted: %v", err)
 	}
 
-	// Rejected: the moving @v7 tag — the EXACT spelling the old literal
-	// check demanded and the current policy forbids.
+	// Rejected: commit-hash pins (full and partial), branch refs and
+	// malformed refs — the exact shapes the v1.11.1 policy forbids.
 	for _, bad := range []string{
-		"v7",
-		"v7.0.2",
-		"main",
-		UploadArtifactV7SHA[:12],
-		"cf430e030ddbb5b0abf93d22962f4752f3646cd0", // unapproved SHA
+		"cf430e030ddbb5b0abf93d22962f4752f3646cd9", // full commit SHA
+		"cf430e030ddbb", // partial hash
+		"main",          // branch ref
+		"master",        // branch ref
+		"",              // empty ref
 	} {
 		if err := ValidateUploadArtifactPins(fixture(bad)); err == nil {
-			t.Errorf("ref %q must be REJECTED under the immutable-pin policy", bad)
+			t.Errorf("ref %q must be REJECTED under the release-tag policy", bad)
 		}
 	}
 

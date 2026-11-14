@@ -47,8 +47,9 @@ One Go process owns the runtime (`internal/runtime.Stack`). Every authority is c
 The product desktop is a **single Go executable**:
 
 - Core (policy/orchestration authority) + Fyne UI (`ui/fyne`) running **in-process** over `internal/localipc`.
-- Transport: Unix domain socket (SO_PEERCRED) on Linux/macOS; named pipe (current-user DACL + post-connect SID check) on Windows.
-- Handshake: strict `sheytan-ipc/1` + ephemeral key header on every request.
+- Transport: Unix domain socket (SO_PEERCRED) on Linux/macOS; named pipe (current-user DACL + post-connect SID check) on Windows. The ONE canonical client dial is `internal/localipc.DialContext` — a context-aware, platform-aware function shared by the Fyne HTTP and WebSocket transports (v1.11.1 maintenance: the former private Unix-only dial in the UI broke every tab on Windows; source-contract tests now fail the build on any regression, and integration tests drive the production CoreClient against the real `localipc.Serve` endpoint on both platforms).
+- Handshake: strict `sheytan-ipc/1` + ephemeral key header on every request; a wrong key or mismatched protocol is a typed refusal, never a fallback.
+- IPC observability (v1.11.1 maintenance): the desktop bootstrap writes STRUCTURED handshake records to app.log — success names the protocol, core version and transport (`windows-named-pipe` / `unix-domain-socket`); failure and first-refresh errors are logged with the transport identity. The endpoint path (account-derived on Windows) and the key are never logged. The shell status surface shows Connecting / Connected / Disconnected with the actionable error and a single-flight Retry action.
 - No TCP listener, no embedded web frontend, no Qt runtime, no React/Vite.
 - Launcher (`internal/desktop`) owns the full lifecycle: bind IPC → attach Fyne window → clean teardown on close/signal.
 - **One shutdown coordinator** (v1.11.1 maintenance pass, run 43008361835): the user's window close, SIGINT/SIGTERM and programmatic closes all funnel through one idempotent running→closing→closed coordinator; teardown is bounded (deadline-bounded activity-pump drain, workspace listener release) and a deadline-exceeded teardown is recorded INCOMPLETE — never graceful. The core/IPC servers close in reverse order after the UI closes.
@@ -56,6 +57,17 @@ The product desktop is a **single Go executable**:
 - **Responsive size-class policy** (v1.11.1 maintenance pass): one `sizeClassFor` function resolves compact <600 / medium 600–899 / desktop 900–1279 / wide ≥1280 logical canvas units; navigation derives from it (top strip + More menu / compact rail / persistent wide rail). The full logical-size matrix and five structural goldens are pinned by tests; a real-window resize smoke walks the matrix under Xvfb in CI.
 - Behavioral contracts (zero-session send, session-list generation guard, live streaming that cannot wedge, reasoning ladder, settings IA) are pinned by Go tests under `ui/fyne`.
 - Linux desktop smoke runs the real binary under Xvfb in CI (launch/soak/SIGTERM smoke plus the resize-matrix smoke).
+- **Button-fit + one-column compact layout** (v1.11.1 maintenance): every action label is short with its explanatory detail in an adjacent wrapped caption; card captions wrap inside the cards (`cardFit` — `widget.NewCard` subtitles never wrap and clipped at compact widths); the chat/agent views use an adaptive dual pane that stacks the session/goal list above the conversation below the 600-unit breakpoint (the documented compact one-column contract). `TestButtonFitMatrix` walks every destination at every representative logical size asserting no compressed buttons, no out-of-bounds rigid controls and no unreachable actions.
+- **Windows gate semantics** (v1.11.1 maintenance): a hosted Windows pass requires the named-pipe CoreClient integration test AND a launch smoke that observes the window AND the successful-handshake record AND a real core read AND logging persistence AND a graceful close; force-termination is a failure, never a pass.
+
+### 3.2 Log catcher (observability)
+
+`internal/logging` owns every sink under `<data-root>/logs/` (`app.log`, `tools.jsonl`, `llm.jsonl`, `crashes/`):
+
+- Boot order: bootstrap logger (stderr + bounded memory) → runtime-data migrations → canonical sinks open → session banner → one startup record naming the resolved log directory and active sinks → bootstrap replay.
+- Sink health is observable (`Manager.Health`): a failed or nil app sink never silently discards events — lines are preserved in a bounded emergency ring, surfaced on rate-limited/deduplicated stderr, and reported through `/api/logs` (`dir` + `sinkHealth`) so the Logs panel and Settings diagnostics show the resolved directory, fallback state and sink problems honestly.
+- Partial sink opens roll back (every opened handle closed, errors joined); rotation and JSONL write failures are reported; `Close` writes its own outcome record and returns joined errors from every sink.
+- If the configured logs directory cannot be opened, a documented per-user private fallback (`os.UserCacheDir()/SHEYTAN-LA/logs`) is used after the primary failure is recorded — the fallback is announced in the startup record, never presented as the canonical sink. The bootstrap stderr + memory logger remains the last resort.
 
 ### 3.1 Hybrid presentation: on-demand Web Workspace
 
@@ -67,6 +79,8 @@ The native shell remains the primary surface for navigation, forms, approvals, r
 - **Security boundary** (same family as the 3D Studio): 127.0.0.1 ephemeral bind, per-launch 256-bit fragment token (never logged, never in page HTML), strict CSP, allow-listed embedded offline assets, GET-only read endpoints, all DOM text via `textContent` — model output is data, never trusted HTML.
 - **No second authority**: the Workspace is a viewer over the presentation store, like the Studio is a viewer over the topology. It holds no session store, no tool registry, no permission system, and (in this slice) exposes zero command endpoints.
 - The desktop shell deliberately does not embed a web runtime; an embedded webview was not verifiable on both desktop targets in the shipping timebox. The browser the user already trusts hosts the page — a documented decision, not a hidden limitation.
+
+---
 
 ---
 

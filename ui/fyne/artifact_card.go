@@ -68,7 +68,10 @@ func newArtifactCard(ap *App) *artifactCard {
 	c.status = widget.NewLabel("")
 	c.status.Wrapping = fyne.TextWrapWord
 	c.status.Importance = widget.LowImportance
-	c.openBtn = widget.NewButtonWithIcon("Open in Workspace", theme.ComputerIcon(), c.open)
+	// v1.11.1 button-fit policy: the short label ("Open workspace") keeps
+	// the action readable at card widths; the card's kind and status
+	// lines carry the context.
+	c.openBtn = widget.NewButtonWithIcon("Open workspace", theme.ComputerIcon(), c.open)
 	body := container.NewVBox(c.excerpt, c.status, c.openBtn)
 	c.card = widget.NewCard("Artifact", "", container.NewVBox(c.kindLab, body))
 	c.card.Hide()

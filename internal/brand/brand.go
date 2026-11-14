@@ -246,7 +246,7 @@ migration): no Qt runtime and no Node/React stack ships or is linked.
 |---|---|---|
 | llama.cpp (downloaded engine) | MIT | fetched at runtime into the managed bin directory — never committed |
 | Fyne (fyne.io/fyne/v2) | BSD-3-Clause | the ONE product UI toolkit (linked into every desktop build) |
-| Three.js 0.182.0 (vendored, embedded) | MIT | internal/studio/assets/ — embedded into the binary for the optional 3D Studio viewer; the verbatim notice also ships as a Go source constant (internal/studio/license.go) |
+| Three.js 0.187.0 (vendored, embedded) | MIT | internal/studio/assets/ — embedded into the binary for the optional 3D Studio viewer; the verbatim notice also ships as a Go source constant (internal/studio/license.go) |
 | gorilla/websocket | BSD-style | build-time Go dependency |
 | chromedp + cdproto | MIT | build-time Go dependency |
 | bild, xdg, winres, go-isatty, nfnt/resize, gobwas/* | MIT / BSD-style / ISC-style (per package) | build-time Go dependencies |
@@ -271,7 +271,7 @@ migration): no Qt runtime and no Node/React stack ships or is linked.
 
 | Package | License | Copyright |
 |---|---|---|
-| three.js 0.182.0 (three.core.js, three.module.js, OrbitControls.js) | MIT | Copyright © 2010-2025 three.js authors |
+| three.js 0.187.0 (three.core.js, three.module.js, OrbitControls.js) | MIT | Copyright © 2010-2026 three.js authors |
 
 The verbatim MIT license text for three.js ships inside the Go source
 (internal/studio/license.go) and therefore inside every binary that

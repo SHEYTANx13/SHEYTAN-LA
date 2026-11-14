@@ -39,6 +39,41 @@ This document describes the **current** maintenance and update behavior of SHEYT
 - The codename-removal gate remains enabled.
 - Publish occurs only on a version tag after a green main matrix.
 
+## Developer dependency & toolchain maintenance
+
+The RUNTIME updater above is user-facing. This subsection is the
+developer process for keeping the application's own build requirements
+current — it is not runtime user instructions.
+
+- **Inventory first**: every versioned application/build requirement is
+  audited as one set — Go modules (`go list -m all`, `go mod graph`,
+  `go mod why`), workflow action references, native prerequisites
+  (MSYS2/UCRT64 packages, NSIS, apt set, runner labels), vendored static
+  assets (Three.js under `internal/studio/assets/`) and runtime-updated
+  engine resources.
+- **Stable tags only**: dependencies move to the latest STABLE tagged
+  release verified upstream at execution time (no alpha/beta/rc/pseudo
+  versions unless a parent dependency requires one — then the reason and
+  upstream origin are recorded, e.g. the Fyne-required systray and
+  go-gl pseudo-versions, and the chromedp v0.16.0 + cdproto pairing
+  pending its dedicated migration session).
+- **Workflow action references use upstream release tags** (`@v7`, `@v6`,
+  `@v2`, …), never commit hashes or moving branch refs — an explicit
+  maintainability choice, mitigated by official sources,
+  least-privilege permissions and the single weekly Dependabot group.
+- **One combined update stream**: `.github/dependabot.yml` groups all
+  supported ecosystems (github-actions + gomod) into ONE weekly PR.
+  Dependabot does not manage manual versions (NSIS, MSYS2 packages,
+  vendored Three.js, engine bundles) — those are pinned in the workflow
+  and recorded in the run log.
+- **Vendored assets move as coherent sets**: Three.js core/module/
+  OrbitControls update together from one upstream tag with the
+  documented local security patch re-applied (see
+  [`3dstudio.md`](3dstudio.md)).
+- **Proof**: `go mod tidy` is idempotent, `go mod verify` passes, the
+  affected integration suites run, and the toolchain version (exact Go
+  patch) is identical in `go.mod` and every workflow lane.
+
 ## Honesty rules that never change
 
 - Build success is never converted into a runtime claim.

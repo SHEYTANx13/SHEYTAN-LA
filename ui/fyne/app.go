@@ -8,11 +8,16 @@ package fyneui
 
 import (
 	"context"
+	"runtime"
+	"sync"
+	"sync/atomic"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/localipc"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/startup"
 )
 
@@ -31,10 +36,26 @@ type App struct {
 	rootCtx context.Context
 	coord   *shutdownCoordinator
 
+	// bootMu/bootInFlight serialize the bootstrap/retry path (v1.11.1):
+	// manual Retry clicks can never stack concurrent bootstraps.
+	bootMu       sync.Mutex
+	bootInFlight atomic.Bool
+
 	// Shell-owned conversation view instances (Phase 2 wiring/test seam;
 	// set by the view builders, never a second authority).
 	chat  *chatView
 	agent *agentView
+}
+
+// transportName names the local IPC transport for the structured
+// handshake records (windows-named-pipe / unix-domain-socket). The
+// endpoint path itself is NOT logged: on Windows it embeds the account
+// name, and the handshake key NEVER appears in any log line.
+func transportName() string {
+	if runtime.GOOS == "windows" {
+		return "windows-named-pipe"
+	}
+	return "unix-domain-socket"
 }
 
 // NewApp builds the product application over an existing core client
@@ -145,20 +166,42 @@ func (ap *App) installRuntimeCallbacks() {
 // v1.11.1 (run 43008361835 §F2): each bootstrap phase is measured with the
 // monotonic startup recorder — cold-start evidence exists even when no data
 // root is ever created.
+//
+// v1.11.1 (Windows IPC repair): the handshake outcome is now a STRUCTURED
+// log record — the gap the supplied app.log exposed: a transport failure
+// the user could see was never written to the core log. Success and
+// failure both name the transport; the endpoint path (account-derived on
+// Windows) and the IPC key are never logged.
 func (ap *App) bootstrap() {
-	ctx := ap.rootCtx
+	// Ctx() falls back to Background before Run() arms the app-lifetime
+	// context (tests, composition probes) — the HTTP layer never sees a
+	// nil context.
+	ctx := ap.Ctx()
 	su := startup.Default()
+
+	if ap.bootInFlight.Swap(true) {
+		return // a bootstrap is already running — never stack them
+	}
+	defer ap.bootInFlight.Store(false)
+
+	uiDo(func() { ap.shell.setConnecting() })
+
 	su.StartPhase(startup.PhaseCoreHandshake)
 	if err := ap.client.Handshake(ctx); err != nil {
 		su.EndPhase(startup.PhaseCoreHandshake, err)
+		logging.Default().Error("ipc", "core handshake failed transport=%s error=%v", transportName(), err)
 		uiDo(func() { ap.shell.setBootError(err) })
 		return
 	}
 	su.EndPhase(startup.PhaseCoreHandshake, nil)
 	version := ap.client.Version()
+	logging.Default().Info("ipc", "core handshake successful protocol=%s protocolVersion=%d coreVersion=%s transport=%s",
+		localipc.ProtocolName, localipc.ProtocolVersion, version, transportName())
+
 	su.StartPhase(startup.PhaseSessionsRefresh)
 	if err := ap.rt.RefreshSessions(ctx); err != nil {
 		su.EndPhase(startup.PhaseSessionsRefresh, err)
+		logging.Default().Error("ipc", "first session refresh failed after a successful handshake operation=sessions error=%v", err)
 		uiDo(func() {
 			ap.shell.coreVersion = version
 			ap.shell.setBootError(err)
@@ -166,11 +209,23 @@ func (ap *App) bootstrap() {
 		return
 	}
 	su.EndPhase(startup.PhaseSessionsRefresh, nil)
+	logging.Default().Info("ipc", "first session refresh succeeded (connected) transport=%s", transportName())
 	uiDo(func() {
 		ap.shell.coreVersion = version
 		ap.shell.setConnected()
 	})
 	su.RecordElapsed(startup.PhaseBackgroundReady, nil)
+}
+
+// retryBootstrap re-runs the connection bootstrap (the shell's Retry
+// action). Single-flight: concurrent clicks coalesce into one attempt —
+// a bounded, user-initiated retry, never a reconnect loop.
+func (ap *App) retryBootstrap() {
+	if ap.bootInFlight.Load() {
+		return
+	}
+	logging.Default().Info("ipc", "manual connection retry requested transport=%s", transportName())
+	go ap.bootstrap()
 }
 
 // Client exposes the core client (views use it).

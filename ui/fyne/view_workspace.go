@@ -40,14 +40,18 @@ type workspaceView struct {
 func buildWorkspaceView(ap *App) fyne.CanvasObject {
 	v := &workspaceView{ap: ap}
 	v.summary = wrappedLabel("Loading workspace…")
+	// v1.11.1 button/entry-fit policy: short placeholders (an entry's
+	// placeholder drives its MinSize — the former 38-char placeholder
+	// alone exceeded compact card widths) and stacked card rows so every
+	// control keeps its full MinSize at every matrix width.
 	v.pathInput = widget.NewEntry()
-	v.pathInput.SetPlaceHolder("Absolute path to a workspace directory")
+	v.pathInput.SetPlaceHolder("Workspace directory path")
 	v.switchBtn = widget.NewButton("Switch", func() { v.doSwitch() })
 	v.revealF = widget.NewButton("Reveal files", func() { v.reveal("files") })
 	v.revealT = widget.NewButton("Open terminal", func() { v.reveal("terminal") })
 
 	v.cloneURL = widget.NewEntry()
-	v.cloneURL.SetPlaceHolder("https://github.com/owner/repository")
+	v.cloneURL.SetPlaceHolder("https://github.com/owner/repo")
 	v.cloneBtn = widget.NewButtonWithIcon("Clone", theme.ContentCopyIcon(), func() { v.clone() })
 	v.cloneCancel = widget.NewButton("Cancel clone", func() {
 		go func() { _ = ap.Client().CancelClone(ap.Ctx()) }()
@@ -57,7 +61,7 @@ func buildWorkspaceView(ap *App) fyne.CanvasObject {
 	v.repoIdx = wrappedLabel("Repository index status loads on open.")
 	v.repoRefresh = widget.NewButton("Re-index", func() { v.reindex() })
 	v.searchIn = widget.NewEntry()
-	v.searchIn.SetPlaceHolder("Search the repository index…")
+	v.searchIn.SetPlaceHolder("Search repo index…")
 	v.searchBtn = widget.NewButton("Search", func() { v.repoSearch() })
 	v.searchOut = wrappedLabel("")
 
@@ -67,12 +71,12 @@ func buildWorkspaceView(ap *App) fyne.CanvasObject {
 	v.errLabel.Hide()
 
 	projectCard := widget.NewCard("Project", "", v.summary)
-	switchCard := widget.NewCard("Switch workspace", "Point the agent at another directory",
-		container.NewVBox(container.NewHBox(v.pathInput, v.switchBtn), container.NewHBox(v.revealF, v.revealT)))
-	cloneCard := widget.NewCard("Clone repository", "Clone from GitHub (backend gitclone is the URL authority)",
-		container.NewVBox(container.NewHBox(v.cloneURL, v.cloneBtn, v.cloneCancel), v.cloneStat))
+	switchCard := cardFit("Switch workspace", "Point the agent at another directory",
+		container.NewVBox(v.pathInput, v.switchBtn, v.revealF, v.revealT))
+	cloneCard := cardFit("Clone repository", "Clone from GitHub (backend gitclone is the URL authority)",
+		container.NewVBox(v.cloneURL, v.cloneBtn, v.cloneCancel, v.cloneStat))
 	repoCard := widget.NewCard("Repository index", "", container.NewVBox(
-		container.NewHBox(v.repoRefresh, v.searchBtn, v.searchIn), v.repoIdx, v.searchOut))
+		v.searchIn, v.repoRefresh, v.searchBtn, v.repoIdx, v.searchOut))
 
 	root := container.NewBorder(
 		PageHeader("Workspace", "Work environment, projects and repository index"),

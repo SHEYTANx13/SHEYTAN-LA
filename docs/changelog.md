@@ -7,9 +7,18 @@ Every release ships with the same invariants: one authority per concern, evidenc
 
 ---
 
-## 1.11.1 (maintenance pass) — 2026-11-13
+## 1.11.1 (maintenance pass) — 2026-11-13, extended 2026-11-14
 
 **Run 43008361835 (run #144) remediation: collector self-job reconciliation, startup phase telemetry, one shutdown coordinator, responsive size-class contract, CI cache scoping, per-job diagnostics index**
+
+**2026-11-14 extension — Windows IPC repair + observability + dependency/CI maintenance (local candidate; hosted verification pending):** no version bump; internal/config.AppVersion stays 1.11.1.
+
+- Windows IPC root cause fixed: the Fyne CoreClient dialed "unix" unconditionally, so every HTTP- and WebSocket-backed tab (including Logs) failed together on Windows, where the endpoint is a named pipe. The dial now lives in ONE canonical platform-aware `localipc.DialContext` (context-aware named-pipe busy dial whose budget is tightened by the caller's deadline; Unix socket dial on Linux/macOS), shared by both transports, with source-contract tests pinning the single-dial rule and integration tests driving the production CoreClient against the real `localipc.Serve` endpoint (Unix suite runs locally; the Windows twin is the new hosted gate). A real wire-shape bug (the client's session `context` field was an object on the wire, not an int) was caught and fixed by the first production round-trip test.
+- Observability hardening: structured IPC handshake success/failure records (naming the transport; never the account-derived endpoint or the key); shell Connecting/Connected/Disconnected states with the actionable error and a single-flight Retry; the log catcher reports sink health (bounded emergency ring, rate-limited stderr, rollback of partial opens, rotation/write/close failure reporting, close-outcome record, per-user private fallback announced in the new resolved-directory startup record); `/api/logs` carries the directory + sink health; the Logs panel renders honest loading/empty/error states with no overlapping requests and a stale-response guard; the Windows launch smoke now requires the handshake record, a real core read, log persistence and a graceful close — force-termination is a failure.
+- Buttons/layout: short action labels with adjacent wrapped captions; card captions wrap inside cards; the chat/agent views stack one column below the 600-unit breakpoint (the documented compact contract the unconditional HSplit violated); a full button-fit matrix test sweeps every destination at every representative size.
+- Dependencies/toolchain (verified against upstream tags on 2026-11-14): Go toolchain go1.27.4; x/sys v0.50.0, x/net v0.62.0, x/image v0.48.0, x/text v0.44.0, uax29/v2 v2.7.0, fsnotify v1.10.1, testify v1.12.1, goldmark v1.8.7, dbus/v5 v5.2.4, bild v0.17.1. Kept with documented reasons: chromedp v0.16.0 + cdproto pseudo (every stable pairing ships the breaking generics rewrite — migration deferred to a Chrome-equipped session), winres v0.3.1 (no v0.3.2/v0.3.3 exists upstream), Fyne v2.8.2 and its parent-required pseudo-versioned support graph.
+- CI: every external action reference uses upstream release tags (no commit-hash pins); explicit windows-2025 runner with the OS build recorded; NSIS pinned to 3.13.0 with a makensis version gate; a new Windows named-pipe CoreClient integration stage; Dependabot consolidated into ONE multi-ecosystem group (github-actions + gomod) with the security-update limitation documented.
+- Vendored Three.js refreshed r182 → r187 as one coherent set with the generateUUID CSPRNG patch re-applied.
 
 No version bump — v1.11.1 remains the product version; this is a reliability/UX maintenance pass, not a feature release.
 

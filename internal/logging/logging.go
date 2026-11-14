@@ -38,6 +38,16 @@ const (
 	// lines in memory (bounded ring, same discipline as recentLinesCap)
 	// before they are replayed into the canonical manager.
 	bootstrapBufferCap = 256
+
+	// v1.11.1 sink-health contract: a failed or nil app sink must never
+	// silently discard a log event. The event is preserved in a bounded
+	// emergency ring (distinct from the UI ring: it is the evidence of
+	// what was logged while the sink was broken), and the failure is
+	// surfaced on stderr — deduplicated by failure key and rate-limited
+	// per window so a broken sink cannot flood the console.
+	emergencyLinesCap = 256
+	sinkReportWindow  = 30 * time.Second
+	sinkReportBudget  = 16 // max distinct stderr reports per window
 )
 
 // bootstrapEntry is one pre-canonical log line held by the bootstrap
@@ -71,6 +81,19 @@ type Manager struct {
 	recent []string // ring of recent app log lines for the UI
 
 	buf []bootstrapEntry // v1.7.4: bounded pre-canonical ring (bootstrap mode only)
+
+	// v1.11.1 sink-health state (observability repair): Enabled() says
+	// the manager is willing to write; these fields say whether the FILE
+	// sinks actually accepted the last event. A broken sink is reported,
+	// never hidden behind a healthy-looking manager.
+	sinkErr        error
+	sinkErrAt      time.Time
+	emergency      []string // bounded ring of lines preserved while the app sink was broken
+	lastReportKey  string
+	lastReportAt   time.Time
+	reportWindowAt time.Time
+	reportBudget   int
+	fallbackReason string // non-empty when the canonical dir failed and the fallback is active
 }
 
 // ToolCallRecord is one structured tool-call entry (tools.jsonl).
@@ -180,16 +203,28 @@ func (m *Manager) openSinks() error {
 	if m.dir == "" {
 		return nil
 	}
-	var err error
-	if m.appF, m.appN, err = openAppend(m.appPath()); err != nil {
+	var closeErrs []error
+	appF, appN, err := openAppend(m.appPath())
+	if err != nil {
 		return err
 	}
-	if m.toolF, m.toolN, err = openAppend(filepath.Join(m.dir, "tools.jsonl")); err != nil {
-		return err
+	toolF, toolN, err := openAppend(filepath.Join(m.dir, "tools.jsonl"))
+	if err != nil {
+		// v1.11.1: close EVERY handle already opened before returning — a
+		// half-open Manager would leak descriptors and (worse) pretend a
+		// partial sink set is a healthy logger. The original open error is
+		// preserved; close failures are joined onto it.
+		closeErrs = append(closeErrs, appF.Close())
+		return errors.Join(append([]error{fmt.Errorf("open tools.jsonl: %w", err)}, closeErrs...)...)
 	}
-	if m.llmF, m.llmN, err = openAppend(filepath.Join(m.dir, "llm.jsonl")); err != nil {
-		return err
+	llmF, llmN, err := openAppend(filepath.Join(m.dir, "llm.jsonl"))
+	if err != nil {
+		closeErrs = append(closeErrs, appF.Close(), toolF.Close())
+		return errors.Join(append([]error{fmt.Errorf("open llm.jsonl: %w", err)}, closeErrs...)...)
 	}
+	m.appF, m.appN = appF, appN
+	m.toolF, m.toolN = toolF, toolN
+	m.llmF, m.llmN = llmF, llmN
 	return nil
 }
 
@@ -217,6 +252,107 @@ func (m *Manager) Dir() string { return m.dir }
 // manager writes to stderr + memory even though it owns no directory;
 // only the true no-op manager (no directory, not bootstrap) is disabled.
 func (m *Manager) Enabled() bool { return m.dir != "" || m.bootstrap }
+
+// SinkHealth is the observable health of the log catcher's file sinks —
+// what the Logs API and the UI surface report. Enabled() means the
+// manager is willing to write; SinksReady says the file sinks actually
+// accepted the last event. A fallback is never presented as a healthy
+// canonical sink: FallbackReason stays non-empty for the process
+// lifetime.
+type SinkHealth struct {
+	Dir            string    `json:"dir"`
+	SinksReady     bool      `json:"sinksReady"`
+	LastErr        string    `json:"lastErr,omitempty"`
+	LastErrAt      time.Time `json:"lastErrAt,omitempty"`
+	FallbackReason string    `json:"fallbackReason,omitempty"`
+	EmergencyLines int       `json:"emergencyLines"`
+}
+
+// Health snapshots the observable sink state. The no-op manager reports
+// Dir="" and SinksReady=false; the bootstrap manager reports its stderr/
+// memory posture.
+func (m *Manager) Health() SinkHealth {
+	if m == nil {
+		return SinkHealth{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	h := SinkHealth{
+		Dir:            m.dir,
+		SinksReady:     m.appF != nil && m.toolF != nil && m.llmF != nil,
+		FallbackReason: m.fallbackReason,
+		EmergencyLines: len(m.emergency),
+	}
+	if m.bootstrap {
+		h.Dir = "(bootstrap: stderr + bounded memory)"
+	}
+	if m.sinkErr != nil {
+		h.LastErr = m.sinkErr.Error()
+		h.LastErrAt = m.sinkErrAt
+	}
+	return h
+}
+
+// Emergency returns up to n lines preserved while the app sink was broken
+// (bounded ring — the evidence of what was logged during the failure).
+func (m *Manager) Emergency(n int) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if n <= 0 || n > len(m.emergency) {
+		n = len(m.emergency)
+	}
+	out := make([]string, n)
+	copy(out, m.emergency[len(m.emergency)-n:])
+	return out
+}
+
+// FallbackLogDir returns the documented per-user fallback log location
+// used ONLY when the configured logs directory cannot be opened: the
+// user's cache directory (per-user and private on every supported
+// platform) plus the product name.
+func FallbackLogDir() (string, error) {
+	base, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("user cache dir: %w", err)
+	}
+	return filepath.Join(base, "SHEYTAN-LA", "logs"), nil
+}
+
+// NewWithFallback opens the canonical sinks at dir. When that fails, the
+// primary failure is recorded FIRST (stderr, before anything else), then
+// a per-user private fallback directory is used. The returned Manager
+// reports the ACTIVE directory via Dir()/Health() and the reason via
+// Health().FallbackReason — the fallback is never hidden and never
+// presented as the canonical sink. When even the fallback cannot be
+// opened, the error names both paths; the caller keeps the bootstrap
+// logger (stderr + bounded memory — the last-resort sink).
+func NewWithFallback(dir string) (*Manager, error) {
+	m, err := New(dir)
+	if err == nil {
+		return m, nil
+	}
+	primaryErr := err
+
+	fbDir, fbErr := FallbackLogDir()
+	if fbErr != nil {
+		return nil, fmt.Errorf("primary log dir %q: %v; fallback unavailable: %w", dir, primaryErr, fbErr)
+	}
+	m, err = New(fbDir)
+	if err != nil {
+		return nil, fmt.Errorf("primary log dir %q: %v; fallback log dir %q: %w", dir, primaryErr, fbDir, err)
+	}
+
+	m.mu.Lock()
+	m.fallbackReason = fmt.Sprintf("primary log dir %q unavailable: %v (fallback active: %s)", dir, primaryErr, fbDir)
+	m.mu.Unlock()
+
+	// The primary failure is the fallback sink's FIRST records: the
+	// evidence travels with the logs an operator will actually read.
+	fmt.Fprintf(os.Stderr, "sheytan-log: primary log directory unavailable: %v — using fallback: %s\n", primaryErr, fbDir)
+	m.Error("logging", "primary log directory unavailable — using the per-user fallback: %v", primaryErr)
+	return m, nil
+}
 
 // --- app.log ---
 
@@ -267,20 +403,90 @@ func (m *Manager) log(level, category, format string, args ...interface{}) {
 		return
 	}
 
-	if m.appF == nil {
-		return
-	}
-	if _, err := m.appF.WriteString(line + "\n"); err == nil {
-		m.appN += int64(len(line) + 1)
-	}
-	// recent ring for the UI
+	m.appendLineLocked(line)
+}
+
+// appendLineLocked persists one formatted line through the app sink.
+// Callers hold m.mu.
+//
+// v1.11.1 sink-health contract: the UI ring stays live even when the app
+// sink is broken (the Logs surface must reflect reality, not emptiness),
+// and a line that could not reach app.log is preserved in the bounded
+// emergency ring with the failure surfaced — never silently discarded.
+func (m *Manager) appendLineLocked(line string) {
+	// recent ring for the UI — first, unconditionally.
 	if len(m.recent) >= recentLinesCap {
 		m.recent = m.recent[1:]
 	}
 	m.recent = append(m.recent, line)
+
+	if m.appF == nil {
+		m.sinkFailureLocked(line, errors.New("app.log sink unavailable (open or rotation failed)"))
+		return
+	}
+	if _, err := m.appF.WriteString(line + "\n"); err != nil {
+		m.sinkFailureLocked(line, fmt.Errorf("app.log write failed: %w", err))
+		return
+	}
+	m.appN += int64(len(line) + 1)
 	if m.appN >= appMaxBytes {
 		m.rotateAppLocked()
 	}
+}
+
+// sinkFailureLocked records a log event that could not reach app.log:
+// the line is preserved in the bounded emergency ring, the observable
+// health state is updated, and the failure is surfaced on stderr —
+// deduplicated by failure message and rate-limited per window so a
+// broken sink cannot flood the console. It NEVER logs through the
+// Manager itself: a logger reporting its own failure through itself is
+// the recursion the v1.11.1 repair explicitly forbids. Callers hold m.mu.
+func (m *Manager) sinkFailureLocked(line string, failure error) {
+	m.sinkErr = failure
+	m.sinkErrAt = time.Now()
+	if len(m.emergency) >= emergencyLinesCap {
+		m.emergency = m.emergency[1:]
+	}
+	m.emergency = append(m.emergency, line)
+	m.reportSinkFaultLocked(failure)
+}
+
+// sinkFaultLocked records a sink fault where NO log line was lost
+// (rotation bookkeeping, jsonl write failures — the app.log line itself
+// was already accepted): observable health + rate-limited stderr, no
+// emergency append. Callers hold m.mu.
+func (m *Manager) sinkFaultLocked(failure error) {
+	m.sinkErr = failure
+	m.sinkErrAt = time.Now()
+	m.reportSinkFaultLocked(failure)
+}
+
+// reportSinkFaultLocked is the ONE stderr channel for sink faults:
+// deduplicated by message key, rate-limited to sinkReportBudget distinct
+// reports per sinkReportWindow. Callers hold m.mu.
+func (m *Manager) reportSinkFaultLocked(failure error) {
+	if failure == nil {
+		return
+	}
+	key := failure.Error()
+	now := time.Now()
+	if now.Sub(m.reportWindowAt) >= sinkReportWindow {
+		m.reportWindowAt = now
+		m.reportBudget = sinkReportBudget
+	}
+	report := false
+	if key != m.lastReportKey {
+		report = true
+	} else if now.Sub(m.lastReportAt) >= sinkReportWindow {
+		report = true
+	}
+	if !report || m.reportBudget <= 0 {
+		return
+	}
+	m.reportBudget--
+	m.lastReportKey = key
+	m.lastReportAt = now
+	fmt.Fprintf(os.Stderr, "sheytan-log: %v — log events continue in the in-memory ring (emergency lines: %d)\n", failure, len(m.emergency))
 }
 
 func (m *Manager) rotateAppLocked() {
@@ -292,16 +498,32 @@ func (m *Manager) rotateAppLocked() {
 	if cerr := m.appF.Close(); cerr != nil {
 		fmt.Fprintf(os.Stderr, "sheytan-log: closing app.log before rotation failed: %v\n", cerr)
 	}
+	// v1.11.1 observability repair: rotation is bookkeeping — no log line
+	// is lost by a rename failure (app.log keeps receiving writes) — but a
+	// failed rotation must be REPORTED, not ignored: the observable health
+	// state and stderr carry it.
+	var rotateErrs []error
 	// shift app-3.log→app-4.log ... app.log→app-1.log
 	for i := appKeepFiles - 1; i >= 1; i-- {
 		src := m.rotatedPath(i)
 		dst := m.rotatedPath(i + 1)
-		_ = os.Rename(src, dst)
+		if err := os.Rename(src, dst); err != nil && !os.IsNotExist(err) {
+			rotateErrs = append(rotateErrs, fmt.Errorf("shift %s: %w", filepath.Base(src), err))
+		}
 	}
-	_ = os.Rename(m.appPath(), m.rotatedPath(1))
+	if err := os.Rename(m.appPath(), m.rotatedPath(1)); err != nil {
+		rotateErrs = append(rotateErrs, fmt.Errorf("rotate app.log: %w", err))
+	}
+	if len(rotateErrs) > 0 {
+		m.sinkFaultLocked(errors.Join(rotateErrs...))
+	}
 	f, n, err := openAppend(m.appPath())
 	if err != nil {
+		// The app sink is now unavailable: report it and let every
+		// subsequent line flow through the emergency path — never a nil
+		// sink that silently drops everything.
 		m.appF = nil
+		m.sinkFaultLocked(fmt.Errorf("reopen app.log after rotation failed: %w", err))
 		return
 	}
 	m.appF, m.appN = f, n
@@ -475,13 +697,28 @@ func (m *Manager) appendJSONL(f **os.File, n *int64, path string, max int64, kee
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if *f == nil {
+		// v1.11.1: a nil structured sink reports honestly — the record is
+		// preserved as an emergency line (redaction applies at render),
+		// never silently dropped.
+		m.sinkFailureLocked(
+			fmt.Sprintf("structured record not persisted (%s unavailable): %s", filepath.Base(path), summarizeJSONL(rec)),
+			fmt.Errorf("%s sink unavailable", filepath.Base(path)))
 		return
 	}
 	data, err := json.Marshal(rec)
 	if err != nil {
+		m.sinkFaultLocked(fmt.Errorf("encode %s record: %w", filepath.Base(path), err))
 		return
 	}
-	if _, err := (*f).Write(append(data, '\n')); err == nil {
+	if _, err := (*f).Write(append(data, '\n')); err != nil {
+		// v1.11.1: the write failure is observable (health + rate-limited
+		// stderr + emergency evidence) — a failing disk must never look
+		// like a healthy structured sink.
+		m.sinkFailureLocked(
+			fmt.Sprintf("structured record lost (%s write failed): %s", filepath.Base(path), summarizeJSONL(rec)),
+			fmt.Errorf("%s write failed: %w", filepath.Base(path), err))
+		return
+	} else {
 		*n += int64(len(data) + 1)
 	}
 	if *n >= max {
@@ -491,18 +728,40 @@ func (m *Manager) appendJSONL(f **os.File, n *int64, path string, max int64, kee
 		if cerr := (*f).Close(); cerr != nil {
 			fmt.Fprintf(os.Stderr, "sheytan-log: closing %s before rotation failed: %v\n", path, cerr)
 		}
+		var rotateErrs []error
 		for i := keep - 1; i >= 1; i-- {
 			src := fmt.Sprintf("%s.%d", path, i)
 			dst := fmt.Sprintf("%s.%d", path, i+1)
-			_ = os.Rename(src, dst)
+			if rerr := os.Rename(src, dst); rerr != nil && !os.IsNotExist(rerr) {
+				rotateErrs = append(rotateErrs, fmt.Errorf("shift %s: %w", filepath.Base(src), rerr))
+			}
 		}
-		_ = os.Rename(path, path+".1")
+		if rerr := os.Rename(path, path+".1"); rerr != nil {
+			rotateErrs = append(rotateErrs, fmt.Errorf("rotate %s: %w", filepath.Base(path), rerr))
+		}
+		if len(rotateErrs) > 0 {
+			m.sinkFaultLocked(errors.Join(rotateErrs...))
+		}
 		nf, nn, err := openAppend(path)
 		if err != nil {
 			*f = nil
+			m.sinkFaultLocked(fmt.Errorf("reopen %s after rotation failed: %w", filepath.Base(path), err))
 			return
 		}
 		*f, *n = nf, nn
+	}
+}
+
+// summarizeJSONL names a structured record WITHOUT its payloads (tool
+// arguments and LLM traffic are data, not diagnostics).
+func summarizeJSONL(rec any) string {
+	switch r := rec.(type) {
+	case ToolCallRecord:
+		return fmt.Sprintf("tool=%s session=%s durationMs=%d err=%t", r.Tool, r.Session, r.DurationMs, r.Error != "")
+	case LLMCallRecord:
+		return fmt.Sprintf("provider=%s model=%s durationMs=%d err=%t", r.Provider, r.Model, r.DurationMs, r.Error != "")
+	default:
+		return fmt.Sprintf("%T", rec)
 	}
 }
 
@@ -836,8 +1095,10 @@ func clip(s string, n int) string {
 	return s[:n] + fmt.Sprintf("…[+%d chars clipped]", len(s)-n)
 }
 
-// Close flushes and closes every sink.
-// It is safe to call more than once.
+// Close flushes and closes every sink, recording the close OUTCOME
+// first (while the sink is still writable) and attempting EVERY sink even
+// when one close fails — all failures are returned joined. It is safe to
+// call more than once.
 func (m *Manager) Close() error {
 	if m == nil || m == noop {
 		return nil
@@ -846,21 +1107,34 @@ func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var firstErr error
+	// v1.11.1: the close-outcome record is written BEFORE the handles
+	// close, so app.log carries the lifecycle evidence; a close failure is
+	// additionally surfaced on stderr and in the observable health state.
+	if !m.bootstrap && m.appF != nil {
+		m.appendLineLocked(fmt.Sprintf("%s INFO  [logging] log sinks closing (dir=%s)",
+			time.Now().Format("2006-01-02 15:04:05.000"), m.dir))
+	}
 
-	closeFile := func(f **os.File) {
+	var errs []error
+	closeSink := func(f **os.File, name string) {
 		if *f == nil {
 			return
 		}
-		if err := (*f).Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := (*f).Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close %s: %w", name, err))
 		}
 		*f = nil
 	}
 
-	closeFile(&m.appF)
-	closeFile(&m.toolF)
-	closeFile(&m.llmF)
+	closeSink(&m.appF, "app.log")
+	closeSink(&m.toolF, "tools.jsonl")
+	closeSink(&m.llmF, "llm.jsonl")
 
-	return firstErr
+	joined := errors.Join(errs...)
+	if joined != nil {
+		fmt.Fprintf(os.Stderr, "sheytan-log: sink close failures: %v\n", joined)
+		m.sinkErr = joined
+		m.sinkErrAt = time.Now()
+	}
+	return joined
 }

@@ -29,9 +29,16 @@ func buildStudioView(ap *App) fyne.CanvasObject {
 	detail.Wrapping = fyne.TextWrapWord
 	detail.TextStyle = fyne.TextStyle{Monospace: true}
 
-	openBtn := widget.NewButton("Open 3D Studio (browser)", nil)
-	stopBtn := widget.NewButton("Stop viewer", nil)
-	copyBtn := widget.NewButton("Copy viewer URL", nil)
+	// v1.11.1 button-fit policy: short action labels ("Open Studio",
+	// "Stop", "Copy URL") STACKED vertically — every child keeps its full
+	// MinSize at every matrix width (no compression, no clipping) — with
+	// the browser consequence in the adjacent caption.
+	openBtn := widget.NewButton("Open Studio", nil)
+	stopBtn := widget.NewButton("Stop", nil)
+	copyBtn := widget.NewButton("Copy URL", nil)
+	buttonsHint := widget.NewLabel("Open Studio launches the read-only viewer in your web browser.")
+	buttonsHint.Wrapping = fyne.TextWrapWord
+	buttonsHint.TextStyle = fyne.TextStyle{Italic: true}
 	disabledNote := widget.NewLabel("")
 
 	openBtn.Importance = widget.HighImportance
@@ -146,7 +153,12 @@ func buildStudioView(ap *App) fyne.CanvasObject {
 	return container.NewVBox(
 		widget.NewLabelWithStyle("3D Studio", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		widget.NewLabel("A read-only 3D map of your live system topology — host hardware, inference engine, governor, sessions and tool registry — rendered with a locally embedded three.js release. The viewer cannot execute tools or change any setting."),
-		container.NewHBox(openBtn, stopBtn, copyBtn),
+		container.NewVBox(
+			openBtn,
+			stopBtn,
+			copyBtn,
+			buttonsHint,
+		),
 		status,
 		detail,
 		disabledNote,

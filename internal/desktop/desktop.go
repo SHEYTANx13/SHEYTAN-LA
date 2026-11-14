@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -142,8 +143,17 @@ func Run(cfg *config.Config) int {
 
 	logging.Default().Info("desktop", "%s v%s (Fyne desktop, one Go UI)", config.AppName, config.AppVersion)
 	fmt.Printf("%s v%s (Fyne desktop, one Go UI)\n", config.AppName, config.AppVersion)
-	logging.Default().Info("desktop", "core endpoint: %s", ipc.Endpoint())
-	fmt.Printf("  core endpoint: %s\n", ipc.Endpoint())
+	// v1.11.1: the transport KIND is logged, never the endpoint path —
+	// on Windows the pipe name embeds the account name and on Unix the
+	// path embeds the uid; neither belongs in a log file an operator
+	// might share. The handshake record (ui bootstrap) carries the
+	// protocol identity; diagnostics carry the resolved log directory.
+	transport := "unix-domain-socket"
+	if runtime.GOOS == "windows" {
+		transport = "windows-named-pipe"
+	}
+	logging.Default().Info("desktop", "core transport: %s", transport)
+	fmt.Printf("  core transport: %s\n", transport)
 
 	// The Fyne app is the ONLY UI: it connects to the same authenticated
 	// endpoint the Qt host used, in-process. No child binary, no

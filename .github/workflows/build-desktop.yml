@@ -27,13 +27,18 @@
 #                  critical concurrent packages, the HEADLESS stress
 #                  release-surface gate, the release/version contract
 #                  tests and the log-collector fixture suite
-#   ui             the Fyne UI contract + composition suite, the FULL
-#                  non-headless test sweep, and the Linux desktop smoke:
-#                  the real SHEYTAN-LA binary under Xvfb (boot, window,
-#                  clean shutdown)
-#   Windows x64    native MSYS2/UCRT64 CGO build of SHEYTAN-LA.exe, PE
-#                  verification, launch smoke, portable ZIP + NSIS
-#                  installer (no Qt runtime, no second UI binary)
+#   ui             the Fyne UI contract + composition suite, the button
+#                  fit matrix (logical-size sweep), the FULL non-headless
+#                  test sweep, and the Linux desktop smoke: the real
+#                  SHEYTAN-LA binary under Xvfb (boot, window, clean
+#                  shutdown)
+#   Windows x64    native MSYS2/UCRT64 CGO build of SHEYTAN-LA.exe, the
+#                  named-pipe CoreClient integration gate (the REAL
+#                  production client over localipc.Serve), PE
+#                  verification, the IPC-aware launch smoke (window +
+#                  successful handshake + core read + logging persistence
+#                  + graceful close), portable ZIP + NSIS installer (no
+#                  Qt runtime, no second UI binary)
 #   Linux x64      native Linux build of SHEYTAN-LA (executable bit), ELF
 #                  verification, compiled-version cross-check, Xvfb
 #                  launch smoke, portable ZIP
@@ -68,7 +73,10 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.27"
+  # v1.11.1 maintenance: the EXACT stable Go patch (go1.27.4, released
+  # 2026-11-10; verified on go.dev/dl) — one version authority for every
+  # lane, matching the go.mod toolchain directive.
+  GO_VERSION: "1.27.4"
   # ONE canonical package root per platform (internal/releasecontract):
   # every staging directory, ZIP name, artifact name and release-metadata
   # reference derives from these. No duplicated root literals.
@@ -412,6 +420,20 @@ jobs:
           go test ./ui/fyne/ -count=1 -v 2>&1 | tee ci-logs/ui-fyne-tests.log
           echo "gate OK: go test ./ui/fyne/" >> ci-logs/gate-order.txt
 
+      # v1.11.1 button-fit contract: every primary and utility destination
+      # is walked at every representative logical size (phone → wide,
+      # breakpoint boundaries, minimum probe) — visible buttons at or
+      # above their content size, rigid controls inside the content area,
+      # every action reachable. Same binary as the suite above; this named
+      # stage exists so the gate and its dedicated log are individually
+      # visible in the job transcript and the consolidated run log.
+      - name: Fyne button fit matrix (logical-size sweep, no clipped labels)
+        run: |
+          set -euo pipefail
+          echo "RUN go test ./ui/fyne/ -run TestButtonFitMatrix" >> ci-logs/gate-order.txt
+          go test ./ui/fyne/ -count=1 -v -run "TestButtonFitMatrix|TestLongLabelButtonsShortened" 2>&1 | tee ci-logs/ui-button-fit-matrix.log
+          echo "gate OK: button fit matrix" >> ci-logs/gate-order.txt
+
       - name: Full test sweep (desktop build, no headless tag)
         run: |
           set -euo pipefail
@@ -577,7 +599,11 @@ jobs:
   # ==========================================================================
   build-windows:
     name: Windows x64
-    runs-on: windows-latest
+    # v1.11.1 maintenance: the EXPLICIT supported label (windows-2025 =
+    # Windows Server 2025, x64), replacing the moving windows-latest
+    # alias. Verified against the actions/runner-images label list on
+    # 2026-11-14; the OS build is recorded in ci-logs below.
+    runs-on: windows-2025
     needs: [preflight]
     timeout-minutes: 45
     env:
@@ -609,6 +635,10 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
           "setup-go cache-hit: ${env:GO_CACHE_HIT}" | Add-Content -Path ci-logs/win-go-cache-facts.log -Encoding utf8NoBOM
+          # v1.11.1 maintenance: the explicit runner label's actual OS
+          # build, recorded beside the toolchain facts (runner drift is
+          # visible in the consolidated run log).
+          (Get-CimInstance Win32_OperatingSystem).Caption + " (build " + (Get-CimInstance Win32_OperatingSystem).BuildNumber + ")" | Add-Content -Path ci-logs/win-go-cache-facts.log -Encoding utf8NoBOM
           go version 2>&1 | Add-Content -Path ci-logs/win-go-cache-facts.log -Encoding utf8NoBOM
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::go version failed (exit $LASTEXITCODE)"; throw "cache facts: go version failed" }
           go env GOOS GOARCH GOMODCACHE GOCACHE 2>&1 | Add-Content -Path ci-logs/win-go-cache-facts.log -Encoding utf8NoBOM
@@ -735,7 +765,9 @@ jobs:
       # the official Fyne Windows prerequisites). MINGW64 is deprecated per
       # msys2's October 2026 announcement — UCRT64 is the supported CRT.
       - name: Setup MSYS2 (UCRT64 GCC for Fyne CGO)
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2 (immutable SHA)
+        # v1.11.1 maintenance: ordinary upstream release tag (never a
+        # commit-hash pin — the repo-wide action-reference policy).
+        uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
           update: false
@@ -770,6 +802,28 @@ jobs:
           $env:CGO_ENABLED = "1"
           go vet ./ui/fyne/ 2>&1 | Tee-Object -FilePath "ci-logs/win-ui-vet.log"
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::ui/fyne vet failed on windows/amd64 (exit $LASTEXITCODE; output in ci-logs/win-ui-vet.log)"; throw "ui/fyne vet failed (windows/amd64)" }
+
+      # ------------------------------------------------------------------
+      # v1.11.1 Windows IPC repair: the REAL production CoreClient over
+      # the REAL Windows named pipe. This is the gate the green run
+      # 43455711025 never had — a visible window proved nothing about the
+      # production client's ability to perform an authenticated request
+      # through localipc.Serve. The transport contract tests (busy-pipe
+      # budget, caller-deadline bounds, cancellation) run alongside; the
+      # named-pipe integration exercises handshake, representative
+      # read-only APIs, the WebSocket attach path with a normal close,
+      # and wrong-key refusal. No GPU, no model, no outbound network.
+      # ------------------------------------------------------------------
+      - name: Windows named-pipe CoreClient integration (production client over localipc.Serve)
+        run: |
+          $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
+          $env:CGO_ENABLED = "1"
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+          go test ./internal/localipc/ -count=1 -timeout 15m -v 2>&1 | Tee-Object -FilePath "ci-logs/win-localipc-tests.log"
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::localipc transport tests failed on windows/amd64 (exit $LASTEXITCODE; output in ci-logs/win-localipc-tests.log)"; throw "localipc transport tests failed (windows/amd64)" }
+          go test ./ui/fyne/ -count=1 -timeout 15m -v -run "TestCoreClientEndToEndOverWindowsNamedPipe|TestCoreClientRejectsWrongKeyWindows" 2>&1 | Tee-Object -FilePath "ci-logs/win-ipc-integration.log"
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::Windows named-pipe CoreClient integration failed (exit $LASTEXITCODE; output in ci-logs/win-ipc-integration.log) — the production client cannot reach the core through the pipe"; throw "Windows named-pipe CoreClient integration failed" }
+          Write-Host "IPC integration gate: production CoreClient handshake + API + WebSocket over the Windows named pipe PASSED"
 
       - name: "Windows resource pipeline (gen-syso: icon + version + DPI manifest)"
         run: |
@@ -1042,7 +1096,7 @@ jobs:
       # own diagnostics instead of a bare timeout. Then a short soak, a
       # GRACEFUL close attempt, and force termination only as the
       # documented last resort. The 60s boot budget is unchanged.
-      - name: Launch smoke (boot, window, bounded, clean close)
+      - name: "Launch smoke (window + IPC handshake + core read + logging persistence + graceful close)"
         run: |
           # Launch target is the RUNNER_TEMP copy (with the pinned Mesa
           # DLL beside the exe), never the staging tree. Every hardened
@@ -1109,13 +1163,68 @@ jobs:
             Write-Host "--- application output (smoke-app-output.log) ---"
             if (Test-Path $smokeLog) { Get-Content $smokeLog -Tail 40 } else { Write-Host "(no stdout captured)" }
             if (Test-Path "$smokeLog.err") { Write-Host "--- application stderr ---"; Get-Content "$smokeLog.err" -Tail 40 }
-            # The application's own catcher lives next to the exe (data\app.log).
-            $appLog = Join-Path (Split-Path $exe) "data\app.log"
-            if (Test-Path $appLog) { Write-Host "--- data\app.log tail ---"; Get-Content $appLog -Tail 40 }
+            # The application's own catcher lives under the portable
+            # data root (data\logs\app.log).
+            $appLog = Join-Path (Split-Path $exe) "data\logs\app.log"
+            if (Test-Path $appLog) { Write-Host "--- data\logs\app.log tail ---"; Get-Content $appLog -Tail 40 }
             Write-Host "::error::launch smoke: Windows launch smoke failed — no observable window within the 60s budget (HasExited=$($p.HasExited), ExitCode=$($p.ExitCode); diagnostics above)"
             throw "Windows launch smoke failed: no observable window"
           }
           Write-Host "window observed (MainWindowHandle: $($p.MainWindowHandle), enumPath: $enumSeen)"
+
+          # ------------------------------------------------------------
+          # v1.11.1 Windows IPC repair — the gate MEANING changed: a
+          # visible window is necessary but NOT sufficient. The smoke now
+          # requires, within a bounded deadline:
+          #   1. the app log records a SUCCESSFUL IPC handshake naming
+          #      the windows-named-pipe transport;
+          #   2. a REAL core read after the handshake (the first session
+          #      refresh);
+          #   3. the canonical log sinks were created (persistence).
+          # A window boot without these is a FAILED smoke.
+          # ------------------------------------------------------------
+          $appLog = Join-Path (Split-Path $exe) "data\logs\app.log"
+          $ipcDeadline = (Get-Date).AddSeconds(30)
+          $handshakeSeen = $false
+          $refreshSeen = $false
+          $logDirSeen = $false
+          while ((Get-Date) -lt $ipcDeadline) {
+            if ($p.HasExited) { break }
+            if (-not $handshakeSeen -and (Test-Path $appLog)) {
+              $hits = Select-String -LiteralPath $appLog -Pattern "core handshake successful" -SimpleMatch
+              if ($hits) {
+                $pipeHit = $hits | Where-Object { $_.Line -match "transport=windows-named-pipe" }
+                if ($pipeHit) { $handshakeSeen = $true }
+              }
+            }
+            if (-not $refreshSeen -and (Test-Path $appLog)) {
+              if (Select-String -LiteralPath $appLog -Pattern "first session refresh succeeded" -SimpleMatch) { $refreshSeen = $true }
+            }
+            if (-not $logDirSeen -and (Test-Path $appLog)) {
+              if (Select-String -LiteralPath $appLog -Pattern "log directory:" -SimpleMatch) { $logDirSeen = $true }
+            }
+            if ($handshakeSeen -and $refreshSeen -and $logDirSeen) { break }
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not $handshakeSeen) {
+            Write-Host "::error::launch smoke stage IPC-HANDSHAKE: no successful windows-named-pipe handshake record in data\logs\app.log within 30s — a visible window alone is no longer a pass (the run-43455711025 gap)"
+            if (Test-Path $appLog) { Write-Host "--- data\logs\app.log tail ---"; Get-Content $appLog -Tail 40 } else { Write-Host "data\logs\app.log was never created (logging persistence failed)" }
+            if (Test-Path $smokeLog) { Write-Host "--- stdout tail ---"; Get-Content $smokeLog -Tail 30 }
+            if (Test-Path "$smokeLog.err") { Write-Host "--- stderr tail ---"; Get-Content "$smokeLog.err" -Tail 30 }
+            throw "Windows launch smoke failed at stage IPC-HANDSHAKE (no handshake record)"
+          }
+          if (-not $refreshSeen) {
+            Write-Host "::error::launch smoke stage CORE-READ: the first session refresh (a real core API read after the handshake) never succeeded within 30s"
+            Get-Content $appLog -Tail 40
+            throw "Windows launch smoke failed at stage CORE-READ (no successful core read)"
+          }
+          if (-not $logDirSeen) {
+            Write-Host "::error::launch smoke stage LOG-PERSISTENCE: app.log exists but carries no resolved-log-directory startup record"
+            Get-Content $appLog -Tail 40
+            throw "Windows launch smoke failed at stage LOG-PERSISTENCE (no startup record)"
+          }
+          Write-Host "IPC gate: handshake successful (windows-named-pipe), first core read succeeded, log directory recorded"
+
           $soakDeadline = (Get-Date).AddSeconds(12)
           while ((Get-Date) -lt $soakDeadline) {
             if ($p.HasExited) {
@@ -1134,13 +1243,63 @@ jobs:
             Start-Sleep -Milliseconds 500
           }
           if (-not $closed) {
-            Write-Host "WARNING: graceful close did not exit within 20s — terminating as the documented last resort"
+            # v1.11.1: force termination is a FAILURE, not a cleanup that
+            # still prints SMOKE OK — a candidate that cannot close
+            # gracefully does not pass the desktop smoke.
+            Write-Host "::error::launch smoke stage GRACEFUL-CLOSE: CloseMainWindow did not exit within 20s — force-terminating as the documented last resort; this is a FAILED smoke, never a pass"
+            if (Test-Path $appLog) { Write-Host "--- data\logs\app.log tail ---"; Get-Content $appLog -Tail 40 }
+            if (Test-Path $smokeLog) { Write-Host "--- stdout tail ---"; Get-Content $smokeLog -Tail 30 }
+            if (Test-Path "$smokeLog.err") { Write-Host "--- stderr tail ---"; Get-Content "$smokeLog.err" -Tail 30 }
             Stop-Process -Id $p.Id -Force
             $p.WaitForExit(15000) | Out-Null
+            throw "Windows launch smoke failed at stage GRACEFUL-CLOSE (process had to be force-terminated)"
           }
-          Write-Host "SMOKE OK: window booted, event loop alive, closed (graceful=$closed)"
+
+          # The shutdown evidence must be IN the persisted log: IPC stop,
+          # core close and the log-sink close record (bounded — the log
+          # is flushed by the process's own exit path).
+          $shutDeadline = (Get-Date).AddSeconds(10)
+          $ipcStopped = $false
+          $sinksClosed = $false
+          while ((Get-Date) -lt $shutDeadline) {
+            if (Test-Path $appLog) {
+              if (-not $ipcStopped -and (Select-String -LiteralPath $appLog -Pattern "ipc stopped" -SimpleMatch)) { $ipcStopped = $true }
+              if (-not $sinksClosed -and (Select-String -LiteralPath $appLog -Pattern "log sinks closing" -SimpleMatch)) { $sinksClosed = $true }
+            }
+            if ($ipcStopped -and $sinksClosed) { break }
+            Start-Sleep -Milliseconds 500
+          }
+          if (-not $ipcStopped) {
+            Write-Host "::error::launch smoke stage SHUTDOWN-LOG: the 'ipc stopped' record never reached data\logs\app.log"
+            if (Test-Path $appLog) { Get-Content $appLog -Tail 40 }
+            throw "Windows launch smoke failed at stage SHUTDOWN-LOG (no ipc-stop record)"
+          }
+          if (-not $sinksClosed) {
+            Write-Host "::error::launch smoke stage SHUTDOWN-LOG: the 'log sinks closing' close-outcome record never reached data\logs\app.log"
+            if (Test-Path $appLog) { Get-Content $appLog -Tail 40 }
+            throw "Windows launch smoke failed at stage SHUTDOWN-LOG (no sink-close record)"
+          }
+
+          # Logging persistence: the structured sinks exist (empty is
+          # allowed until real calls occur) and the session banner +
+          # handshake record survived the clean close.
+          $logsDir = Join-Path (Split-Path $exe) "data\logs"
+          foreach ($sink in @("app.log", "tools.jsonl", "llm.jsonl")) {
+            if (-not (Test-Path (Join-Path $logsDir $sink))) {
+              Write-Host "::error::launch smoke stage LOG-PERSISTENCE: expected sink $sink missing under data\logs"
+              throw "Windows launch smoke failed at stage LOG-PERSISTENCE (missing $sink)"
+            }
+          }
+          if (-not (Select-String -LiteralPath $appLog -Pattern "session start" -SimpleMatch)) {
+            Write-Host "::error::launch smoke stage LOG-PERSISTENCE: the session banner did not persist in app.log"
+            throw "Windows launch smoke failed at stage LOG-PERSISTENCE (no session banner)"
+          }
+
+          Write-Host "SMOKE OK: window booted, IPC handshake succeeded (windows-named-pipe), core read succeeded, soak survived, graceful close, shutdown records persisted"
           Write-Host "--- application output tail ---"
           if (Test-Path $smokeLog) { Get-Content $smokeLog -Tail 20 }
+          Write-Host "--- data\logs\app.log tail ---"
+          if (Test-Path $appLog) { Get-Content $appLog -Tail 25 }
           # v1.11.1 dependency-audit gate (release gate, run 41933333132):
           # the launch evidence above was collected even when the audit
           # itself could not run (ERROR) — but ERROR is never PASS, so the
@@ -1295,8 +1454,21 @@ jobs:
       # staged tree (uninstall symmetry).
       - name: Install NSIS
         run: |
-          choco install nsis -y --no-progress
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::NSIS install failed (choco exit $LASTEXITCODE) — the installer job cannot build"; throw "NSIS install failed" }
+          # v1.11.1 maintenance: NSIS pinned to the verified upstream
+          # stable release 3.13 (2026-09-27; Chocolatey package 3.13.0
+          # maps to it — verified on community.chocolatey.org and
+          # github.com/nsis-dev/nsis/releases/tag/v313). The actual
+          # makensis version is recorded in the log below and in
+          # ci-logs/win-nsis-version.log.
+          choco install nsis --version=3.13.0 -y --no-progress
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::NSIS 3.13.0 install failed (choco exit $LASTEXITCODE) — the installer job cannot build"; throw "NSIS install failed" }
+          $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (-not (Test-Path $makensis)) { Write-Host "::error::makensis not found at $makensis after the NSIS install"; throw "makensis missing" }
+          $nsisVersion = (& $makensis "/VERSION") 2>&1
+          Write-Host "makensis /VERSION: $nsisVersion"
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+          "makensis /VERSION: $nsisVersion" | Add-Content -Path ci-logs/win-nsis-version.log -Encoding utf8NoBOM
+          if ("$nsisVersion" -notmatch "^3\.13") { Write-Host "::error::makensis reports version '$nsisVersion', want 3.13.x — the pin did not take effect"; throw "NSIS version mismatch: $nsisVersion" }
 
       - name: Generate payload-uninstall.nsh (uninstall symmetry)
         run: |
@@ -1639,7 +1811,7 @@ jobs:
       # always() — and only when BOTH verified distribution files exist
       # (error on missing): no partial or placeholder package bundles.
       - name: Upload Windows package
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7 (immutable SHA)
+        uses: actions/upload-artifact@v7
         with:
           name: windows-x64-package
           path: |
@@ -1956,7 +2128,7 @@ jobs:
       # always() — and only when the verified portable archive exists
       # (error on missing): no partial or placeholder package bundles.
       - name: Upload Linux package
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7 (immutable SHA)
+        uses: actions/upload-artifact@v7
         with:
           name: linux-x64-package
           path: dist/${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64.zip
@@ -2044,7 +2216,7 @@ jobs:
       # artifact; the attempt number lives inside the report content.
       - name: Upload the consolidated run log (single plain-text artifact)
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7 (immutable SHA)
+        uses: actions/upload-artifact@v7
         with:
           name: SHEYTAN-LA-all-logs.txt
           path: SHEYTAN-LA-all-logs.txt
@@ -2148,7 +2320,7 @@ jobs:
           echo "--- SHA256SUMS.txt ---"; cat dist/SHA256SUMS.txt
 
       - name: Publish the release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3 (immutable SHA)
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip

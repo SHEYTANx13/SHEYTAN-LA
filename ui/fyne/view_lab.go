@@ -38,7 +38,10 @@ func buildLabView(ap *App) fyne.CanvasObject {
 	v.runBtn = widget.NewButton("Run request", func() { v.run() })
 	v.runBtn.Importance = widget.HighImportance
 
-	presetBar := container.NewHBox()
+	// v1.11.1 button-fit repair: the four presets STACK vertically — the
+	// former single HBox (≈350 logical units) pushed the card's minimum
+	// width past every compact viewport.
+	presetBar := container.NewVBox()
 	for _, p := range []struct{ label, action string }{
 		{"Inspect source", "inspect"},
 		{"Run command", "command"},
@@ -61,7 +64,7 @@ func buildLabView(ap *App) fyne.CanvasObject {
 		v.errLabel, nil, nil,
 		container.NewScroll(container.NewVBox(
 			widget.NewCard("Tasks", "", v.tasks),
-			widget.NewCard("Action console", "Server-validated actions only", container.NewVBox(presetBar, v.actionIn, v.runBtn, note)),
+			cardFit("Action console", "Server-validated actions only", container.NewVBox(presetBar, v.actionIn, v.runBtn, note)),
 		)),
 	)
 	v.refresh()
@@ -144,7 +147,7 @@ func buildAutomationView(ap *App) fyne.CanvasObject {
 		PageHeader("Automation", "Scheduled tasks and artifacts", v.refreshB),
 		v.errLabel, nil, nil,
 		container.NewScroll(container.NewVBox(
-			widget.NewCard("Task controls", "Applies the action typed below to the task id typed below (server-validated)", container.NewVBox(actions)),
+			cardFit("Task controls", "Applies the action typed below to the task id typed below (server-validated)", container.NewVBox(actions)),
 			widget.NewCard("Tasks", "", v.tasks),
 			widget.NewCard("Artifacts", "", v.arts),
 		)),

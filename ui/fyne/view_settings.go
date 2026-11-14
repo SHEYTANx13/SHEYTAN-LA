@@ -425,7 +425,7 @@ func (v *settingsView) buildToolsMatrix() fyne.CanvasObject {
 			box.Refresh()
 		})
 	}()
-	return widget.NewCard("Tool access", "Server-side permissions still apply to every tool", box)
+	return cardFit("Tool access", "Server-side permissions still apply to every tool", box)
 }
 
 func (v *settingsView) toolsPatched(name string, on bool) {
@@ -462,18 +462,31 @@ func (v *settingsView) toolsPatched(name string, on bool) {
 func (v *settingsView) buildDiagnostics() fyne.CanvasObject {
 	logs := wrappedLabel("Loading logs…")
 	go func() {
-		entries, err := v.ap.Client().Logs(v.ap.Ctx(), 120)
+		entries, meta, err := v.ap.Client().Logs(v.ap.Ctx(), 120)
 		if err != nil {
 			uiDo(func() { v.showErr("logs", err) })
 			return
 		}
 		var b strings.Builder
+		// The diagnostics surface names the resolved log directory too —
+		// an operator collecting evidence needs to know where the files
+		// live (and whether a fallback is active).
+		if meta.Dir != "" {
+			b.WriteString(fmt.Sprintf("Log folder: %s", meta.Dir))
+			if meta.SinkHealth.FallbackReason != "" {
+				b.WriteString(" (fallback active)")
+			}
+			if !meta.SinkHealth.SinksReady {
+				b.WriteString(" (sink problem — events may not persist)")
+			}
+			b.WriteString("\n\n")
+		}
 		for _, e := range entries {
 			b.WriteString(fmt.Sprintf("%s [%s] %s: %s\n", e.TS, strings.ToUpper(e.Level), e.Sub, e.Msg))
 		}
 		uiDo(func() { logs.SetText(b.String()) })
 	}()
-	return container.NewScroll(widget.NewCard("Recent log entries", "Redacted by the core", logs))
+	return container.NewScroll(cardFit("Recent log entries", "Redacted by the core", logs))
 }
 
 func (v *settingsView) load() {

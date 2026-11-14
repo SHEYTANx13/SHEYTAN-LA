@@ -446,11 +446,12 @@ fi
 # 16. workflow shape contract ----------------------------------------------
 yml_ok=1
 [ -f "$workflow" ] || yml_ok=0
-# exactly ONE upload of the single log artifact, by immutable SHA,
-# archive:false, with the stable display name
+# exactly ONE upload of the single log artifact, by upstream release
+# tag (the v1.11.1 action-reference policy), archive:false, with the
+# stable display name
 [ "$(grep -c 'path: SHEYTAN-LA-all-logs.txt' "$workflow")" = "1" ] || yml_ok=0
 grep -q 'name: SHEYTAN-LA-all-logs.txt' "$workflow" || yml_ok=0
-grep -q 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9' "$workflow" || yml_ok=0
+grep -q 'actions/upload-artifact@v7' "$workflow" || yml_ok=0
 [ "$(grep -c 'archive: false' "$workflow")" = "1" ] || yml_ok=0
 # no per-job log-part uploads and no smoke-output uploads remain
 [ "$(grep -c 'name: .*-logs-part' "$workflow")" = "0" ] || yml_ok=0

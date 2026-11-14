@@ -406,7 +406,15 @@ func TestNSISDefinesQuotedByWorkflow(t *testing.T) {
 	var invocationLines []int
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.Contains(trimmed, "makensis.exe") && !strings.HasPrefix(trimmed, "#") {
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		// v1.11.1: the NSIS install step now also NAMES the makensis path
+		// (existence check, /VERSION recording) without invoking it — an
+		// invocation line must carry an invocation marker (the pwsh call
+		// operator &) or a makensis define, so path/variable lines are
+		// not counted as the quoting contract's subject.
+		if strings.Contains(trimmed, "makensis.exe") && (strings.Contains(trimmed, "&") || strings.Contains(trimmed, "-D")) {
 			invocations++
 			invocationLines = append(invocationLines, i+1)
 		}

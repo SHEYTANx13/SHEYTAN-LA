@@ -46,13 +46,17 @@ type CoreClient struct {
 	version string
 }
 
-// NewCoreClient builds a client for the localipc endpoint. The endpoint is
-// dialed directly (no TCP), preserving the transport identity boundary:
-// uid peer check on Unix, per-user DACL on Windows.
+// NewCoreClient builds a client for the localipc endpoint. Both the HTTP
+// and the WebSocket transports dial through the ONE canonical
+// platform-aware localipc.DialContext (v1.11.1 Windows IPC repair: the
+// former unconditional "unix" dial broke every tab — including Logs — on
+// Windows, where the endpoint is a named pipe). No TCP fallback, no
+// second dial implementation: the transport identity boundary (uid peer
+// check on Unix, per-user DACL + current-user SID check on Windows) is
+// preserved by construction.
 func NewCoreClient(endpoint, key string) *CoreClient {
 	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(ctx, "unix", endpoint)
+		return localipc.DialContext(ctx, endpoint)
 	}
 	return &CoreClient{
 		httpc: &http.Client{
@@ -173,15 +177,28 @@ type Message struct {
 
 // Session mirrors sessions.Session.
 type Session struct {
-	ID        string     `json:"id"`
-	Title     string     `json:"title,omitempty"`
-	Model     string     `json:"model,omitempty"`
-	CreatedAt *time.Time `json:"createdAt,omitempty"`
-	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
-	Mode      string     `json:"mode,omitempty"`
-	Context   *int       `json:"context,omitempty"`
-	Messages  []Message  `json:"messages,omitempty"`
-	MsgCount  *int       `json:"msgCount,omitempty"`
+	ID        string          `json:"id"`
+	Title     string          `json:"title,omitempty"`
+	Model     string          `json:"model,omitempty"`
+	CreatedAt *time.Time      `json:"createdAt,omitempty"`
+	UpdatedAt *time.Time      `json:"updatedAt,omitempty"`
+	Mode      string          `json:"mode,omitempty"`
+	Context   *SessionContext `json:"context,omitempty"`
+	Messages  []Message       `json:"messages,omitempty"`
+	MsgCount  *int            `json:"msgCount,omitempty"`
+}
+
+// SessionContext mirrors sessions.Context — an OBJECT on the wire. The
+// former *int mirror could not decode a real core's session payload (the
+// first production round-trip test, v1.11.1, caught the shape drift the
+// fake-core UI tests had masked); the UI does not interpret the policy,
+// it only needs the decode to succeed.
+type SessionContext struct {
+	SystemPrompt  string   `json:"systemPrompt,omitempty"`
+	AttachedFiles []string `json:"attachedFiles,omitempty"`
+	AttachmentIDs []string `json:"attachmentIds,omitempty"`
+	MaxIterations int      `json:"maxIterations,omitempty"`
+	ContextTokens int      `json:"contextTokens,omitempty"`
 }
 
 // Config mirrors the redacted config JSON published by GET /api/config.
@@ -421,6 +438,23 @@ type LogEntry struct {
 	Level string `json:"level,omitempty"`
 	Sub   string `json:"sub,omitempty"`
 	Msg   string `json:"msg,omitempty"`
+}
+
+// SinkHealth mirrors the core's observable log-sink health payload
+// (v1.11.1): SinksReady says the file sinks accepted the last event; a
+// non-empty FallbackReason or LastErr must be shown, never hidden.
+type SinkHealth struct {
+	Dir            string `json:"dir,omitempty"`
+	SinksReady     bool   `json:"sinksReady"`
+	LastErr        string `json:"lastErr,omitempty"`
+	FallbackReason string `json:"fallbackReason,omitempty"`
+	EmergencyLines int    `json:"emergencyLines"`
+}
+
+// LogsMeta mirrors the operator fields of GET /api/logs.
+type LogsMeta struct {
+	Dir        string     `json:"dir,omitempty"`
+	SinkHealth SinkHealth `json:"sinkHealth"`
 }
 
 // engineDiagnosticsSubset mirrors llm.EngineDiagnostics (only the fields
@@ -897,16 +931,20 @@ func (c *CoreClient) AutomationTaskAction(ctx context.Context, id, action string
 	return c.do(ctx, http.MethodPost, "/api/automation/tasks/"+url.PathEscape(id)+"/"+url.PathEscape(action), nil, nil)
 }
 
-// Logs fetches the redacted log ring.
-func (c *CoreClient) Logs(ctx context.Context, limit int) ([]LogEntry, error) {
+// Logs fetches the redacted log ring plus the operator metadata (the
+// resolved log directory and sink health) — the Logs panel needs both to
+// report WHERE logs live and WHETHER the sinks are actually healthy.
+func (c *CoreClient) Logs(ctx context.Context, limit int) ([]LogEntry, LogsMeta, error) {
 	if limit <= 0 {
 		limit = 200
 	}
 	var out struct {
-		Entries []LogEntry `json:"entries"`
+		Entries    []LogEntry `json:"entries"`
+		Dir        string     `json:"dir"`
+		SinkHealth SinkHealth `json:"sinkHealth"`
 	}
 	err := c.do(ctx, http.MethodGet, fmt.Sprintf("/api/logs?limit=%d", limit), nil, &out)
-	return out.Entries, err
+	return out.Entries, LogsMeta{Dir: out.Dir, SinkHealth: out.SinkHealth}, err
 }
 
 // Tools fetches the available-tool catalog.

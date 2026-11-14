@@ -106,7 +106,7 @@ func buildChatView(ap *App) fyne.CanvasObject {
 	// stream accumulator only. Its Stop lives in the composer's single
 	// primary slot — no second competing Stop button here.
 	v.liveBox = container.NewVBox(
-		widget.NewLabelWithStyle("Live — provisional, settled below on completion", fyne.TextAlignLeading, fyne.TextStyle{Bold: true, Italic: true}),
+		liveCaption(),
 		v.live,
 	)
 	v.liveBox.Hide()
@@ -163,8 +163,18 @@ func buildChatView(ap *App) fyne.CanvasObject {
 	// Composer: gated ONLY while a run is live (zero-session send is the
 	// contract — an empty session list must not wedge the composer). The
 	// primary action is ONE slot: Send while idle, Stop while busy.
+	//
+	// v1.11.1 button-fit repair: the former single HBox (options +
+	// spacer + two actions + the primary slot) overflowed the content
+	// width at phone sizes — the trailing buttons rendered outside the
+	// visible area, unreachable and clipped. The composer now stacks by
+	// role: generation options, artifact actions, the ONE primary action
+	// (full width), then the input — every control keeps its full
+	// MinSize at every matrix width.
 	composer := container.NewVBox(
-		container.NewHBox(v.thinking, v.netSearch, layoutSpacer(), v.wsBtn, v.regenBtn, v.slot.canvas()),
+		container.NewHBox(v.thinking, v.netSearch),
+		container.NewHBox(v.wsBtn, v.regenBtn),
+		v.slot.canvas(),
 		v.input,
 	)
 	controls := container.NewHBox(v.newBtn, v.renBtn, v.delBtn)
@@ -179,8 +189,11 @@ func buildChatView(ap *App) fyne.CanvasObject {
 
 	liveColumn := container.NewBorder(nil, composer, nil, nil, container.NewScroll(container.NewVBox(v.emptyBox, v.transcript, v.liveBox, v.artCard.canvas())))
 
-	split := container.NewHSplit(sessionsPane, liveColumn)
-	split.Offset = 0.28
+	// v1.11.1 compact repair: the adaptive dual pane stacks the sessions
+	// list above the conversation below the compact breakpoint (the
+	// documented one-column contract) and keeps the 0.28 side-by-side
+	// split above it.
+	split := newAdaptiveDualPane(0.28, sessionsPane, liveColumn)
 	root := container.NewBorder(
 		PageHeader("Chat", "Conversations in the chat space"),
 		v.errLabel,
@@ -202,12 +215,6 @@ func buildChatView(ap *App) fyne.CanvasObject {
 	v.sessions = ap.rt.Sessions()
 	v.attachIfActive()
 	return root
-}
-
-// helpers shared by chat/agent views
-
-func layoutSpacer() fyne.CanvasObject {
-	return widget.NewLabel("")
 }
 
 func roleLabel(role string) string {
@@ -495,3 +502,12 @@ func sessionRowText(s Session, active bool) string {
 // ensure version import used (honest status line carries the core version).
 var _ = config.AppVersion
 var _ = time.Now
+
+// liveCaption is the shared "Live" heading, WRAPPED so it reflows at
+// compact widths instead of escaping the content column (v1.11.1 fit
+// repair — the former rigid 331-unit label clipped on phones).
+func liveCaption() fyne.CanvasObject {
+	l := widget.NewLabelWithStyle("Live — provisional, settled below on completion", fyne.TextAlignLeading, fyne.TextStyle{Bold: true, Italic: true})
+	l.Wrapping = fyne.TextWrapWord
+	return l
+}

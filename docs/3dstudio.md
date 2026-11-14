@@ -32,14 +32,14 @@ The viewer is browser-hosted: “Open 3D Studio” starts the loopback server an
 
 ## Resource posture
 
-- **Offline**: Three.js r182 (0.182.0, MIT) is vendored under `internal/studio/assets/` and embedded into the binary with `go:embed`. No CDN, no network fetch, no Node at runtime. The only network traffic the viewer can generate is `fetch('/api/view')` to its own origin (CSP-enforced).
+- **Offline**: Three.js r187 (0.187.0, MIT) is vendored under `internal/studio/assets/` and embedded into the binary with `go:embed`. No CDN, no network fetch, no Node at runtime. The only network traffic the viewer can generate is `fetch('/api/view')` to its own origin (CSP-enforced).
 - **Render-on-demand**: no continuous animation loop. A frame is drawn on load, on camera interaction, on resize and on explicit refresh; the loop pauses entirely while the tab is hidden (`visibilitychange`). Renderer pixel ratio is capped at 2 and the renderer is created with `powerPreference: 'low-power'`.
 - **Honest degradation**: without WebGL the page says so (typed reason) and the textual topology equivalent remains fully usable — the 3D view is never faked.
 - **Dispose**: geometries, materials and the renderer are disposed on reload and on page unload.
 
 ## Asset update procedure (reproducible)
 
-1. Pick the target release from https://github.com/mrdoob/three.js/tags (the current pin is **0.182.0** — see `ThreeJSVersion` in `internal/studio/doc.go`).
+1. Pick the target release from https://github.com/mrdoob/three.js/tags (the current pin is **0.187.0** — see `ThreeJSVersion` in `internal/studio/doc.go`).
 2. Download from that exact tag (npm mirror of the release): `build/three.core.js`, `build/three.module.js`, `examples/jsm/controls/OrbitControls.js`, and the package `LICENSE`.
 3. Replace the three files under `internal/studio/assets/` and update `LICENSE-THREE.txt`; bump `ThreeJSVersion` in `internal/studio/doc.go`.
 4. Re-run the gates: `go test ./internal/studio/ ./internal/api/ ./ui/fyne/`. The viewer tests assert the embedded assets are present and served, and the security contract holds for the new files.

@@ -34,6 +34,7 @@ package releasecontract
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -168,21 +169,18 @@ func ValidateLinuxRunnerContract(workflowText string) error {
 	return nil
 }
 
-// UploadArtifactV7SHA is the official actions/upload-artifact v7.0.2
-// release commit — the verified immutable pin the desktop workflow uses
-// (verified: the tag v7.0.2 of actions/upload-artifact points at this
-// commit; archive:false semantics were checked against this revision's
-// action.yml).
-const UploadArtifactV7SHA = "cf430e030ddbb5b0abf93d22962f4752f3646cd9"
-
-// uploadArtifactAllowlist is the reviewed immutable-ref allowlist for
-// actions/upload-artifact. The pin policy is strict: ONLY a verified,
-// full-length commit SHA from this list satisfies the gate. Moving
-// major tags (@v7), branch names (@main), short/partial hashes,
-// malformed references and any unapproved SHA are rejected.
-var uploadArtifactAllowlist = map[string]bool{
-	UploadArtifactV7SHA: true,
-}
+// v1.11.1 maintenance policy change (operator-directed): external
+// workflow action references use ORDINARY UPSTREAM RELEASE TAGS
+// (checkout@v7, setup-msys2@v2, codeql-action@v4, ...), never
+// commit-hash pins, branch refs or moving aliases outside the tag
+// scheme. This is a deliberate maintainability choice: tags are mutable,
+// so the risk is mitigated by official upstream sources,
+// least-privilege permissions, the single weekly Dependabot update
+// group and the workflow contract below. The former immutable-SHA
+// allowlist was retired WITH this policy (the tag validator rejects any
+// 40-hex/partial-hash ref outright, so a hash pin can never reappear
+// silently).
+const releaseTagPattern = `^v[0-9]+(\.[0-9]+)*$`
 
 // workflowStep is the decoded subset of a workflow step the contract
 // needs. The YAML parser decodes with-block scalars (multi-line path
@@ -341,41 +339,78 @@ func ArtifactSteps(workflowText, actionID string) ([]ArtifactStep, error) {
 	return out, nil
 }
 
-// ValidateUploadArtifactPins enforces the immutable-SHA pin policy for
-// EVERY actions/upload-artifact use in the workflow: each reference
-// must be a reviewed full-length commit SHA from the allowlist. The
-// workflow must carry at least one such step (the consolidated log
-// upload) or the contract is violated by definition.
+// allActionSteps parses the workflow and returns every external action
+// use (owner/repo@ref) with its job and step identity. Local composite
+// actions (a bare path ref) are skipped — the policy governs external
+// actions only.
+func allActionSteps(workflowText string) ([]ArtifactStep, error) {
+	doc, err := parseWorkflow(workflowText)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []ArtifactStep
+	for key, job := range doc.Jobs {
+		for _, step := range job.Steps {
+			if step.Uses == "" {
+				continue
+			}
+			idx := strings.LastIndex(step.Uses, "@")
+			if idx < 0 {
+				continue // local composite action path
+			}
+			out = append(out, ArtifactStep{
+				Job:     key,
+				JobName: job.Name,
+				Step:    step.Name,
+				Uses:    step.Uses,
+				Ref:     step.Uses[idx+1:],
+			})
+		}
+	}
+	return out, nil
+}
+
+// ValidateUploadArtifactPins enforces the v1.11.1 release-tag policy for
+// EVERY external action use in the workflow: each uses: reference must
+// be an ordinary upstream release tag (v7, v6, v2, v4.39.1, ...).
+// Commit-hash pins (full or partial), branch refs (@main), moving
+// aliases outside the tag scheme and malformed references are rejected.
+// The workflow must carry at least one actions/upload-artifact step
+// (the consolidated log upload) or the contract is violated by
+// definition.
 func ValidateUploadArtifactPins(workflowText string) error {
-	steps, err := ArtifactSteps(workflowText, "actions/upload-artifact")
+	all, err := allActionSteps(workflowText)
 	if err != nil {
 		return err
 	}
-
-	if len(steps) == 0 {
-		return errors.New(
-			"no actions/upload-artifact step found — the consolidated log upload is missing from the workflow",
-		)
+	if len(all) == 0 {
+		return errors.New("no external action uses found in the workflow — the action-reference policy has no subject")
 	}
 
+	hasUpload := false
 	var bad []string
-
-	for _, s := range steps {
-		if !uploadArtifactAllowlist[s.Ref] {
+	tagRe := regexp.MustCompile(releaseTagPattern)
+	for _, s := range all {
+		if s.Uses[:len(s.Uses)-len(s.Ref)-1] == "actions/upload-artifact" {
+			hasUpload = true
+		}
+		if !tagRe.MatchString(s.Ref) {
 			bad = append(bad, fmt.Sprintf(
-				"job %q step %q uses %q — not the reviewed immutable upload-artifact v7.0.2 commit SHA %s (moving tags, branch names, partial hashes and unapproved SHAs are rejected)",
-				s.Job, s.Step, s.Uses, UploadArtifactV7SHA,
+				"job %q step %q uses %q — the ref is not an upstream release tag (vN or vN.N.N). Commit hashes, digest pins, branch refs and moving aliases are rejected by the v1.11.1 action-reference policy",
+				s.Job, s.Step, s.Uses,
 			))
 		}
 	}
-
 	if len(bad) > 0 {
 		return fmt.Errorf(
-			"upload-artifact pin policy violated (%d of %d steps unapproved):\n  %s",
-			len(bad), len(steps), strings.Join(bad, "\n  "),
+			"action release-tag policy violated (%d of %d uses):\n  %s",
+			len(bad), len(all), strings.Join(bad, "\n  "),
 		)
 	}
-
+	if !hasUpload {
+		return errors.New("no actions/upload-artifact step found — the consolidated log upload is missing from the workflow")
+	}
 	return nil
 }
 

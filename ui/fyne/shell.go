@@ -101,10 +101,13 @@ type shell struct {
 	rail        *fyne.Container
 	topNav      fyne.CanvasObject // compact top strip (navTopStrip zone)
 	status      *widget.Label
+	retryB      *widget.Button               // v1.11.1: safe reconnect action, shown only when disconnected
+	errLine     *widget.Label                // v1.11.1: the actionable connection error, shown only when disconnected
 	views       map[string]fyne.CanvasObject // cached built views (rebuilt on demand)
 	active      string
 	bootErr     error
 	connected   bool
+	connecting  bool // v1.11.1: explicit Connecting state (never guess from absence)
 	coreVersion string
 	onStream    []func()
 	onSettled   []func()
@@ -201,6 +204,24 @@ func (s *shell) root() fyne.CanvasObject {
 	s.status.TextStyle = fyne.TextStyle{Monospace: true}
 	s.status.Truncation = fyne.TextTruncateEllipsis
 
+	// v1.11.1: the safe reconnect action. Visible ONLY in the
+	// disconnected state; retry is bounded by the app's single-flight
+	// bootstrap guard (no retry storms).
+	s.retryB = widget.NewButtonWithIcon("Retry", theme.ViewRefreshIcon(), func() {
+		if ap := s.app; ap != nil {
+			ap.retryBootstrap()
+		}
+	})
+	s.retryB.Importance = widget.HighImportance
+	s.retryB.Hide()
+
+	// v1.11.1: the actionable error line — shown ONLY in the
+	// disconnected state, next to the retry action.
+	s.errLine = widget.NewLabel("")
+	s.errLine.Importance = widget.DangerImportance
+	s.errLine.Wrapping = fyne.TextWrapWord
+	s.errLine.Hide()
+
 	// Primary destinations in the rail.
 	for _, v := range primaryViews {
 		vv := v
@@ -238,7 +259,7 @@ func (s *shell) root() fyne.CanvasObject {
 	strip.Add(more)
 	s.topNav = container.NewHScroll(strip)
 
-	statusBar := container.NewVBox(widget.NewSeparator(), s.status)
+	statusBar := container.NewVBox(widget.NewSeparator(), container.NewHBox(s.status, s.retryB), s.errLine)
 	// ONE parent per object: the border owns ONLY the body + status
 	// bar — the rail is owned by the responsive container below.
 	content := container.NewBorder(nil, statusBar, nil, nil, s.body)
@@ -462,6 +483,12 @@ func (s *shell) show(id string) {
 				break
 			}
 		}
+		// v1.11.1 hardening: an unknown id must never reach the body —
+		// container.NewMax(nil) panics the moment a real canvas lays the
+		// stack out (showSub already guards; show now does too).
+		if v == nil {
+			return
+		}
 		s.mu.Lock()
 		s.views[id] = v
 		s.mu.Unlock()
@@ -493,11 +520,21 @@ func (s *shell) showSub(id string) {
 	s.body.Refresh()
 }
 
+// setConnecting marks the bootstrap in flight (v1.11.1: the status
+// surface must show an explicit Connecting state, never a guess).
+func (s *shell) setConnecting() {
+	s.mu.Lock()
+	s.connecting = true
+	s.mu.Unlock()
+	s.updateStatus()
+}
+
 // setBootError renders a typed connection failure honestly.
 func (s *shell) setBootError(err error) {
 	s.mu.Lock()
 	s.bootErr = err
 	s.connected = false
+	s.connecting = false
 	s.mu.Unlock()
 	s.updateStatus()
 }
@@ -506,6 +543,7 @@ func (s *shell) setBootError(err error) {
 func (s *shell) setConnected() {
 	s.mu.Lock()
 	s.connected = true
+	s.connecting = false
 	s.bootErr = nil
 	s.mu.Unlock()
 	s.updateStatus()
@@ -517,6 +555,8 @@ func (s *shell) updateStatus() {
 	conn := "disconnected"
 	if s.connected {
 		conn = "connected"
+	} else if s.connecting {
+		conn = "connecting"
 	}
 	ver := s.coreVersion
 	if ver == "" {
@@ -528,6 +568,18 @@ func (s *shell) updateStatus() {
 	}
 	mode := s.app.rt.Mode()
 	s.status.SetText(fmt.Sprintf("%s · %s · mode %s%s", conn, ver, mode, model))
+
+	// v1.11.1: an actionable error + a safe retry surface in the
+	// disconnected state (the retry button marshals through the app's
+	// single-flight bootstrap guard; Connecting/Connected hide it).
+	if s.connected || s.connecting || s.bootErr == nil {
+		s.retryB.Hide()
+		s.errLine.Hide()
+	} else {
+		s.retryB.Show()
+		s.errLine.SetText("Not connected: " + s.bootErr.Error() + " — check that the app was started normally; Retry re-attempts the connection.")
+		s.errLine.Show()
+	}
 }
 
 // registerShortcuts wires desktop keyboard navigation (Ctrl+1..8 for the

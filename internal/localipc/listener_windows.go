@@ -271,81 +271,10 @@ func waitNamedPipe(name string, timeoutMS uint32) error {
 	return nil
 }
 
-// dialEndpoint opens a connection to the endpoint, implementing the
-// documented Windows named-pipe CLIENT contract for ERROR_PIPE_BUSY
-// (Microsoft, Named Pipe Client): attempt CreateFile; on ERROR_PIPE_BUSY
-// call WaitNamedPipe and — while the wait reports an instance becoming
-// available — retry CreateFile immediately. There is NO attempt count
-// (v1.10.12, W-BUDGET): the only bound is pipeBusyDialBudget, the total
-// busy-dial wall-clock deadline; each individual wait stays capped by
-// pipeBusyWaitMS and is clamped to the remaining budget, so the stated
-// total is honest. Honest early exits: a CreateFile error other than
-// ERROR_PIPE_BUSY returns as-is (ERROR_FILE_NOT_FOUND — the pipe does
-// not exist — is never retried into existence); a wait that reports
-// ERROR_FILE_NOT_FOUND returns that error (the pipe name vanished — the
-// server is gone; not a busy condition); a wait that times out with no
-// instance (the server stopped publishing — a real failure) or an
-// unresolved WaitNamedPipe proc (waiting is impossible; the loop never
-// spins on a broken wait facility) surfaces the ORIGINAL busy error. On
-// deadline exhaustion the typed ErrBusyDialBudgetExhausted names the
-// budget and the elapsed time.
-func dialEndpoint(endpoint string) (net.Conn, error) {
-	name := pipeName(endpoint)
-	start := time.Now()
-	for {
-		handle, err := windows.CreateFile(
-			windows.StringToUTF16Ptr(name),
-			windows.GENERIC_READ|windows.GENERIC_WRITE,
-			0,   // exclusive
-			nil, // no security attributes on the client side
-			windows.OPEN_EXISTING,
-			windows.FILE_FLAG_OVERLAPPED,
-			0,
-		)
-		if err == nil {
-			return newPipeConn(handle)
-		}
-		if err != windows.ERROR_PIPE_BUSY {
-			return nil, err
-		}
-		elapsed := time.Since(start)
-		if elapsed >= pipeBusyDialBudget {
-			return nil, fmt.Errorf("localipc: dial %s: %w (%v budget, %v elapsed): %w",
-				name, ErrBusyDialBudgetExhausted, pipeBusyDialBudget,
-				elapsed.Round(time.Millisecond), err)
-		}
-		// The documented client contract: wait for an instance to become
-		// available, then retry the open. The wait is the OS's readiness
-		// notification — event-driven, never a sleep-based poll — and is
-		// clamped to the remaining budget so the total stays within the
-		// stated deadline.
-		waitMS := uint32(pipeBusyWaitMS)
-		if remainingMS := uint32((pipeBusyDialBudget - elapsed) / time.Millisecond); remainingMS < waitMS {
-			waitMS = remainingMS
-		}
-		if waitMS == 0 {
-			// Sub-millisecond budget left: one more open attempt, then
-			// the budget check above exits.
-			continue
-		}
-		werr := waitNamedPipe(name, waitMS)
-		if werr == nil {
-			// An instance became available: retry CreateFile NOW — no
-			// attempt counter, the deadline is the only bound.
-			continue
-		}
-		if errors.Is(werr, windows.ERROR_FILE_NOT_FOUND) {
-			// The pipe name vanished — the server is gone. That error
-			// is returned honestly; it is not a busy condition.
-			return nil, fmt.Errorf("localipc: dial %s: pipe vanished while busy-waiting: %w", name, werr)
-		}
-		// The wait did NOT report an instance: a timeout (the server
-		// stopped publishing — a real failure) or an unresolved proc
-		// (waiting is impossible). Surface the ORIGINAL busy error
-		// honestly.
-		return nil, fmt.Errorf("localipc: dial %s: no listening pipe instance after a %dms busy wait: %w", name, waitMS, err)
-	}
-}
+// dialEndpoint and the context-aware dial loop it delegates to now live
+// in dial_windows.go (v1.11.1 Windows IPC repair: one canonical,
+// context-aware client dial shared by the Fyne HTTP/WebSocket transports
+// and the listener's probe paths).
 
 // pipeListener accepts one instance at a time; http.Serve serializes
 // Accept anyway. The instance inventory is governed by mu, and the W-INV

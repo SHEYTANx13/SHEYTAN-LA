@@ -1,19 +1,45 @@
-# Dependabot — keeps the pinned third-party actions and Go modules current.
-# The build workflow pins actions/upload-artifact (and friends) to full
-# immutable SHAs; this config gives those pins a reviewed update path.
+# Dependabot — ONE multi-ecosystem update group for every supported
+# dependency ecosystem in this repository (github-actions + gomod).
+#
+# v1.11.1 maintenance: all version updates arrive as ONE combined
+# scheduled PR/branch per week (the all-dependencies group below), not
+# one PR per action or module. The open-pull-requests-limit of 1 per
+# ecosystem is a defensive cap on VERSION updates inside the group.
+#
+# GitHub platform limitations, documented for the operator:
+#   - Dependabot SECURITY-update PRs are controlled separately by GitHub
+#     (a separate fixed limit, unaffected by open-pull-requests-limit).
+#     If an absolute maximum of one Dependabot branch including security
+#     PRs is required, disable "Dependabot security updates" in
+#     Settings → Code security and analysis — the YAML cannot enforce it.
+#     Do NOT disable vulnerability alerts, the dependency graph or CodeQL.
+#   - Grouped branch names carry a platform-generated uniqueness digest
+#     suffix; it is not an action commit-hash pin and cannot be removed.
+#
+# Manual versions (NSIS 3.13, MSYS2/UCRT64 packages, the vendored
+# Three.js assets, downloaded llama.cpp engine bundles) are managed by
+# the application-wide dependency inventory in docs/UPDATE.md and the
+# workflow pins — Dependabot does not manage them.
 version: 2
+
+multi-ecosystem-groups:
+  all-dependencies:
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+
 updates:
   - package-ecosystem: github-actions
     directory: /
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
-    groups:
-      actions:
-        patterns:
-          - "*"
+    patterns:
+      - "*"
+    open-pull-requests-limit: 1
+    multi-ecosystem-group: all-dependencies
+
   - package-ecosystem: gomod
     directory: /
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+    patterns:
+      - "*"
+    open-pull-requests-limit: 1
+    multi-ecosystem-group: all-dependencies

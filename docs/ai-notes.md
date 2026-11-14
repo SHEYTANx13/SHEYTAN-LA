@@ -1,527 +1,92 @@
-# AI Notes
+# AI Notes — Current Technical Hand-Off
 
-**This is the only file AI agents may freely update for working notes, progress, and session state.**
-
-`docs/Dev-Notes.md` is reserved for the human developer and must not be edited by AI agents unless the human explicitly instructs it in the current prompt.
-
----
-
-## Prior-session lineage (one line each)
-
-- **#117**: Windows smoke first came alive (app launched, closed cleanly) — diagnosability discipline born.
-- **#118 (41060689195)**: gofmt 1.27 pin + preflight tee; collector five-part rewiring; RUNNER_TEMP smoke + ZIP-purity gates; pinned Mesa 26.2.5; release-manifest.json.
-- **#119**: Mesa two-DLL smoke-only contract + ImportAudit; updater manifest host repointed to the code repo.
-- **#120 (41223763993)**: staging bare red closed both ways; 3-attempt download hardening; titled ::error + tee discipline everywhere.
-- **#122 (41239634246)**: NSIS macro-name fix + installer branding/license page/makensis tee/marker assertion; pinned by 4 releasecontract tests.
-- **#123 (41245854150)**: quoted `"-DVERSION=…"` fix + `TestNSISDefinesQuotedByWorkflow`; Dev-Notes UI/UX research append (operator-authorized); Phase 0 executed (theme tokens + docs/ui-contract.md).
-- **#124 (41256606070)**: quoting fix HELD; the NEXT stacked defect fired — the generator's `!endmacro` terminator; `!macroend` fix + post-write validation + fail-closed Go guard; typed missing-engine state + gate-aware pending diagnostics; UI Phase 1 (composer contract, primary slot, focus return, empty states); all pre-makensis surfaces GREEN.
-- **#125 (41304350626, commit c8bad23f7e3e6c052538ad18b16dadc952648d14)**: all pre-makensis surfaces GREEN; the ONE red step was the post-compile marker assertion — makensis compiled the installer but the marker never appeared. #124's `!macroend` and quoted `-DVERSION` fixes HELD.
-- **#127 (41901967798, commit e2d8ded1963a705729d19fd29fc0c66fd22ea713)**: three-probe red (release_surface literal @v7 check vs the immutable SHA pin; TestWorkflowStableArtifactNamesExact CRLF scanner leak; TestStopDuringRestartBackoffCancelsRestart boot-commit swallow race) — repaired and locally verified in the 2026-11-05 session below.
-- **#126 (41338124787, commit db9c816dc272673f124e30713766b8c9e3a4d2d2)**: v1.11.0 FULLY GREEN — preflight/core-audit/Fyne-UI/Windows-x64/Linux-x64/consolidated-logs all succeeded; NSIS compile + REAL silent install/uninstall round-trip smoke PASS with 8 SHA-256 user-data sentinels preserved byte-for-byte; core/headless + race gates green; stress 47/0/0/0; release/tag-only job correctly skipped. This is the baseline for the post-v1.11.0 session below.
+**This is the only file AI agents freely update.** It carries the
+current working state an agent needs BEFORE reading code: live
+constraints, blockers, known evidence and the next actionable step.
+It is a snapshot, not a diary — per-session narratives, per-run recaps
+and finished task lists live in git history and
+[`changelog.md`](changelog.md). Do not append a new diary entry each
+session; rewrite this note so it stays true.
 
 ---
 
-## Session — 2026-11-04 (run #41548925352 stabilization work order: P1 log-artifact contract) — FINAL HAND-OFF
+## Current state (2026-11-14, v1.11.1 maintenance candidate)
 
-**Summary and success condition**
-- Baseline: live clone of origin/main at 87452b69d03df794b01d90a2bf6eb3143ad8ffab (3 LICENSE-only commits ahead of the red run's 85d020d…, ancestor-verified); worktree clean; local branch `work/v1.11.1-stabilization-41548925352`. No remote mutation of any kind; no push; no tag. Hosted runs #133/#8 on HEAD are CANCELLED (neither green nor red) — the newest real code evidence remains run #130 (41548925352, failure on the Fyne UI gate) and CodeQL run #5 (41548925285, success with open alerts).
-- THIS session's host has NO Go toolchain and NO GL/Wayland headers (the work order forbids installing large toolchains), so: P0 (Model Studio) was root-caused statically to exact line evidence and shipped as a PATCH SPEC (below) — no Go source was edited blind; P1 (single plain-text run-log artifact) was IMPLEMENTED and LOCALLY TESTED (bash collector + 14 offline fixtures, 14 pass / 0 fail); P2 Windows package pipeline preserved untouched, Linux TAR.GZ/DEB deferred (needs Go builds; §7.3 discipline); P3 CodeQL live inventory UNKNOWN (alerts API requires auth — HTTP 401 unauthenticated; never interpreted as zero).
-- **Model Studio root cause (static, exact):** `ui/fyne/panels.go:263` seeds `studioLabel` with the STATIC text "Inherit is the default state: …" at construction, while `refreshStudio()` (panels.go:902-931) populates `studioSys.Options` only later inside `uiDo` after the async `Systems()` fetch returns. The shared helper (`model_studio_ui_test.go:40`) waits for that static label — true at t=0 — then calls `studioSys.SetSelectedIndex(1)`/`(0)` while Options is still empty; Fyne v2.8.2 drops out-of-range selections without firing OnChanged, so `studioSystemChanged()` never runs: ApplyBinding times out at line 108 ("binding selects populated") and ApplyErrorRearms at line 158 ("Apply armed") — exactly the recorded run #130 failure lines. The two passing tests wait on REAL readiness signals (options length; unavailable label). Product-truth defect confirmed: loading renders as if "inherit" were a resolved binding. Required fix (next Go-capable session): explicit loading state (label "Loading AI Systems…", selects+Apply disabled), distinct empty state, enable-on-ready, helper waits for `len(studioSys.Options) > 0` (the passing test's signal); optionally a fakecore `systemsBlock` barrier + generation counter for stale-response protection. NO P0 source change was committed (no compile/test evidence possible here — §5.1/§10.1 discipline).
-- **P1 landed (3 files):** `scripts/ci/consolidate-run-log.sh` rewritten to collect the run-attempt logs archive (GET /repos/{repo}/actions/runs/{id}/attempts/{n}/logs) + paginated jobs metadata; deterministic plain-text report (header → run summary → error/warning indexes → NEVER_STARTED / MISSING LOG SOURCE → collector diagnostics → full logs in jobs-API order with job/step boundaries preserved); secret redaction (token value, ghp_/github_pat_, AWS keys, Authorization headers, URL credentials, PEM headers); token sent only to the API host — the signed redirect is https-validated and fetched by a credential-free curl; size-capped, zip-integrity + traversal/symlink rejected, fail closed AFTER the report is written. `build-desktop.yml`: per-job `*-logs-part` uploads + Windows smoke-output upload REMOVED (6 steps), consolidate-logs rewritten (job-scoped permissions: contents:read + actions:read), ONE upload: upload-artifact pinned to the verified immutable v7 commit cf430e030ddbb5b0abf93d22962f4752f3646cd9 with `archive: false` → the artifact IS the file `SHEYTAN-LA-all-logs.txt`; overwrite:true; if-no-files-found:error; a collector-verdict step fails the job after the upload when coverage is incomplete. Package uploads success-gated (no always()) + if-no-files-found:error + the same SHA pin (§7.4: no partial bundles). Fixture suite rewritten to the new contract (14 cases, incl. a workflow-shape contract and the signed-URL isolation source contract); the audit job's fixture gate re-runs it hosted.
-- **Verification (LOCAL-TESTED, bash class):** YAML parses (PyYAML 6.0.3; jobs: preflight, audit, ui, build-windows, build-linux, consolidate-logs, release); `bash -n` clean; fixtures 14 pass / 0 fail. gofmt/go build/go vet/go test NOT RUN (no Go) — the changed surfaces are bash + YAML only.
-- **Deferred/backlog:** P0 fix + tests (spec above; ui/fyne suite is hosted-class); Linux TAR.GZ + real .deb (§7.3: not startable without Go; existing Linux ZIP pipeline preserved); CodeQL 287-alert triage (live API needs auth; the workflow's export-alert-report artifact is the retrieval path); remaining build-desktop.yml tag pins (checkout/setup-go/cache/msys2/download-artifact/gh-release — pre-existing actions/unpinned-tag debt); Dev-Notes untouched (sha256 1f5e4244563425aeadf814c2db686b46d5871dc11df9abbd546b2b230958c01e re-verified); no version bump (AppVersion/productVersion/SIGNATURE all 1.11.1; zero 1.11.2 strings repo-wide).
+The branch `maintenance/v1.11.1-windows-ipc` (local, unpushed) carries
+the Windows IPC repair and the maintenance pass described in
+[`changelog.md`](changelog.md) under the existing 1.11.1 maintenance
+heading. Baseline: `c8fc15e` on main (green run 43455711025). Product
+version stays 1.11.1 everywhere. The full evidence inventory for this
+candidate ships in `note.md` beside the source ZIP.
 
----
+## Live architectural constraints (unchanged, load-bearing)
 
-## Session — 2026-11-03 (run #41415240891 remediation + Model Studio §5.2) — FINAL HAND-OFF
+- **One authority per concern.** The Go core owns sessions, runs, models,
+  tools, approvals, policy, logging and persistence. The Fyne UI is a
+  client. Never add a second backend, UI stack or policy implementation.
+- **The ONE local transport.** Every in-process client dials through
+  `internal/localipc.DialContext` (Windows named pipe / Unix domain
+  socket). No TCP fallback, no second dial implementation, no weakened
+  DACL/peer-credential/protocol checks. Source-contract tests in
+  `ui/fyne/client_source_contract_test.go` fail the build on regressions.
+- **No sleep-based correctness; bounded everything.** Retries are
+  deadline-bounded (the Windows busy-dial budget), event-driven waits
+  only.
+- **Evidence classes are `local-static`, `hosted`, `physical`.** Build
+  success and a visible window prove nothing about IPC or runtime
+  behavior. The hosted Windows smoke now requires an IPC handshake
+  record — keep that meaning.
+- **Version identity from `internal/config.AppVersion` only.** No
+  version numbers in product-facing docs; no new tags without the human.
 
-**Summary and success condition**
-- Baseline: verified live clone of origin/main at the EXACT observed run commit 4e8c2b8150e192f997b610cd82bf07851fbc859b (title v1.11.1); worktree clean; branch `work/v1.11.1-model-studio` created locally from it. No remote mutation of any kind; no tag; no push.
-- P0 executed: (A) the version dispatch is genuinely read-only — the Linux ZIP can no longer carry probe-created runtime data; (B) the fake-engine port fixtures are ownership-aware — the freePort TOCTOU class is retired without serializing CI; (C) the version lineage is REAL — the Go authority, packaging metadata, SIGNATURE, workflow declarations and the fail-closed contract suite all say 1.11.1. Model Studio §5.2 landed at the store/API/UI seams that already own the problem. Full local verification ladder green at the final tree for every package that compiles on a GL-less host (ui/fyne is the hosted Fyne gate's class, below). **Hosted verification of THIS candidate is PENDING — no push was authorized; NO green-run claim is made for the new changes.**
+## Active blockers
 
-**Prior-request ledger (audited in the CURRENT tree, evidence per line)**
+- **chromedp/cdproto pairing.** Every stable pairing since chromedp
+  v0.17 ships the generics API rewrite (`Action[T]`, `Do`, value-returning
+  actions); `internal/browser` + `internal/tools/browser.go` still use the
+  v0.16 API. The pair is intentionally kept at chromedp v0.16.0 +
+  cdproto pseudo-version (no stable tag carries the old API) until a
+  Chrome-equipped lane can verify a real migration. Plan it as its own
+  session; do not compile-only migrate.
+- **Hosted verification of the IPC gates is pending the operator's push.**
+  No green-run claim exists for the candidate.
 
-| Request | Status | Evidence |
-|---|---|---|
-| v1.11.1 version sync (Failure C) | LANDED this session | internal/config/config.go (AppVersion "1.11.1"); build/config.yml productVersion; SIGNATURE regenerated via `go run scripts/gen-signature.go` (1 line diff); workflow APP_VERSION literals ×2; cmd/printversion doc contract; new `internal/releasecontract/version_v1111_contract_test.go` (3 tests, fail-closed proven); `TestReleaseVersionSingleSource` still green |
-| Read-only version dispatch (Failure A) | LANDED this session | cmd/root.go earlyVersionDispatch before config.Load (version case REMOVED from dispatch); cmd/version_purity_test.go (4 tests incl. zero-residue proof); hosted probe isolated + residue-asserted in build-desktop.yml |
-| Fake-engine port race (Failure B) | LANDED this session | internal/llm/llama_test.go portReservation/reservePort/reReservePort (freePort retired); fakeEngineConfig + fakeManagedEngineConfig hold+revalidate; lifecycle_v136_test.go startBareHealthServer serves ON the held listener; adoption fixture child selects+reports its own port (--port 0 + SHEYTAN_FAKE_ADDR_FILE); internal/runtime/prewarm_model_first_test.go same discipline |
-| CodeQL advanced workflow + alert report (§8.4) | LANDED (prior sessions; verified, untouched) | .github/workflows/codeql.yml at this commit carries `gh api --paginate --slurp --method GET`, security-events: read, tool filter, unarchived .txt upload — verified by inspection this session; NOT modified (no regression, no missing part) |
-| Navigation ownership (§8.2) | LANDED (prior session; preserved) | ui/fyne/shell.go single-owner root + nav_ownership_test.go present at this commit; untouched |
-| Model-selection smoothness + truthful markers (§8.1) | LANDED (prior session; preserved) | ui/fyne/panels.go highlight-only rows + Use action + phase poll present; extended this session ONLY by the additive Model Studio card |
-| preferFastest default ON (§8.1) | LANDED (prior session; preserved) | internal/config + internal/recommendation + tests present at this commit; untouched (no duplication) |
-| Minimal install root / data preservation (§8.3) | LANDED (prior session; preserved) | installer.nsi + releasecontract suites present; ZIP purity verifiers present in build-desktop.yml (they caught Failure A — retained untouched) |
-| Stable CI artifact names (§8.3) | LANDED (prior session; preserved) | artifact_naming_contract_test.go green in this session's ladder |
-| Engine update-check / user-controlled install (§8.3) | LANDED (prior session; preserved) | internal/api/engine_update.go + engine_update_test.go present; untouched |
-| Per-agent model selection (§5.2) | LANDED this session (store/API/UI subset) | aisystem.Snapshot freezes Model+RuntimeProfile+Compaction+Memory (modelstudio_v1111_test.go); Validate rejects path-like model overrides + unknown profiles against recommendation.Tasks (ONE vocabulary); API PUT validated server-side (modelstudio_systems_v1111_test.go, 3 tests); Fyne binding card (panels.go + client.go UpdateSystem + model_studio_ui_test.go — HOSTED-CLASS: compiled/tests only in the Fyne CI gate, this host has no GL) |
-| Fastest Safe default (§5.2) | LANDED (prior session; preserved) | preferFastest rides the ONE recommendation authority; the Model Studio profile picker maps to recommendation.Task ids, not new presets |
-| Resource estimates + admission (§6) | PARTIAL — pre-existing honesty surface reused, no new estimator | perf/governor/recommendation untouched (no second sampler); the estimate-before-load expander is NOT built this session — deferred below with reason |
-| Adaptive context (§6.3) | PARTIAL — existing ladder verified, expansion engine deferred | ResolveEffectiveContext/ResolveSessionContext + per-session ContextTokens clamps + contextplan pressure + continuum compaction all present and untouched; automatic discrete expansion between runs NOT built this session — deferred below with reason |
-| Dev-Notes byte-identical (§8.5) | LANDED | git diff --exit-code -- docs/Dev-Notes.md clean at the final tree |
-| No remote mutations (§4.20) | LANDED | local branch only; `git branch -a` shows no new remote ref; no push/tag/PR/dispatch |
+## Known evidence (current)
 
-**Fail-closed proofs run this session**
-- workflow APP_VERSION forced back to "1.11.0" → `TestWorkflowAppVersionTracksAuthority` FAILED with the exact drift message; restored → green.
-- Compiled headless binary `SHEYTAN-LA version` executed in an empty probe dir: prints `SHEYTAN-Local-Agent v1.11.1`, exit 0, directory byte-unchanged (the run #41415240891 probe shape, reproduced and proven clean).
+- Windows named-pipe transport: contract tests + production CoreClient
+  integration exist and run hosted; locally they are compile-verified
+  (`GOOS=windows go vet`) — the runtime authority is the hosted lane.
+- Unix transport: the same integration suite runs green on Linux
+  (handshake, read-only APIs, WebSocket attach/normal close, wrong-key
+  refusal, protocol refusal).
+- Fyne button-fit matrix + responsive viewport matrix: green on Linux;
+  hosted in the UI lane with a dedicated log.
+- CodeQL: operator reports zero outstanding errors on main; the candidate
+  has NOT been scanned (unpushed) — never claim otherwise.
 
-**Full local verification ladder at the final tree (class local-build/local-runtime, go1.27.3 linux/amd64; this host has NO OpenGL/Wayland headers, no root)**
-| Gate | Command | Result |
-|---|---|---|
-| formatting | `gofmt -l cmd internal ui` | EMPTY |
-| build | `go build ./...` | GREEN |
-| vet (headless-compilable pkgs) | `go vet ./internal/llm ./internal/runtime ./cmd ./internal/releasecontract ./internal/config ./cmd/printversion ./internal/aisystem ./internal/api …` | CLEAN |
-| cmd + printversion + config + releasecontract | `go test … -count=1` | ok (incl. 4 purity + 3 version-contract tests) |
-| llm (full engine lifecycle/transactions/adoption) | `go test ./internal/llm/ -count=1` | ok (60s) |
-| runtime (prewarm model-first) | `go test ./internal/runtime/ -count=1` | ok |
-| aisystem (Model Studio store) | `go test ./internal/aisystem/ -count=1` | ok (5 new tests) |
-| api (Model Studio systems contract) | `go test ./internal/api/ -run 'TestSystemModelStudio|TestSystemModelOverride|TestSystemProfileValidated' -count=1` | ok (3 new tests) |
-| ui/fyne suite | go test ./ui/fyne/ | **HOSTED-CLASS** — GL/Wayland headers absent on this host; the Fyne CI gate owns it. New code API-verified against the pinned fyne v2.8.2 module source (Select.Options/ClearSelected/SetSelected/SelectedIndex) and gofmt -e parse-clean |
-| stress / NSIS / collector fixtures | not re-run this session | untouched surfaces; prior-session evidence stands |
+## Unresolved risks
 
-**Deferred (honest, with reason)**
-- Resource estimate-before-load expander (§6.1/§6.2): the existing perf/governor/model-card authorities render measured + predicted values today; a NEW load-preview estimate panel needs its own admission-path integration and test ladder. Blocked by scope, not by architecture: it must extend internal/perf + the engine mutation seam without duplicating them — deliberately not rushed inside this pass (work order §6: the estimator is a safety authority, not a decoration; half an estimator is worse than none).
-- Adaptive context expansion engine (§6.3): the ceilings/budget/clamps exist (ResolveEffectiveContext → per-session ContextTokens → contextplan → continuum); the automatic discrete between-run expansion with hysteresis + Governor re-admission is a governor-adjacent behavioral change that deserves its own session with the full stress matrix (rapid growth, concurrent agents, low RAM, unknown VRAM). Not faked with a UI-only knob (work order §6.3: compaction is not expansion; a silent global change is forbidden).
-- Advanced/Manual low-level engine settings editor (§5.4): the classification table and manual editor require the capability-verified argument surface (Caps/EngineCaps) to be exposed per-option with support evidence; deferred as a coherent unit.
-- ui/fyne hosted gate: every UI change this session (client.go mirror+method, panels.go card, fakecore routes, 4 new UI tests) compiles and runs only where GL exists — the hosted Fyne gates are the definitive class, same as the prior session's canvas-only discipline.
+- The r182→r187 Three.js refresh re-applied the vendored `generateUUID`
+  CSPRNG patch; the assets are embed/compile-verified, but 3D Studio
+  runtime behavior is physical class until a browser run happens.
+- Dependabot security-update PRs are governed by a separate GitHub
+  setting; the one-group YAML cannot cap them. The manual setting path is
+  documented in `.github/dependabot.yml` and `note.md`.
 
-**File-by-file change list (20 files; +6 new)**
-- cmd/root.go — read-only early version dispatch (Failure A).
-- cmd/version_purity_test.go (NEW) — zero-side-effect version contract ×4.
-- internal/config/config.go — AppVersion 1.11.1 + authority comment.
-- build/config.yml, SIGNATURE — synchronized identity consumers.
-- cmd/printversion/main.go — doc contract updated.
-- .github/workflows/build-desktop.yml — APP_VERSION ×2 → 1.11.1; Linux version probe isolated (RUNNER_TEMP probe dir + zero-residue assertion, log teed to the repo ci-logs by absolute path).
-- internal/releasecontract/version_v1111_contract_test.go (NEW) — exact-identity + workflow-derivation contracts.
-- internal/llm/llama_test.go — portReservation/reservePort/reReservePort (freePort retired), fixture handoffs revalidated, child ephemeral mode (+serveFakeEngineOn).
-- internal/llm/lifecycle_v136_test.go — fakeManagedEngineConfig re-reserves; startBareHealthServer serves ON the held listener; adoption uses the reported ephemeral port.
-- internal/llm/rediscover_v137_test.go — reservation discipline.
-- internal/runtime/prewarm_model_first_test.go — same reservation discipline.
-- internal/aisystem/aisystem.go — Snapshot freezes Model/RuntimeProfile/Compaction/Memory; Validate: bare-name model override + ONE-vocabulary profile validation.
-- internal/aisystem/modelstudio_v1111_test.go (NEW) — 5 store tests.
-- internal/api/modelstudio_systems_v1111_test.go (NEW) — 3 API contract tests.
-- ui/fyne/client.go — AISystem mirror extended; UpdateSystem PUT.
-- ui/fyne/panels.go — Model Studio binding card (inherit-first selects, single-flight Apply, full-record PUT, store-truth label).
-- ui/fyne/fakecore_test.go — /api/systems GET+PUT fakes (round-trip, fail-path).
-- ui/fyne/model_studio_ui_test.go (NEW) — 4 UI tests (hosted class).
-- docs/changelog.md — concise 1.11.1 entry (convention: per-release entries exist).
-- docs/ai-notes.md — this hand-off. NOT touched: docs/Dev-Notes.md (verified byte-identical), README, ROADMAP, LICENSE, internal/updater, internal/workspace, CodeQL workflow.
+## Next actionable hand-off
 
-**Hand-off — what the operator should do next**
-1. Review the diff 4e8c2b8 → this branch HEAD (20 files, all listed above). The deliverable ZIP beside this note carries the exact tree.
-2. Push authorization is the operator's alone. On the next hosted run watch: Linux x64 (the isolated version probe prints "version probe left the probe directory clean"; ZIP verify must stay green), preflight (gofmt/vet), core audit (the llm suite with the owned-port fixtures), Fyne UI gates (the new model-studio tests run THERE for the first time), Windows x64 (PE/installer identities now 1.11.1 via gen-syso + -DVERSION chain).
-3. The two deferred authorities (estimate-before-load, adaptive expansion) are the recommended NEXT session scope; the store/API/UI seams they need are exactly the ones this pass verified.
-
-**Deliverables (this session, placed beside the tree by the work-order agent)**
-- SHEYTAN-LA-v1.11.1-run41415240891-remediation-source.zip — source-only archive of the committed tree (single SHEYTAN-LA/ root; excludes .git/, dist/, runtime data, generated payload-uninstall.nsh); unzip -t verified; byte size + entry count in the note.
-- SHEYTAN-LA-v1.11.1-run41415240891-UPDATE-NOTE.md — this session's operator-facing summary (evidence classes, ladder, deferred list). No patch file this session (work order: "No patch file").
+1. Operator reviews the candidate diff + `note.md`, pushes, and watches
+   the first hosted run of the new gates (Windows integration gate, IPC
+   smoke, button-fit stage).
+2. Any agent continuing here should re-verify with the smallest ladder
+   prefix: `gofmt -l cmd internal ui`, `go build ./...`,
+   `go test -tags headless ./internal/...`, then the touched packages —
+   full ladder and evidence-class rules live in [`agent.md`](agent.md).
+3. If the hosted Windows lane is red, start from
+   `ci-logs/win-ipc-integration.log` and `data\logs\app.log` inside the
+   smoke output — the gates are named for their failure stage.
 
 ---
 
-## Session — 2026-11-02 (post-v1.11.0 operator-feedback pass) — FINAL HAND-OFF
-
-**Summary and success condition**
-- Operator scope: fix the real-PC reported UX/packaging issues on top of the FULLY GREEN run #126 v1.11.0 baseline (db9c816): (A) duplicated/cluttered main navigation, (B) unsmooth model selection, (C) Smooth+Fastest safe defaults with opt-out, (D) complicated installed directory, (E) official llama.cpp/Vulkan update-check with user-controlled install, (F) CI artifact `attempt1` naming noise. ALL SIX landed as one local-only commit; the full local verification ladder is green at the final tree. **Hosted verification of THIS candidate is PENDING — no push was authorized; NO green-run claim is made for the new changes.** The run #126 baseline green (41338124787) is the operator's own observed evidence, not proof of this tree.
-
-**Branch/commit identity (LOCAL ONLY — never pushed)**
-- Work branch: `agent/post-v1110-ux-20261102`, created from the EXACT baseline db9c816dc272673f124e30713766b8c9e3a4d2d2. HEAD: the single ordinary commit on this branch, 33 files (25 modified + 8 new) — the exact SHA is recorded in the UPDATE-NOTE deliverable beside the archive (a byte-exact self-reference inside the committed tree is unstable by construction); verify with `git rev-parse agent/post-v1110-ux-20261102`. No remote branch/ref was created (verified: `git branch -a` shows no `remotes/origin/agent/*`); local `main` untouched; `origin/main` had advanced 2 operator commits (CodeQL workflow only — NOT mixed in).
-- `git diff --exit-code -- docs/Dev-Notes.md` — UNCHANGED (human-only file).
-
-**A. Navigation ownership (P0) — the operator's duplication, reproduced and fixed**
-- Root cause (concrete, in tree): `shell.root()` inserted `s.rail` BOTH as the content border's left object AND as a direct child of the responsive container — one CanvasObject, two layout parents, two paint passes at wide widths. Fail-closed proof: reintroducing the defect makes `TestShellSingleParentOwnership` FAIL with the exact root-cause message; restoring makes it pass.
-- Rebuild: single-owner tree (responsive container owns exactly rail/topNav/content); utilities (History/Models/My Tools/Logs) grouped under a muted "Utilities" rail section + the compact strip's More menu (pop-up overlay — no second tree); Ctrl+1..8 covers all eight primary views; navigation IDs/order/lazy-cache/back-behavior and the #125 deadlock fix (`TestShellShowLazyBuildDoesNotDeadlock`) preserved.
-- Tests: `ui/fyne/nav_ownership_test.go` — single-parent tree identity, one visible destination per zone swept at 360/500/640/800/999/1000/1280/1440/1920 (+ re-layout after resize), utilities reachable in every zone, one-invocation lazy-cache discipline, documented shortcut map.
-
-**B. Model selection (P1)**
-- Row selection now only HIGHLIGHTS (facts summary + armed action — never an engine transaction); the ONE explicit "Use this model" action is single-flight with a monotonic generation token and a settled-generation guard (a trailing poll tick can never repaint an intermediate phase over the terminal state). While the POST walks the backend state machine, the AUTHORITATIVE GET `/api/models/select` is polled at a bounded cadence off the UI thread (2 ms in tests, 500 ms in production; stops at terminal/cancel/error). Truthful separate markers: `● ACTIVE` = serving, `○ SELECTED` = authoritative selection (the previously DISCARDED `active` local is now the real badge source). Failure keeps the previous model active; every terminal path re-enables controls; already-serving selection offers no redundant action (the core's short-circuit mirrored in the UI). Tests: `ui/fyne/models_panel_test.go` (6) + the extended fake core's controllable selection state machine; `App.Ctx()` made nil-safe (Background fallback before Run()).
-
-**C. Smooth + Fastest defaults (P1)**
-- SmoothStream=true + TargetFPS=120 confirmed unchanged (already the v1.11.0 defaults; no fabricated "hidden Fastest toggle" was claimed — none existed). NEW `preferFastest` (config/API/UI, default ON): legacy configs without the field load ON (default-primed unmarshal); an explicit stored false SURVIVES reloads (pinned); round-trips through Save. It rides `recommendation.Input` — the ONE authority: ON takes the speed-oriented q8_0 KV choice under VERIFIED flash attention on any task (halved KV memory → more offload headroom INSIDE the measured limits); OFF = the balanced policy; the resource ladder still clamps context, GPU posture stays evidence-gated, MANUAL mode is never touched (applies only under AUTO — existing selection tests). Settings/Performance toggle labeled "fastest SAFE" with the honest caveat. Tests: `internal/config/preferfastest_v1111_test.go` (4), `internal/recommendation/preferfastest_v1111_test.go` (5), `TestPreferFastestPatchPersists` (api), `TestPreferFastestSettingsFieldPinned` (ui).
-
-**D. Minimal installed root (P1)**
-- New payload shape (one authority — staging tree feeds ZIP, NSIS `File /r`, and the generated uninstall manifest): root carries SHEYTAN-LA.exe, SHEYTAN-LA.bat (+ Uninstall.exe); ALL static content under `resources/docs` (README.txt, BUILD-INFO.txt, LICENSE.md, optional SIGNATURE) and `resources/brand` (sheytan.ico — now STAGED, one payload authority; shortcuts/AUMID/ARP icons point at `$INSTDIR\resources\brand\sheytan.ico`); the RETIRED root-level models/ + workspace/ placeholder directories no longer ship (the runtime's one-time `MigrateAppRootDirectData` fold of REAL legacy roots is untouched; user-created roots are never deleted).
-- NSIS: /FileExists assertions follow the staged tree; license page reads `resources\docs\LICENSE.md`; the uninstaller keeps the legacy hardcoded root Deletes as no-op fallbacks and removes the v1.11.1 payload through the generated manifest (bottom-up RMDir covers resources/docs, resources/brand, resources). No RMDir /r anywhere (contract re-verified green).
-- Workflow: Windows + Linux staging/BUILD-INFO/ZIP-verify rewritten (required entries include the resources tree; purity now also REJECTS retired root-level placeholder entries); install/uninstall smoke extended — installed-payload assertions on the resources tree, a NEW proof that the installer does NOT create root-level models/workspace, and the 8 SHA-256 sentinels retained with the top-level pair now explicitly USER-CREATED legacy roots (the preservation contract itself). **Class local-static for the .nsi + workflow text (no makensis on this host); the hosted Windows job remains the definitive compiler + smoke gate.**
-- Contracts: `releasecontract.go` required ZIP entries (Windows+Linux+workflow spellings) + `BrandIconName`; installer_contract license/smoke contracts updated to the new paths. The stress surface re-verifies agreement (47/0/0/0 below).
-
-**E. Engine update-check + variant reconciliation (P1/P2)**
-- NEW `GET /api/engine/update/check` (read-only): official `ggml-org/llama.cpp` resolution through the ONE variant-aware resolver (`updater.LatestTagForVariant`, new read-only wrapper) — installed tag/variant/platform, latest tag whose release ACTUALLY carries the exact variant asset (exact asset name reported; releases without it are SKIPPED — pinned), honest classes: current | update-available | offline | no-asset | error (a network failure is NEVER "no asset" — pinned) | installing | installed | install-failed.
-- NEW `POST /api/engine/update` (user-controlled install): gated exactly like variant provisioning (run-active 409, calibration 409, remote 400) + single-flight; resolves the exact-asset tag first; ALREADY-CURRENT = a no-op (no engine restart — pinned); otherwise drives the engine-owned `UpdateEngineNow` transaction (stop → stage → verify → restart → commit | rollback) in one background goroutine with live download progress on the check surface and cancellation through the existing cancel action + Close(). The scheduled updater's policy semantics are untouched (check ≠ install).
-- UI: Models panel "Engine updates" card (Check for updates / Install update (restarts engine) / Cancel download + truthful monospace status incl. progress); all network off the UI thread; the interim-label write happens on the UI-event-loop path directly (the uiDo-from-UI-thread self-deadlock was found by the tests and fixed). Tests: `internal/api/engine_update_test.go` (8; HOST-AGNOSTIC fixtures — no SetPlatformForTest in api tests: that seam writes package globals and raced the AUTO Vulkan probe goroutines earlier tests leave behind under -race; the fixtures instead derive the host's own exact asset names) + `ui/fyne/engine_update_ui_test.go` (6).
-- Variant matrix reconciled against the OFFICIAL b12032 release (2026-11-01, asset list verified live this session): `llama-b12032-bin-win-vulkan-arm64.zip` EXISTS — Windows ARM64 now advertises + names the Vulkan ZIP (same transaction as x64); `llama-b12032-bin-ubuntu-vulkan-x64.tar.gz` / all ubuntu+macos assets are `.tar.gz` — Linux/darwin stay HONESTLY not-provisionable via this build's ZIP transaction (comments corrected to cite b12032; no support boolean was flipped without a transaction). Vulkan system diagnostics/driver guidance: NOT built this session (explicitly deferred — see Remaining); no GPU/Vulkan execution claim is made anywhere in this pass.
-
-**F. Stable CI artifact names (P2)**
-- Every upload/download artifact name is stable (preflight/audit/ui/windows/linux `-logs-part`, windows/linux `-x64-package`, `SHEYTAN-LA-all-logs-run-<run_id>`); `overwrite: true` on EVERY upload (verified against the pinned actions/upload-artifact@v7 action.yml — the input exists, default false); download paths keep the per-job namespace `ci-parts/<stable-name>/` (anti-flatten rule from run #118 preserved); the attempt number survives ONLY inside the consolidated report as `--attempt` metadata. `windows-smoke-app-output` keeps run-id uniqueness, drops the attempt. Fail-closed proven: re-adding an attempt suffix fails `TestWorkflowArtifactNamesCarryNoAttemptSuffix` with the exact message.
-- Collector fixtures: cases 10/11 moved to stable names; NEW case 12 (five stable parts captured, same filename in five namespaces, zero collisions) and case 13 (rerun/overwrite shape — same names, replaced content, 5/5 coverage, no attempt-shaped directories): **13 pass / 0 fail**. New contracts: `internal/releasecontract/artifact_naming_contract_test.go` (5 tests).
-
-**Full local verification ladder at the final tree (class local-build/local-runtime, go1.27.3 linux/amd64, GOTOOLCHAIN=local, user-space CGO sysroot)**
-| Gate | Command | Result |
-|---|---|---|
-| formatting | `gofmt -l cmd internal ui` | EMPTY |
-| build | `go build ./...` | GREEN |
-| vet | `go vet ./...` | CLEAN |
-| headless core | `go test ./internal/... -tags headless -count=1` | 67 ok / 0 FAIL |
-| release contracts | `go test ./internal/releasecontract/ -count=1` | ok (incl. 5 new artifact-naming + updated installer contracts) |
-| race (7 critical pkgs) | `go test -race -tags headless -count=1 …` | 7/7 ok (api run 3× after fixing the test-seam race found by the detector) |
-| stress | `go run -tags headless ./cmd/sheytan-local-agent stress` | `STRESS-RESULT pass=47 fail=0 hangs=0 crashes=0` |
-| collector fixtures | `bash scripts/ci/consolidate-run-log-fixtures.sh` | 13 pass / 0 fail |
-| Fyne UI suite | `go test ./ui/fyne/ -count=1` | ok (incl. 6 nav-ownership, 6 model-selection, 6 engine-update tests) |
-| desktop sweep | `go test ./... -count=1` | **70 packages ok / 0 FAIL** (same count as the #126 baseline) |
-| NSIS compile | makensis NOT AVAILABLE on this host | **local Windows proof unavailable** — class local-static over the .nsi/workflow text; hosted Windows job is the definitive gate |
-| Dev-Notes | `git diff --exit-code -- docs/Dev-Notes.md` | UNCHANGED |
-
-**Fail-closed proofs run this session**: reintroduced the rail double-parent → `TestShellSingleParentOwnership` FAILED with the exact message; re-added an attempt-suffixed artifact name → `TestWorkflowArtifactNamesCarryNoAttemptSuffix` FAILED with the exact message; both restored to green.
-
-**File-by-file change list (33 files; +8 new)**
-- `ui/fyne/shell.go` — single-owner root(), Utilities grouping, More menu, Ctrl+1..8 (P0-A).
-- `ui/fyne/nav_ownership_test.go` (NEW) — tree identity/zone/reachability/invocation/shortcut tests (P0-A).
-- `ui/fyne/panels.go` — models panel rebuild (non-destructive selection controller, live phase poll, truthful markers, modelSummary) + Engine updates card (P1-B, P1/P2-E).
-- `ui/fyne/models_panel_test.go` (NEW), `ui/fyne/engine_update_ui_test.go` (NEW) — the two UI suites.
-- `ui/fyne/fakecore_test.go` — /api/models route + controllable selection state machine + engine update-check/install fakes (test-only).
-- `ui/fyne/client.go` — Config mirror `preferFastest`; EngineUpdateCheck wire type + CheckNow/Install methods.
-- `ui/fyne/app.go` — Ctx() nil-safe fallback (tests/composition probes).
-- `ui/fyne/settings_schema.go`, `ui/fyne/view_settings.go`, `ui/fyne/logic_test.go` — the Performance toggle + its pinned test.
-- `internal/config/config.go` — PreferFastest field + default.
-- `internal/config/preferfastest_v1111_test.go` (NEW) — defaults/legacy/false/round-trip.
-- `internal/recommendation/recommendation.go` — Input.PreferFastest + the speed-priority KV branch inside the ONE authority.
-- `internal/recommendation/preferfastest_v1111_test.go` (NEW) — on/off/evidence-gates/memory-clamp.
-- `internal/api/recommendation.go` — buildRecommendationInput passes cfg.PreferFastest.
-- `internal/api/engine_update.go` (NEW) — GET check + POST install handlers (gated, single-flight, no-op-when-current).
-- `internal/api/engine_update_test.go` (NEW) — 8 host-agnostic tests.
-- `internal/api/server.go` — routes + the four engine-update state fields.
-- `internal/api/lifecycle.go` — Close cancels an in-flight user-triggered engine update.
-- `internal/api/config_patch_test.go` — preferFastest patch persistence test.
-- `internal/updater/variant.go` — win/arm64 Vulkan reconciliation (b12032 evidence), honest linux/darwin comments, LatestTagForVariant read-only wrapper, test-facing release-list seams.
-- `internal/updater/variant_test.go`, `internal/updater/variant_strict_test.go` — matrix/evidence tests updated + 3 new.
-- `internal/releasecontract/releasecontract.go` — resources/ ZIP entries + BrandIconName.
-- `internal/releasecontract/installer_contract_test.go` — license-page/smoke contracts follow the new paths.
-- `internal/releasecontract/artifact_naming_contract_test.go` (NEW) — the stable-name contract suite.
-- `packaging/nsis/installer.nsi` — minimal-root payload contract (assertions, license path, staged icon, icon references, payload comment, legacy-fallback deletes).
-- `.github/workflows/build-desktop.yml` — staging/BUILD-INFO/ZIP-verify/smoke (Windows+Linux) minimal-root rework + stable artifact names + overwrite + consolidated-log naming.
-- `scripts/ci/consolidate-run-log-fixtures.sh` — stable-name cases + rerun/overwrite fixtures 12/13.
-- `docs/ui-contract.md` — contracts #9/#10/#11 recorded as LANDED (v1.11.1 remediation; Phases 3–5 explicitly still deferred).
-- `docs/FEATURES.md` — the genuinely new user-visible capabilities only.
-- `docs/ai-notes.md` — this hand-off.
-
-**Deliverables (mechanically verified at placement)**
-- `SHEYTAN-LA-v1.11.1-agent-post-v1110-ux-20261102-source.zip` — source-only archive of the committed tree (single `SHEYTAN-LA/` root; excludes .git/, dist/, runtime data, generated payload-uninstall.nsh); `unzip -t` clean; byte size + entry count recorded in the update note.
-- `SHEYTAN-LA-v1.11.1-UPDATE-NOTE.md` — this hand-off's operator-facing summary.
-- `SHEYTAN-LA-v1.11.1-agent.patch` — `git format-patch` bundle (applies with `git am` onto db9c816) for the operator's review/push.
-
-**Hand-off — what the operator should do next**
-1. Review the diff db9c816 → this branch HEAD (33 files, all listed above; patch bundle provided).
-2. Decide whether to authorize a push of `agent/post-v1110-ux-20261102` (or a cherry-pick onto main) — NOTHING was pushed by this session; hosted verification of this candidate is PENDING by construction.
-3. On the next hosted run, watch: Windows x64 job (makensis -V4 transcript + marker, the REWRITTEN install/uninstall smoke with the resources/ layout + no-placeholder proof + 8 sentinels, the package gate), the consolidated five-part log with STABLE names (a rerun must REPLACE, not collide), and the Fyne UI gates (the new suites run there).
-4. Physical GPU/Vulkan execution remains the standing external hardware gate — nothing in this pass claims it (the engine-update check is a release-list resolution, not an execution claim).
-
-**Remaining (honest, deferred with reason)**
-- Secure tar.gz transaction for Linux/darwin engine packages (upstream is .tar.gz there) — requires the full safe-extractor + transaction tests; deliberately NOT claimed (documented in variant.go).
-- Vulkan system diagnostics (loader/ICD enumeration, vendor driver guidance) in the UI — the truthful accelerator/evidence surfaces already render; the dedicated diagnostics card is future work. No driver/SDK downloads or ICD writes were added (by design).
-- UI Phases 3–5 of the formal roadmap — untouched, still deferred (operator's phase order).
-- The engine update-check surface is API+UI complete and locally tested; its first HOSTED execution (and the smoke's first hosted run with the new layout) lands with the operator's push.
-
----
-
-## Session — 2026-11-01 (run #125 deep repair + installer/uninstaller round-trip proof + UI Phase 2) — FINAL HAND-OFF
-
-**Summary and success condition**
-- P0 executed: the verified NSIS include-path defect was REPRODUCED and FIXED on real makensis 3.11 (not inferred), the reproduction exposed TWO more stacked defects in the same marker chain (relative `${__FILEDIR__}` under a relative script path; `!echo` output being verbosity-4-only), the installer payload contract was audited against the actual workflow staging tree (stale README.md removed, required-file assertions added, wrong comments corrected), a REAL silent install → user-data preservation → uninstall smoke was added to the hosted Windows job, and the whole chain was pinned by three new relationship-aware release contracts (fail-closed proven). P1 executed: UI/UX Phase 2 (native settled-artifact card + truthful Workspace affordance on Chat AND Agent, stale-reference-safe, settle-path-only) with 9 new tests, plus one REAL latent production deadlock found and fixed on the primary navigation path. P2 executed: the early engine-enumeration warning was traced to the exact pre-gate boot window and reclassified with precise non-pending diagnostics. Full local verification ladder green at the final tree. **Hosted verification remains PENDING: this session has no repository credentials, so the one authorized ordinary commit was created LOCALLY and must be pushed by the operator** — no green-run claim is made (evidence class boundary held).
-
-**Target run/commit and actual live starting HEAD**
-- Operator target: run 41304350626 (build-desktop #125), commit c8bad23f7e3e6c052538ad18b16dadc952648d14, refs/heads/main, v1.11.0, Go 1.27.3. Verified live via `git ls-remote`: origin/main HEAD == c8bad23 at session start (main had NOT advanced; ancestry verified; worktree clean). Public run page verified: FAILURE 13m23s, Windows x64 red at step "Build the NSIS installer", every other job green.
-- Run #125 verified evidence boundary: the ONLY red step is the post-compile marker assertion; makensis itself exited 0 and wrote the installer (never describe this as an NSIS compiler failure); warning 7010 (`README.md` no files found, installer.nsi:285) was the only visible warning.
-
-**Baseline (recorded at c8bad23 BEFORE edits; class local-build/local-runtime, go1.27.3 linux/amd64, GOTOOLCHAIN=local)**
-- `gofmt -l cmd internal ui` EMPTY; `go build ./...` GREEN (user-space CGO sysroot rebuilt at /tmp/sysroot — session-local tooling only); `go vet ./...` CLEAN; `go test ./internal/... -tags headless -count=1` 67 ok / 0 FAIL; `go test ./internal/releasecontract/` ok; race 7/7 critical packages ok; `go test ./ui/fyne/` ok. Baseline matches run #125's green surfaces — no pre-existing local red.
-
-**Exact root cause and the include-path fix (reproduced on real makensis 3.11 — evidence class local-runtime; hosted Windows stays the definitive compiler gate)**
-- Local reproduction used the REAL installer.nsi, the REAL workflow generator logic, and the exact CI invocation shape (repository-root CWD, relative script path). Result, byte-for-byte the run #125 shape: makensis exit 0, installer written, warning 7010, NO marker — and the `/nonfatal` include miss is SILENT on 3.11 (not even a warning), which is why the #125 transcript shows only 7010.
-- THREE stacked defects, all in one chain, all fixed:
-  1. `!include /nonfatal "payload-uninstall.nsh"` resolves against the compiler's working directory (plus NSIS include dirs), NOT the script directory. Fix: `!include /nonfatal "${__FILEDIR__}\payload-uninstall.nsh"` (installer.nsi, with the root cause documented in-file).
-  2. `${__FILEDIR__}` mirrors the script-path SPELLING: a relative script path makes it relative and the include still misses (reproduced: warning 7000). Fix: the workflow passes the ABSOLUTE resolved script path (`$nsiAbs = (Resolve-Path $nsi).Path`) — completing the v1.2.0 absolute-path contract for the third makensis path (BUILDDIR/OUTFILE/script).
-  3. The marker is `!echo` output and makensis prints `!echo` ONLY at verbosity 4: at the default verbosity the marker NEVER reaches the tee'd log, so the hosted marker assertion was unsatisfiable on every run so far (explains why the marker has never fired hosted). Fix: the invocation carries `"-V4"`, plus two additive fail-closed transcript assertions (`Processing script file`, `Output:`) with titled ::error.
-- End-to-end mechanism proof: with the resolving include the uninstaller compiles **76 instructions**; with the miss, **65** — the 8-Delete/2-RMDir payload list is physically absent from the uninstaller without the fix. Verification matrix (real 3.11): repo-root + relative script path = miss (proves the invocation fix is required); repo-root + ABSOLUTE script path + -V4 = marker PRESENT, **zero warnings**; developer shape `cd packaging/nsis && makensis installer.nsi` with generated file = marker PRESENT; without the generated file = compiles (the intentional `/nonfatal` developer behavior preserved). Define/macro names, marker text, `!macroend`, quoted `-D` args: all unchanged.
-
-**Installer payload audit and README warning disposition (class local-static over the workflow + tree)**
-- Ground truth: the staging tree at NSIS time contains EXACTLY SHEYTAN-LA.exe, SHEYTAN-LA.bat, LICENSE.md, SIGNATURE, README.txt, BUILD-INFO.txt, models/README.txt, workspace/README.txt (+ models/ and workspace/). NOTHING is excluded before makensis — the old installer.nsi comment claimed the opposite and was corrected. One payload root provably feeds three consumers: portable ZIP, generated uninstall manifest, installer `File /r`.
-- installer.nsi changes: stale `File /nonfatal "${BUILDDIR}\README.md"` REMOVED (README.md is never staged — the warning 7010 source; the canonical install README is README.txt); new fail-fast `/FileExists` assertions for README.txt and BUILD-INFO.txt (verified: removing README.txt aborts makensis exit 1 with the exact message); SIGNATURE stays deliberately optional; the two explicit required `File` lines kept as a second guard layer; the uninstaller's hardcoded `Delete "$INSTDIR\README.md"` deliberately RETAINED as legacy fallback (harmless no-op on modern installs).
-
-**Hosted Windows install/uninstall smoke (added; the assertions it will make on the next run — class local-static for the step contract, hosted for its first execution)**
-- NEW step "NSIS install/uninstall smoke (payload symmetry + data preservation)" between "Verify the installer exists" and the package gate: real silent install of the ACTUAL compiled installer (`/S`, final unquoted `/D=` into a unique GUID path under RUNNER_TEMP, bounded 180s) → installed-payload assertions (every staged file + icon + Uninstall.exe; SIGNATURE only when staged) → ARP entry (both registry views — the x86-unicode installer writes the WOW64 view), AUMID `SHEYTANx13.SHEYTAN-LA`, Start Menu + desktop shortcuts (silent default CHECKED) → 7 install-local sentinels (data root, data\models/sessions/logs/workspace, top-level models/ and workspace/) + external-data sentinel + a legacy README.md, SHA-256 hashed → silent uninstall (`Uninstall.exe /S _?=<path>`, bounded 120s) → every payload file gone, legacy README.md gone, Uninstall.exe present (documented `_?=` behavior), ARP/AUMID/shortcuts gone, EVERY sentinel byte-identical, staging tree untouched. Transcript via Start-Transcript → `ci-logs/win-nsis-install-uninstall-smoke.log`, uploaded by the existing always() windows-logs-part upload on red AND green; every failure emits titled `::error::NSIS install/uninstall smoke (<stage>): …`; cleanup strictly bounded to the unique fixture root. No sleeps, no retry storms, no unbounded waits.
-
-**Release-contract additions (all green; fail-closed proven)**
-- `nsiCodeLines` helper (NSIS comment lines stripped — a comment quoting a forbidden directive neither satisfies nor fails a contract).
-- `TestNSISPayloadUninstallIncludeResolvesFromScriptDir`: rejects the bare include, requires ${__FILEDIR__} + the generator/include same-file relationship (`packaging/nsis/payload-uninstall.nsh`) + the absolute script path + the -V4 invocation + the marker inside the !ifdef branch with the `_FILES` insertmacro. FAIL-CLOSED PROVEN: reintroducing the bare include made it FAIL with the full root-cause message; restoring made the suite ok.
-- `TestNSISUninstallerIsDataSafe`: no `RMDir /r`, no `Delete /r`, no `Remove-Item`, no install-root/data-root wildcards; plain `RMDir "$INSTDIR"`; generator must enumerate the pristine tree, reject `data\*` and both Mesa DLLs, sort directories bottom-up, emit only ordinary Delete/RMDir.
-- `TestNSISInstallUninstallSmokeEnforcedByWorkflow`: the smoke step exists, is ordered after "Verify the installer exists" and before the package gate, and carries every mandated mechanism (real installer, /S + final /D=, _?= uninstall, all sentinel paths, hash comparison, ARP/AUMID/shortcuts, titled ::error, teed transcript, bounded timeouts, RUNNER_TEMP-bounded cleanup, always() upload).
-- All pre-existing contracts remain green (6 NSIS contracts + license/version/retirement suites).
-
-**UI Phase 2 — Artifact / Workspace Integration (class local-build/local-runtime via the Fyne test canvas; hosted Xvfb remains the real-driver gate)**
-- NEW `ui/fyne/artifact_card.go`: the native-first settled-artifact card — kind · title line, one bounded single-line plain-text excerpt (Label = text-only, safe by construction), the TRUTHFUL Workspace status (closed/open in browser loopback; eviction degradation), and the contextual Open-in-Workspace action. Settle-path-only promotion (`promoteSettledAssistant` on BOTH chatView and agentView): the live bubble can never promote itself; empty/non-assistant content registers nothing; a rebuilt view re-seeds from the hub projection; a stale (evicted) reference re-resolves at open time and degrades VISIBLY (status + disabled action) instead of opening a blank surface. `syncWorkspaceAffordance`: the general Workspace entry is actionable only once a settled artifact exists (no blank surface). The hub gained a mutex-guarded `Latest()` projection + `Running()` + `RegisterAgentResponse` (agent gets the same affordance; Source records ui/chat vs ui/agent; openWorkspaceURL factored out). No webview, no new authority, no state machine in the UI; Workspace security untouched (loopback-only, fragment token, CSP, zero commands — server code unchanged).
-- REAL latent production deadlock found and fixed: `shell.show()` built a lazy view while holding the shell mutex, and the view's `shell.register()` re-took it — the FIRST navigation to a not-yet-built view froze the UI thread (production shape: non-nil shell; earlier tests built views detached from a shell, and the Xvfb smoke never clicks navigation — that is why CI never caught it). Build now runs outside the critical section; pinned by `TestShellShowLazyBuildDoesNotDeadlock`.
-- `presentation.SelectSurface` stays pure; the deterministic mapping test now also pins `Kind("")` and `Kind("\n")` → native.
-- docs/ui-contract.md: contract #8 recorded as LANDED (Phase 2) with the exact tests; Phases 3–5 deferred with reason. docs/FEATURES.md: one line for the new user-visible native artifact card. ARCHITECTURE.md: no change (no architectural shift — the card renders the existing store).
-
-**Startup engine-enumeration warning — status (class local-static; the run #125 timestamps explained)**
-- Traced to the exact code path: the accelerator evidence gatherer is poll-driven (`/api/perf` / `/api/engine` refresh the memo); at 12:12:06.959 the first UI poll raced ahead of `EnsureSetup`'s gate arming (dirs + installer + hardware warm happen BEFORE `startStartupMaintenance`), so `gateValue()` was still nil and the typed missing-engine failure fell to the generic WARN — 0.9s before the gate's own decision log. The probe is intentional (no new worker, no reorder needed); the gap was the missing PRE-GATE disposition.
-- Fix (typed, additive): third disposition `enumReportPreGate` — typed missing-engine + gate-not-yet-armed → precise INFO ("startup engine probe: engine binary not present yet (pre-maintenance window: the startup gate has not announced a phase) — the startup gate owns the next step"), same changed/unchanged chatter discipline. NOT labeled pending (no phase exists yet), NOT suppressed, and every other class unchanged: in-flight → pending INFO; gate armed in READY/DEFERRED/FAILED/BLOCKED → genuine WARN; non-missing errors → WARN; `ErrEngineBinaryMissing`, bounded failure cache, and the gate-aware tests preserved (the nil-gate case updated deliberately in the same batch, with the run #125 evidence recorded in the test comment).
-- Vulkan evidence boundary (unchanged): no model was selected in run #125 → prewarm deferred, AUTO Vulkan candidate evaluation skipped, no GGUF loaded, no GPU inference; nothing in this session claims Vulkan execution.
-
-**Full local verification ladder at the final tree (class local-build/local-runtime)**
-| Gate | Command | Result |
-|---|---|---|
-| formatting | `gofmt -l cmd internal ui` | EMPTY |
-| build | `go build ./...` (user-space sysroot) | GREEN |
-| vet | `go vet ./...` | CLEAN |
-| headless core | `go test ./internal/... -tags headless -count=1` | 67 ok / 0 FAIL |
-| installer contracts | `go test ./internal/releasecontract/ -count=1` | ok (incl. 3 new guards; fail-closed proof run) |
-| api suite (perf change) | `go test ./internal/api/ -tags headless -count=1` | ok |
-| race (7 critical pkgs) | `go test -race -tags headless -count=1 …` | 7/7 ok |
-| stress | `go run -tags headless ./cmd/sheytan-local-agent stress` | `STRESS-RESULT pass=47 fail=0 hangs=0 crashes=0` |
-| collector fixtures | `bash scripts/ci/consolidate-run-log-fixtures.sh` | 11 pass / 0 fail |
-| Fyne UI suite | `go test ./ui/fyne/ -count=1` | ok (incl. 9 new Phase 2 tests) |
-| desktop sweep | `go test ./... -count=1` | **70 packages ok / 0 FAIL** |
-| NSIS matrix (makensis 3.11) | scripts/nsis_repro.sh / nsis_verify.sh | fixed shapes GREEN, zero warnings; negative tests abort exactly |
-| Dev-Notes | `git diff --exit-code -- docs/Dev-Notes.md` | UNCHANGED |
-
-**File-by-file change list (16 files; +2 new)**
-- `packaging/nsis/installer.nsi` — include fix + payload audit + truthful comments (P0).
-- `.github/workflows/build-desktop.yml` — absolute script path + `-V4` + transcript assertions + the install/uninstall smoke step (P0).
-- `internal/releasecontract/installer_contract_test.go` — nsiCodeLines + 3 new relationship-aware contracts (P0).
-- `internal/api/perf.go` — pre-gate disposition + precise reporter (P2).
-- `internal/api/engine_enum_pending_test.go` — pre-gate classification pin (P2).
-- `ui/fyne/artifact_card.go` (NEW) — native artifact card + affordance sync (P1).
-- `ui/fyne/artifact_card_test.go` (NEW) — 9 Phase 2 tests incl. the navigation-deadlock regression (P1).
-- `ui/fyne/workspace_hub.go` — Latest()/Running()/RegisterAgentResponse/openWorkspaceURL factoring (P1).
-- `ui/fyne/view_chat.go`, `ui/fyne/view_agent.go` — settle-path promotion + card + truthful Workspace entry (P1).
-- `ui/fyne/shell.go` — navigation deadlock fix (P1, discovered by Phase 2 tests).
-- `ui/fyne/app.go` — shell-owned chat/agent view seam (P1).
-- `internal/presentation/presentation_test.go` — empty-kind mapping pins (P1).
-- `docs/ui-contract.md`, `docs/FEATURES.md`, `docs/ai-notes.md` — contract landing + capability line + this hand-off.
-- NOT touched: docs/Dev-Notes.md (verified byte-identical), LICENSE.md, internal/config (1.11.0), internal/workspace (security surface), internal/updater, Mesa pins, quoted -D, `!macroend` generator.
-
-**Deliverables (mechanically verified at placement)**
-- `SHEYTAN-LA-v1.11.0-run41304350626-fix-source.zip` — source-only ZIP of the committed tree, single top-level `SHEYTAN-LA/` root; excludes `.git/`, dist/, logs, runtime data, engine binaries, Mesa DLLs, and the generated `payload-uninstall.nsh`. Byte size and entry count recorded beside the archive in the update note (a byte-exact self-reference inside the archive is unstable by construction); `unzip -t` full extraction clean.
-- `SHEYTAN-LA-v1.11.0-run41304350626-UPDATE-NOTE.md` — run identity, the three-defect chain + transcripts, smoke step spec, Phase 2 changes, verification table with evidence classes, remaining gates.
-- `SHEYTAN-LA-run125-fix.patch` — `git format-patch` single commit bundle (applies with `git am` to c8bad23) for the operator's push.
-
-**Hand-off**
-- Done: everything above; the local ladder is green at the final tree; the authorized ordinary commit exists LOCALLY on top of c8bad23 (no force, no tag, no release, no remote mutation).
-- Remaining (honest): (1) **hosted verification is PENDING** — no repository credentials in this session; the operator must push the prepared commit (or apply the patch bundle) and watch the new build-desktop run: the Windows x64 job must now show makensis at -V4, the marker in the tee'd log, the install/uninstall smoke PASS, and the package gate. Never claim green without that observed run. (2) The install/uninstall smoke's first hosted execution is also its first real-Windows proof (UAC/elevation behavior on the hosted runner is the one environment variable this smoke cannot prove locally; failures will be titled and diagnosed in `ci-logs/win-nsis-install-uninstall-smoke.log`). (3) Physical Vulkan test with a real device + selected GGUF (operator's standing external gate). (4) UI Phases 3–5 remain deferred (operator's phase order).
-- Risks: (a) a stacked makensis/NSIS-version difference behind the -V4 behavior — the 3.11 reproduction is strong evidence, but choco could deliver a different 3.x; the transcript contract asserts the exact three greps so any drift is one-look diagnosable; (b) the smoke's ARP assertion accepts either registry view (32-bit WOW64 view is the expected one for an x86-unicode NSIS binary); (c) the artifact card is canvas-class evidence locally — hosted Xvfb stays the visual gate; (d) `shell.show()`'s unlocked build relies on navigation callbacks running on the single UI event loop (true for Fyne) — if a future caller builds views from a background goroutine, the map write must be re-guarded.
-- Recommended next: review the diff c8bad23 → the prepared commit (16 files, all listed above) → push → inspect the new Windows x64 job (makensis transcript + smoke log + consolidated five-part log) → if green, the #125 defect class closes permanently and the installer artifact gains a real round-trip proof on every future run.
-- Deferred (with reason): UI Phases 3–5; no engine-reorder change (the pre-gate reclassification answers the timing question with evidence; no engine process can start before the gate permits — that v1.6.0 invariant was not touched); no version bump anywhere.
-
----
-
-*This file is proprietary material under the Proprietary License.*
-
----
-
-## Recovery session — run #41851100943 (v1.11.1, 2026-11-04)
-
-**Scope:** recover the failed build-desktop run #41851100943 at 4a46f5baf4866e99fbb9834d53c35c2df49203e4 (= live main at session start), per the operator's recovery work order. Version stayed v1.11.1 (internal/config.AppVersion untouched; binary prints `SHEYTAN-Local-Agent v1.11.1`). Local branch `recovery/41851100943`; nothing pushed, no tag, no release, no remote mutation; docs/Dev-Notes.md untouched.
-
-**Failure ledger for run #41851100943 (evidence class: local reproduction; hosted job logs UNAVAILABLE — every api.github.com call of this session returned HTTP 403 "API rate limit exceeded", no repository credentials in the sandbox; the supplied consolidated-log report proves the collector failure directly):**
-- `consolidate-logs` — RED (proven): the collector fetched `GET /actions/runs/{id}/attempts/{n}/logs`, which 404s while the same run is still in progress; zero logs captured, missing=0 reported with captured=0. Evidence: supplied report + the old script's archive dependency.
-- `audit` — RED (locally reproduced): internal/releasecontract failed 6 tests — 4 stale five-part log-part contract pins (artifact naming ×3 + the NSIS-smoke transcript pin) vs the shipped single-artifact workflow/collector/fixtures, and 2 LICENSE.md↔brand.LicenseText desyncs (the human's LICENSE.md edits — new title anchor, linktr.ee contact — were never carried into brand).
-- `ui` — RED (locally reproduced): ui/fyne TestModelStudioApplyBinding + TestModelStudioApplyErrorRearms timed out — both tests selected a system with `SetSelectedIndex` while the async systems fetch had not populated the options (out-of-range ⇒ no OnChanged ⇒ nothing armed); deterministic red on a loaded CI runner, exactly the anti-pattern "synchronize on actual options/readiness, not a static label".
-- `preflight`, `build-windows`, `build-linux` — no local evidence of a source-level failure (gofmt clean, headless build green, full CGO build green on go1.27.3, go vet clean, 71/71 packages green after repair); hosted conclusions UNVERIFIED (API 403). Release (tags only) — skipped by design on a main push.
-
-**Repairs (all verified on the final tree; full ladder green — 71 packages ok / 0 FAIL, gofmt clean, go vet clean, collector fixtures 17/17):**
-1. ui/fyne boot: the lazy-build shell rework had LOST the initial show call — the window presented a BLANK primary surface until the first navigation click (confirmed visually under Xvfb before the fix). `App.showInitialView()` now renders `primaryViews[0]` ("chat") at boot (ui/fyne/app.go, ui/fyne/shell.go); pinned by `TestShellShowsInitialViewAtBoot`. Post-fix Xvfb launch smoke renders the full Chat surface (sessions panel, honest zero-session empty state with capability chips, composer, `connected · 1.11.1 · mode chat`) and exits cleanly on SIGTERM.
-2. ui/fyne Model Studio tests now synchronize on actual readiness (options populated, "Model A" selectable) before selecting — the work-order-mandated fix; assertions unchanged and now deterministic (-count=3 green).
-3. LICENSE contract reconciled to the human's authoritative LICENSE.md: brand.LicenseText re-synchronized FROM LICENSE.md (the standing generator direction brand→LICENSE.md is unchanged); anchor pin updated to the human's new title "PARSAETAK & SHEYTAN PROPRIETARY LICENSE"; `TestLicenseMDSynchronizedWithBrand` + `TestLicenseMDIsTheCompleteConsolidatedDocument` green.
-4. releasecontract re-pinned to the shipped v1.11.1 single-artifact contract (exact stable name `SHEYTAN-LA-all-logs.txt`, no run-id/attempt suffix, retired `*-logs-part`/`ci-parts/` banned, CONSOLIDATE_ATTEMPT provenance, fixtures coverage classes; the step-scanner also gained a job-boundary guard so job display names can no longer leak into artifact-name extraction). NSIS-smoke transcript pin re-targeted to the real guarantee chain: consolidate-logs needs build-windows + if: always().
-5. Collector rewritten (scripts/ci/consolidate-run-log.sh): paginated jobs metadata + `GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs` per terminal job; NEVER calls the run-attempt archive; skip/in-progress/missing/captured accounting reconciles to the jobs list (invariant: jobs present but zero coverage in all categories = hard failure); collector SELF-LOG embedded locally (its own GitHub-hosted log is honestly unavailable mid-run); bearer token only on the API host, https-only Location, credential-free signed fetch, no --location-trusted, per-job size cap; report written and uploaded BEFORE any nonzero exit; upstream red ≠ collector failure. Fixtures: 17/17 (scripts/ci/consolidate-run-log-fixtures.sh) incl. terminal 404/403 partial-report-before-nonzero, cancelled capture, pagination, non-HTTPS rejection, redaction, six-job reconciliation, workflow shape.
-6. Security (CodeQL remediation, honest scope): `internal/customtools/exec.go` — structured endpoint policy (https-only, metadata/link-local/IMDSv6 refusal, zone-suffix handling) + per-hop redirect policy blocking downgrades and confused-deputy pivots into local/private hosts, same-host hops preserved for local-first tools; pinned by `internal/customtools/ssrf_policy_test.go`. `internal/studio/viewer.go` — hand-concatenated JSON error bodies replaced by `writeViewerJSONError` (encoding/json; alerts #183/#184 class). `internal/continuum/continuum.go` — checked allocation arithmetic (`addSizes`, saturating). Actions pinned to verified immutable SHAs: `msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e` (# v2), `softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64` (# v3); codeql.yml was already fully SHA-pinned.
-
-**Not done / honest blockers:** CodeQL was NOT run on the candidate (no CLI, no credentials) — no alert-count claims beyond the baseline deltas addressed above; the remaining ~203 path-injection, 6 zipslip, 14 log-injection, 16 unhandled-close, 10 useless-assignment Go alerts and all 25 C++ / 3 JS-TS / 1 Python alerts remain open (Go-only boundary respected — no native source touched). Windows x64 build/installer: NOT EXECUTED (no mingw-w64 CGO cross-toolchain in this sandbox; no fake claimed). Linux .deb: untouched. Hosted verification of THIS candidate: pending the operator's push (no credentials here). UI interaction automation (clicking nav, typing Quick Chat) was not drivable (no xdotool in the sandbox) — the visible-launch evidence covers window render + responsiveness + clean close.
-
-**Changed files (15 modified, 1 added):** .github/workflows/build-desktop.yml; internal/brand/brand.go; internal/continuum/continuum.go; internal/customtools/exec.go; internal/customtools/ssrf_policy_test.go (new); internal/releasecontract/{artifact_naming_contract_test.go, installer_contract_test.go, license_contract_test.go}; internal/studio/{jsonutil.go, viewer.go}; scripts/ci/{consolidate-run-log.sh, consolidate-run-log-fixtures.sh}; ui/fyne/{app.go, shell.go, shell_test.go, model_studio_ui_test.go}.
-
-**Deliverables:** `SHEYTAN-LA-v1.11.1-source.zip` + `note.md` in the session's documented download output directory (`/home/z/my-project/download/` — the sandbox has no user Downloads dir; the exact path is recorded in note.md).
-
----
-
-*This file is proprietary material under the Proprietary License.*
-
----
-
-## Session — 2026-11-05 (run #41901967798 stabilization work order: three CI blockers + critical security) — FINAL HAND-OFF
-
-**Identity and safety**
-- Live clone of origin/main at the run's own evidence commit e2d8ded1963a705729d19fd29fc0c66fd22ea713 (v1.11.1), clean tree; local branch `fix/v1.11.1-run41901967798`; local commit d419a88 + this notes commit. NO push, NO PR, NO merge, NO tag, NO release, NO workflow dispatch — the operator owns every remote action. `docs/Dev-Notes.md` byte-identical (sha256 1f5e42445634…958c01e verified before and after). Version freeze held: internal/config.AppVersion = "1.11.1" (compiled binary reports v1.11.1 from an isolated probe dir with zero residue).
-
-**The three evidenced failures — root causes and repairs**
-- **Failure A (release_surface rejected the valid SHA pin):** the stress gate demanded the literal `actions/upload-artifact@v7` while the workflow pins the official v7.0.2 immutable commit cf430e030ddbb5b0abf93d22962f4752f3646cd9. Repair: ONE shared validator pair in `internal/releasecontract/workflow_contract.go` — `ValidateUploadArtifactPins` (explicit reviewed allowlist: full-length verified SHA only; moving tags, @main, partial/unapproved hashes rejected) and `ValidateUploadArtifactContract` (per-job/per-step scoped upload surface). Both the stress gate (cmd/stress_release_surface.go 3d/3d-v2) and the Go contract tests run the SAME functions — no second authority. The same defect class on the other literal action checks (action-gh-release/setup-msys2 migrated to SHA pins) is fixed by ref-parsing presence (`workflowHasAction`: moving tag OR verified immutable SHA accepted). Stale 3n anchors aligned with the v1.11.1 single-artifact contract (stable `SHEYTAN-LA-all-logs.txt`, attempt only as CONSOLIDATE_ATTEMPT report metadata; the retired run-id-suffixed name anchor replaced; collector-script report markers now pinned against the script file where they live).
-- **Failure B (TestWorkflowStableArtifactNamesExact counted 2 log uploads on Windows):** the hand-rolled line scanner was CRLF-sensitive — windows-latest materializes the unpinned .yml as CRLF, the `^  job-key:$` boundary regexp never matched, step context leaked across jobs and the JOB DISPLAY NAMES ("Linux x64", "Consolidate logs") were captured as artifact names; "Consolidate logs" contains "logs" → count 2. Reproduced byte-exactly (CRLF conversion of the real workflow yields the exact CI capture list). Repair: the retired scanners were REPLACED by YAML-parsed extraction (gopkg.in/yaml.v3 — already in go.mod as an indirect dep, now direct; no new dependency added to the graph) in workflow_contract.go; all artifact-naming tests rewritten on the shared parser; fixture suite pins the positive three-upload workflow, its CRLF materialization (must pass), a duplicate-log upload (must fail), an extra upload (must fail), the pin-policy table (SHA accepted with/without comment; v7/v7.0.2/main/partial/unapproved-SHA rejected).
-- **Failure C (TestStopDuringRestartBackoffCancelsRestart: "crashed engine never reported stopped"):** NOT Linux-specific and NOT a bad test — a lifecycle race. A child dying between its /health 200 and the ready commit was classified by the exit watcher against the transient "starting" state (not alive) and swallowed silently: no stopped event, no watchdog, while the boot then published ready for an already-dead child (the swallow window includes verifyStartupState's bounded probes + persist disk I/O — seconds wide under CI load; matches the 10.89s CI signature). Repair (internal/llm/llama.go): the exit watcher records the death (`exitSeen`) in the SAME critical section that confiscates cmd; the ready commit is ONE mutex-serialized decision (`commitBootOutcome`: exitSeen → refuse the commit and fail the launch honestly, the compatibility ladder retries with a fresh child; stop-won → abort; else begin episode AND publish ready in the same critical section so any later death classifies against an alive state → honest stopped + bounded restart). Also: subscriber channels are no longer closed on unsubscribe (fan-out sends outside subsMu could hit a closed channel and panic). Regression: `TestDeathDuringBootCommitIsNeverSwallowed` — deterministic die-after-health fake mode (child honors /health once then exits the instant the response flushes), asserts the contract for BOTH race winners: terminal failed reached (bounded), every ready immediately followed by an honest stopped, restart budget ≤ maxAutoRestarts, nothing boots after terminal. No sleeps, no skipped tests, no timeout increases; the original test is unchanged and now deterministic.
-
-**Critical Go security pass (CodeQL P0s)**
-- **SSRF (go/request-forgery #288, internal/customtools/exec.go):** the endpoint validator sees hostnames only, so a hostile DNS answer could pivot a benign name onto the cloud metadata range. New connection-time guard: `safeToolDialer.Control` (net.Dialer) classifies every RESOLVED address after DNS and before any packet — link-local unicast/multicast, their IPv4-mapped spellings and the documented fd00:ec2::254 endpoint are refused at connect time; loopback/RFC1918 stay reachable (the local-first trust boundary is a supported feature, not a regression). Redirect revalidation, timeouts and bounded reads were already in place and are untouched. Tests: blocked classes (incl. ::ffff:169.254.169.254), allowed local-first classes, Control-hook refusal before connect, guarded client still serves a loopback httptest server.
-- **Zip Slip cluster (internal/tools/archive.go, internal/updater/install.go, internal/updater/updater.go):** extraction is now ROOTED — every write goes through an os.Root handle bound to the destination (the OS resolves the final path inside the root; symlink-planting in the staging tree cannot redirect writes). Symlink/hardlink archive members are rejected outright. The lexical layer is ONE authority: `safeZipRel`/`SafeArchiveRel` in updater (separator-canonical rejection of POSIX-absolute, Windows-rooted, drive-letter, UNC, traversal, NUL) shared by all three extractors; the weaker tools-side safeJoin was retired. Size/count caps and executable-bit behavior preserved. Tests: hostile archive (../, C:/, UNC, symlink) fails closed with nothing materialized outside the root; valid two-member archive still extracts; safeZipRel parity with safeZipPath; symlink-member rejection in extractZip.
-
-**Verification matrix (all against the final local candidate, Go 1.27.3 linux/amd64)**
-- gofmt -l cmd internal ui → empty. go build ./... → PASS (local Fyne deps provided via an extracted prefix; the sandbox has no apt-installed GL/Wayland dev stack). go vet ./... → PASS. go test ./internal/... -tags headless -count=1 → ALL 74 packages ok. go test ./ui/fyne/ → ok. Stress suite (release_surface scenario + full chaos battery): 47 pass / 0 fail / 0 hangs / 0 crashes (baseline was 46/1). Race batteries: internal/llm focused lifecycle tests -race ×5 PASS; internal/api, agent, sessions, contextplan, histref, runtime, localipc -race -tags headless ALL ok.
-- Runtime evidence: REAL desktop launch on Linux — Xvfb :91, the real trimmed binary observed in the X tree (title SHEYTAN-Local-Agent), 10s soak with a live event loop, SIGTERM honored, process reaped (SMOKE PASS).
-- Packages: Linux portable ZIP BUILT AND VERIFIED (dist/SHEYTAN-LA-v1.11.1-linux-x64.zip — contracted entries, minimal-root purity, executable bit preserved, 8 entries). Windows: PE32+ GUI x86-64 CROSS-COMPILED with the pinned windowsgui ldflags + gen-syso resources (rsrc_windows_amd64.syso linked; generated syso removed from the tree afterwards — CI regenerates it); actual Windows launch/installer/portable ZIP remain HOSTED-JOB territory (no Windows host here — reported, not claimed).
-- CodeQL: NOT RUN locally (no codeql CLI in the sandbox). Baseline stands: 279 open / 9 fixed at the evidence commit. Candidate delta UNKNOWN until the operator's hosted scan; nothing was dismissed, suppressed, excluded or downgraded, and the language matrix / security-and-quality suite are untouched. Non-Go backlog (25 C++ in native/engine, 3 JS/TS in studio/workspace assets, 1 Python fixture script) remains open and unmodified — the Go-only application constraint stands.
-
-**Files changed:** internal/llm/llama.go, internal/llm/llama_test.go, internal/releasecontract/workflow_contract.go (new), internal/releasecontract/artifact_naming_contract_test.go, cmd/stress_release_surface.go, internal/customtools/exec.go, internal/customtools/ssrf_dialer_guard_test.go (new), internal/updater/updater.go, internal/updater/install.go, internal/updater/zipsafe_rooted_test.go (new), internal/tools/archive.go, internal/tools/archive_zipslip_test.go (new), go.mod (yaml.v3 indirect→direct only).
-
-**Hosted status:** HOSTED_GREEN_UNVERIFIED — a new Actions run on the exact candidate commit must complete all required jobs green before BUILD_GREEN may be claimed; a successful CodeQL run with open alerts is not SECURITY_CLEAN.
-
----
-
-## Session — 2026-11-06 (run #41933333132 work order: ETXTBSY + Vulkan variant + audit fail-closed + classifier + security) — HAND-OFF
-
-**Identity and safety**
-- Live clone of origin/main at the run's own evidence commit 7f357d4b0830906b9684d502b82fe979959e2c92 (v1.11.1 — origin/main had NOT moved), clean tree; local branch `v1.11.1-stabilization-41933333132`. NO push, NO PR, NO tag, NO release, NO workflow dispatch. `docs/Dev-Notes.md` untouched. Version freeze held: internal/config.AppVersion = "1.11.1" and build/config.yml productVersion "1.11.1" agree (no bump).
-
-**P0-A — Linux ETXTBSY (Fyne UI gates failure, run 41933333132)**
-- Reproduced the mechanism deterministically: the fixture `commitEngineTransaction` wrote the managed binary with `os.WriteFile` (O_TRUNC at the LIVE executable path). A real long-lived process executing FROM bin/llama-server (test binary re-executed as the fake engine) makes that exact open fail with ETXTBSY — asserted against the kernel in the new test. The secondary "timed out waiting for prewarm" line is NOT an independent defect: the seam callback ran `t.Fatalf` on the GATE's goroutine → runtime.Goexit → the gate never reached a terminal phase → the prewarm event could never fire.
-- Repair: (1) `commitEngineTransactionErr` + `writeFileAtomic` — unique sibling temp file in the same dir, full write, fsync, close, chmod, `os.Rename` (a rename replaces the directory entry and cannot fail with ETXTBSY; the executing process keeps the old inode); (2) the two transaction-running identity tests return the error instead of Fatal-ing, so the gate settles (FAILED) and the test fails immediately with the real cause; (3) `TestTransactionErrorSettlesGateAndSurfaces` pins that contract. The production installer was already transactional (directory swap), so no production lifecycle change was needed.
-- Tests: `internal/api/maintenance_etxtbsy_v1111_test.go` (executing-binary swap, atomic idle swap, error-settles-gate); `go test ./internal/api -run TestMaintenance -count=5` PASS; `-race` on api/llm/updater/downloader/tools ALL ok.
-
-**P0-B — Windows Vulkan asset variant lost (real user session app(2).log)**
-- TWO stacked defects traced end-to-end: (1) `downloadEngineArchiveStaged` was variant-blind — `Dest` used the CPU alias `AssetName(tag)` and the download cache key carried the bare tag, so a Vulkan transfer landed in `llama-b12119-bin-win-cpu-x64.zip` under a CPU-colliding key; (2) in `updateEngineVariantTx` (internal/llm/llama.go) the downloaded archive was removed by a `defer` bound to the DOWNLOAD closure — the file was deleted before the destructive window's staged swap ever extracted it → the observed `extract engine b12119: open ...llama-b12119-bin-win-cpu-x64.zip: The system cannot find the file specified`.
-- Repair: (1) the stager derives the archive name AND cache key from the SAME (tag, variant) descriptor via `AssetNameForVariant` — unsupported combinations fail closed BEFORE any download (`engineArchiveCacheKey` carries tag+GOOS+GOARCH+variant+asset name); (2) the staged-swap closure owns the archive lifetime and removes it on BOTH outcomes after the extraction attempt.
-- Tests: `internal/updater/engine_asset_descriptor_v1111_test.go` — exact b12119 Windows x64 CPU/Vulkan names + URLs (Vulkan never contains win-cpu), cache-key distinctness, loopback-served download whose returned path feeds `InstallStagedFromArchiveDeferredWithVariant` (downloader→extractor identity), fail-closed unsupported variant. Vulkan hardware execution remains UNVERIFIED (no GPU here) — CPU fallback posture unchanged.
-
-**P1-C — ImportAudit.ps1 fail-open → release gate**
-- The script had `$ErrorActionPreference = "Stop"` with no top-level guard (any terminating error crashed it before an exit code) and treated per-module PE-parse failure as warning+continue (exit 0) — "script ran without exception" masquerading as a verified closure; the workflow wrapper then caught a crash and set $auditExit = 0 (the confirmed fail-open warning of this run).
-- Repair: structured result PASS(0)/FAIL(2)/ERROR(3) — ERROR is never PASS; per-module parse failure now classifies ERROR with full diagnostics; top-level try/catch dumps exception + ScriptStackTrace + invocation and exits 3; `Set-StrictMode -Version Latest` added. Wrapper: crash → ::error + auditExit=3 + `ci-logs/win-dep-audit-ERROR.marker`; the launch smoke still runs as its own step (launch evidence preserved) and the job FAILS at the end of that step via the marker gate. Fixtures: `scripts/ci/ImportAudit.Tests.ps1` (complete closure=0, API-set classification, missing module=2, malformed PE=3, non-PE=3, parse error never 0, runtime exception=3) wired as a workflow step. NOTE: no pwsh in this sandbox — fixtures are HOSTED-verified only; parser logic reviewed line-by-line.
-
-**P1-D — consolidated log classifier (false "78 failed commands")**
-- Root cause: the collector grepped every captured log line for ::error:: — including the runner's ECHOED step source (`echo "::error::..."` / `Write-Host "::error::..."` literals) — and reported that count as "files/lines with failed commands", contradicting the jobs API (exactly ONE failed job).
-- Repair: two labeled data sources — AUTHORITATIVE FAILURE SUMMARY from job/step metadata (steps[] now carried from the jobs API response; failed terminal jobs + failed steps counted from metadata, job names listed) and LOG ANNOTATIONS extracted from output with runner-echoed source lines EXCLUDED (echo/printf/Write-*/Log + quoted annotation literal, plain and xtrace forms) and counted separately. Raw logs preserved verbatim; verdict logic unchanged; artifact name unchanged.
-- Fixtures: 22/22 in `scripts/ci/consolidate-run-log-fixtures.sh` — 5 new (echoed bash, echoed PowerShell, emitted-annotation-not-a-failed-job, metadata-only step failure, 40 echoed literals in a SUCCESS job). The corrected report for the exact run reads: five terminal job logs captured, one collector in progress, zero missing, one failed terminal job (Fyne UI gates (Linux)).
-
-**Security pass (CodeQL families, work order §8)**
-- SSRF #288 (internal/customtools/exec.go): structural policy additions — embedded userinfo refused, host-syntax validation (no whitespace/percent-escape/separator tricks), port policy (non-local endpoints: https default or 443 only; local-first keeps arbitrary ports), explicit `Proxy: nil` (env proxies are a second destination authority), and a 5-hop redirect limit (a custom CheckRedirect REPLACES net/http's default 10-cap). Connect-time resolved-IP guard, metadata/link-local refusal and redirect revalidation were already in place (run 41901967798) and are pinned by tests. New tests: structural policy table, redirect limit, no-environment-proxy.
-- Zip Slip #175/#176 + archive hardening (internal/tools/archive.go): extraction ledger (duplicate members, case-fold collisions, file-vs-dir conflicts fail closed), streamed per-member byte cap (256 MiB — never trust the header's UncompressedSize64 alone), total cap and a 200x compression-ratio bomb guard (1 MiB floor) for BOTH unzip and untar; `SafeArchiveRel` now also rejects ADS colon names. Existing rooted-extraction/link-rejection tests still green; 6 new adversarial tests.
-- Log injection #215–#228 (internal/api/goals.go): `goalLogValue` normalizes every untrusted log arg (invalid UTF-8 → U+FFFD; \n \r \t NUL ANSI/ESC and U+2028/29 escaped as \xNN literals) — 12/12 log.Printf sites wrapped; structured evidence payloads keep the original bounded text. Tests: forged INFO, CR, LF, CRLF, tab, NUL, ANSI, U+2028, invalid UTF-8; plain text passes through unchanged.
-
-**P1-E — Ubuntu 24.04 → 26.04 runner migration (verified, not YAML-only)**
-- All six Linux jobs (preflight, audit, ui, build-linux, consolidate-logs, release) moved to `ubuntu-26.04`; build-windows stays windows-latest. Every Linux job now asserts the OS identity at start (uname -a, /etc/os-release, dpkg arch, ImageOS/ImageVersion captured; ubuntu-26.04 + amd64 enforced — drift fails loudly). Preflight's prerequisite step now PROVES the Fyne contract (`pkg-config --modversion gl` + glx). The Xvfb readiness probe is now a real `xdpyinfo` probe (x11-utils was already installed) instead of a lock-file check; SIGTERM shutdown/reap logic unchanged. Go stays pinned at 1.27 (workflow env GO_VERSION="1.27", go.mod toolchain go1.27.3) — no toolchain bump during the OS migration. Hosted verification of the new image is pending the operator's push (blocker per work order §7: any missing 26.04 package must block, not silently fall back).
-
-**Verification matrix (Go 1.27.3 linux/amd64, this sandbox)**
-- gofmt -l cmd internal ui → EMPTY. go build -tags headless ./... → PASS. go vet -tags headless ./internal/... ./cmd/... → PASS. go test -tags headless -count=1 ./... → ALL 69 test packages ok, zero failures. Cross-compile: GOOS=windows GOARCH=amd64 and GOOS=linux GOARCH=amd64 headless builds PASS. Focused race suite (api/llm/updater/downloader/tools) PASS. Collector fixtures 22/22. CodeQL NOT RUN locally (no CLI) — alert-count deltas for the candidate are UNVERIFIED until the operator's hosted scan on the pushed branch; nothing dismissed or suppressed; language matrix and security-and-quality suite untouched.
-
-**Remaining open Go alerts (honest backlog, per the timebox cutoff):** the systematic 194-alert go/path-injection families (Appendix A) beyond the archive/descriptor fixes above; 14 go/unhandled-writable-file-close sites; 10 useless-assignment sites; all 29 non-Go alerts (25 C++ native/engine — Go-only boundary respected, incl. the 4 cpp/world-writable-file-creation test findings recommended for owner-only file modes; 3 JS/TS; 1 Python). Windows hosted evidence (PE machine check, dependency audit PASS in CI, NSIS install, launch smoke) and Ubuntu 26.04 hosted evidence remain HOSTED-JOB territory.
-
-**Changed files (13 modified, 6 added):** .github/workflows/build-desktop.yml; internal/api/{goals.go, maintenance_identity_v176_test.go, maintenance_twoboot_v175_test.go, goals_log_injection_v1111_test.go (new), maintenance_etxtbsy_v1111_test.go (new)}; internal/customtools/{exec.go, ssrf_policy_test.go}; internal/llm/llama.go; internal/tools/{archive.go, archive_hardening_v1111_test.go (new)}; internal/updater/{install.go, updater.go, engine_asset_descriptor_v1111_test.go (new)}; scripts/ci/{ImportAudit.ps1, ImportAudit.Tests.ps1 (new), consolidate-run-log.sh, consolidate-run-log-fixtures.sh}.
-
-**Deliverables:** `SHEYTAN-LA-v1.11.1-source.zip` + `note.md` in `/home/z/my-project/download/` (the sandbox's documented download directory).
-
----
-
-## Session — 2026-11-07 (run 42127523923 work order: candidate verification + residual dead stores) — FINAL HAND-OFF
-
-**Scope and base:** end-to-end verification of the remediation candidate at origin/main tip `d4ae19dccd1684e9003d5ee0393ceb08e9319a35` (newest verified main descendant of the run's evidence anchor `470df47…` — ancestor-verified; version 1.11.1 untouched; `docs/Dev-Notes.md` untouched). Local-only work on the clone; no push, no tag, no remote mutation. The companion `Deep-Analysis.md` alert ledger was NOT provided in this environment — per-alert CodeQL IDs/lines below cite the work order text only; hosted CodeQL on the pushed candidate is the authority for alert-count deltas.
-
-**Two build blockers — verified closed at the tip:**
-- Windows repeated-crash TempDir residue: `TestRepeatedCrashesExhaustBoundedBudget` PASS ×5 locally (`-tags headless -count=5`, 45.3s). Linux teardown still logs the benign persisted-DataDir residue (engine-caps.json / installed.json / models/ / run/ — final-boot artifacts written DURING the test, owned by `ownEngineTempRoot`'s documented teardown boundary: residue named, bounded ≤2 s foreign-handle clearance, survival still fails the test via the framework's TempDir cleanup — no error swallowed). Root cause remains the documented Windows real-time-scanner delete-pending interaction, NOT a lifecycle leak (lifecycle audit re-checked: every Start has exactly one Wait, watchers/join paths verified).
-- release_surface: stress = **47 pass / 0 fail / 0 hangs / 0 crashes**; the scenario now enforces the Linux x64 job's exact `ubuntu-26.04` pin + runtime `VERSION_ID=26.04` guard and rejects the retired 24.04 anywhere (pinned by `internal/releasecontract` suite, PASS).
-
-**Residual dead-store repairs (2 of the work order's 10 useless-assignment sites; 6 were already fixed in prior commits):**
-- `internal/runtime/automation.go` (taskRunner): the rendered task-scoped skill block was assigned to a LOCAL `prompt` nothing ever read — every scheduled run received `task.Prompt` verbatim and the documented progressive-disclosure injection was silently dropped. The block now prepends to the task copy the runner consumes (matching still sees the original prompt). Regression: `automation_skill_injection_v1111_test.go` (injection present + verbatim no-match case).
-- `internal/preflight/live.go` (classify): computed reasons were written into the method's VALUE copy of Sample — returned/stored/callback samples carried empty Reasons. classify now returns (level, reasons); Poll assigns both. Regression: `live_reasons_v1111_test.go` (pressure sample carries reasons incl. m.Last(); healthy sample stays empty).
-- NOT touched, verified dynamically live: `server.go:2940` `runTiming` (the settle closure reads it inside the same run goroutine — removing would zero the TTFT summary) and `orchestrator.go:2431` `result2` (read at 2464/2476 after the cached-hit assignment). Hosted CodeQL re-run adjudicates; nothing suppressed.
-
-**Verification matrix (Go 1.27.3 linux/amd64, this sandbox):** gofmt -l . EMPTY; go vet ./... PASS; `go test -tags headless -count=1 ./internal/...` PASS (full suite, re-run after the repairs); stress 47/0/0/0; releasecontract + ui-affecting contracts PASS; race suite PASS on llm/api/agent/sessions/runtime/updater/tools/customtools/preflight; cross-compiled windows/amd64 + linux/amd64 headless builds NOT re-run this session (prior session evidence stands; no build-relevant change — 2 source files + 2 test files). ui/fyne compile gate BLOCKED locally (no GL/Wayland headers, no root for apt) — hosted Fyne lane territory, unchanged. Windows §7 pipeline (PE checks, smoke, ZIP/NSIS install round-trip) NOT RUN — Windows-hosted only. CodeQL NOT RUN locally (no CLI); suite/languages/pins untouched; 29 non-Go alerts untouched (Go-only boundary).
-
-**Deliverables:** `SHEYTAN-LA-v1.11.1-source.zip` (complete working tree, one top-level SHEYTAN-LA/, .git excluded) + `note.md` in `/home/z/my-project/download/`. Final status: READY_FOR_OPERATOR_PUSH per the local matrix; hosted green requires the operator's push.
-
----
-
-## Session — 2026-11-08 (run 42405993776 / CodeQL 42405993856 work order: Windows releasecontract fix + Qt/QML retirement closure + P0 security) — FINAL HAND-OFF
-
-**Scope and base:** live clone of origin/main at the work order's evidence commit `c4a495e79c6c1c317dc0bdb44795d6563bd8cb99` (v1.11.1 — origin/main had NOT advanced past it, `rev-list --left-right --count HEAD...origin/main = 0 0`); local branch `work/v1.11.1-candidate` (non-main); changes carried as an UNCOMMITTED working tree (§H grants no commit/push authorization — none performed: no push, no PR, no tag, no release, no dispatch, no settings change). `docs/Dev-Notes.md` byte-identical (verified via `git diff -- docs/Dev-Notes.md` empty). Version freeze held: `internal/config.AppVersion = "1.11.1"`, `SIGNATURE` v1.11.1, `build/config.yml productVersion 1.11.1` (pinned by `TestReleaseVersionSingleSource`, PASS).
-
-**Windows CI blocker (§C) — root-caused by reproduction, then fixed at the fixture/validator seam:**
-- Root cause: `TestLinuxRunnerContractRejectsExtraLabels` precondition matched the production workflow with a raw multi-line LF string literal; `*.yml` is NOT pinned in `.gitattributes`, so windows-latest materializes `build-desktop.yml` as CRLF (`core.autocrlf=true`) and the literal never matches → `fixture precondition: the workflow must carry the Linux x64 job block` at `linux_runner_contract_test.go:78`. Reproduced bit-for-bit on Linux by materializing the workflow as CRLF (all sibling tests stayed green — loader/CWD/package-path hypotheses ruled out, matching the evidence run where only this test failed on Windows).
-- Fix per §C3 (two independent tests, nothing deleted/skipped/loosened): (1) `TestLinuxRunnerContractRejectsExtraLabels` is now a fixture-only validator-behavior test — embedded self-contained YAML, exact `ubuntu-26.04` accepted in LF AND CRLF spellings, negative subtests for composite `[ubuntu-26.04, self-hosted]`, reversed composite, duplicate labels, retired 24.04, arm image, missing/empty runs-on, mapping-form node, missing Linux job, malformed YAML; zero dependence on the production workflow. (2) NEW `TestBuildDesktopWorkflowLinuxX64Conformance` reads the real workflow via the yaml.v3 helpers (line-ending-proof by construction), discovers the Linux job key over the real jobs map, asserts typed runs-on is exactly `[ubuntu-26.04]` (length-1, no substring), and proves package-job identity from steps (builds `./cmd/sheytan-local-agent` into `dist/linux/app`, produces `-linux-x64.zip`, uploads `linux-x64-package`) — fails on drift. (3) `findRepoRoot` now resolves via `runtime.Caller(0)` walk-up to `go.mod` (os.Getwd fallback kept) — CWD-independent; loader errors carry the resolved absolute path.
-- Proof: focused suite PASS with the workflow materialized as CRLF (the exact Windows condition) and as LF; compiled test binary PASS from an unrelated CWD (`/tmp/unrelated-cwd`).
-
-**Qt/QML retirement (§D) — audited, closed as "zero active Qt/QML UI", guard added:**
-- Inventory (work-order §B scans on the live tree): 0 files matching `*.qml *.qrc *.pro *.pri *.qmlproject *.ui`; the only Qt-vocabulary hits are `docs/retired.md` (retirement documentation) and the new guard test's own identifier/comment. `ui/` contains exactly `ui/fyne`; entrypoint `cmd/sheytan-local-agent` is in-process Fyne. No Qt build wiring, SDK/cache steps, runtime DLLs/plugins in manifests (stress gate bans the Qt/GTK toolchain packages; Windows `ImportAudit.ps1` fails closed on any missing static import).
-- Per §D5 ("do not create artificial rewrites"), NO porting was fabricated. Added the missing guard `TestNoQtQmlAppSourceRemains` (internal/releasecontract/retirement_scan_test.go): rejects retired Qt/QML extensions and 13 Qt app-UI framework/build symbols across the active application/package paths (internal, cmd, ui, packaging, build, scripts, .github, docs); `native/**` deliberately out of scope (llama.cpp engine C++ is not a Qt UI); banned literals assembled from split fragments so the guard never carries what it bans. Negative-validated (planted .qml + QApplication file fails with both violations named; clean tree passes).
-
-**JavaScript boundary (§D3) — 3 alerts fixed, allowlist justified:** three.core.js/three.module.js/OrbitControls.js = vendored three.js r182 (MIT, pinned in doc.go) required for the WebGL topology viewer (browser-native capability, documented not-adopted decision for an embedded webview); #1 `generateUUID` now sources its four words from `crypto.getRandomValues` with a deterministic monotonic fallback (internal instance/cache IDs, not security tokens; patch marked in-file + doc.go for vendor refreshes; license preserved; `node --check` valid). studio.js #188 unused `kinds` local removed; workspace.js #189 unused `fenceLang` removed. No JS-owned state/FS/process/network/secrets; no new React/TS/Node-runtime/Electron/Wails.
-
-**Security remediation (§E) — source-level with tests:**
-- SSRF #288 (customtools/exec.go): full guard chain verified against §E2 (https-only, host-syntax, no userinfo, port policy, connect-time resolved-IP class guard incl. IPv4-mapped-IPv6 via To4(), metadata/link-local refusal, 5-hop redirect revalidation, `Proxy: nil`, bounded timeouts, streamed response cap); the ONE gap found — Google's alternate metadata domain `metadata.goog` — added to the refused-host list with test.
-- Zip Slip #175/#176 (tools/archive.go): the os.OpenRoot staged-transactional stack verified line-by-line against §E3 (lexical `SafeArchiveRel`, symlink rejection, ledger, caps/ratio guard, rollback); missing TAR-side adversarial test added (`TestUntarRejectsHostileMembers`: traversal/symlink/hardlink members, outside-root escape probes, stage-rollback verification) — both formats now covered.
-- Log injection ×14 (api/goals.go): all callsites route through `goalLogValue`; adversarial testing found the missing U+0085 (NEXT LINE) — added to the escape set; new callsite-level capture tests pin single-record output for CRLF/ANSI/U+2028/U+0085/tab payloads with escaped spellings preserved.
-- Writable-close ×3: sessions.go #247 via `appendLineClose` (errors.Join, both failures preserved, deterministic Close-fails fixture); logging.go #253/#254 close failures surfaced on stderr (the sink that survives a broken file logger).
-- Useless assignment #230 (agent/orchestrator.go): dead `error(nil)` write removed, logic unchanged, suite green.
-- **Path injection ×196: classified residual (NOT remediated — deliberate).** The hotspot managed-root flows are built on `ResolvePathChecked` confinement + os.Root where a root exists; the alert mass is dominated by CodeQL's taint model not recognizing these layers, mixed with genuinely lexical-only flows. A §E4 conversion (os.OpenRoot capabilities, strict ID grammars, picker boundaries, per-file compat tests) is a dedicated multi-file program — attempting it inside this window risked the mandatory green suite (rules 9/12). Starting point documented: `internal/tools/tools.go` first, one file per commit with adversarial + valid-path tests.
-
-**Verification matrix (Go 1.27.3 linux/amd64, this sandbox — re-executed end-to-end at final tree):** focused runner-contract suite PASS (LF + CRLF-materialized + unrelated-CWD binary); `go test ./internal/releasecontract/ -count=1` PASS; **`go test -tags headless -count=1 -timeout 25m ./internal/...` exit 0 (every package)**; stress `47 pass / 0 fail / 0 hangs / 0 crashes` (incl. release_surface + update_zip_slip_members); race gate PASS on api/agent/sessions/contextplan/histref/runtime/localipc; customtools/tools/logging/agent/studio/workspace suites PASS; goals log-injection + sessions writable-close unit tests PASS; collector fixtures 22/22; `go vet` (releasecontract/api/sessions/logging/agent/customtools) clean; `gofmt -l` on all changed packages empty; `git diff --check` clean. **Not obtainable here (truthful):** Windows headless/packaging/installer chain (Linux-only sandbox), Linux desktop runtime + `ui/fyne` compile/tests (no GL/Wayland headers, no root; NO ui/fyne source modified), hosted CodeQL rerun (requires push; counts in note.md are source-level, not scanner-verified).
-
-**Changed files (15 modified, 2 added):** internal/releasecontract/{linux_runner_contract_test.go, retirement_scan_test.go, version_contract_test.go}; internal/customtools/{exec.go, ssrf_policy_test.go}; internal/tools/archive_zipslip_test.go; internal/api/{goals.go, goals_log_injection_v1111_test.go, goals_log_injection_callsites_v1111_test.go (new)}; internal/sessions/{sessions.go, sessions_writableclose_v1111_test.go (new)}; internal/logging/logging.go; internal/agent/orchestrator.go; internal/studio/{doc.go, assets/three.core.js, view/studio.js}; internal/workspace/view/workspace.js.
-
-**Deliverables:** `SHEYTAN-LA-v1.11.1-source.zip` (complete working tree, one top-level `SHEYTAN-LA/`, 743 files / 849 ZIP entries, `.git`/caches/binaries/user data excluded, byte-verified against the tree) + `note.md` in `/home/z/my-project/download/`. Final status: **BLOCKED** — Windows hosted acceptance, ui/fyne compile evidence and the hosted CodeQL ledger remain outstanding; every gate runnable in this environment is green.
-
----
-
-## Session — 2026-11-11 (run 42909094540 / build run 42909094540 + CodeQL run 42909094289 work order: Windows TaskRegistry path panic + five open CodeQL maintainability findings + release reliability) — FINAL HAND-OFF
-
-**Scope and base:** live clone of origin/main at the work order's evidence commit `48d8f10db381aaa5776dd01a725305614a44543e` (v1.11.1 — origin/main had NOT advanced past it; `git ls-remote` HEAD equals the evidence commit); local branch `main` (read-only clone, no checkout created — changes carried as an UNCOMMITTED working tree; no push, no PR, no tag, no release, no dispatch, no settings change). `docs/Dev-Notes.md` untouched (human-only file). Version freeze held: nothing bumped.
-
-**Windows TaskRegistry.Create panic (§3.2) — root-caused in source, then fixed at the path-model level:**
-- Root cause: `internal/artifacts/taskmeta.go:228` — `relTaskID := relToRoot[:strings.Index(relToRoot, "/")]` where `relToRoot` is `filepath.Rel` output: "/"-separated on POSIX, backslash-separated on Windows. On Windows `strings.Index` returned **-1** and the unguarded slice panicked with `slice bounds out of range [:-1]` on every artifact REPLACEMENT write (the `prevCurrent != nil` archive branch — uniquely reached by `TestVersionArchiveStaysInsideTaskRoot` and the API test's REPLACE step, whose server-side panic surfaced as the POST's EOF at `internal/api/automation.go:511`). This conflated the slash-delimited LOGICAL path domain with the NATIVE filesystem domain.
-- Fix (no index guard, no behavior masking): (1) `firstRelComponent()` splits the first component of a cleaned relative path considering both separators — sound because the first component is the grammar-gated task id (`validTaskID` rejects both separators) — and `Create` proves `relTaskID == taskID` before any slicing; no boundary / empty component / mismatch → fail-closed controlled error, never a panic. (2) `archiveDir`/`versioned` are built with `filepath.Join` (native separators on every platform) instead of hard-coded "/" spellings that mixed domains in archived metadata paths. (3) Windows-hostile LOGICAL spellings are rejected before the `filepath.FromSlash` conversion on Windows hosts (runtime.GOOS-gated): empty components, drive/ADS colons, trailing dot/space components, reserved device basenames (`isWindowsReservedName`: CON/PRN/AUX/NUL/COM1-9/LPT1-9, with-or-without extension) — POSIX literal-name behavior explicitly unchanged and pinned by tests.
-- New tests (nothing renamed/deleted/skipped): `internal/artifacts/taskmeta_pathsafety_winmatrix_test.go` (NOTE: originally written as `taskmeta_windows_test.go` — the `_windows` filename suffix is an implicit GOOS build constraint and the file silently did not build on Linux; renamed) — helper contract, valid nested/multi-dot/backslash destinations, hostile-spelling table with outside-sentinel + no-new-entries assertions, symlink-planted-destination refusal through the os.Root sink (skip on runners without the symlink primitive), Windows-native drive-absolute-root round trip (runs in the Windows CI job); `internal/api/automation_artifacts_pathsafety_test.go` — hostile filenames/task ids through the HTTP surface all answer the documented 400 (no panic/EOF), outside sentinel untouched, nested create+replace through the API archives `report.v1.md` under the task's `.versions` directory.
-- Repo-wide sibling scan: every other `strings.Index/LastIndex` path split is either guarded (`if i >= 0`) or operates on slash-delimited logical strings (URLs, GGUF names) — `taskmeta.go:228` was the only unguarded native-path slice.
-
-**CodeQL five open findings (§4) — fixed at source, no suppression/dismissal/suite change; native/engine stays in the C++ database:**
-- #213 `cpp/poorly-documented-function` (json.cpp:398 `extract_decode_payload`, 116 lines): ids-array walk extracted into documented `read_ids_array()` (exact historical error strings preserved); envelope/member/delimiter/post-condition phase comments added.
-- #214 `cpp/poorly-documented-function` (json.cpp:625 `extract_generate_payload`, 150 lines): parse-time range-check/no-second-pass/post-condition invariant documentation added (structure unchanged — heterogeneous members; extraction would have obscured the exact per-member error paths).
-- #362 `cpp/long-switch` (gguf.cpp:559-617, kTypeArray 39-line case): body extracted into documented `read_array_value()`; the branch is a short delegation with identical cursor movement, bounds and error outcomes (same pattern as the prior #190 remediation in the same function).
-- #363/#364 `cpp/long-switch` + `cpp/trivial-switch` (json.h:181-220): the switch had exactly one live case (`u` — every other escape already returned above) plus an unreachable default; replaced with a direct `if (esc != 'u')` branch and the 35-line Unicode-escape logic moved into documented `read_unicode_escape()` (cursor consumption, hex validation, truncation, surrogate→U+FFFD replacement and UTF-8 encoding byte-identical).
-
-**Verification matrix (Go 1.27.3 linux/amd64 sandbox, g++ 14.2):** focused artifacts+api suites PASS (incl. both previously-failing tests on Linux); `go test -tags headless -count=1 -timeout 25m ./internal/...` exit 0 (67 ok packages); full `go test -count=1` on all 78 buildable packages exit 0 (69 ok); race gate on api/agent/sessions/contextplan/histref/runtime/localipc PASS; `gofmt -l cmd internal ui` clean; `go vet` clean on all buildable packages; native engine: `make library` clean (-Wall -Wextra -Wpedantic) and all 12 `make test` binaries PASS; windows/amd64 cross-compile of `-tags headless ./internal/...` exit 0, `GOOS=windows go vet ./internal/artifacts ./internal/api` exit 0, windows test binary cross-compiled (execution requires a Windows host). **Not obtainable here (truthful):** Windows-native test execution, PE build, DLL staging, visible-window smoke, portable ZIP/NSIS install-uninstall + PackageGate execution (Linux-only sandbox: no Windows runner, no MSYS2/mingw, no NSIS; Fyne cgo build also unavailable — no GL/Wayland headers, no root; ui/fyne, internal/desktop, cmd/sheytan-local-agent are the only unbuildable packages; NO ui source modified); hosted CodeQL rerun and Linux desktop Xvfb smoke (same class of evidence as the previous session's hand-off — hosted verification remains pending operator push).
-
-**Qt/QML audit:** zero active first-party Qt/QML app source/build/runtime/deploy residue re-proven on the current tree (no `*.qml *.qrc *.pro *.pri *.qmlproject *.ui` tracked files; no Qt symbols outside historical docs and the retirement guard itself); `TestNoQtQmlAppSourceRemains` guard from run 42405993776 remains in place; native engine `native/engine/**`, generic CMake and CGO/Fyne prerequisites untouched.
-
-**Changed files (4 modified, 2 added):** internal/artifacts/taskmeta.go (path-domain fix + helpers); internal/artifacts/taskmeta_pathsafety_winmatrix_test.go (new); internal/api/automation_artifacts_pathsafety_test.go (new); native/engine/src/json.h (#363/#364); native/engine/src/json.cpp (#213/#214); native/engine/src/gguf.cpp (#362); docs/changelog.md; docs/ai-notes.md (this hand-off).
-
----
-
-## Session — 2026-11-11 (run 42928792246 work order: PackageGate stable outcome contract + CI reliability + docs/Qt audits) — FINAL HAND-OFF
-
-**Summary and success condition**
-- Baseline: live clone of origin/main at 47e32a73e1ba4c3ec7fbd44ced680bb86491950e (verified still HEAD via clone at session start); worktree clean; NO remote mutation of any kind (no push/branch/PR/tag/dispatch/settings change). Candidate: local branch `work/v1.11.1-run42928792246-repair` (commit SHA recorded in note.md next to the source ZIP); v1.11.1 NOT bumped (version authority untouched; APP_VERSION cross-checks in the workflow still pin internal/config.AppVersion).
-- The work order's §3.3 narrative (B–E: missing ZIP/NSIS producers, staging-only smoke, missing payload audit, weak NSIS contract test) was audited against the actual HEAD sources: ALL FOUR are ALREADY IMPLEMENTED at 47e32a7 (real Compress-Archive ZIP producer + Verify Windows ZIP purity/required-entry guards; real EnumWindows launch smoke from the RUNNER_TEMP copy with soak + graceful close; real pre-launch ImportAudit on the smoke copy; real NSIS install/uninstall round-trip with SHA-256 sentinels; TestNSISInstallUninstallSmokeEnforcedByWorkflow already asserts executable behavior — Start-Process /S, /D=, _?=, WaitForExit bounds, sentinels). Recorded as proof, no manufactured changes (§8's zero-residue discipline applied to §3.3 too).
-- **Defect A root cause (REPRODUCED locally, PowerShell 7.4.12, exactly the seven hosted failures):** the v1 fixture harness captured the gate with `2>&1` only, while `PackageGate.ps1` emitted everything through `Write-Host` (information stream 6); `2>&1` merges stream 2 into 1 and NEVER the information stream, so the captured output was empty (exit codes via `$LASTEXITCODE` were fine) — all seven diagnostic-output assertions failed while the raw `::error::` lines leaked to the console as live annotations. Second local-only hazard: fixture 8's missing `-Zip` engaged the mandatory-parameter interactive prompt and HUNG the suite whenever stdin is open (hosted passed only because runner stdin is closed).
-
-**PackageGate v2 stable machine-readable contract (§3.2) — scripts/ci/PackageGate.ps1 rewritten, PackageGate.Tests.ps1 rewritten (table-driven, 20 states, 140 assertions, 0 fail):**
-- ONE token line on the SUCCESS stream, exactly once, in EVERY state: `PACKAGE_GATE_RESULT <TOKEN>` (capturable by 2>&1, Tee-Object, redirects — no Write-Host dependence). Tokens: OK(0), BOTH_MISSING(2), ZIP_MISSING(2), INSTALLER_MISSING(2), ZIP_EMPTY(2), INSTALLER_EMPTY(2), ZIP_CORRUPT(2), ZIP_BAD_ROOT(2), ZIP_MISSING_ENTRIES(2), ZIP_FORBIDDEN_ENTRIES(2), INSTALLER_NOT_PE(2), INSTALLER_BAD_ARCH(2), DEPENDENCY_CLOSURE_FAILURE(2), INVALID_ARGUMENTS(1), EVALUATION_ERROR(3). Locale-independent (InvariantCulture everywhere); success line prints ACTUAL byte counts + SHA-256 digests, ONLY after every check passes, ONLY in OK.
-- Deeper integrity checks in the gate itself: ZIP opens via ZipArchive (ZIP_CORRUPT), exactly one top-level `-ExpectedRoot` directory (ZIP_BAD_ROOT), contracted required entries (ZIP_MISSING_ENTRIES — JSON names the exact missing paths), forbidden entries = data/models/workspace residue + Mesa opengl32.dll/libgallium_wgl.dll + Qt5*/Qt6*/libQt*.dll leaves (ZIP_FORBIDDEN_ENTRIES), installer MZ+PE machine ∈ {i386 NSIS stub, x86-64} (INSTALLER_NOT_PE / INSTALLER_BAD_ARCH — ARM64 rejected; i386 stays the documented NSIS 3.x stub identity, pinned by TestWindowsInstallerPEIdentityValidated).
-- New optional params: `-ResultFile` (structured JSON: token, exitCode, paths, byte counts, entry count, missing/forbidden lists, installer machine, dependency verdict, SHA-256s) and `-DependencyReport` (the ImportAudit log; verdict MISSING/ERROR/absent/unrecognized ⇒ DEPENDENCY_CLOSURE_FAILURE — closure unverified is never a pass; evaluated only when both packages exist so an upstream red keeps BOTH_MISSING as the named root cause).
-- Invalid arguments are now EXPLICIT validation (exit 1 + INVALID_ARGUMENTS token) — deterministic everywhere, no mandatory-prompt machinery; child-process CLI parity pinned with a real `pwsh -NoProfile -NonInteractive -File` invocation.
-- Fixture harness: ALL-stream capture via `& script 2>&1 6>&1` (NOT `*&1` — probed: `*&1` on a script that `exit`s loses $LASTEXITCODE entirely), named-parameter HASHTABLE splatting (an array splat binds positionally and turns `-Zip` into a literal value — found and fixed), real ZIP fixtures via ZipArchive, real PE byte fixtures, expected negative-fixture output preserved INERT in `ci-logs/package-gate-fixtures.log` (every line prefixed `fixture-output: ` so no captured line can start a live workflow command; asserted in-suite).
-
-**Workflow (build-desktop.yml) and contract-test updates (§4/§5):**
-- Gate step now passes `-ResultFile ci-logs/win-package-gate-result.json` and `-DependencyReport ci-logs/win-payload-import-audit.log`; all pinned releasecontract fragments preserved (tests re-run green).
-- Defect D closure: NEW step "Payload dependency audit (static imports of the shipped tree)" after "Verify the PE" — runs the REAL ImportAudit against `dist/windows/app/SHEYTAN-LA` (the exact ZIP/installer payload), fail-closed exit 2/3; smoke audit additionally writes `-JsonReport ci-logs/win-import-audit.json` (structured module/import/status report added to ImportAudit.ps1 — additive; fixture exit-code contract unchanged).
-- "Verify Windows ZIP" extended with the §4.2 full integrity test (`7z t` CRC of every stream, tool version recorded) + ZIP size/sha256 into `ci-logs/win-package-digests.log`; NEW step "Package manifest and digests" before the gate writes `ci-logs/win-package-manifest.json` (both packages + per-file staged-payload inventory with SHA-256 — one canonical manifest, §4.4).
-- Windows headless tests now run ONCE with `-json` (machine-readable event log `ci-logs/win-go-test-headless.json` + human package summary rendered from the same events + first failing package tail on red; no cached-pass, no double run).
-- Environment fingerprint steps (safe, bounded, secret-free: commit/ref/run/job, OS/arch/image, pwsh/go/gcc versions, safe go env values, disk headroom, pinned Mesa sha256) added to build-windows + build-linux; §5.2's other jobs already emit runner-identity/toolchain gates.
-- Action pins: checkout/setup-go/cache/download-artifact moved from moving tags to verified immutable full SHAs (git ls-remote of the official tags: 3d3c42e5…, b7ad1dad…, 55cc8345…, 9000827c…; independently corroborated — codeql.yml already pins checkout/setup-go to the SAME SHAs). `cmd/stress_release_surface.go` required-action refs extended to accept tag OR the verified SHA per action (the same pattern upload-artifact/msys2/gh-release already used) — the stress gate named the drift on the first post-edit run and now passes; `actions/cache` added to the required list.
-- build-linux Xvfb readiness switched from the stale `.X92-lock` file probe to the REAL xdpyinfo probe (the contract the ui job already pins); Linux job gains the same fingerprint step.
-- `.gitignore`: `/ci-logs/` ignored (local CI output, never source); retired Qt-era ignore residue removed (`/sheytan` + the v1.10.8 verify-all.mjs comment; `ui/qt/build/` — no ui/qt tree exists). `/local-agent` build-product entry kept.
-
-**Verification matrix (final state, all commands with exact outcomes):**
-- gofmt -l cmd internal ui: empty. go build -tags headless ./internal/... ./cmd/... ./scripts/...: exit 0 (Go 1.27.3 linux/amd64). go vet -tags headless (same scope): exit 0.
-- go test ./internal/... -tags headless -count=1 -timeout 25m: exit 0 (all packages ok). Race gate on api/agent/sessions/contextplan/histref/runtime/localipc: exit 0 (7 ok, api 135s). Stress + release-surface: STRESS-RESULT pass=47 fail=0 hangs=0 crashes=0 (threshold held). releasecontract: ok (includes TestWindowsPackageGateIsFailClosed, TestWindowsPackageProducerOrdering, TestWindowsZipPurityBansQtRuntime, TestNoQtQmlAppSourceRemains against the EDITED workflow). Collector fixtures: 22 pass / 0 fail. PackageGate fixtures: 140 ok / 0 fail (rc 0).
-- LOCAL Linux package pipeline (real Fyne CGO build in a no-root sandbox via dpkg-extracted GL/Wayland/X11 dev prefix): compiled version cross-check v1.11.1 (isolated probe dir, no residue); ELF x86-64; Xvfb :93 with REAL xdpyinfo readiness; REAL window observed (`0x200020 "SHEYTAN-Local-Agent": ("SHEYTAN-Local-Agent" "SHEYTAN-Local-Agent") 1080x720`); 10s soak alive; clean SIGTERM shutdown with reap; ZIP created/verified (entries, executable bit, minimal-root purity) — `dist/SHEYTAN-LA-v1.11.1-linux-x64.zip` sha256 530c1fd7624759044fa2353b4e55cce482bd069d68e6f9622d58ceaef6d92362 (24,717,423 bytes). Crash-report path itself was exercised earlier (missing libxkbcommon-x11) and produced a proper `data/logs/crashes/crash-*.log` — the runtime catcher works.
-- Not obtainable here (truthful): full `go build ./...`/`go vet ./...`/desktop `go test ./...`/ui-fyne suite with CGO on the HOST toolchain set (GL/Wayland dev headers absent system-wide; the local Fyne build used an extracted dev prefix — same source, different system layout), Windows PE build + real Windows launch smoke + NSIS install/uninstall + real-Windows PackageGate execution (no Windows here; the hosted Windows job remains the definitive gate for all Windows-only evidence), hosted consolidated-log artifact, and CodeQL (code-scanning API: HTTP 401 unauthenticated — status NOT VERIFIED this session; baseline remains the user-reported zero-open; no suppression/dismissal/query-suite change exists in the diff).
-
-**Qt/QML audit (§8):** zero first-party residue re-proven on 47e32a7 — 0 tracked *.qml/*.qrc/*.pro/*.pri/*.qmlproject/*.ui; Qt symbols appear ONLY in the retirement guard itself; 0 qmake/CMake Qt wiring; native/engine CMake has 0 Qt refs (generic CMake preserved); the guard TestNoQtQmlAppSourceRemains stays enabled.
-
-**Docs (§7):** inventory re-verified — one canonical page per topic already exists (README + docs/ARCHITECTURE/FEATURES/ROADMAP/UPDATE/agent/ai-notes/retired/changelog/ui-contract/3dstudio + SECURITY + LICENSE), no exact duplicates by hash, 22 relative links checked 0 broken, no stale package paths/retired workflow names in active docs (the only Wails hit is a negative contract statement in ai-notes). Dev-Notes.md untouched (human-only). changelog.md untouched (release process). This hand-off is the ai-notes update. The deliverable note.md (outside the repo, next to the source ZIP) carries the full work-order report.
-
-**Next operator steps:** review the local branch diff; push through the approved process; the next hosted build-desktop run on the candidate commit is the definitive Windows evidence (packages + launch smoke + install/uninstall + gate) and the CodeQL rerun.
+*Proprietary material under the Proprietary License (see
+[`../LICENSE.md`](../LICENSE.md)).*

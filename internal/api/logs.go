@@ -40,9 +40,18 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	// Parsed + REDACTED view; secrets are redacted inside RecentParsed
 	// BEFORE anything leaves the process. The ring is bounded server-side,
 	// so memory usage stays capped no matter how the UI polls.
+	//
+	// v1.11.1 (observability repair): the response also carries the
+	// resolved log directory and the sink health, so the Logs UI can show
+	// an operator WHERE logs live and WHETHER the file sinks are actually
+	// healthy — an unhealthy or fallback sink must never look like a
+	// healthy canonical one. Paths contain no secrets; the health fields
+	// carry no key material.
 	writeJSON(w, map[string]any{
-		"entries": logging.Default().RecentParsed(limit),
-		"limit":   limit,
+		"entries":    logging.Default().RecentParsed(limit),
+		"limit":      limit,
+		"dir":        logging.Default().Dir(),
+		"sinkHealth": logging.Default().Health(),
 	})
 }
 

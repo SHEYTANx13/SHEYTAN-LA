@@ -12,7 +12,7 @@ This file carries no version numbers. Capabilities and goals carry honest status
 - `../README.md` — current product only
 - `UPDATE.md` — current maintenance behavior
 - `ARCHITECTURE.md` — architecture truth for what is built
-- `Dev-Notes.md` — living open-item checklist (mandatory for agents)
+- `Dev-Notes.md` — the current developer work-order handler (human-owned)
 
 Motto: **“The model proposes. The tools execute. The laboratory verifies.”**
 
@@ -57,6 +57,34 @@ Status: **DELIVERED** — proven by current repository behaviour, code, tests or
 - **D** — Documented/verified by current code, tests or CI
 - **I** — Architectural inference (needs measurement plan)
 - **H** — Hypothesis (needs experiment before any implementation decision)
+
+---
+
+### UI/UX hybrid upgrade (direction absorbed from the operator research, 2026-11-01)
+
+Native Fyne stays primary; the Workspace stays on-demand, loopback-only,
+token-gated, CSP-strict; no second UI stack; no new authorities. Phases
+0–2 (design tokens + contracts; conversation surface; artifact/workspace
+integration) are DELIVERED and pinned in
+[`ui-contract.md`](ui-contract.md). Remaining direction:
+
+- **Phase 3 — Project / Goal / multi-agent command surface**: elevate the
+  Agent/Goal view (plan → act → verify stages, checkpoint visibility,
+  approval parking); surface parallel/sub-agent activity only if the
+  runtime already exposes it; optional low-risk project-like grouping (a
+  label/filter on sessions/goals, never a second store); keep Chat vs
+  Agent separation and mode clarity.
+- **Phase 4 — System, Models, Settings polish**: laboratory surfaces with
+  control-panel discipline (controls secondary but always available) and
+  the evidence ladder rendered with the Phase 0 hierarchy.
+- **Phase 5 — Smoothness, measurement, regression**: profile
+  streaming/layout/refresh under realistic load; extend smoke/golden
+  checks; every "smoother" claim backed by a test or an observable
+  before/after.
+
+Success metric: as fluid as the best web UIs, as orchestrable as the
+best agent consoles, as mode-clear as the best studios — and more honest
+and controllable than all of them.
 
 ---
 

@@ -1,148 +1,122 @@
 # Agent Operating Manual
 
-This is the durable operating guide for any AI agent working on SHEYTAN-LA.
+The durable operating guide for any AI coding agent working on
+SHEYTAN-LA. One success condition per session, minimum context, real
+evidence, clean hand-off.
 
 **Non-negotiable rules**
 
-1. The human’s current prompt always takes absolute precedence over every document, including this one.
-2. `docs/Dev-Notes.md` is **human-only**. AI agents must not edit it unless the human explicitly orders it in the current prompt.
-3. AI agents write all working notes, progress, evidence, and hand-offs exclusively in `docs/ai-notes.md`.
-4. Work must be fast, focused, and free of double work. Attention and tokens are limited; use them deliberately.
-
----
-
-## 0. Efficient multi-agent development process
-
-SHEYTAN-LA is developed primarily by coordinating multiple AI agents without a traditional IDE. The human operator reviews and is the only one who pushes.
-
-### Token, attention, and effort rules
-
-- Load the **minimum necessary context**: human prompt → `Dev-Notes.md` (read-only) → `ai-notes.md` (previous hand-off) → `agent.md` → only the specific code/docs required for the success condition.
-- Do **not** re-read or re-summarize large docs that have not changed and are not relevant to the current success condition.
-- Prefer one clear success condition per session. Finish it completely (including docs and hand-off) before starting another.
-- Avoid exploratory refactors, drive-by cleanups, or “while I’m here” changes.
-- Do not duplicate information that already lives in ARCHITECTURE, ROADMAP, FEATURES, or Dev-Notes. Point to it instead.
-- When verification is needed, run the smallest relevant subset of the verification ladder first. Escalate only if the small set is green and more coverage is required.
-- If blocked, stop early, record the blocker in `ai-notes.md`, and hand off. Do not burn tokens looping.
-
-### Staged process (complete, no skipped stages, no double work)
-
-| Stage | Activity | Exit criterion |
-|-------|----------|----------------|
-| 1. Orient | Read human prompt + Dev-Notes (read-only) + ai-notes + this manual | One-sentence success condition |
-| 2. Audit | Inspect only the code/docs that the success condition actually touches | Short audit note in ai-notes |
-| 3. Plan | Minimal file list + tests + docs to update | Plan matches success condition exactly |
-| 4. Implement | Smallest correct change | Focused diff |
-| 5. Verify | Relevant tests / checks only | Evidence class recorded |
-| 6. Document | Update affected public docs + write hand-off in ai-notes | Docs match code; ai-notes current |
-| 7. Hand-off | Clear summary for human or next agent | Next step is obvious |
-
-Never perform the same analysis or rewrite the same section twice in one session unless new evidence forces it.
-
-### Definition of Done
-
-- Success condition met
-- Relevant tests pass / evidence recorded
-- Evidence class stated
-- `ai-notes.md` contains an up-to-date hand-off
-- Affected public docs updated in the same change
-- `Dev-Notes.md` left untouched (unless human ordered otherwise)
-- No version numbers added to product-facing docs
-- No work outside the stated success condition
+1. The human's current prompt takes absolute precedence over every
+   document, including this one.
+2. [`Dev-Notes.md`](Dev-Notes.md) is human-only. Never edit it without an
+   explicit authorization in the current prompt; a past authorization
+   never carries over.
+3. Working notes, evidence and hand-offs go in
+   [`ai-notes.md`](ai-notes.md) — and only there.
+4. Never push, tag, open PRs, merge, dispatch workflows or write to
+   `main`. The operator owns every remote mutation.
 
 ---
 
 ## 1. What this is
 
-SHEYTAN-LA is a local-first AI engineering laboratory. One Go core owns every authority exactly once and serves it over secured local IPC. The desktop is a single in-process Go + Fyne application. Managed llama.cpp + optional native C++ engine.
+SHEYTAN-LA is a local-first AI engineering laboratory: one Go core that
+owns every authority exactly once, served over a secured local IPC
+channel, with a single in-process Go + Fyne desktop client and a managed
+llama.cpp / optional native engine.
 
-Motto: **“The model proposes. The tools execute. The laboratory verifies.”**
+Motto: *"The model proposes. The tools execute. The laboratory verifies."*
 
-### Durable invariants
+Durable invariants:
 
-- One authority per concern
-- No sleep-based correctness
-- Build success ≠ runtime proof
-- Detection ≠ execution
-- Model output ≠ objective evidence
-- Codename-removal gate enabled
-- Version identity from `internal/config.AppVersion` only
+- One authority per concern (the UI is a client).
+- One local transport: `internal/localipc.DialContext` (named pipe on
+  Windows, Unix socket elsewhere); no TCP fallback.
+- No sleep-based correctness; retries are bounded and event-driven.
+- Build success, a visible window and fake-core tests never prove
+  production IPC or runtime behavior.
+- Hardware truth: detected ≠ available ≠ selected ≠ executed ≠ verified.
+- Version identity comes from `internal/config.AppVersion` only.
 
----
+## 2. Repository preflight (before ANY edit)
 
-## 2. Repository map (high level)
+1. `git status`, `git log --oneline -5`, `git branch -a` — record the
+   baseline commit, worktree state and any dirty/untracked files.
+2. Never overwrite pre-existing user changes; preserve unrelated dirty
+   files; stop and record conflicts instead of discarding them.
+3. Work on a local non-main branch created from the freshly inspected
+   HEAD.
+4. Read the human prompt → [`Dev-Notes.md`](Dev-Notes.md) (read-only) →
+   [`ai-notes.md`](ai-notes.md) → only the code/docs the success
+   condition touches.
 
-- `cmd/` — entrypoints and printversion
-- `internal/` — all core authorities
-- `ui/fyne/` — one product UI
-- `native/` — C++ engine
-- `docs/` — documentation (Dev-Notes = human, ai-notes = AI)
-- `.github/workflows/` — CI
+## 3. Staged process
 
----
+| Stage | Activity | Exit criterion |
+|-------|----------|----------------|
+| 1. Orient | Prompt + Dev-Notes + ai-notes + this manual | One-sentence success condition |
+| 2. Audit | Inspect only the surfaces the condition touches | Short audit note |
+| 3. Plan | Minimal file list + tests + docs to update | Plan matches the condition exactly |
+| 4. Implement | Smallest correct change | Focused diff |
+| 5. Verify | Smallest sufficient verification prefix, escalating only on green | Evidence class recorded |
+| 6. Document | Affected public docs + ai-notes rewrite | Docs match code |
+| 7. Hand-off | Summary + exact next step for the human or next agent | Nothing unexplained |
 
-## 3. Verification ladder (use the smallest sufficient prefix)
+Avoid exploratory refactors and drive-by cleanups; do not duplicate
+content that lives in ARCHITECTURE / ROADMAP / FEATURES / Dev-Notes —
+link to it.
 
-1. `gofmt -l .`
-2. `go build -tags headless ./...`
+## 4. Verification ladder (smallest sufficient prefix)
+
+1. `gofmt -l cmd internal ui`
+2. `go build ./...` (or `-tags headless ./...` where the host lacks CGO
+   prerequisites)
 3. Relevant package tests
-4. Race tests only on concurrency-critical packages when touched
-5. UI tests only when `ui/fyne` is touched
-6. Full stress / release-surface only when the change affects those contracts
+4. Race gates only on touched concurrency-critical packages
+5. `ui/fyne` tests when the UI is touched (the button-fit and responsive
+   matrices run there)
+6. Stress / release-surface gates only when those contracts change
 
----
+Evidence classes — never inflate:
 
-## 4. Evidence classes
-
-- `local-static` — compile + unit tests
+- `local-static` — compile + unit tests on this host
 - `hosted` — green GitHub Actions on the exact revision
-- `physical` — real hardware (fail-closed)
+- `physical` — real hardware, fail-closed
 
-Never inflate the class.
+## 5. Code and test quality
 
----
+- Deterministic, event-driven tests; no timing hacks; never weaken or
+  delete a test to make a gate green.
+- No secrets, keys, tokens, prompt bodies or private user data in logs,
+  test output, docs or archive metadata.
+- Preserve the named-pipe DACL, Unix peer-credential checks, handshake
+  key, protocol-version check and local-only transport.
+- Windows test code is compile-verified with `GOOS=windows go vet` when
+  no Windows host is available; say so — the hosted lane is the runtime
+  authority.
 
-## 5. Documentation rules
+## 6. Documentation obligations
 
-- Docs must reflect code and evidence, never intention alone.
-- AI agents update public docs when behaviour or architecture changes, and write session state only in `ai-notes.md`.
-- `Dev-Notes.md` remains the human’s prioritised backlog.
+- Docs reflect implemented behavior and evidence, never intention.
+- Update affected public docs in the same change; rewrite
+  [`ai-notes.md`](ai-notes.md) as a current snapshot (no diary appends).
+- Retirements update [`retired.md`](retired.md); architecture changes
+  update [`ARCHITECTURE.md`](ARCHITECTURE.md); release history only in
+  [`changelog.md`](changelog.md).
+- Every relative link must resolve; every command must be runnable from
+  the documented directory or state its prerequisites.
 
----
+## 7. Deliverables and hand-off
 
-## 6. Push protocol
-
-Agents never push. Operator pushes and tags.
-
----
-
-## 7. Protected surfaces
-
-Touch only with an explicit human request or a clear item in Dev-Notes:
-
-- One-Go-UI + local IPC
-- Execution/evidence ladder + GPU truth
-- Governor admission
-- Goal engine terminal settlement
-- Session-list generation guard + zero-session Send
-- Stress / release-surface gates
-- Codename-removal gate
-
----
-
-## 8. File responsibilities
-
-| File | Who writes | Purpose |
-|------|------------|---------|
-| `docs/Dev-Notes.md` | Human only | Curated open items and process rules |
-| `docs/ai-notes.md` | AI agents | Working notes, evidence, hand-offs |
-| `docs/agent.md` | Human (+ rare AI under instruction) | This manual |
-| `docs/ARCHITECTURE.md` | Both (when architecture changes) | What is built |
-| `docs/ROADMAP.md` | Both (when direction changes) | Capability direction |
-| `docs/FEATURES.md` | Both | Implemented vs coming |
-| `README.md` | Both | Current product description |
-| `docs/changelog.md` | Human / release process | Release history |
+- Deliver what the work order names, in the workspace `download/`
+  directory; validate archives (`unzip -t`) before claiming them.
+- The hand-off states: what changed, the evidence (with classes), what is
+  deliberately NOT done and why, and the single next action for the
+  operator.
+- Naming honesty: never label a candidate GREEN unless every required
+  gate that can run has run green; label unrun gates NOT RUN.
 
 ---
 
-*Human prompt first. Minimum context. One success condition. Evidence. Clean hand-off in ai-notes.md. No double work.*
+*Human prompt first. Minimum context. One success condition. Evidence.
+Clean hand-off.*

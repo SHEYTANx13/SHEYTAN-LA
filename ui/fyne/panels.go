@@ -144,14 +144,16 @@ type modelsPanel struct {
 	// truthful result line, and a USER-CONTROLLED install through the
 	// core's engine-update API. All network work stays off the UI thread;
 	// the bounded install poll runs only while a transaction is in flight.
-	updCheckB   *widget.Button
-	updInstallB *widget.Button
-	updCancelB  *widget.Button
-	updLabel    *widget.Label
-	updMu       sync.Mutex
-	updBusy     bool   // single-flight: one check/install interaction at a time
-	updPolling  bool   // the bounded install poll is running
-	updTag      string // the resolved update target tag
+	updCheckB    *widget.Button
+	updInstallB  *widget.Button
+	updCancelB   *widget.Button
+	updLabel     *widget.Label
+	updHint      *widget.Label
+	openFldrHint *widget.Label
+	updMu        sync.Mutex
+	updBusy      bool   // single-flight: one check/install interaction at a time
+	updPolling   bool   // the bounded install poll is running
+	updTag       string // the resolved update target tag
 
 	// v1.11.1 Model Studio (run #41415240891 §5.2/§7): per-AI-System
 	// model assignment + runtime profile, edited through the EXISTING
@@ -215,7 +217,11 @@ func buildModelsPanelFor(ap *App) (fyne.CanvasObject, *modelsPanel) {
 	p.importIn = widget.NewEntry()
 	p.importIn.SetPlaceHolder("Absolute path to a .gguf model on disk")
 	p.importB = widget.NewButton("Import", func() { p.importModel() })
-	p.openFldr = widget.NewButton("Open models folder", func() {
+	// v1.11.1 button-fit policy: short, clear action labels on
+	// constrained controls; the explanatory detail lives in the adjacent
+	// wrapped caption (meaning kept, labels never clipped). "Open models
+	// folder" (18 chars) clipped at compact widths.
+	p.openFldr = widget.NewButton("Open folder", func() {
 		go func() {
 			if err := ap.Client().OpenModelsFolder(ap.Ctx()); err != nil {
 				uiDo(func() { p.showErr("open models folder", err) })
@@ -233,14 +239,22 @@ func buildModelsPanelFor(ap *App) (fyne.CanvasObject, *modelsPanel) {
 	// driven only through the core's engine-update API (the same
 	// transactional authority as the scheduled updater — never a second
 	// updater in the UI).
-	p.updLabel = wrappedLabel("Engine updates: not checked yet — run Check for updates.")
+	// Button-fit policy (v1.11.1): the three actions carry short labels
+	// ("Check now", "Install update", "Cancel") STACKED vertically —
+	// Fyne 2.8.2's VBox grants every child its full MinSize, so no label
+	// can ever be compressed or clipped at any matrix width — and the
+	// restart consequence lives in the adjacent caption, exactly where an
+	// operator looks before pressing Install.
+	p.updLabel = wrappedLabel("Engine updates: not checked yet — run Check now.")
 	p.updLabel.TextStyle = fyne.TextStyle{Monospace: true}
-	p.updCheckB = widget.NewButton("Check for updates", func() { p.checkEngineUpdate() })
+	p.updHint = wrappedLabel("Install restarts the local engine after the package verifies. Check is read-only; Cancel stops a running download.")
+	p.updHint.TextStyle = fyne.TextStyle{Italic: true}
+	p.updCheckB = widget.NewButton("Check now", func() { p.checkEngineUpdate() })
 	p.updCheckB.Importance = widget.LowImportance
-	p.updInstallB = widget.NewButton("Install update (restarts engine)", func() { p.installEngineUpdate() })
+	p.updInstallB = widget.NewButton("Install update", func() { p.installEngineUpdate() })
 	p.updInstallB.Importance = widget.HighImportance
 	p.updInstallB.Disable() // armed only by an update-available check
-	p.updCancelB = widget.NewButton("Cancel download", func() {
+	p.updCancelB = widget.NewButton("Cancel", func() {
 		go func() {
 			if err := ap.Client().CancelEngineDownload(ap.Ctx()); err != nil {
 				uiDo(func() { p.showErr("cancel engine update download", err) })
@@ -1096,16 +1110,35 @@ func buildToolsPanel(ap *App) fyne.CanvasObject {
 
 // --- Logs ---
 
+// logsPanel is the operator log surface. v1.11.1 honest-state contract:
+// loading, empty (ONLY after a successful fetch that returned nothing),
+// error (a failed request is NEVER rendered as "no entries"), refreshed,
+// and the resolved log directory + sink health — an unhealthy or
+// fallback sink is shown as such, never hidden behind a healthy-looking
+// panel.
 type logsPanel struct {
 	ap       *App
 	view     *widget.Label
 	filt     *widget.Entry
 	refreshB *widget.Button
-	entries  []LogEntry
+	dirInfo  *widget.Label
 	err      *widget.Label
+	entries  []LogEntry
+
+	// inFlight guards against overlapping requests; reqSeq drops stale
+	// responses so a slow earlier fetch can never overwrite a newer one.
+	inFlight bool
+	reqSeq   int
 }
 
 func buildLogsPanel(ap *App) fyne.CanvasObject {
+	root, _ := buildLogsPanelFor(ap)
+	return root
+}
+
+// buildLogsPanelFor is the test seam: it returns the assembled panel
+// object AND the panel state (the same single construction path).
+func buildLogsPanelFor(ap *App) (fyne.CanvasObject, *logsPanel) {
 	p := &logsPanel{ap: ap}
 	p.view = widget.NewLabel("")
 	p.view.Wrapping = fyne.TextWrapWord
@@ -1116,25 +1149,91 @@ func buildLogsPanel(ap *App) fyne.CanvasObject {
 	p.refreshB = widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), func() { p.load() })
 	p.err = widget.NewLabel("")
 	p.err.Importance = widget.DangerImportance
+	p.err.Wrapping = fyne.TextWrapWord
 	p.err.Hide()
+	p.dirInfo = widget.NewLabel("")
+	p.dirInfo.TextStyle = fyne.TextStyle{Italic: true}
+	p.dirInfo.Wrapping = fyne.TextWrapOff
 
 	root := container.NewBorder(
-		container.NewVBox(PageHeader("Logs", "Redacted ring buffer from the core", p.refreshB), p.filt),
+		container.NewVBox(
+			PageHeader("Logs", "Redacted ring buffer from the core", p.refreshB),
+			p.dirInfo,
+			p.filt,
+		),
 		p.err, nil, nil, container.NewScroll(p.view),
 	)
 	p.load()
-	return root
+	return root, p
 }
 
+// load fetches the core log ring. One request at a time; a response from
+// a superseded request is discarded (reqSeq), so manual Refresh clicks
+// can never interleave into a stale overwrite.
+//
+// Threading: load() runs on the UI goroutine (panel construction or the
+// Refresh button tap) — the loading-state mutations below are direct,
+// consistent with the surrounding panel construction; only the fetch
+// callback marshals back through uiDo.
 func (p *logsPanel) load() {
+	if p.inFlight {
+		return
+	}
+	p.inFlight = true
+	seq := p.reqSeq + 1
+	p.reqSeq = seq
+
+	p.view.SetText("(loading…)")
+	p.err.Hide()
+
 	go func() {
-		entries, err := p.ap.Client().Logs(p.ap.Ctx(), 200)
-		if err != nil {
-			uiDo(func() { p.err.SetText("logs: " + err.Error()); p.err.Show() })
-			return
-		}
-		uiDo(func() { p.entries = entries; p.render(); p.err.Hide() })
+		entries, meta, err := p.ap.Client().Logs(p.ap.Ctx(), 200)
+		uiDo(func() {
+			p.inFlight = false
+			if seq != p.reqSeq {
+				return // superseded by a newer request — never a stale overwrite
+			}
+			if err != nil {
+				// A failed request is an ERROR state, never "no entries":
+				// the transport being broken must be visible here.
+				p.entries = nil
+				p.view.SetText("")
+				p.dirInfo.SetText("")
+				p.err.SetText("logs unavailable — the core connection is broken or the request failed: " + err.Error())
+				p.err.Show()
+				return
+			}
+			p.entries = entries
+			p.dirInfo.SetText(p.describeDir(meta))
+			p.err.Hide()
+			p.render()
+		})
 	}()
+}
+
+// describeDir renders the resolved log directory and sink health in an
+// operator-friendly single caption. Fallback and failure states are
+// named, never hidden.
+func (p *logsPanel) describeDir(meta LogsMeta) string {
+	dir := meta.Dir
+	if dir == "" {
+		dir = "(unknown)"
+	}
+	text := "Log folder: " + dir
+	if meta.SinkHealth.FallbackReason != "" {
+		text += " — FALLBACK ACTIVE (the configured log folder could not be used)"
+	}
+	if !meta.SinkHealth.SinksReady {
+		if meta.SinkHealth.LastErr != "" {
+			text += " — sink problem: " + meta.SinkHealth.LastErr
+		} else {
+			text += " — sink problem (events may not persist to disk)"
+		}
+	}
+	if meta.SinkHealth.EmergencyLines > 0 {
+		text += fmt.Sprintf(" — %d recent event(s) held in memory only", meta.SinkHealth.EmergencyLines)
+	}
+	return text
 }
 
 func (p *logsPanel) render() {
@@ -1148,6 +1247,10 @@ func (p *logsPanel) render() {
 		b.WriteString(line + "\n")
 	}
 	if b.Len() == 0 {
+		// Only reachable after a SUCCESSFUL fetch: the honest empty state.
+		if p.err.Visible() {
+			return // an error is showing — never mask it with "no entries"
+		}
 		b.WriteString("(no entries match)")
 	}
 	p.view.SetText(b.String())
