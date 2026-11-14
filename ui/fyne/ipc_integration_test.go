@@ -26,6 +26,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -244,6 +245,153 @@ func TestCoreClientRefusesMismatchedProtocol(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mismatch") && !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("refusal should name the protocol mismatch, got: %v", err)
+	}
+}
+
+// TestNoNetworkListenerIsOpened
+// (internal/localipc/serve_test.go) keeps the endpoint-shape pin; this
+// test proves the FULL production-client flow — real core, real IPC
+// server, handshake, reads, WebSocket attach/close — opened no TCP
+// listener owned by this process (procfs inode match: the listener
+// count is PID-precise, not system-wide, so concurrent test binaries
+// cannot flake it).
+func TestUnixIPCFlowOpensNoTCPListener(t *testing.T) {
+	before := unixOwnTCPListeners(t)
+
+	srv, cfg := newIsolatedCore(t)
+	key, err := localipc.NewKey()
+	if err != nil {
+		t.Fatalf("NewKey: %v", err)
+	}
+	ipc := startIPC(t, srv, cfg, key)
+
+	client := fyneui.NewCoreClient(ipc.Endpoint(), key)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := client.Handshake(ctx); err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+	if _, err := client.Config(ctx); err != nil {
+		t.Fatalf("Config: %v", err)
+	}
+	sess, err := client.CreateSession(ctx, "chat")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	rt := fyneui.NewRuntime(client)
+	defer rt.Shutdown()
+	attachDone := make(chan error, 1)
+	actx, acancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer acancel()
+	go func() { attachDone <- rt.AttachActivity(actx, sess.ID) }()
+	// Bounded settle so the WS dial has run before the recount; the pump
+	// is torn down deterministically right after via Detach.
+	time.Sleep(500 * time.Millisecond)
+	rt.DetachActivity()
+	select {
+	case <-attachDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("attach pump did not end after detach")
+	}
+
+	after := unixOwnTCPListeners(t)
+	if after != before {
+		t.Fatalf("TCP listener count changed around the IPC flow: before=%d after=%d — a TCP fallback or side listener appeared", before, after)
+	}
+}
+
+// unixOwnTCPListeners counts LISTENING TCP sockets whose inode belongs to
+// one of THIS process's open file descriptors (pure procfs — no external
+// commands, no system-wide flakiness). Skips on non-procfs platforms.
+func unixOwnTCPListeners(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Skip("procfs unavailable on this host")
+	}
+	own := map[string]bool{}
+	for _, e := range entries {
+		link, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name()))
+		if err == nil && strings.HasPrefix(link, "socket:[") {
+			own[strings.TrimSuffix(strings.TrimPrefix(link, "socket:["), "]")] = true
+		}
+	}
+	count := 0
+	for _, path := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue // no IPv6 table, restricted host, etc.
+		}
+		for _, line := range strings.Split(string(data), "\n")[1:] {
+			fields := strings.Fields(line)
+			// st==0A is LISTEN; field 9 is the socket inode.
+			if len(fields) >= 10 && fields[3] == "0A" && own[fields[9]] {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+// TestCoreClientWebSocketCallerCancelUnix: the CALLER's context — not a
+// detach — terminates the activity pump, and the pump surfaces the
+// context error, over the REAL Unix-socket transport (the Windows named-
+// pipe twin lives in ipc_negative_windows_test.go).
+func TestCoreClientWebSocketCallerCancelUnix(t *testing.T) {
+	srv, cfg := newIsolatedCore(t)
+	key, err := localipc.NewKey()
+	if err != nil {
+		t.Fatalf("NewKey: %v", err)
+	}
+	ipc := startIPC(t, srv, cfg, key)
+
+	client := fyneui.NewCoreClient(ipc.Endpoint(), key)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := client.Handshake(ctx); err != nil {
+		t.Fatalf("handshake: %v", err)
+	}
+
+	sess, err := client.CreateSession(ctx, "chat")
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	rt := fyneui.NewRuntime(client)
+	defer rt.Shutdown()
+
+	attached := make(chan struct{}, 1)
+	rt.SetCallbacks(
+		func() {
+			select {
+			case attached <- struct{}{}:
+			default:
+			}
+		},
+		func() {},
+		func() {},
+	)
+
+	attachDone := make(chan error, 1)
+	actx, acancel := context.WithCancel(context.Background())
+	defer acancel()
+	go func() { attachDone <- rt.AttachActivity(actx, sess.ID) }()
+
+	select {
+	case <-attached:
+	case <-time.After(15 * time.Second):
+		t.Fatal("no WebSocket attach frame within 15s — the streaming transport is broken over the unix socket")
+	}
+
+	acancel() // the caller cancels: the pump must end with the context error
+	select {
+	case err := <-attachDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled attach returned %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("attach pump did not end within 5s of caller cancellation")
 	}
 }
 

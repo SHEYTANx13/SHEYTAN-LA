@@ -348,6 +348,11 @@ func TestStopIsCleanAndIdempotent(t *testing.T) {
 	}
 }
 
+// TestNoNetworkListenerIsOpened pins the transport-identity boundary:
+// the endpoint is never a TCP address, and — where procfs is available —
+// binding and serving the localipc endpoint opens ZERO TCP listeners for
+// this process (inode-matched to /proc/self/fd, so the check is
+// PID-precise and immune to concurrent test binaries).
 func TestNoNetworkListenerIsOpened(t *testing.T) {
 	endpoint, _, err := Endpoint()
 	if err != nil {
@@ -357,6 +362,72 @@ func TestNoNetworkListenerIsOpened(t *testing.T) {
 	if strings.HasPrefix(endpoint, "tcp://") || strings.Contains(endpoint, "0.0.0.0") {
 		t.Fatalf("endpoint %q must never be a TCP address", endpoint)
 	}
+
+	if _, err := os.ReadDir("/proc/self/fd"); err != nil {
+		t.Skip("procfs unavailable on this host — the endpoint-shape pin above still holds")
+	}
+
+	srv, cfg := newCore(t)
+	key, err := NewKey()
+	if err != nil {
+		t.Fatalf("NewKey: %v", err)
+	}
+	before := ownTCPListeners(t)
+	ipc := startIPC(t, srv, cfg, key)
+
+	// One real round-trip so the full serving path has run.
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return DialContext(ctx, ipc.Endpoint())
+			},
+		},
+		Timeout: 10 * time.Second,
+	}
+	resp, err := client.Get("http://core/api/config")
+	if err != nil {
+		t.Fatalf("core read over the local transport: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("core read status = %d, want 200", resp.StatusCode)
+	}
+
+	if after := ownTCPListeners(t); after != before {
+		t.Fatalf("TCP listener count changed around localipc.Serve: before=%d after=%d — a network listener appeared", before, after)
+	}
+}
+
+// ownTCPListeners counts LISTENING TCP sockets whose inode belongs to one
+// of this process's open file descriptors (pure procfs; PID-precise).
+func ownTCPListeners(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Skip("procfs unavailable on this host")
+	}
+	own := map[string]bool{}
+	for _, e := range entries {
+		link, err := os.Readlink(filepath.Join("/proc/self/fd", e.Name()))
+		if err == nil && strings.HasPrefix(link, "socket:[") {
+			own[strings.TrimSuffix(strings.TrimPrefix(link, "socket:["), "]")] = true
+		}
+	}
+	count := 0
+	for _, path := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n")[1:] {
+			fields := strings.Fields(line)
+			// st==0A is LISTEN; field 9 is the socket inode.
+			if len(fields) >= 10 && fields[3] == "0A" && own[fields[9]] {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 func min(a, b int) int {

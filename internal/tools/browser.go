@@ -217,8 +217,9 @@ func (b *BrowserTool) Run(ctx context.Context, args json.RawMessage) (string, er
 			url = "https://" + url
 		}
 		human()
-		var title, finalURL string
-		err := sess.Do(actx,
+		// chromedp v0.23 API: void steps run through Do; value-returning
+		// evaluations run through browser.Run and RETURN their value.
+		if err := sess.Do(actx,
 			chromedp.Navigate(url),
 			// v1.4.0: replace the fixed 300 ms post-navigate sleep with the
 			// REAL readiness conditions — chromedp.WaitReady blocks until the
@@ -228,9 +229,14 @@ func (b *BrowserTool) Run(ctx context.Context, args json.RawMessage) (string, er
 			// pages paid a fixed latency tax.
 			chromedp.WaitReady("body"),
 			chromedp.WaitVisible("body"),
-			chromedp.Evaluate(`document.title`, &title),
-			chromedp.Evaluate(`location.href`, &finalURL),
-		)
+		); err != nil {
+			return "", fmt.Errorf("navigate: %w", err)
+		}
+		title, err := browser.Run(sess, actx, chromedp.Evaluate[string](`document.title`))
+		if err != nil {
+			return "", fmt.Errorf("navigate: %w", err)
+		}
+		finalURL, err := browser.Run(sess, actx, chromedp.Evaluate[string](`location.href`))
 		if err != nil {
 			return "", fmt.Errorf("navigate: %w", err)
 		}
@@ -243,13 +249,12 @@ func (b *BrowserTool) Run(ctx context.Context, args json.RawMessage) (string, er
 			return "", fmt.Errorf("selector is required")
 		}
 		human()
-		if err := sess.Do(actx, chromedp.Click(p.Selector, selectorOpts(p.Selector)...)); err != nil {
+		if err := sess.Do(actx, chromedp.Click(p.Selector)); err != nil {
 			return "", fmt.Errorf("click %q: %w", p.Selector, err)
 		}
 		human()
 		// report where we landed
-		var after string
-		_ = sess.Do(actx, chromedp.Evaluate(`location.href`, &after))
+		after, _ := browser.Run(sess, actx, chromedp.Evaluate[string](`location.href`))
 		return fmt.Sprintf("clicked %q — now at %s", p.Selector, after), nil
 
 	case "type":
@@ -260,11 +265,11 @@ func (b *BrowserTool) Run(ctx context.Context, args json.RawMessage) (string, er
 			return "", fmt.Errorf("selector is required (type into a specific element)")
 		}
 		human()
-		actions := []chromedp.Action{}
+		actions := []chromedp.Action[chromedp.Void]{}
 		if p.Clear {
-			actions = append(actions, chromedp.Clear(p.Selector, selectorOpts(p.Selector)...))
+			actions = append(actions, chromedp.Clear(p.Selector))
 		}
-		actions = append(actions, chromedp.Click(p.Selector, selectorOpts(p.Selector)...))
+		actions = append(actions, chromedp.Click(p.Selector))
 		if err := sess.Do(actx, actions...); err != nil {
 			return "", fmt.Errorf("focus %q: %w", p.Selector, err)
 		}
@@ -315,21 +320,30 @@ func (b *BrowserTool) Run(ctx context.Context, args json.RawMessage) (string, er
 		case "up":
 			js = fmt.Sprintf(`window.scrollBy({top:%d, behavior:'smooth'})`, -p.Amount)
 		}
-		var dummy any
 		// v1.4.0: the smooth scroll is an async animation — the REAL
 		// completion condition is the scroll position itself, not a fixed
 		// 500 ms nap. The poll loop observes the actual window.scrollY /
 		// scrollHeight state and settles as soon as the browser reaches
 		// the commanded position (bounded by the action context).
-		if err := sess.Do(actx,
-			chromedp.Evaluate(js, &dummy),
-			chromedp.Poll(`window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 8 || window.scrollY === 0`, &dummy, chromedp.WithPollingTimeout(2*time.Second)),
-		); err != nil {
-			// A mid-document scrollBy legitimately never reaches the
-			// bottom or the top: the poll timeout is EXPECTED there.
-			// The scroll command itself already ran (Evaluate above);
-			// success is reported because the animation was commanded,
-			// not because a terminal position was verified.
+		// chromedp v0.23 API: the scroll command and the poll predicate
+		// are value-returning actions (the values are discarded).
+		if _, err := browser.Run(sess, actx, chromedp.Evaluate[any](js)); err == nil {
+			if _, perr := browser.Run(sess, actx, chromedp.Poll[bool](
+				`window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 8 || window.scrollY === 0`,
+				chromedp.WithPollingTimeout(2*time.Second),
+			)); perr != nil {
+				// A mid-document scrollBy legitimately never reaches the
+				// bottom or the top: the poll timeout is EXPECTED there.
+				// The scroll command itself already ran (Evaluate above);
+				// success is reported because the animation was commanded,
+				// not because a terminal position was verified.
+				logging.Default().Debug(
+					"browser",
+					"scroll %s settled without reaching a terminal position (partial scroll)",
+					dir,
+				)
+			}
+		} else {
 			logging.Default().Debug(
 				"browser",
 				"scroll %s settled without reaching a terminal position (partial scroll)",
@@ -343,8 +357,9 @@ func (b *BrowserTool) Run(ctx context.Context, args json.RawMessage) (string, er
 		if maxChars <= 0 {
 			maxChars = 3000
 		}
-		var info pageInfo
-		if err := sess.Do(actx, chromedp.Evaluate(extractJS, &info)); err != nil {
+		// chromedp v0.23 API: the evaluation returns the decoded struct.
+		info, err := browser.Run(sess, actx, chromedp.Evaluate[pageInfo](extractJS))
+		if err != nil {
 			return "", fmt.Errorf("extract: %w", err)
 		}
 		return formatPageInfo(&info, maxChars), nil
@@ -353,9 +368,9 @@ func (b *BrowserTool) Run(ctx context.Context, args json.RawMessage) (string, er
 		var text string
 		var err error
 		if p.Selector == "" {
-			err = sess.Do(actx, chromedp.Evaluate(`document.body ? document.body.innerText : ''`, &text))
+			text, err = browser.Run(sess, actx, chromedp.Evaluate[string](`document.body ? document.body.innerText : ''`))
 		} else {
-			err = sess.Do(actx, chromedp.Text(p.Selector, &text, selectorOpts(p.Selector)...))
+			text, err = browser.Run(sess, actx, chromedp.Text(p.Selector))
 		}
 		if err != nil {
 			return "", fmt.Errorf("text: %w", err)
@@ -367,8 +382,10 @@ func (b *BrowserTool) Run(ctx context.Context, args json.RawMessage) (string, er
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return "", err
 		}
-		var buf []byte
-		if err := sess.Do(actx, chromedp.FullScreenshot(&buf, 90)); err != nil {
+		// chromedp v0.23 API: FullScreenshot takes the quality and
+		// returns the PNG bytes.
+		buf, err := browser.Run(sess, actx, chromedp.FullScreenshot(90))
+		if err != nil {
 			return "", fmt.Errorf("screenshot: %w", err)
 		}
 		path := filepath.Join(dir, "shot-"+time.Now().Format("20060102-150405")+".png")
@@ -385,7 +402,7 @@ func (b *BrowserTool) Run(ctx context.Context, args json.RawMessage) (string, er
 
 	case "wait":
 		if p.Selector != "" {
-			if err := sess.Do(actx, chromedp.WaitVisible(p.Selector, selectorOpts(p.Selector)...)); err != nil {
+			if err := sess.Do(actx, chromedp.WaitVisible(p.Selector)); err != nil {
 				return "", fmt.Errorf("wait for %q: %w", p.Selector, err)
 			}
 			return fmt.Sprintf("element visible: %s", p.Selector), nil
@@ -401,11 +418,13 @@ func (b *BrowserTool) Run(ctx context.Context, args json.RawMessage) (string, er
 		return fmt.Sprintf("waited %dms", ms), nil
 
 	case "url":
-		var url, title string
-		if err := sess.Do(actx,
-			chromedp.Evaluate(`location.href`, &url),
-			chromedp.Evaluate(`document.title`, &title),
-		); err != nil {
+		// chromedp v0.23 API: each evaluation returns its value.
+		url, err := browser.Run(sess, actx, chromedp.Evaluate[string](`location.href`))
+		if err != nil {
+			return "", fmt.Errorf("url: %w", err)
+		}
+		title, err := browser.Run(sess, actx, chromedp.Evaluate[string](`document.title`))
+		if err != nil {
 			return "", fmt.Errorf("url: %w", err)
 		}
 		return fmt.Sprintf("URL: %s\nTitle: %s", url, title), nil
@@ -414,8 +433,9 @@ func (b *BrowserTool) Run(ctx context.Context, args json.RawMessage) (string, er
 		if p.Js == "" {
 			return "", fmt.Errorf("js is required")
 		}
-		var res any
-		if err := sess.Do(actx, chromedp.Evaluate(p.Js, &res)); err != nil {
+		// chromedp v0.23 API: the evaluation returns the decoded value.
+		res, err := browser.Run(sess, actx, chromedp.Evaluate[any](p.Js))
+		if err != nil {
 			return "", fmt.Errorf("eval: %w", err)
 		}
 		out, err := json.Marshal(res)
@@ -457,7 +477,7 @@ func (b *BrowserTool) Run(ctx context.Context, args json.RawMessage) (string, er
 			return "", fmt.Errorf("selector and value are required")
 		}
 		human()
-		if err := sess.Do(actx, chromedp.SetValue(p.Selector, p.Value, selectorOpts(p.Selector)...)); err != nil {
+		if err := sess.Do(actx, chromedp.SetValue(p.Selector, p.Value)); err != nil {
 			return "", fmt.Errorf("select: %w", err)
 		}
 		return fmt.Sprintf("set %q = %q", p.Selector, p.Value), nil
@@ -467,18 +487,13 @@ func (b *BrowserTool) Run(ctx context.Context, args json.RawMessage) (string, er
 	}
 }
 
-// selectorOpts converts a friendly selector into chromedp query options:
-// "text=Sign in" → plain-text search, XPath expressions → search, else CSS.
-func selectorOpts(sel string) []chromedp.QueryOption {
-	s := strings.TrimSpace(sel)
-	if strings.HasPrefix(s, "text=") {
-		return []chromedp.QueryOption{chromedp.BySearch}
-	}
-	if strings.HasPrefix(s, "//") || strings.HasPrefix(s, "(") || strings.HasPrefix(s, "./") {
-		return []chromedp.QueryOption{chromedp.BySearch}
-	}
-	return nil
-}
+// Selector lookup note (chromedp v0.23 API migration): the former
+// selectorOpts helper mapped "text=…"/XPath selectors to chromedp.BySearch
+// and left plain CSS on the old default query — chromedp removed BySearch
+// because a PLAIN STRING selector now always runs the unified Search
+// lookup, which matches plain text, CSS selectors AND XPath in one
+// DOM.performSearch call. Every friendly selector form this tool accepts
+// therefore needs no query option at all.
 
 // session lazily boots the shared browser session. The parent context
 // bounds startup (30s) and is propagated so a hung Chrome can never block

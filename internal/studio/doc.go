@@ -40,6 +40,6 @@ var (
 // Re-apply that patch after every vendor refresh (see the marked block
 // inside the file).
 const (
-	ThreeJSVersion = "0.187.0" // three.js r187, MIT — see assets/LICENSE-THREE.txt
+	ThreeJSVersion = "0.187.0" // three.js r187, MIT — the verbatim notice ships as ThreeJSMITNotice (license.go); the only license artifact in the tree is the root LICENSE.md
 	ThreeJSLicense = "MIT"
 )

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/aicontext"
@@ -14,6 +15,24 @@ import (
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/releasecontract"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/resources"
 )
+
+// goModToolchainVersion extracts the exact toolchain version from the
+// canonical `toolchain goX.Y.Z` directive of go.mod — the ONE version
+// constant the release surface is allowed to reference. Everything else
+// (workflow GO_VERSION env, setup-go pins, the runtime building this
+// gate) must agree with it; no copy of the version may be hard-coded in
+// a gate or fixture (the run-#40 and run-43601915826 defect class).
+func goModToolchainVersion(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	m := regexp.MustCompile(`(?m)^\s*toolchain\s+go(\S+)\s*$`).FindSubmatch(data)
+	if m == nil {
+		return "", fmt.Errorf("%s declares no `toolchain goX.Y.Z` directive", path)
+	}
+	return string(m[1]), nil
+}
 
 // --- release-surface scenarios ---
 //
@@ -265,7 +284,7 @@ func stressReleaseSurface() error {
 	if strings.Contains(w, "go-version: 'stable'") ||
 		strings.Contains(w, `go-version: stable`) {
 		return fmt.Errorf(
-			"CI toolchain floats on 'stable' — pin it to 1.27",
+			"CI toolchain floats on 'stable' — pin it to the exact go.mod toolchain release",
 		)
 	}
 
@@ -277,9 +296,35 @@ func stressReleaseSurface() error {
 	// (46 pass / 1 fail, exit 1). The gate must follow the workflow
 	// forward, never pin it to a superseded toolchain (the same rule
 	// 3d's comment pins for the action set).
-	if !strings.Contains(w, `GO_VERSION: "1.27"`) {
+	// v1.11.1 (run 43601915826, work order §3.4): the same defect class
+	// struck AGAIN one level deeper — the gate demanded the obsolete
+	// `GO_VERSION: "1.27"` literal while the workflow, the go.mod
+	// toolchain directive and the hosted runtime had all correctly
+	// moved to the exact patch go1.27.4 (46 pass / 1 fail again). The
+	// expected version is no longer hard-coded anywhere: it is DERIVED
+	// from the canonical `toolchain` directive in go.mod, and this gate
+	// requires exact parity with the workflow GO_VERSION env and with
+	// the Go runtime actually building this gate. Exactly one version
+	// constant exists — the toolchain directive.
+	wantToolchain, err := goModToolchainVersion("go.mod")
+	if err != nil {
+		return fmt.Errorf("canonical toolchain directive: %v", err)
+	}
+
+	goVersionRef := regexp.MustCompile(`GO_VERSION:\s*"([^"]+)"`).FindStringSubmatch(w)
+	if goVersionRef == nil {
+		return fmt.Errorf("workflow env block missing the GO_VERSION pin")
+	}
+	if goVersionRef[1] != wantToolchain {
 		return fmt.Errorf(
-			"CI toolchain not pinned to 1.27 (expected GO_VERSION: \"1.27\" in the workflow env block)",
+			"workflow GO_VERSION %q does not match the go.mod toolchain %q — exactly one canonical Go version must exist",
+			goVersionRef[1], wantToolchain,
+		)
+	}
+	if runtimeVersion := strings.TrimPrefix(runtime.Version(), "go"); runtimeVersion != wantToolchain {
+		return fmt.Errorf(
+			"this gate runs on go%s but the canonical toolchain is %q — run the release surface under the exact go.mod toolchain",
+			runtimeVersion, wantToolchain,
 		)
 	}
 

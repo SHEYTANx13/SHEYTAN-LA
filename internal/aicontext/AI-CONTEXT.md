@@ -1,4 +1,4 @@
-<!-- sheytan-context-version: 13 -->
+<!-- sheytan-context-version: 14 -->
 <!-- This file is SHEYTAN's AI instruction file. It is prepended to the system
      prompt of every model plugged into the app. You may edit it freely — your
      edits are kept until an app upgrade ships a newer instruction version

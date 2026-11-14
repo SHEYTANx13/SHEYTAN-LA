@@ -12,12 +12,13 @@ session; rewrite this note so it stays true.
 
 ## Current state (2026-11-14, v1.11.1 maintenance candidate)
 
-The branch `maintenance/v1.11.1-windows-ipc` (local, unpushed) carries
-the Windows IPC repair and the maintenance pass described in
-[`changelog.md`](changelog.md) under the existing 1.11.1 maintenance
-heading. Baseline: `c8fc15e` on main (green run 43455711025). Product
-version stays 1.11.1 everywhere. The full evidence inventory for this
-candidate ships in `note.md` beside the source ZIP.
+The branch `maintenance-v1.11.1` (local, unpushed) carries the
+run-43601915826 repair: the Windows IPC repair and the maintenance pass
+described in [`changelog.md`](changelog.md) under the existing 1.11.1
+maintenance heading. Baseline: `cbb07af` on main (the red run's commit;
+the earlier green run 43455711025 is historical only). Product version
+stays 1.11.1 everywhere. The full evidence inventory for this candidate
+ships in `note.md` beside the source ZIP.
 
 ## Live architectural constraints (unchanged, load-bearing)
 
@@ -41,28 +42,44 @@ candidate ships in `note.md` beside the source ZIP.
 
 ## Active blockers
 
-- **chromedp/cdproto pairing.** Every stable pairing since chromedp
-  v0.17 ships the generics API rewrite (`Action[T]`, `Do`, value-returning
-  actions); `internal/browser` + `internal/tools/browser.go` still use the
-  v0.16 API. The pair is intentionally kept at chromedp v0.16.0 +
-  cdproto pseudo-version (no stable tag carries the old API) until a
-  Chrome-equipped lane can verify a real migration. Plan it as its own
-  session; do not compile-only migrate.
+- **chromedp browser runtime smoke (physical class).** The v0.23.1 +
+  cdproto v0.160.2 migration is COMPLETE and compile-verified (headless
+  Linux build, GOOS=windows cross-build, full headless suite, 47/47
+  stress scenarios), but this sandbox has no Chrome: browser-tool runtime
+  behavior is NOT RUN until a Chrome-equipped lane exercises it. A
+  real-browser smoke is the next hosted verification item.
 - **Hosted verification of the IPC gates is pending the operator's push.**
   No green-run claim exists for the candidate.
 
 ## Known evidence (current)
 
-- Windows named-pipe transport: contract tests + production CoreClient
-  integration exist and run hosted; locally they are compile-verified
-  (`GOOS=windows go vet`) — the runtime authority is the hosted lane.
-- Unix transport: the same integration suite runs green on Linux
-  (handshake, read-only APIs, WebSocket attach/normal close, wrong-key
-  refusal, protocol refusal).
-- Fyne button-fit matrix + responsive viewport matrix: green on Linux;
-  hosted in the UI lane with a dedicated log.
-- CodeQL: operator reports zero outstanding errors on main; the candidate
-  has NOT been scanned (unpushed) — never claim otherwise.
+- Run-43601915826 root causes fixed: the busy-pipe test fixture
+  deadlock (synchronous handle + OVERLAPPED mismatch in
+  `dial_windows_test.go`), the logging rotation-test handle leak
+  (Windows TempDir cleanup), and the stale `GO_VERSION: "1.27"` literal
+  in the release-surface gate (now derived from the go.mod toolchain
+  directive with exact workflow/runtime parity). Windows lanes are
+  compile-verified (`GOOS=windows go test -c`) — the runtime authority
+  is the hosted lane.
+- Unix transport: the integration suite runs green on Linux and now
+  also proves the WS caller-cancel path and a procfs-inode-precise
+  no-TCP-listener contract (`TestNoNetworkListenerIsOpened` runs green
+  locally).
+- Dependency integrity: `go mod verify` passes and `go mod tidy` is
+  idempotent at chromedp v0.23.1 / cdproto v0.160.2. Fresh tag audit:
+  winres v0.3.1 IS the latest real tag (the researched v0.3.3 does not
+  exist); `fyne.io/systray` stays on the pseudo-version because Fyne
+  v2.8.2's own graph requires it.
+- Fyne button-fit: the rail now grows to its content minimum (the fixed
+  rail width was the Windows clipping mechanism), the Models panel's
+  orphaned "Open folder" button and restart-hint caption are wired, and
+  the engine-update actions are a real stacked column. The matrix,
+  chrome sweep and rail contract are compile-verified only in this
+  sandbox (no GL headers for the Fyne CGO build) — the Linux UI lane is
+  the compile/run authority.
+- CodeQL: the two documented actions/unpinned-tag warnings remain the
+  accepted baseline under the tag-only policy; the candidate has NOT
+  been scanned (unpushed) — never claim otherwise.
 
 ## Unresolved risks
 

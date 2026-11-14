@@ -36,21 +36,82 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// busyPipeServer creates a named pipe with exactly ONE instance and an
-// accept that never completes a second instance: after the first client
-// connects, the pipe exists but has no listening instance, so every
-// further CreateFile returns ERROR_PIPE_BUSY — the deterministic busy
-// condition (no goroutine races, no load assumptions).
-func busyPipeServer(t *testing.T) string {
+// pipeSeq namespaces the fixture pipe names across tests in this process
+// (package-level so two fixture instances can never collide even if a
+// previous instance's handles are still being reaped).
+var pipeSeq uint32
+
+const (
+	// busyFixtureAcceptMS bounds the fixture's single WaitForSingleObject
+	// on the overlapped accept completion. A real client connect (or the
+	// cleanup cancel) signals the event far earlier; the bound only
+	// guarantees the helper goroutine always exits. Not a correctness
+	// sleep: every completion path is event-driven.
+	busyFixtureAcceptMS = 5000
+
+	// busyFixtureReapWait bounds the cleanup wait on the fixture
+	// channels before handles are closed. The overlapped
+	// ConnectNamedPipe call itself returns immediately, so this is
+	// microseconds in practice.
+	busyFixtureReapWait = 2 * time.Second
+)
+
+// busyPipeFixture is the deterministic single-instance busy-pipe state
+// machine: one pipe, one overlapped accept, channels for readiness and
+// completion, and bounded cancellation-safe reaping.
+type busyPipeFixture struct {
+	name string
+	// acceptDone receives the accept completion status exactly once:
+	// nil once a client consumed the single listening instance (the
+	// readiness signal the busy tests wait on), or the abort/timeout
+	// error on every other exit path.
+	acceptDone <-chan error
+}
+
+// waitAcceptDone proves the single instance was actually consumed by a
+// client before the test proceeds — the deterministic readiness signal
+// (never a sleep or a polling loop) that makes the following busy dial
+// guaranteed to observe ERROR_PIPE_BUSY.
+func (f *busyPipeFixture) waitAcceptDone(t *testing.T) {
+	t.Helper()
+	select {
+	case err := <-f.acceptDone:
+		if err != nil {
+			t.Fatalf("overlapped accept did not complete successfully: %v", err)
+		}
+	case <-time.After(busyFixtureReapWait):
+		t.Fatalf("overlapped accept never completed within %v — the fixture deadlocked", busyFixtureReapWait)
+	}
+}
+
+// busyPipeServer creates a named pipe with exactly ONE instance and arms
+// exactly ONE overlapped accept: after the first client connects, the
+// single instance is occupied and every further CreateFile returns
+// ERROR_PIPE_BUSY — the deterministic busy condition (no goroutine
+// races, no load assumptions).
+//
+// Run-43601915826 correction: the previous fixture created a SYNCHRONOUS
+// pipe handle (no FILE_FLAG_OVERLAPPED) while passing a non-NULL
+// OVERLAPPED to ConnectNamedPipe. On a synchronous handle the call blocks
+// until a client connects — and no client could dial because the helper
+// never returned the pipe name. The fixture deadlocked inside
+// windows.ConnectNamedPipe and burned the whole 25-minute Windows test
+// timeout. The handle is now created WITH FILE_FLAG_OVERLAPPED so the
+// accept is non-blocking and cancelable; completion is carried on
+// channels; cleanup cancels the outstanding accept with CancelIoEx and
+// reaps the goroutine with bounded waits before closing the handles, so
+// no handle or goroutine outlives the test on any exit path.
+func busyPipeServer(t *testing.T) *busyPipeFixture {
 	t.Helper()
 
-	var pipeSeq uint32
 	name := fmt.Sprintf(`\\.\pipe\sheytan-test-busy-dial-%d-%d`,
 		os.Getpid(), atomic.AddUint32(&pipeSeq, 1))
 
+	// FILE_FLAG_OVERLAPPED makes the accept non-blocking and cancelable:
+	// the helper must never block the test goroutine.
 	handle, err := windows.CreateNamedPipe(
 		windows.StringToUTF16Ptr(name),
-		windows.PIPE_ACCESS_DUPLEX,
+		windows.PIPE_ACCESS_DUPLEX|windows.FILE_FLAG_OVERLAPPED,
 		windows.PIPE_TYPE_BYTE|windows.PIPE_READMODE_BYTE|windows.PIPE_WAIT,
 		1, // exactly one instance: no refill, ever
 		4096, 4096, 0, nil,
@@ -58,24 +119,60 @@ func busyPipeServer(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("CreateNamedPipe: %v", err)
 	}
-	t.Cleanup(func() { _ = windows.CloseHandle(handle) })
 
-	// Arm the (never-completing) accept so the single instance listens for
-	// exactly one client.
 	evt, err := windows.CreateEvent(nil, 1, 0, nil)
 	if err != nil {
+		_ = windows.CloseHandle(handle)
 		t.Fatalf("CreateEvent: %v", err)
 	}
-	t.Cleanup(func() { _ = windows.CloseHandle(evt) })
 
 	var ol windows.Overlapped
 	ol.HEvent = evt
-	if err := windows.ConnectNamedPipe(handle, &ol); err != nil &&
-		err != windows.ERROR_IO_PENDING && err != windows.ERROR_PIPE_CONNECTED {
-		t.Fatalf("ConnectNamedPipe: %v", err)
-	}
 
-	return name
+	// Arm the single accept asynchronously. The overlapped call returns
+	// immediately (ERROR_IO_PENDING, or ERROR_PIPE_CONNECTED if a client
+	// was already queued); the OS signals the event on real completion.
+	issued := make(chan error, 1)
+	acceptDone := make(chan error, 1)
+	go func() {
+		issued <- windows.ConnectNamedPipe(handle, &ol)
+		// ERROR_PIPE_CONNECTED means the accept completed inline and
+		// no event will fire; otherwise wait for the event (client
+		// connect, or the cleanup cancel). Bounded so this goroutine
+		// always exits.
+		s, werr := windows.WaitForSingleObject(evt, busyFixtureAcceptMS)
+		if s == windows.WAIT_OBJECT_0 {
+			var n uint32
+			acceptDone <- windows.GetOverlappedResult(handle, &ol, &n, false)
+			return
+		}
+		acceptDone <- werr
+	}()
+
+	t.Cleanup(func() {
+		// The call must have been issued before any cancellation so
+		// there is always something to reap (the overlapped call
+		// returns immediately, so this is instantaneous).
+		select {
+		case <-issued:
+		case <-time.After(busyFixtureReapWait):
+		}
+		// Cancel any outstanding accept: the abort completes the
+		// overlapped operation and signals the event, so the helper
+		// goroutine always exits. CancelIoEx is the documented
+		// cancellation path — never a sleep, never a handle leak.
+		_ = windows.CancelIoEx(handle, nil)
+		// Reap the completion before the handles die so no goroutine
+		// is still inside a wait that references them.
+		select {
+		case <-acceptDone:
+		case <-time.After(busyFixtureReapWait):
+		}
+		_ = windows.CloseHandle(handle)
+		_ = windows.CloseHandle(evt)
+	})
+
+	return &busyPipeFixture{name: name, acceptDone: acceptDone}
 }
 
 // TestDialContextCanceledNeverTouchesPipe: an already-canceled context is
@@ -118,20 +215,27 @@ func TestDialContextMissingPipeSurfacesCreateFileError(t *testing.T) {
 // at the caller's deadline with the typed context error, not after the
 // full 10s internal budget.
 func TestDialContextCallerDeadlineBoundsBusyDial(t *testing.T) {
-	name := busyPipeServer(t)
+	fixture := busyPipeServer(t)
 
 	// Occupy the single instance: from here on every dial is busy.
-	held, err := DialContext(context.Background(), name)
+	held, err := DialContext(context.Background(), fixture.name)
 	if err != nil {
 		t.Fatalf("first client dial: %v", err)
 	}
 	defer held.Close()
 
+	// Deterministic readiness: the overlapped accept completed, so the
+	// single instance is genuinely occupied before the busy dial — the
+	// busy condition no longer depends on fixture timing.
+	fixture.waitAcceptDone(t)
+
+	// 300ms caller deadline plus a small scheduler tolerance below: the
+	// deadline must dominate the 10s internal busy-dial budget.
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
 	start := time.Now()
-	_, err = DialContext(ctx, name)
+	_, err = DialContext(ctx, fixture.name)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -140,8 +244,11 @@ func TestDialContextCallerDeadlineBoundsBusyDial(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("caller-deadline busy dial error = %v, want context.DeadlineExceeded", err)
 	}
-	if elapsed > 5*time.Second {
+	if elapsed > 2*time.Second {
 		t.Fatalf("busy dial took %v — the caller deadline did not bound it", elapsed)
+	}
+	if elapsed < 250*time.Millisecond {
+		t.Fatalf("busy dial returned after %v — earlier than the caller deadline, which is not the documented busy path", elapsed)
 	}
 }
 
@@ -154,16 +261,20 @@ func TestDialContextBusyBudgetExhaustsTyped(t *testing.T) {
 		t.Skip("exercises the full 10s busy-dial budget")
 	}
 
-	name := busyPipeServer(t)
+	fixture := busyPipeServer(t)
 
-	held, err := DialContext(context.Background(), name)
+	held, err := DialContext(context.Background(), fixture.name)
 	if err != nil {
 		t.Fatalf("first client dial: %v", err)
 	}
 	defer held.Close()
 
+	// Deterministic readiness: the single instance is genuinely occupied
+	// before the budget-exhaustion dial.
+	fixture.waitAcceptDone(t)
+
 	start := time.Now()
-	_, err = DialContext(context.Background(), name)
+	_, err = DialContext(context.Background(), fixture.name)
 	elapsed := time.Since(start)
 
 	if !errors.Is(err, ErrBusyDialBudgetExhausted) {

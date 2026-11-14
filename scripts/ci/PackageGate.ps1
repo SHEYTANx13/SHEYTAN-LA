@@ -53,6 +53,14 @@
     DEPENDENCY_CLOSURE_FAILURE 2   -DependencyReport absent/unreadable/
                                    unrecognized, or its audit verdict is
                                    MISSING/ERROR (closure never assumed)
+    BLOCKED_BY_UPSTREAM_TEST_FAILURE
+                               2   the -UpstreamFailureMarker file exists:
+                                   an upstream verification gate FAILED
+                                   and the package-producing steps never
+                                   ran — the report names the FIRST
+                                   failing gate instead of inventing a
+                                   second root error (run 43601915826
+                                   work order §3.5). Still fail-closed.
     INVALID_ARGUMENTS          1   required arguments missing/invalid
                                    (deterministic: explicit validation,
                                    never the interactive prompt machinery)
@@ -75,7 +83,8 @@ param(
     [string]$ResultFile,
     [string[]]$RequiredEntries,
     [string]$ExpectedRoot = "SHEYTAN-LA",
-    [string]$DependencyReport
+    [string]$DependencyReport,
+    [string]$UpstreamFailureMarker
 )
 
 $ErrorActionPreference = "Stop"
@@ -107,6 +116,7 @@ $script:Result = [ordered]@{
     installerMachine  = $null
     dependencyReport  = $DependencyReport
     dependencyVerdict = $null
+    upstreamFailure   = $null
     zipSha256         = $null
     installerSha256   = $null
     expectedRoot      = $ExpectedRoot
@@ -163,6 +173,27 @@ try {
     foreach ($entry in $RequiredEntries) {
         if ([string]::IsNullOrWhiteSpace($entry)) {
             Fail-State -Token "INVALID_ARGUMENTS" -Code 1 -Message "invalid arguments: -RequiredEntries must not contain empty values"
+        }
+    }
+
+    # ------------------------------------------------------------------
+    # 0b. Blocked-by-upstream reporting (run 43601915826 §3.5): when an
+    #     upstream verification gate failed, the package-producing steps
+    #     were skipped and BOTH packages are legitimately absent — that
+    #     is ONE root cause, not a second package defect. The marker file
+    #     (written by the FIRST failing gate) names it; the gate stays
+    #     fail-closed (exit 2) but reports the true upstream failure
+    #     instead of BOTH_MISSING. A missing marker changes nothing: a
+    #     completed packaging path that fails to emit its output still
+    #     fails hard with the package truth table.
+    # ------------------------------------------------------------------
+    if ($UpstreamFailureMarker) {
+        if (Test-Path -LiteralPath $UpstreamFailureMarker -PathType Leaf) {
+            $gate = "<unreadable marker>"
+            try { $gate = ([System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $UpstreamFailureMarker).Path)).Trim() } catch { }
+            if (-not $gate) { $gate = "<empty marker>" }
+            $script:Result.upstreamFailure = $gate
+            Fail-State -Token "BLOCKED_BY_UPSTREAM_TEST_FAILURE" -Code 2 -Message ("packaging was BLOCKED BY UPSTREAM TEST FAILURE — the first failing gate is '{0}' (marker '{1}'); the packages were never produced by that failed run, so there is no second package defect to report" -f $gate, $UpstreamFailureMarker)
         }
     }
 

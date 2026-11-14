@@ -60,15 +60,6 @@ The product desktop is a **single Go executable**:
 - **Button-fit + one-column compact layout** (v1.11.1 maintenance): every action label is short with its explanatory detail in an adjacent wrapped caption; card captions wrap inside the cards (`cardFit` — `widget.NewCard` subtitles never wrap and clipped at compact widths); the chat/agent views use an adaptive dual pane that stacks the session/goal list above the conversation below the 600-unit breakpoint (the documented compact one-column contract). `TestButtonFitMatrix` walks every destination at every representative logical size asserting no compressed buttons, no out-of-bounds rigid controls and no unreachable actions.
 - **Windows gate semantics** (v1.11.1 maintenance): a hosted Windows pass requires the named-pipe CoreClient integration test AND a launch smoke that observes the window AND the successful-handshake record AND a real core read AND logging persistence AND a graceful close; force-termination is a failure, never a pass.
 
-### 3.2 Log catcher (observability)
-
-`internal/logging` owns every sink under `<data-root>/logs/` (`app.log`, `tools.jsonl`, `llm.jsonl`, `crashes/`):
-
-- Boot order: bootstrap logger (stderr + bounded memory) → runtime-data migrations → canonical sinks open → session banner → one startup record naming the resolved log directory and active sinks → bootstrap replay.
-- Sink health is observable (`Manager.Health`): a failed or nil app sink never silently discards events — lines are preserved in a bounded emergency ring, surfaced on rate-limited/deduplicated stderr, and reported through `/api/logs` (`dir` + `sinkHealth`) so the Logs panel and Settings diagnostics show the resolved directory, fallback state and sink problems honestly.
-- Partial sink opens roll back (every opened handle closed, errors joined); rotation and JSONL write failures are reported; `Close` writes its own outcome record and returns joined errors from every sink.
-- If the configured logs directory cannot be opened, a documented per-user private fallback (`os.UserCacheDir()/SHEYTAN-LA/logs`) is used after the primary failure is recorded — the fallback is announced in the startup record, never presented as the canonical sink. The bootstrap stderr + memory logger remains the last resort.
-
 ### 3.1 Hybrid presentation: on-demand Web Workspace
 
 The native shell remains the primary surface for navigation, forms, approvals, run controls and diagnostics. Content kinds that benefit from browser-grade rendering (markdown, code, diffs, tables, chart specifications) can additionally be opened in the **Web Workspace** (`internal/workspace`) — an on-demand, browser-hosted read-only viewer:
@@ -82,7 +73,14 @@ The native shell remains the primary surface for navigation, forms, approvals, r
 
 ---
 
----
+### 3.2 Log catcher (observability)
+
+`internal/logging` owns every sink under `<data-root>/logs/` (`app.log`, `tools.jsonl`, `llm.jsonl`, `crashes/`):
+
+- Boot order: bootstrap logger (stderr + bounded memory) → runtime-data migrations → canonical sinks open → session banner → one startup record naming the resolved log directory and active sinks → bootstrap replay.
+- Sink health is observable (`Manager.Health`): a failed or nil app sink never silently discards events — lines are preserved in a bounded emergency ring, surfaced on rate-limited/deduplicated stderr, and reported through `/api/logs` (`dir` + `sinkHealth`) so the Logs panel and Settings diagnostics show the resolved directory, fallback state and sink problems honestly.
+- Partial sink opens roll back (every opened handle closed, errors joined); rotation and JSONL write failures are reported; `Close` writes its own outcome record and returns joined errors from every sink.
+- If the configured logs directory cannot be opened, a documented per-user private fallback (`os.UserCacheDir()/SHEYTAN-LA/logs`) is used after the primary failure is recorded — the fallback is announced in the startup record, never presented as the canonical sink. The bootstrap stderr + memory logger remains the last resort.
 
 ## 4. Session & run lifecycle
 

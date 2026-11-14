@@ -43,7 +43,9 @@
     6  OK (real zip + real PE)    0   13  OK with i386 NSIS stub  0
     7  ZIP_CORRUPT                2   14  INVALID_ARGUMENTS       1
     15 INVALID_ARGUMENTS (CLI)    1   16  DEPENDENCY_CLOSURE      2
-    17 dependency PASS report     0
+    17 dependency PASS report     0   18  determinism pins
+    21 BLOCKED_BY_UPSTREAM_TEST_FAILURE 2   22a marker-absent OK   0
+    22b marker-absent BOTH_MISSING 2
 
   Additional contract pins: the success line "package gate: reached"
   and the OK token appear ONLY in the OK state; the OK success line
@@ -100,12 +102,13 @@ function Invoke-Gate {
     # POSITIONALLY and turn the '-Zip'/'-Installer' flag strings into
     # literal parameter values. Omitted keys omit the argument — which is
     # exactly the invalid-argument state under test.
-    param([string]$ZipPath, [string]$InstallerPath, [string]$ResultPath, [string]$DependencyReportPath)
+    param([string]$ZipPath, [string]$InstallerPath, [string]$ResultPath, [string]$DependencyReportPath, [string]$UpstreamMarkerPath)
     $ht = @{}
     if ($ZipPath)           { $ht["Zip"] = $ZipPath }
     if ($InstallerPath)     { $ht["Installer"] = $InstallerPath }
     if ($ResultPath)        { $ht["ResultFile"] = $ResultPath }
     if ($DependencyReportPath) { $ht["DependencyReport"] = $DependencyReportPath }
+    if ($UpstreamMarkerPath)   { $ht["UpstreamFailureMarker"] = $UpstreamMarkerPath }
     $out = & $gateScript @ht 2>&1 6>&1
     $code = $LASTEXITCODE
     $lines = @($out | ForEach-Object { $_.ToString() })
@@ -453,6 +456,32 @@ try {
     $resultPath20 = Join-Path $work "gate-result-20.json"
     $r = Invoke-Gate -ZipPath (Join-Path $work "ghost.zip") -InstallerPath $instPath -ResultPath $resultPath20
     Assert-GateOutcome -r $r -ExpectToken "ZIP_MISSING" -ExpectCode 2 -What "state 20 (JSON written on failure)" -ExpectJson
+
+    # ------------------------------------------------------------------
+    # 21. BLOCKED_BY_UPSTREAM_TEST_FAILURE (run 43601915826 §3.5): when an
+    #     upstream verification gate failed, its marker names the FIRST
+    #     failing gate and the gate reports the blocked state INSTEAD of a
+    #     second missing-package root error — still exit 2, still no
+    #     success line, and the JSON records the upstream gate name.
+    # ------------------------------------------------------------------
+    $marker21 = Join-Path $work "win-upstream-failure.txt"
+    Set-Content -LiteralPath $marker21 -Value "Headless core tests (windows/amd64)" -Encoding utf8NoBOM
+    $resultPath21 = Join-Path $work "gate-result-21.json"
+    $r = Invoke-Gate -ZipPath (Join-Path $work "never-produced.zip") -InstallerPath (Join-Path $work "never-produced.exe") -UpstreamMarkerPath $marker21 -ResultPath $resultPath21
+    Assert-GateOutcome -r $r -ExpectToken "BLOCKED_BY_UPSTREAM_TEST_FAILURE" -ExpectCode 2 -What "state 21 (blocked by upstream test failure)" -ExpectJson
+    Assert-True ($r.Json.upstreamFailure -eq "Headless core tests (windows/amd64)") "state 21: JSON records the first failing gate (got $($r.Json.upstreamFailure))"
+
+    # ------------------------------------------------------------------
+    # 22. No marker -> the package truth table unchanged: a valid pair
+    #     with the marker argument present but the file ABSENT stays OK
+    #     (a completed packaging path is never masked), and a missing
+    #     package WITHOUT any marker still reports BOTH_MISSING — the
+    #     blocked report can only come from a real upstream failure.
+    # ------------------------------------------------------------------
+    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath -UpstreamMarkerPath (Join-Path $work "absent-marker.txt")
+    Assert-GateOutcome -r $r -ExpectToken "OK" -ExpectCode 0 -What "state 22a (marker absent, packages valid — unchanged OK)"
+    $r = Invoke-Gate -ZipPath (Join-Path $work "ghost.zip") -InstallerPath (Join-Path $work "ghost2.exe") -UpstreamMarkerPath (Join-Path $work "absent-marker.txt")
+    Assert-GateOutcome -r $r -ExpectToken "BOTH_MISSING" -ExpectCode 2 -What "state 22b (marker absent, packages missing — BOTH_MISSING unchanged)"
 }
 finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue

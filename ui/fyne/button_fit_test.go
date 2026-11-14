@@ -1,11 +1,33 @@
 //go:build !headless
 
-// button_fit_test.go — v1.11.1 button-fit contract: at every
-// representative logical size, for EVERY primary and utility
-// destination, the assembled real widget tree keeps every visible button
-// at or above its rendered/minimum content size (no clipped label, no
-// compressed touch target), every visible card fits the content width
-// (card content is not clipped), and every action stays reachable.
+// WHY THE FORMER GATE WAS INSUFFICIENT (work order §6.3): the first
+// TestButtonFitMatrix/TestLongLabelButtonsShortened pair passed on the
+// hosted Linux lane while a real Windows desktop still showed clipped
+// button labels. Three blind spots explain the false confidence, and the
+// sweep below closes each one:
+//
+//  1. The walk started at sh.body only — the navigation rail, the compact
+//     top strip and the status bar were never swept at all, so a rail
+//     button whose rendered minimum exceeded the rail's FIXED design
+//     width (the exact Windows text/DPI-scaling mechanism) passed the
+//     matrix while clipping on screen. The layout now grows the rail to
+//     its content minimum (shell.go responsiveLayout), and the sweep
+//     walks the whole assembled window (TestButtonFitMatrix full-shell
+//     pass plus TestRailButtonsFitRailWidth).
+//  2. Character-count/geometry gates say nothing about text that is
+//     WIDER than its widget: the fit assertion compares the button's
+//     ASSIGNED size against its own renderer MinSize for the real text,
+//     theme, font and scale — the only honest definition of "label fits".
+//  3. The engine-update actions sat in an HBox row while the code
+//     comment (and ui-contract.md) claimed a VBox stack; the matrix
+//     asserted the row's cells stayed in bounds without asserting the
+//     per-button minima. The row is now a real stacked column (panels.go)
+//     and every button's size-vs-minimum is asserted at every size.
+//
+// Pixel-image goldens remain unreachable under the locked Fyne v2.8.2
+// (shell_responsive_test.go documents why); these structural assertions
+// are the strongest evidence available in-repo, and the native Windows
+// GUI smoke captures the actual rendered window as CI evidence.
 package fyneui
 
 import (
@@ -30,6 +52,8 @@ var fitSizes = []fyne.Size{
 	fyne.NewSize(1366, 768), // desktop
 	fyne.NewSize(1920, 1080),
 	fyne.NewSize(2560, 1440), // wide (real logical size; no false clamp)
+	fyne.NewSize(3440, 1440), // ultrawide
+	fyne.NewSize(3840, 2160), // 4K desktop
 	fyne.NewSize(599, 480),   // breakpoint boundary below
 	fyne.NewSize(600, 480),   // breakpoint boundary at
 	fyne.NewSize(601, 480),   // breakpoint boundary above
@@ -52,11 +76,13 @@ func assertInBounds(t *testing.T, label, kind string, abs fyne.Position, size fy
 	}
 }
 
-// walkCanvasObjects descends containers, scroll views and splits (the
-// object tree the shell and panels own; card-internal trees are asserted
-// through the Card MinSize contract instead). fn receives each visible
-// object with its ABSOLUTE position (accumulated through parents), so
-// bounds checks are exact.
+// walkCanvasObjects descends containers, scroll views, splits and CARD
+// CONTENT (case *widget.Card below — card-internal trees participate in
+// every assertion; note widget.NewCard subtitles are NOT canvas children
+// of the card, which is why production code must use cardFit's wrapped
+// in-content captions instead). fn receives each visible object with its
+// ABSOLUTE position (accumulated through parents), so bounds checks are
+// exact.
 func walkCanvasObjects(o fyne.CanvasObject, fn func(fyne.CanvasObject, fyne.Position)) {
 	walkAt(o, fyne.NewPos(0, 0), fn)
 }
@@ -195,6 +221,74 @@ func TestButtonFitMatrix(t *testing.T) {
 		}
 	}
 	_ = rc
+}
+
+// TestShellChromeButtonsFit sweeps the shell CHROME the body walk never
+// reached (the blind spot that let the former gate pass while Windows
+// clipped rail labels): the navigation rail, the compact top strip and
+// the status bar, walked from the assembled window root at every matrix
+// size. Every visible button must hold at least its own renderer minimum
+// — assigned size >= content size is the no-clip contract regardless of
+// which region owns the button.
+func TestShellChromeButtonsFit(t *testing.T) {
+	_, sh, w, rc, _ := matrixShell(t)
+
+	for _, sz := range fitSizes {
+		uiDoLocked(func() { w.Resize(sz) })
+		label := fmt.Sprintf("%dx%d", int(sz.Width), int(sz.Height))
+		buttons := 0
+		// The window root is the responsive container (rail, topNav,
+		// content border): walking it covers every shell region with
+		// ABSOLUTE positions, so nothing escapes the real canvas.
+		walkCanvasObjects(rc, func(o fyne.CanvasObject, abs fyne.Position) {
+			b, ok := o.(*widget.Button)
+			if !ok {
+				return
+			}
+			buttons++
+			min := b.MinSize()
+			got := b.Size()
+			if got.Width+0.5 < min.Width || got.Height+0.5 < min.Height {
+				t.Fatalf("%s: shell button %q compressed to (%.0fx%.0f) below its content size (%.0fx%.0f) at abs (%.0f,%.0f) — the label is clipped",
+					label, b.Text, got.Width, got.Height, min.Width, min.Height, abs.X, abs.Y)
+			}
+			if b.Text == "" && b.Icon == nil {
+				t.Fatalf("%s: visible shell button carries neither label nor icon", label)
+			}
+		})
+		if buttons == 0 {
+			t.Fatalf("%s: shell chrome rendered with zero buttons — navigation vanished", label)
+		}
+	}
+}
+
+// TestRailButtonsFitRailWidth pins the repaired rail contract: the rail's
+// allocated width must cover its content's real minimum at every rail
+// size class — the exact assertion that failed to exist while Windows
+// text scaling clipped "Coding Lab"-class labels inside the fixed rail.
+func TestRailButtonsFitRailWidth(t *testing.T) {
+	_, sh, w, _, _ := matrixShell(t)
+
+	for _, sz := range []fyne.Size{
+		fyne.NewSize(600, 800),   // medium: compact rail
+		fyne.NewSize(1024, 768),  // desktop: wide rail
+		fyne.NewSize(1920, 1080), // wide rail
+	} {
+		uiDoLocked(func() { w.Resize(sz) })
+		railW := sh.rail.Size().Width
+		if minW := sh.rail.MinSize().Width; railW+0.5 < minW {
+			t.Fatalf("%dx%d: rail width %.0f < rail content minimum %.0f — nav labels clip",
+				int(sz.Width), int(sz.Height), railW, minW)
+		}
+		walkCanvasObjects(sh.rail, func(o fyne.CanvasObject, _ fyne.Position) {
+			if b, ok := o.(*widget.Button); ok {
+				if got := b.Size().Width; got+0.5 < b.MinSize().Width {
+					t.Fatalf("%dx%d: rail button %q allocated %.0f < its minimum %.0f",
+						int(sz.Width), int(sz.Height), b.Text, got, b.MinSize().Width)
+				}
+			}
+		})
+	}
 }
 
 // TestLongLabelButtonsShortened pins the v1.11.1 short-label policy for

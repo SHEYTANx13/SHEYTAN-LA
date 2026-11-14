@@ -148,7 +148,6 @@ type modelsPanel struct {
 	updInstallB  *widget.Button
 	updCancelB   *widget.Button
 	updLabel     *widget.Label
-	updHint      *widget.Label
 	openFldrHint *widget.Label
 	updMu        sync.Mutex
 	updBusy      bool   // single-flight: one check/install interaction at a time
@@ -230,6 +229,8 @@ func buildModelsPanelFor(ap *App) (fyne.CanvasObject, *modelsPanel) {
 	})
 	p.task = widget.NewSelect([]string{"chat", "coding", "research", "vision", "agent", "low-power", "maximum"}, nil)
 	p.task.PlaceHolder = "task fit (optional)"
+	p.openFldrHint = wrappedLabel("Open folder reveals the models directory in your file manager.")
+	p.openFldrHint.TextStyle = fyne.TextStyle{Italic: true}
 	p.err = widget.NewLabel("")
 	p.err.Importance = widget.DangerImportance
 	p.err.Hide()
@@ -239,16 +240,16 @@ func buildModelsPanelFor(ap *App) (fyne.CanvasObject, *modelsPanel) {
 	// driven only through the core's engine-update API (the same
 	// transactional authority as the scheduled updater — never a second
 	// updater in the UI).
-	// Button-fit policy (v1.11.1): the three actions carry short labels
-	// ("Check now", "Install update", "Cancel") STACKED vertically —
-	// Fyne 2.8.2's VBox grants every child its full MinSize, so no label
-	// can ever be compressed or clipped at any matrix width — and the
-	// restart consequence lives in the adjacent caption, exactly where an
-	// operator looks before pressing Install.
+	// Button-fit policy (v1.11.1, run-43601915826 repair): the three
+	// actions carry short labels ("Check now", "Install update",
+	// "Cancel") and are STACKED vertically — Fyne's VBox grants every
+	// child its full MinSize, so no label can ever be compressed or
+	// clipped at any matrix width or Windows text scale. The restart
+	// consequence lives in the cardFit caption, exactly where an
+	// operator looks before pressing Install (the caption is a WRAPPED
+	// label — widget.NewCard subtitles never wrap).
 	p.updLabel = wrappedLabel("Engine updates: not checked yet — run Check now.")
 	p.updLabel.TextStyle = fyne.TextStyle{Monospace: true}
-	p.updHint = wrappedLabel("Install restarts the local engine after the package verifies. Check is read-only; Cancel stops a running download.")
-	p.updHint.TextStyle = fyne.TextStyle{Italic: true}
 	p.updCheckB = widget.NewButton("Check now", func() { p.checkEngineUpdate() })
 	p.updCheckB.Importance = widget.LowImportance
 	p.updInstallB = widget.NewButton("Install update", func() { p.installEngineUpdate() })
@@ -280,19 +281,42 @@ func buildModelsPanelFor(ap *App) (fyne.CanvasObject, *modelsPanel) {
 	root := container.NewBorder(
 		container.NewVBox(
 			PageHeader("Models", "Discovery and the REAL selection state machine"),
-			widget.NewCard("Engine & backend", "Requested ≠ available ≠ selected ≠ executed ≠ verified — strongest PROVEN state only", p.engineCard),
-			widget.NewCard("Engine updates", "Official ggml-org/llama.cpp releases · check is read-only · install is user-controlled", container.NewVBox(
-				container.NewHBox(p.updCheckB, p.updInstallB, p.updCancelB),
+			// cardFit: every explanatory caption is a WRAPPED label
+			// inside the content — the raw widget.NewCard subtitles
+			// here before never wrapped and drove the card's MinSize
+			// past compact widths (the v1.11.1 fit-matrix defect
+			// class documented on cardFit itself).
+			cardFit("Engine & backend", "Requested ≠ available ≠ selected ≠ executed ≠ verified — strongest PROVEN state only", p.engineCard),
+			cardFit("Engine updates", "Official ggml-org/llama.cpp releases · check is read-only · install is user-controlled. Install restarts the local engine after the package verifies; Cancel stops a running download.", container.NewVBox(
+				// STACKED action column: each button always receives
+				// its full renderer minimum — the former HBox row
+				// compressed "Install update" at narrow widths
+				// (the user-visible clipped-button report).
+				p.updCheckB,
+				p.updInstallB,
+				p.updCancelB,
 				p.updLabel,
 			)),
-			widget.NewCard("Model Studio", "Per-AI-System model binding · one Apply action · the core validates and freezes it per run", container.NewVBox(
+			cardFit("Model Studio", "Per-AI-System model binding · one Apply action · the core validates and freezes it per run", container.NewVBox(
 				p.studioSys,
 				p.studioModel,
 				p.studioProfile,
 				p.studioLabel,
 				p.studioApply,
 			)),
-			container.NewHBox(p.importIn, p.importB, p.task),
+			// Import group: the path entry and the task select each own a
+			// full-width row; only the two short actions share a row
+			// (their combined minimum fits every supported width, and
+			// the fit matrix asserts allocated >= MinSize for both).
+			// "Open folder" was built but never attached to any
+			// container before this repair — the action was unreachable
+			// from the UI.
+			cardFit("Import a model", "Paste an absolute path to a .gguf file on disk, optionally pick a task fit, then Import.", container.NewVBox(
+				p.importIn,
+				container.NewHBox(p.importB, p.openFldr),
+				p.task,
+				p.openFldrHint,
+			)),
 			container.NewBorder(nil, nil, p.useB, nil, p.detail),
 			p.sel,
 		),

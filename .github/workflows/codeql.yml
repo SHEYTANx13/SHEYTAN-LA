@@ -6,7 +6,8 @@
 # SHEYTAN-LA: full CodeQL security + quality analysis.
 # Each language gets an independent CodeQL database and analysis category.
 # Go and C++ use explicit manual builds so CodeQL observes the real compilers.
-# All external actions are pinned to verified immutable commit SHAs.
+# External action references follow the repo-wide policy: ordinary upstream
+# release tags (never commit hashes, never moving branch refs).
 
 name: CodeQL Security & Quality
 
@@ -32,7 +33,7 @@ concurrency:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       actions: read
@@ -95,8 +96,9 @@ jobs:
         if: matrix.language == 'go'
         uses: actions/setup-go@v7
         with:
-          # Matches build-desktop.yml; go.mod's toolchain directive selects 1.27.3.
-          go-version: "1.27"
+          # Exact parity with build-desktop.yml and the canonical go.mod
+          # toolchain directive (go1.27.4) — one Go patch everywhere.
+          go-version: "1.27.4"
           cache: false
 
       # Run vet before CodeQL initialization. It is a useful quality check, but
@@ -171,7 +173,7 @@ jobs:
   export-alert-report:
     name: Export complete CodeQL alert report
     needs: analyze
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
       contents: read

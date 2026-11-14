@@ -259,21 +259,49 @@ func TestNewWithFallbackFallsBackToBootstrapWhenBothFail(t *testing.T) {
 // TestRotationFailureReportedNotSilent proves a failing rotation reopen
 // leaves an observable failure — not a nil sink that silently drops
 // everything.
+//
+// Run-43601915826 correction: the previous shape simulated the rotation
+// failure by ORPHANING the still-open app handle (old := m.appF;
+// m.appF = nil without closing old). The real rotation path closes the
+// old handle BEFORE the reopen attempt (rotateAppLocked), so an honest
+// simulation must release it too — on Windows the leaked descriptor kept
+// app.log "in use" and the temporary-directory cleanup failed after the
+// assertions had already passed. The close here is the production-mirroring
+// fix, not a Windows-only concession, and the explicit RemoveAll below
+// asserts the whole cleanup is leak-free on every platform.
 func TestRotationFailureReportedNotSilent(t *testing.T) {
 	dir := t.TempDir()
 	m, err := New(dir)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	t.Cleanup(func() { _ = m.Close() })
+	closed := false
+	t.Cleanup(func() {
+		if err := m.Close(); err != nil {
+			t.Errorf("Close after simulated rotation failure: %v", err)
+		}
+		if !closed {
+			t.Errorf("the replaced app handle was never closed by the test body")
+		}
+		// Windows cleanup proof: every descriptor must be released
+		// before the temporary directory can be removed.
+		if err := os.RemoveAll(dir); err != nil {
+			t.Errorf("remove log dir after simulated rotation failure (descriptor leak?): %v", err)
+		}
+	})
 
 	m.mu.Lock()
 	old := m.appF
 	m.appF = nil
-	// Simulate the post-rotation reopen failure: the emergency path must
-	// engage for subsequent lines.
 	m.mu.Unlock()
-	_ = old
+
+	// The production rotation path releases the old handle before the
+	// reopen attempt; mirror that exactly, then flag the simulation as
+	// completed for the cleanup assertion above.
+	if err := old.Close(); err != nil {
+		t.Errorf("close the replaced app handle: %v", err)
+	}
+	closed = true
 
 	m.Info("boot", "after simulated rotation failure")
 	h := m.Health()

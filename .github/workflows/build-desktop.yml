@@ -208,6 +208,30 @@ jobs:
           go vet ./... 2>&1 | tee ci-logs/preflight-vet.log
           echo "gate OK: go vet ./..." >> ci-logs/gate-order.txt
 
+      # Work order §9 gate 5 (v1.11.1): Go dependency integrity — go mod
+      # verify, then prove tidy IDEMPOTENCE (a second tidy must leave no
+      # diff against the committed manifests). Drift means the committed
+      # go.mod/go.sum are not the toolchain-canonical state and Dependabot
+      # comparisons would run against a moving baseline.
+      - name: Go dependency integrity (mod verify + tidy idempotence)
+        run: |
+          set -euo pipefail
+          echo "RUN go mod verify + go mod tidy (idempotence)" >> ci-logs/gate-order.txt
+          cp go.mod ci-logs/go.mod.committed
+          cp go.sum ci-logs/go.sum.committed
+          go mod verify 2>&1 | tee ci-logs/dep-integrity.log
+          go mod tidy 2>&1 | tee -a ci-logs/dep-integrity.log
+          go mod tidy 2>&1 | tee -a ci-logs/dep-integrity.log
+          if ! diff -u ci-logs/go.mod.committed go.mod | tee ci-logs/dep-tidy-drift.log; then
+            echo "::error::go mod tidy is not idempotent — the committed go.mod differs from the tidied state (diff at ci-logs/dep-tidy-drift.log)"
+            exit 1
+          fi
+          if ! diff -u ci-logs/go.sum.committed go.sum | tee -a ci-logs/dep-tidy-drift.log; then
+            echo "::error::go.sum drift after go mod tidy — the committed go.sum is not toolchain-canonical (diff at ci-logs/dep-tidy-drift.log)"
+            exit 1
+          fi
+          echo "gate OK: go mod verify + go mod tidy idempotence" >> ci-logs/gate-order.txt
+
       # F6 (run 43008361835): the per-job machine-readable diagnostics
       # index — always built, printed to the step log (so it reaches the
       # consolidated run-log artifact) and written to
@@ -794,14 +818,26 @@ jobs:
           $env:CGO_ENABLED = "1"
           New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
           go test -tags headless -count=1 -timeout "${{ env.GO_TEST_TIMEOUT }}" ./internal/... 2>&1 | Tee-Object -FilePath "ci-logs/win-go-test-headless.log"
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::headless core tests failed on windows/amd64 (exit $LASTEXITCODE; failing test names in ci-logs/win-go-test-headless.log)"; throw "headless core tests failed (windows/amd64)" }
+          if ($LASTEXITCODE -ne 0) {
+            # v1.11.1 blocked-by-upstream reporting (work order §3.5): the FIRST
+            # failing gate records its identity so the if:always() package gate
+            # reports BLOCKED_BY_UPSTREAM_TEST_FAILURE with this gate's name
+            # instead of inventing a second missing-package root error.
+            Set-Content -Path "ci-logs/win-upstream-failure.txt" -Value "Headless core tests (windows/amd64)"
+            Write-Host "::error::headless core tests failed on windows/amd64 (exit $LASTEXITCODE; failing test names in ci-logs/win-go-test-headless.log)"
+            throw "headless core tests failed (windows/amd64)"
+          }
 
       - name: Build the Fyne UI tests (windows/amd64 compile gate)
         run: |
           $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
           $env:CGO_ENABLED = "1"
           go vet ./ui/fyne/ 2>&1 | Tee-Object -FilePath "ci-logs/win-ui-vet.log"
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::ui/fyne vet failed on windows/amd64 (exit $LASTEXITCODE; output in ci-logs/win-ui-vet.log)"; throw "ui/fyne vet failed (windows/amd64)" }
+          if ($LASTEXITCODE -ne 0) {
+            Set-Content -Path "ci-logs/win-upstream-failure.txt" -Value "Build the Fyne UI tests (windows/amd64 compile gate)"
+            Write-Host "::error::ui/fyne vet failed on windows/amd64 (exit $LASTEXITCODE; output in ci-logs/win-ui-vet.log)"
+            throw "ui/fyne vet failed (windows/amd64)"
+          }
 
       # ------------------------------------------------------------------
       # v1.11.1 Windows IPC repair: the REAL production CoreClient over
@@ -820,9 +856,17 @@ jobs:
           $env:CGO_ENABLED = "1"
           New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
           go test ./internal/localipc/ -count=1 -timeout 15m -v 2>&1 | Tee-Object -FilePath "ci-logs/win-localipc-tests.log"
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::localipc transport tests failed on windows/amd64 (exit $LASTEXITCODE; output in ci-logs/win-localipc-tests.log)"; throw "localipc transport tests failed (windows/amd64)" }
-          go test ./ui/fyne/ -count=1 -timeout 15m -v -run "TestCoreClientEndToEndOverWindowsNamedPipe|TestCoreClientRejectsWrongKeyWindows" 2>&1 | Tee-Object -FilePath "ci-logs/win-ipc-integration.log"
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::Windows named-pipe CoreClient integration failed (exit $LASTEXITCODE; output in ci-logs/win-ipc-integration.log) — the production client cannot reach the core through the pipe"; throw "Windows named-pipe CoreClient integration failed" }
+          if ($LASTEXITCODE -ne 0) {
+            Set-Content -Path "ci-logs/win-upstream-failure.txt" -Value "Windows named-pipe CoreClient integration (localipc transport tests)"
+            Write-Host "::error::localipc transport tests failed on windows/amd64 (exit $LASTEXITCODE; output in ci-logs/win-localipc-tests.log)"
+            throw "localipc transport tests failed (windows/amd64)"
+          }
+          go test ./ui/fyne/ -count=1 -timeout 15m -v -run "TestCoreClientEndToEndOverWindowsNamedPipe|TestCoreClientRejectsWrongKeyWindows|TestCoreClientWebSocketCallerCancelWindows|TestWindowsIPCFlowOpensNoTCPListener|TestCoreClientRefusesMismatchedProtocolWindows" 2>&1 | Tee-Object -FilePath "ci-logs/win-ipc-integration.log"
+          if ($LASTEXITCODE -ne 0) {
+            Set-Content -Path "ci-logs/win-upstream-failure.txt" -Value "Windows named-pipe CoreClient integration (production client over localipc.Serve)"
+            Write-Host "::error::Windows named-pipe CoreClient integration failed (exit $LASTEXITCODE; output in ci-logs/win-ipc-integration.log) — the production client cannot reach the core through the pipe"
+            throw "Windows named-pipe CoreClient integration failed"
+          }
           Write-Host "IPC integration gate: production CoreClient handshake + API + WebSocket over the Windows named pipe PASSED"
 
       - name: "Windows resource pipeline (gen-syso: icon + version + DPI manifest)"
@@ -1232,6 +1276,13 @@ jobs:
               if (Test-Path $smokeLog) { Get-Content $smokeLog -Tail 40 }
               throw "Windows launch smoke failed: early exit"
             }
+            # v1.11.1 (run-43601915826 audit): a hung-but-alive process must
+            # not pass the soak — responsiveness is part of the gate.
+            if (-not $p.Responding) {
+              Write-Host "::error::launch smoke stage SOAK: the window stopped responding during the 12s soak"
+              if (Test-Path $smokeLog) { Get-Content $smokeLog -Tail 40 }
+              throw "Windows launch smoke failed at stage SOAK (window not responding)"
+            }
             Start-Sleep -Milliseconds 500
           }
           # Graceful close first — the same path a user's window close takes.
@@ -1256,23 +1307,31 @@ jobs:
           }
 
           # The shutdown evidence must be IN the persisted log: IPC stop,
-          # core close and the log-sink close record (bounded — the log
-          # is flushed by the process's own exit path).
+          # core close ('server closed' — internal/desktop/desktop.go's
+          # deferred teardown record) and the log-sink close record
+          # (bounded — the log is flushed by the process's own exit path).
           $shutDeadline = (Get-Date).AddSeconds(10)
           $ipcStopped = $false
+          $coreClosed = $false
           $sinksClosed = $false
           while ((Get-Date) -lt $shutDeadline) {
             if (Test-Path $appLog) {
               if (-not $ipcStopped -and (Select-String -LiteralPath $appLog -Pattern "ipc stopped" -SimpleMatch)) { $ipcStopped = $true }
+              if (-not $coreClosed -and (Select-String -LiteralPath $appLog -Pattern "server closed" -SimpleMatch)) { $coreClosed = $true }
               if (-not $sinksClosed -and (Select-String -LiteralPath $appLog -Pattern "log sinks closing" -SimpleMatch)) { $sinksClosed = $true }
             }
-            if ($ipcStopped -and $sinksClosed) { break }
+            if ($ipcStopped -and $coreClosed -and $sinksClosed) { break }
             Start-Sleep -Milliseconds 500
           }
           if (-not $ipcStopped) {
             Write-Host "::error::launch smoke stage SHUTDOWN-LOG: the 'ipc stopped' record never reached data\logs\app.log"
             if (Test-Path $appLog) { Get-Content $appLog -Tail 40 }
             throw "Windows launch smoke failed at stage SHUTDOWN-LOG (no ipc-stop record)"
+          }
+          if (-not $coreClosed) {
+            Write-Host "::error::launch smoke stage SHUTDOWN-LOG: the 'server closed' core-close record never reached data\logs\app.log"
+            if (Test-Path $appLog) { Get-Content $appLog -Tail 40 }
+            throw "Windows launch smoke failed at stage SHUTDOWN-LOG (no core-close record)"
           }
           if (-not $sinksClosed) {
             Write-Host "::error::launch smoke stage SHUTDOWN-LOG: the 'log sinks closing' close-outcome record never reached data\logs\app.log"
@@ -1282,13 +1341,29 @@ jobs:
 
           # Logging persistence: the structured sinks exist (empty is
           # allowed until real calls occur) and the session banner +
-          # handshake record survived the clean close.
+          # handshake record survived the clean close. JSONL validity is
+          # asserted line-by-line (run-43601915826 audit gap 3a): a
+          # non-empty structured sink whose lines do not parse is a
+          # persistence defect, never a pass.
           $logsDir = Join-Path (Split-Path $exe) "data\logs"
           foreach ($sink in @("app.log", "tools.jsonl", "llm.jsonl")) {
             if (-not (Test-Path (Join-Path $logsDir $sink))) {
               Write-Host "::error::launch smoke stage LOG-PERSISTENCE: expected sink $sink missing under data\logs"
               throw "Windows launch smoke failed at stage LOG-PERSISTENCE (missing $sink)"
             }
+          }
+          foreach ($sink in @("tools.jsonl", "llm.jsonl")) {
+            $path = Join-Path $logsDir $sink
+            $n = 0
+            foreach ($line in (Get-Content -LiteralPath $path)) {
+              if ([string]::IsNullOrWhiteSpace($line)) { continue }
+              $n++
+              try { $null = $line | ConvertFrom-Json } catch {
+                Write-Host "::error::launch smoke stage LOG-PERSISTENCE: $sink line $n is not valid JSON: $($_.Exception.Message)"
+                throw "Windows launch smoke failed at stage LOG-PERSISTENCE (invalid JSON in $sink line $n)"
+              }
+            }
+            Write-Host "JSONL validity: $sink carries $n valid record(s) (empty is allowed until real calls occur)"
           }
           if (-not (Select-String -LiteralPath $appLog -Pattern "session start" -SimpleMatch)) {
             Write-Host "::error::launch smoke stage LOG-PERSISTENCE: the session banner did not persist in app.log"
@@ -1789,7 +1864,14 @@ jobs:
       - name: Package gate (root-cause reporter)
         if: always()
         run: |
-          & ./scripts/ci/PackageGate.ps1 -Zip "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip" -Installer "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe" 2>&1 | Tee-Object -FilePath "ci-logs/win-package-gate.log"
+          # v1.11.1 (run 43601915826 work order §3.5): the if:always() gate
+          # receives the upstream-failure marker written by the FIRST failed
+          # verification gate. When tests failed, the report is
+          # BLOCKED_BY_UPSTREAM_TEST_FAILURE naming that gate — one root
+          # error, never a second confusing missing-package annotation. A
+          # completed packaging path that lacks its output still fails hard
+          # through the unchanged package truth table.
+          & ./scripts/ci/PackageGate.ps1 -Zip "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip" -Installer "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe" -UpstreamFailureMarker "ci-logs/win-upstream-failure.txt" 2>&1 | Tee-Object -FilePath "ci-logs/win-package-gate.log"
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::package gate: Windows package contract violated (gate exit $LASTEXITCODE; named incomplete state in ci-logs/win-package-gate.log)"; throw "Windows package gate failed (exit $LASTEXITCODE)" }
 
       # F6 (run 43008361835): the per-job machine-readable diagnostics
@@ -2100,13 +2182,17 @@ jobs:
 
       # Package gate: report the root failure HERE rather than letting the
       # upload step emit a vague "no files were found" annotation.
+      # v1.11.1 (run-43601915826 audit gap 6b): FAIL-CLOSED, matching the
+      # Windows lane — a missing package is a hard failure (exit 1), and
+      # the success line prints ONLY when the verified archive exists.
       - name: Package gate (root-cause reporter)
         if: always()
         run: |
-          set -euo pipefail
+          set -uo pipefail
           zip="dist/${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip"
           if [ ! -f "$zip" ]; then
             echo "::error::the Linux portable package was not produced — see the FIRST failed step of this job for the root cause (this gate intentionally reports the missing package once, with cause context)"
+            exit 1
           fi
           echo "package gate: reached"
 

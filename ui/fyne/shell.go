@@ -259,7 +259,7 @@ func (s *shell) root() fyne.CanvasObject {
 	strip.Add(more)
 	s.topNav = container.NewHScroll(strip)
 
-	statusBar := container.NewVBox(widget.NewSeparator(), container.NewHBox(s.status, s.retryB), s.errLine)
+	statusBar := container.NewVBox(widget.NewSeparator(), container.NewBorder(nil, nil, nil, s.retryB, s.status), s.errLine)
 	// ONE parent per object: the border owns ONLY the body + status
 	// bar — the rail is owned by the responsive container below.
 	content := container.NewBorder(nil, statusBar, nil, nil, s.body)
@@ -421,6 +421,16 @@ func (l *responsiveLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
 	switch navPolicy(w) {
 	case navRailWide:
 		railW := railWidthWide
+		// v1.11.1 button-fit repair: the fixed design width must never
+		// compress a nav button below its renderer minimum — Windows text
+		// and display scaling render wider glyphs than the Linux CI font
+		// metrics, which is exactly the clipped-rail-label class the
+		// operator reported on a real desktop. The rail grows to its
+		// content's real minimum when that exceeds the design width; at
+		// the default text scale the design width still wins.
+		if minW := l.rail.MinSize().Width; minW > railW {
+			railW = minW
+		}
 		if w < railW {
 			railW = w // degenerate guard: never overflow the canvas
 		}
@@ -433,6 +443,11 @@ func (l *responsiveLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
 		l.inner.Move(fyne.NewPos(railW, 0))
 	case navRailCompact:
 		railW := railWidthCompact
+		// Same content-minimum guarantee as the wide rail above: the
+		// compact rail grows rather than clipping a nav label.
+		if minW := l.rail.MinSize().Width; minW > railW {
+			railW = minW
+		}
 		if w < railW {
 			railW = w
 		}

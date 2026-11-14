@@ -152,11 +152,15 @@ Live configuration is one concurrency-safe source (`config.Source`) shared by ev
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Architecture truth table for what is built |
 | [`docs/FEATURES.md`](docs/FEATURES.md) | Single feature inventory (implemented vs coming) |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Capability-driven direction |
+| [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md) | Desktop symptom → cause → recovery, incl. log locations |
+| [`docs/ui-contract.md`](docs/ui-contract.md) | The normative UI interaction/layout contract |
 | [`docs/3dstudio.md`](docs/3dstudio.md) | Optional 3D Studio contract |
+| [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) | Build/test/vet commands, gates, conventions, licensing |
 | [`docs/agent.md`](docs/agent.md) | Agent operating manual (process, efficiency rules, definition of done) |
 | [`docs/Dev-Notes.md`](docs/Dev-Notes.md) | **Human-only** curated open items and priorities |
 | [`docs/ai-notes.md`](docs/ai-notes.md) | **AI agents only** — working notes, evidence, hand-offs |
 | [`docs/UPDATE.md`](docs/UPDATE.md) | Current maintenance and update behavior |
+| [`docs/worklog.md`](docs/worklog.md) | Short factual chronology of notable engineering events |
 | [`docs/changelog.md`](docs/changelog.md) | Canonical release history |
 | [`docs/retired.md`](docs/retired.md) | Retired / legacy mechanisms (still under Proprietary License) |
 | [`SECURITY.md`](SECURITY.md) | Security policy and vulnerability reporting |

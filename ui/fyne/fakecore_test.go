@@ -4,9 +4,10 @@
 // UI-contract tests. It speaks the REAL wire contracts (bare session
 // array, {systems,activeSystemId} envelope, {error} bodies, config
 // deep-merge) over a loopback HTTP server; the CoreClient is pointed at
-// it with the endpoint dialer swapped to TCP (test seam: NewCoreClient
-// dials unix sockets in production; the fake server url is passed the
-// same way through a tiny adapter).
+// it with the endpoint dialer swapped to TCP (test seam only: production
+// CoreClient dials the platform-aware localipc transport — Windows named
+// pipe / Unix domain socket — through the ONE canonical localipc.DialContext;
+// the fake server url is passed the same way through a tiny adapter).
 package fyneui
 
 import (
@@ -120,14 +121,14 @@ func newFakeCore(t *testing.T) *fakeCore {
 	mux.HandleFunc("/api/studio/state", f.handleStudioState)
 	mux.HandleFunc("/api/logs", f.handleLogs)
 	f.srv = httptest.NewServer(mux)
-	// Point the unix-socket dialer at the TCP test server (test seam).
+	// Point the localipc dialer at the TCP test server (test seam).
 	host := strings.TrimPrefix(f.srv.URL, "http://")
 	f.endpoint = host
 	return f
 }
 
 // NewCoreClientForTest builds a client wired to a TCP endpoint (test
-// seam; production dials the unix socket path).
+// seam; production dials the platform-aware localipc transport).
 func NewCoreClientForTest(endpoint, key string) *CoreClient {
 	c := NewCoreClient(endpoint, key)
 	dial := func(ctx context.Context, _, _ string) (net.Conn, error) {

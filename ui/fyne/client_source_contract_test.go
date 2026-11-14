@@ -43,12 +43,20 @@ func TestCoreClientDialsThroughCanonicalLocalIPC(t *testing.T) {
 		t.Fatal("client.go must not construct its own net.Dialer — the platform dial belongs to internal/localipc (the v1.11.1 defect was a private Unix-only dial here)")
 	}
 
-	// A hard-coded network dial call (any Dial* call with a "unix"/"tcp"
-	// network literal) is the defect shape; prose in comments stays free.
+	// A hard-coded network dial call (any Dial*/Listen* call with a
+	// "unix"/"tcp" network literal) is the defect shape; prose in
+	// comments stays free. The patterns cover both the dialer-first and
+	// the network-literal-first call shapes (net.DialUnix/net.ListenUnix
+	// carry the network inside the function name, not an argument).
 	dialCall := regexp.MustCompile(`\.Dial\w*\(\s*[^,)]+,\s*"(unix|tcp)"`)
 	if loc := dialCall.FindStringIndex(src); loc != nil {
 		t.Fatalf("client.go hard-codes a %q network dial — the transport is platform-aware by contract: %s",
 			dialCall.FindStringSubmatch(src)[1], strings.TrimSpace(src[loc[0]:loc[0]+50]))
+	}
+	unixNamed := regexp.MustCompile(`net\.(DialUnix|ListenUnix)\(`)
+	if loc := unixNamed.FindStringIndex(src); loc != nil {
+		t.Fatalf("client.go hard-codes a Unix-socket call — the transport is platform-aware by contract: %s",
+			strings.TrimSpace(src[loc[0]:loc[0]+50]))
 	}
 
 	// Both transports must share the exact same dial closure.
@@ -70,7 +78,15 @@ func TestNoSecondDialImplementationInUI(t *testing.T) {
 		t.Fatalf("glob package sources: %v", err)
 	}
 
-	dialerPattern := regexp.MustCompile(`net\.Dialer|net\.Dial\(`)
+	// net.DialUnix/net.ListenUnix carry the network inside the function
+	// name (no "unix" argument), so the name must be matched directly.
+	dialerPattern := regexp.MustCompile(`net\.Dialer|net\.Dial\(|net\.DialUnix\(|net\.ListenUnix\(`)
+	// A second http.Transport with the DEFAULT (TCP) dialer would be a
+	// silent TCP fallback that evades the dial-name patterns: client.go
+	// owns the package's ONLY http.Transport construction, wired to the
+	// shared localipc dial (pinned by TestCoreClientDialsThroughCanonical
+	// LocalIPC).
+	transportPattern := regexp.MustCompile(`http\.Transport\{`)
 
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") || f == clientSource {
@@ -84,6 +100,9 @@ func TestNoSecondDialImplementationInUI(t *testing.T) {
 			src := string(data)
 			t.Fatalf("%s builds a transport dial of its own (%q) — UI packages must route through CoreClient's shared localipc dial",
 				f, strings.TrimSpace(src[loc[0]:loc[0]+40]))
+		}
+		if f != clientSource && transportPattern.MatchString(string(data)) {
+			t.Fatalf("%s constructs its own http.Transport — a default (TCP) transport here is a silent fallback; client.go owns the ONE shared transport", f)
 		}
 	}
 }

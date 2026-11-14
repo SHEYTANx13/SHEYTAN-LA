@@ -243,6 +243,23 @@ func openAppend(path string) (*os.File, int64, error) {
 	return f, st.Size(), nil
 }
 
+// Fault-injection seams (v1.11.1, run 43601915826 work order §3.3B/§5.2):
+// the rotation/reopen/close failure paths need DETERMINISTIC fault tests on
+// every platform — not ACL games, read-only chmods that Windows ignores, or
+// racy filesystem bets. Production assignments live directly below; the
+// fault-injection tests temporarily replace them and always restore the
+// production operation in a deferred call.
+var (
+	// closeAppSink closes one open sink handle: the rotation pre-close
+	// and every Manager.Close sink teardown route through it.
+	closeAppSink = func(f *os.File) error { return f.Close() }
+
+	// reopenAppSink reopens app.log after a rotation shift.
+	reopenAppSink = func(m *Manager) (*os.File, int64, error) {
+		return openAppend(m.appPath())
+	}
+)
+
 func (m *Manager) appPath() string { return filepath.Join(m.dir, "app.log") }
 
 // Dir returns the log directory ("" for the no-op manager).
@@ -495,7 +512,7 @@ func (m *Manager) rotateAppLocked() {
 	// error-return channel to its callers (Write is best-effort by
 	// contract), and stderr is the ONE sink that survives a broken file
 	// logger (the bootstrap path uses the same channel).
-	if cerr := m.appF.Close(); cerr != nil {
+	if cerr := closeAppSink(m.appF); cerr != nil {
 		fmt.Fprintf(os.Stderr, "sheytan-log: closing app.log before rotation failed: %v\n", cerr)
 	}
 	// v1.11.1 observability repair: rotation is bookkeeping — no log line
@@ -517,7 +534,7 @@ func (m *Manager) rotateAppLocked() {
 	if len(rotateErrs) > 0 {
 		m.sinkFaultLocked(errors.Join(rotateErrs...))
 	}
-	f, n, err := openAppend(m.appPath())
+	f, n, err := reopenAppSink(m)
 	if err != nil {
 		// The app sink is now unavailable: report it and let every
 		// subsequent line flow through the emergency path — never a nil
@@ -724,8 +741,10 @@ func (m *Manager) appendJSONL(f **os.File, n *int64, path string, max int64, kee
 	if *n >= max {
 		// v1.11.1 (CodeQL go/unhandled-writable-file-close #254): the
 		// pre-rotation close failure is surfaced on stderr (same
-		// propagation rationale as rotateAppLocked).
-		if cerr := (*f).Close(); cerr != nil {
+		// propagation rationale as rotateAppLocked). Routed through the
+		// closeAppSink seam so the close-failure fault injection covers
+		// structured sinks uniformly.
+		if cerr := closeAppSink(*f); cerr != nil {
 			fmt.Fprintf(os.Stderr, "sheytan-log: closing %s before rotation failed: %v\n", path, cerr)
 		}
 		var rotateErrs []error
@@ -1120,7 +1139,7 @@ func (m *Manager) Close() error {
 		if *f == nil {
 			return
 		}
-		if err := (*f).Close(); err != nil {
+		if err := closeAppSink(*f); err != nil {
 			errs = append(errs, fmt.Errorf("close %s: %w", name, err))
 		}
 		*f = nil

@@ -41,7 +41,7 @@ The viewer is browser-hosted: “Open 3D Studio” starts the loopback server an
 
 1. Pick the target release from https://github.com/mrdoob/three.js/tags (the current pin is **0.187.0** — see `ThreeJSVersion` in `internal/studio/doc.go`).
 2. Download from that exact tag (npm mirror of the release): `build/three.core.js`, `build/three.module.js`, `examples/jsm/controls/OrbitControls.js`, and the package `LICENSE`.
-3. Replace the three files under `internal/studio/assets/` and update `LICENSE-THREE.txt`; bump `ThreeJSVersion` in `internal/studio/doc.go`.
+3. Replace the three files under `internal/studio/assets/`; refresh the verbatim MIT notice in `ThreeJSMITNotice` (`internal/studio/license.go`) from the package `LICENSE` of that tag; bump `ThreeJSVersion` in `internal/studio/doc.go`.
 4. Re-run the gates: `go test ./internal/studio/ ./internal/api/ ./ui/fyne/`. The viewer tests assert the embedded assets are present and served, and the security contract holds for the new files.
 
 ## Verification status (honest)

@@ -138,8 +138,19 @@ func assertMatrixGeometry(t *testing.T, label string, sz fyne.Size, sh *shell, r
 		if zone == navRailWide {
 			wantRail = railWidthWide
 		}
-		if got := sh.rail.Size().Width; got != fyne.Min(wantRail, eff.Width) {
-			t.Fatalf("%s %dx%d: rail width = %v, want %v", label, int(sz.Width), int(sz.Height), got, fyne.Min(wantRail, eff.Width))
+		// v1.11.1 button-fit repair contract: the rail is at least the
+		// design width AND at least its content's real minimum (the rail
+		// grows rather than clipping a nav label under larger Windows
+		// text/DPI metrics), and never overflows the canvas.
+		got := sh.rail.Size().Width
+		if got+0.5 < wantRail {
+			t.Fatalf("%s %dx%d: rail width = %v, want at least the design width %v", label, int(sz.Width), int(sz.Height), got, wantRail)
+		}
+		if minW := sh.rail.MinSize().Width; got+0.5 < minW {
+			t.Fatalf("%s %dx%d: rail width = %v, want at least the rail content minimum %v — a nav label would clip", label, int(sz.Width), int(sz.Height), got, minW)
+		}
+		if got > eff.Width+0.5 {
+			t.Fatalf("%s %dx%d: rail width = %v overflows the effective canvas %v", label, int(sz.Width), int(sz.Height), got, eff.Width)
 		}
 		if got := sh.rail.Position(); got.X != 0 || got.Y != 0 {
 			t.Fatalf("%s %dx%d: rail must sit at (0,0), got %v", label, int(sz.Width), int(sz.Height), got)

@@ -22,8 +22,11 @@ const FileName = "AI-CONTEXT.md"
 
 // ContextVersion is the instruction-file version. Bump it whenever the
 // embedded AI-CONTEXT.md changes in a release; existing installs with an
-// older marker get the fresh file on next boot.
-const ContextVersion = 10
+// older marker get the fresh file on next boot. v1.11.1 fix (run
+// 43601915826 docs audit): the marker had drifted to 13 while this
+// constant stayed 10, so existing installs never refreshed; 14 bumps the
+// pair together again.
+const ContextVersion = 14
 
 //go:embed AI-CONTEXT.md
 var embedded string

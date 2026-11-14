@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	cdp "github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 
@@ -177,14 +178,22 @@ func (s *Session) start(ctx context.Context) error {
 		return fmt.Errorf("browser startup cancelled: %w", ctx.Err())
 	}
 
-	// Boot the browser + first blank tab.
-	if err := chromedp.Run(ctx); err != nil {
+	// Boot the browser + first blank tab (chromedp v0.23 API: Run takes
+	// exactly one action — an empty Steps() sequence allocates and boots
+	// without touching the page).
+	if _, err := chromedp.Run(ctx, chromedp.Steps()); err != nil {
 		cancel()
 		allocCancel()
 		return fmt.Errorf("start browser: %w", err)
 	}
-	// Inject the stealth script into every future document.
-	if _, err := page.AddScriptToEvaluateOnNewDocument(stealthJS).Do(ctx); err != nil {
+	// Inject the stealth script into every future document (chromedp
+	// v0.23 / cdproto v0.160 API: protocol commands execute through
+	// cdp.Call against the session target inside a plain action func).
+	if _, err := chromedp.Run(ctx, func(ctx context.Context, t *chromedp.Target) (chromedp.Void, error) {
+		_, err := cdp.Call(ctx, t, page.AddScriptToEvaluateOnNewDocument,
+			page.AddScriptToEvaluateOnNewDocumentParams{Source: stealthJS})
+		return chromedp.Void{}, err
+	}); err != nil {
 		logging.Default().Warn("browser", "stealth script injection failed: %v", err)
 	}
 	s.allocCtx, s.allocCancel = allocCtx, allocCancel
@@ -214,33 +223,63 @@ func (s *Session) stopLocked() {
 	s.allocCtx, s.allocCancel = nil, nil
 }
 
-// Do runs chromedp actions in the live session. If the browser has died,
-// it is restarted once and the actions retried.
-func (s *Session) Do(parent context.Context, actions ...chromedp.Action) error {
+// target returns the live session context, restarting a dead browser
+// once. Callers use the returned context for their chromedp calls.
+func (s *Session) target() (context.Context, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.ctx == nil || s.ctx.Err() != nil {
 		s.restart()
 		if s.ctx == nil {
-			s.mu.Unlock()
-			return fmt.Errorf("browser session unavailable")
+			return nil, fmt.Errorf("browser session unavailable")
 		}
 	}
-	ctx := s.ctx
-	s.mu.Unlock()
+	return s.ctx, nil
+}
 
-	err := chromedp.Run(ctx, actions...)
+// Do runs chromedp VOID actions in the live session. If the browser has
+// died, it is restarted once and the actions retried (chromedp v0.23 API:
+// value-returning work goes through the package-level Run helper, which
+// shares this restart-once discipline).
+func (s *Session) Do(parent context.Context, steps ...chromedp.Action[chromedp.Void]) error {
+	ctx, err := s.target()
+	if err != nil {
+		return err
+	}
+	if err := chromedp.Do(ctx, steps...); err != nil && isDeadSession(ctx, err) {
+		logging.Default().Warn("browser", "browser died mid-action (%v); restarting and retrying once", err)
+		ctx2, terr := s.target()
+		if terr != nil {
+			return terr
+		}
+		return chromedp.Do(ctx2, steps...)
+	} else {
+		return err
+	}
+}
+
+// Run executes ONE value-returning chromedp action in the live session
+// with the same restart-once discipline as Do. Go methods cannot be
+// generic, so this is a package-level helper that receives the session
+// explicitly (chromedp v0.23 API: Run(ctx, action) returns the action's
+// value).
+func Run[T any](s *Session, parent context.Context, a chromedp.Action[T]) (T, error) {
+	ctx, err := s.target()
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	v, err := chromedp.Run(ctx, a)
 	if err != nil && isDeadSession(ctx, err) {
 		logging.Default().Warn("browser", "browser died mid-action (%v); restarting and retrying once", err)
-		s.mu.Lock()
-		s.restart()
-		ctx2 := s.ctx
-		s.mu.Unlock()
-		if ctx2 == nil {
-			return fmt.Errorf("browser session unavailable after restart")
+		ctx2, terr := s.target()
+		if terr != nil {
+			var zero T
+			return zero, terr
 		}
-		return chromedp.Run(ctx2, actions...)
+		return chromedp.Run(ctx2, a)
 	}
-	return err
+	return v, err
 }
 
 func isDeadSession(ctx context.Context, err error) bool {
@@ -287,13 +326,14 @@ func (s *Session) Close() {
 // HoverJS builds an action that dispatches realistic mouse events
 // (mousemove → mouseover → mouseenter) on the first element matching `sel`.
 // CSS selectors, XPath, and "text=…" selectors are all accepted.
-func HoverJS(sel string) chromedp.Action {
-	return chromedp.ActionFunc(func(ctx context.Context) error {
+// (chromedp v0.23 API: an action is a plain func against the session
+// target; value-returning actions are called directly as funcs.)
+func HoverJS(sel string) chromedp.Action[chromedp.Void] {
+	return func(ctx context.Context, t *chromedp.Target) (chromedp.Void, error) {
 		selJSON, err := json.Marshal(sel)
 		if err != nil {
-			return err
+			return chromedp.Void{}, err
 		}
-		var matched bool
 		js := `(sel => {
                         const resolve = s => {
                                 if (s.startsWith('text=')) {
@@ -315,12 +355,18 @@ func HoverJS(sel string) chromedp.Action {
                         el.dispatchEvent(new MouseEvent('mouseenter', {...opts, bubbles: false}));
                         return true;
                 })(` + string(selJSON) + `)`
-		if err := chromedp.Evaluate(js, &matched).Do(ctx); err != nil {
-			return err
+		if err := func() error {
+			matched, err := chromedp.Evaluate[bool](js)(ctx, t)
+			if err != nil {
+				return err
+			}
+			if !matched {
+				return fmt.Errorf("hover: no element matches %q", sel)
+			}
+			return nil
+		}(); err != nil {
+			return chromedp.Void{}, err
 		}
-		if !matched {
-			return fmt.Errorf("hover: no element matches %q", sel)
-		}
-		return nil
-	})
+		return chromedp.Void{}, nil
+	}
 }
