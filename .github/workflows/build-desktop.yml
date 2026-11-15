@@ -1466,6 +1466,36 @@ jobs:
             Write-Host "wrote $($f.Path) ($size bytes, marker OK)"
           }
 
+      # v1.11.1 maintenance (run 43718750096 work order §7.3): the hard
+      # 100,000,000-byte per-file payload ceiling, enforced on the
+      # STAGING TREE before the ZIP/installer are built (the NSIS payload
+      # and the portable ZIP both materialize from exactly this tree)
+      # and again on the finished archive's UNCOMPRESSED members in the
+      # verify step below. Optional oversized assets (model weights,
+      # engine archives, backend runtime bundles) belong to the in-app
+      # managed-downloads flow, never inside a package; the gate never
+      # truncates or silently drops a violating file — it fails closed
+      # so a human classifies it.
+      - name: Staged payload size gate (100 MB per file)
+        run: |
+          $sizeLimit = 100000000
+          $root = "dist/windows/app/${env:WIN_PKG_ROOT}"
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+          $files = @(Get-ChildItem -Recurse -File $root)
+          $violations = @($files | Where-Object { $_.Length -gt $sizeLimit })
+          foreach ($v in $violations) {
+            Write-Host ("::error::size-audit violation: {0} is {1} bytes (limit {2} bytes, UNCOMPRESSED) — classify required-runtime-component vs optional-downloadable and fix the packaging; never truncate or silently drop" -f $v.FullName, $v.Length, $sizeLimit)
+          }
+          $total = ($files | Measure-Object -Property Length -Sum).Sum
+          $largest = $files | Sort-Object Length -Descending | Select-Object -First 1
+          ("staged: {0} files, {1} bytes total, largest {2} ({3} bytes), limit {4}" -f $files.Count, $total, $largest.FullName, $largest.Length, $sizeLimit) |
+            Add-Content -Path ci-logs/win-size-audit.log -Encoding utf8NoBOM
+          if ($violations.Count -gt 0) {
+            Write-Host "::error::package size gate FAILED: $($violations.Count) staged file(s) exceed the $sizeLimit-byte per-file ceiling"
+            throw ("package size gate: {0} staged file(s) exceed the {1}-byte ceiling" -f $violations.Count, $sizeLimit)
+          }
+          Write-Host "size-audit staged OK: $($files.Count) files, $total bytes total, largest $($largest.FullName) ($($largest.Length) bytes), limit $sizeLimit"
+
       - name: Create Windows ZIP
         run: |
           try {
@@ -1544,6 +1574,25 @@ jobs:
                 throw ("ZIP purity violation: Qt runtime DLL '{0}' present" -f $name)
               }
             }
+            # v1.11.1 maintenance (run 43718750096 work order §7.3): the
+            # hard per-file ceiling on the finished archive — every
+            # member's UNCOMPRESSED size must stay under 100,000,000
+            # bytes (exactly 100,000,000 is allowed; compressed size is
+            # never a compliance argument — a 250 MB model that compresses
+            # to 60 MB is still a violation).
+            $sizeLimit = 100000000
+            $largest = 0; $largestName = ""
+            foreach ($entry in $archive.Entries) {
+              if ($entry.Length -gt $largest) { $largest = $entry.Length; $largestName = $entry.FullName }
+              if ($entry.Length -gt $sizeLimit) {
+                Write-Host ("::error::size-audit violation: {0} :: {1} is {2} bytes (limit {3} bytes, UNCOMPRESSED) — classify required-runtime-component vs optional-downloadable and fix the packaging; never truncate or silently drop" -f $zip, $entry.FullName, $entry.Length, $sizeLimit)
+                throw ("package size gate: member '{0}' exceeds the {1}-byte ceiling" -f $entry.FullName, $sizeLimit)
+              }
+            }
+            $totalUncompressed = ($archive.Entries | Measure-Object -Property Length -Sum).Sum
+            ("zip: {0} members, {1} bytes uncompressed, archive {2} bytes compressed, largest {3} ({4} bytes), limit {5}" -f $archive.Entries.Count, $totalUncompressed, (Get-Item $zip).Length, $largestName, $largest, $sizeLimit) |
+              Add-Content -Path ci-logs/win-size-audit.log -Encoding utf8NoBOM
+            Write-Host ("size-audit zip OK: {0} members, {1} bytes uncompressed, largest member {2} ({3} bytes), limit {4}" -f $archive.Entries.Count, $totalUncompressed, $largestName, $largest, $sizeLimit)
             Write-Host "ZIP OK: all contracted entries present; purity assertions passed (no data/ residue, no opengl32.dll, no libgallium_wgl.dll, no root-level models/workspace placeholders)"
           } finally { $archive.Dispose() }
 
@@ -2204,6 +2253,23 @@ jobs:
           unzip -q "$zip" -d "$RUNNER_TEMP/zipcheck"
           test -x "$RUNNER_TEMP/zipcheck/${LINUX_PKG_ROOT}/SHEYTAN-LA" || { echo "::error::executable bit lost in the ZIP"; exit 1; }
           echo "ZIP OK: all contracted entries present, executable bit preserved, minimal root purity passed"
+
+      # v1.11.1 maintenance (run 43718750096 work order §7.3): the hard
+      # 100,000,000-byte per-file ceiling — the staging tree BEFORE the
+      # archive is built and every member's UNCOMPRESSED size AFTER it,
+      # via the shared fail-closed scripts/ci/package-size-audit.sh (the
+      # same gate internal/releasecontract/oversized_asset_policy_test.go
+      # pins for BOTH lanes). Optional oversized assets (model weights,
+      # engine archives, backend runtime bundles) belong to the in-app
+      # managed-downloads flow, never inside a package; the gate never
+      # truncates or silently drops a violating file — it fails closed.
+      - name: Payload size gate (100 MB per file)
+        run: |
+          set -euo pipefail
+          bash scripts/ci/package-size-audit.sh \
+            --dir "dist/linux/app/${LINUX_PKG_ROOT}" \
+            --zip "dist/${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip" \
+            | tee ci-logs/linux-size-audit.log
 
       # Package gate: report the root failure HERE rather than letting the
       # upload step emit a vague "no files were found" annotation.

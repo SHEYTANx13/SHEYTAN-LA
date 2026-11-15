@@ -14,13 +14,44 @@ var dagWorkflowRelPath = filepath.Join("..", "..", ".github", "workflows", "buil
 // codeqlWorkflowRelPath points at the REAL CodeQL workflow.
 var codeqlWorkflowRelPath = filepath.Join("..", "..", ".github", "workflows", "codeql.yml")
 
+// loadWorkflowForDAG reads the real workflow and returns it in the
+// CANONICAL text form the DAG contract reasons about: UTF-8 without a
+// BOM, LF line endings.
+//
+// Run-43718750096 correction (Windows x64 red, the two portability
+// failures this loader fixes): the hosted Windows runner materializes
+// the working tree with Git-for-Windows' default core.autocrlf=true, and
+// .gitattributes deliberately pins only *.go (LF) and *.bat (CRLF) —
+// *.yml falls through to the platform default, so build-desktop.yml
+// arrives with CRLF line endings on Windows while staying LF on Linux.
+// The semantic YAML validators never cared (yaml.v3 accepts CRLF), which
+// is why every positive DAG test stayed green on both platforms — but
+// the REGRESSION fixtures in this file perform multi-line string surgery
+// with LF-only needles (`"  "+job+":\n    name:"), and under CRLF those
+// needles matched nothing: the "mutated" workflow was byte-identical to
+// the healthy one, the validator correctly accepted it, and the tests
+// failed as "the regression detector is broken" — a fixture portability
+// bug masquerading as a contract bug.
+//
+// Normalizing HERE (the single load seam) keeps the contract tests
+// reading the file that ships while making the fixture surgery
+// deterministic on every platform; the mutation tests additionally guard
+// that each injection actually applied, so a future workflow-header
+// reshape fails loudly as a fixture-shape error instead of silently
+// testing the unmutated workflow. The validators themselves are
+// unchanged and remain CRLF-tolerant for any other caller.
 func loadWorkflowForDAG(t *testing.T, rel string) string {
 	t.Helper()
 	data, err := os.ReadFile(rel)
 	if err != nil {
 		t.Fatalf("read workflow %s: %v", rel, err)
 	}
-	return string(data)
+	// Canonical form: strip a UTF-8 BOM if present, then CRLF (and lone
+	// CR) to LF. No content-bearing byte is altered.
+	text := strings.TrimPrefix(string(data), "\ufeff")
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	return text
 }
 
 // TestBuildWorkflowIndependentGatesDAG proves the run-43630164424 repair
@@ -76,15 +107,30 @@ func TestRedPreflightDoesNotSkipGates(t *testing.T) {
 // the previous DAG (needs: [preflight] re-introduced on the four gates)
 // — the exact shape that turned run 43630164424 into a red run with
 // four skipped gates.
+//
+// Run-43718750096 portability note: the surgery below uses LF-only
+// needles; loadWorkflowForDAG normalizes the real file to LF first, and
+// the application guard proves every injection landed — under the old
+// loader a CRLF checkout silently produced an unmutated workflow and
+// this test failed as a broken detector instead of a broken fixture.
 func TestOldPreflightDAGShapeIsRejected(t *testing.T) {
 	w := loadWorkflowForDAG(t, dagWorkflowRelPath)
 
 	// Re-introduce the run-43630164424 defect shape.
 	old := w
+	applied := 0
 	for _, job := range IndependentGateJobs {
-		old = strings.Replace(old,
+		mutated := strings.Replace(old,
 			"  "+job+":\n    name:",
 			"  "+job+":\n    needs: [preflight]\n    name:", 1)
+		if mutated != old {
+			applied++
+		}
+		old = mutated
+	}
+	if applied != len(IndependentGateJobs) {
+		t.Fatalf("the defect-shape surgery applied to only %d/%d independent gates — the job-header shape in build-desktop.yml changed; update the mutation needle in this test (a silent no-op here once produced a false 'broken detector' failure on Windows)",
+			applied, len(IndependentGateJobs))
 	}
 
 	if err := ValidateIndependentGatesDAG(old); err == nil {
@@ -137,11 +183,18 @@ func TestRedPlatformGateKeepsOthersRunning(t *testing.T) {
 
 // TestContinueOnErrorIsRejected: an active continue-on-error on a
 // required gate must fail the contract (green-washing hazard).
+//
+// Run-43718750096 portability note: same CRLF defect class as
+// TestOldPreflightDAGShapeIsRejected — the LF-normalized loader plus the
+// application guard below keep the injection real on every platform.
 func TestContinueOnErrorIsRejected(t *testing.T) {
 	w := loadWorkflowForDAG(t, dagWorkflowRelPath)
 	greenwashed := strings.Replace(w,
 		"  preflight:\n    name: Preflight compile gate",
 		"  preflight:\n    continue-on-error: true\n    name: Preflight compile gate", 1)
+	if greenwashed == w {
+		t.Fatalf("the continue-on-error injection did not apply — the preflight job header in build-desktop.yml changed; update the mutation needle in this test (a silent no-op here once produced a false 'broken detector' failure on Windows)")
+	}
 
 	if err := ValidateFinalVerdictJob(greenwashed); err == nil {
 		t.Fatalf("continue-on-error on a required gate passed the contract — a failed gate must stay red, never hidden")

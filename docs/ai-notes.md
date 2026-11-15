@@ -10,15 +10,20 @@ session; rewrite this note so it stays true.
 
 ---
 
-## Current state (2026-11-15, v1.11.1 maintenance candidate)
+## Current state (2026-11-16, v1.11.1 maintenance candidate)
 
-The branch `maintenance/v1.11.1-ci-resilience` (local, unpushed) carries
-the run-43630164424 CI-resilience repair on top of the earlier Windows
-IPC repair line. Baseline: `2bc66e5` on main — the red build run's
-commit AND the failing CodeQL run 43630164359's head (verified same
-SHA; the go-lane failure is the same unused-`sh` vet defect). Product
-version stays 1.11.1 everywhere. The full evidence inventory ships in
-`note.md` beside the source ZIP.
+The branch `maintenance/v1.11.1-run43718750096` (local, unpushed) carries
+the run-43718750096 Windows-repair candidate. Baseline: `94a97de` on
+main — the failing build run's commit AND the successful CodeQL run
+43718750102's head (same SHA, branch main). The previous candidate from
+`2bc66e5` WAS published and hosted-verified as designed: its pipeline
+executed all independent gates (run 43718750096 — preflight, Core audit,
+Fyne UI, Linux x64 green; Windows x64 red on exactly two failing steps,
+final verdict red as designed), and CodeQL 43718750102 completed
+all-success. This candidate repairs the four Windows headless test
+failures exposed by that run and adds the §7.3 100 MB package-size
+gate. Product version stays 1.11.1 everywhere. The full evidence
+inventory ships in `note.md` beside the source ZIP.
 
 ## Live architectural constraints (unchanged, load-bearing)
 
@@ -42,62 +47,82 @@ version stays 1.11.1 everywhere. The full evidence inventory ships in
 
 ## Active blockers
 
+- **Hosted verification of the four repaired Windows tests and the new
+  size gates is pending the operator's push.** No green-run claim
+  exists for THIS candidate. Native Windows execution (named-pipe
+  busy-dial fixtures, release-contract fixtures, PE packaging) is NOT
+  RUN in this Linux sandbox — the Windows lane is their runtime
+  authority. Windows headless cross-vet and test-binary compile are
+  clean locally (`GOOS=windows go vet -tags headless ./...`).
 - **chromedp browser runtime smoke (physical class).** The v0.23.1 +
-  cdproto v0.160.3 migration is COMPLETE and suite-verified (full
-  desktop sweep, 72 packages, on this Linux sandbox), but there is no
-  Chrome here: browser-tool runtime behavior is NOT RUN until a
-  Chrome-equipped lane exercises it. A real-browser smoke is the next
-  hosted verification item.
-- **Hosted verification of the independent-gates pipeline and the IPC
-  gates is pending the operator's push.** No green-run claim exists for
-  the candidate. Native Windows tests (named-pipe dial/listener,
-  CoreClient Windows twin, PE packaging) are NOT RUN in this Linux
-  sandbox — the Windows lane is their runtime authority.
+  cdproto v0.160.3 migration is COMPLETE and suite-verified, but there
+  is no Chrome here: browser-tool runtime behavior is NOT RUN until a
+  Chrome-equipped lane exercises it.
+- **This session's sandbox lacks the OpenGL/GL dev headers** (no sudo),
+  so the full CGO Fyne build/vet and the local `go test ./ui/fyne`
+  sweep were NOT RUN for this candidate — they were NOT needed either:
+  the candidate changes ZERO `ui/fyne` files, so the hosted Fyne UI
+  gate's green result for `94a97de` (run 43718750096) carries over
+  unchanged for the UI tree.
 
 ## Known evidence (current)
 
-- Run-43630164424 root causes fixed: (1) the unused `sh` at
-  `ui/fyne/button_fit_test.go:234` — now a real chrome-coverage
-  assertion (the sweep must reach the visible rail/strip); (2) the
-  never-run rail-fit probe defect — raw 600x800 is BELOW the 600
-  breakpoint after the test canvas applies theme padding (effective
-  584), so the probe now uses 700x800 with a fail-loud zone guard; (3)
-  the WebSocket caller-cancel race in `ui/fyne/state.go` — a canceled
-  attach returned the incidental close error instead of
-  `context.Canceled`; the pump now reports the context as the canonical
-  cause (the Windows twin asserts the same contract).
+- Run-43718750096 root causes fixed (fixture-only; production dial
+  untouched): (1) the busy-pipe fixture armed its overlapped accept
+  WITHOUT waiting for the issue, so the first client could connect in
+  the CreateNamedPipe→ConnectNamedPipe window — ConnectNamedPipe then
+  completes INLINE with ERROR_PIPE_CONNECTED and NO event ever fires,
+  but the helper still waited on the event (5s timeout vs the 2s
+  readiness bound — the exact hosted ~4s failure signature). The
+  fixture now (a) waits for the accept to be ISSUED before returning
+  and (b) branches on all three completion modes (nil /
+  ERROR_PIPE_CONNECTED / ERROR_IO_PENDING). (2) The two release-
+  contract mutation fixtures used LF-only needles against a CRLF
+  Windows checkout (autocrlf=true; `.gitattributes` pins only `*.go` /
+  `*.bat`): the mutations silently no-opped and the healthy workflow
+  passed the validators — the "broken detector" failures.
+  `loadWorkflowForDAG` now normalizes BOM/CRLF→LF and every mutation
+  carries an application guard (a future workflow reshape fails loudly
+  as a fixture-shape error, never as a silent no-op).
+- §7.3 hard 100,000,000-byte per-file payload ceiling is now ENFORCED:
+  shared fail-closed `scripts/ci/package-size-audit.sh` (staged tree +
+  UNCOMPRESSED archive members), invoked by BOTH lanes, plus a tree
+  scan + lane pins + mechanism test in
+  `internal/releasecontract/oversized_asset_policy_test.go`. Tree
+  scan: 804 tracked files, largest 5,959,200 bytes — zero violations.
 - Build-workflow DAG: audit/ui/build-windows/build-linux have NO
-  `needs: [preflight]` (own checkout/setup, same SHA); a `final-verdict`
-  job fails unless every required gate concluded success; the collector
-  runs on `!cancelled()` and additionally uploads `run-diagnostics.json`
-  (collector `--json-out` mode). Pinned by parser-based contract tests
-  (`workflow_dag_contract.go`) + scheduling fixtures wired into the
-  stress gate (47/47) and the release-contract suite — the old DAG is a
-  failing test. Collector offline fixtures: 25/25.
+  `needs: [preflight]` (own checkout/setup, same SHA) — PROVEN HOSTED by
+  run 43718750096 (all four gates executed with the Windows lane red);
+  the `final-verdict` job stays red when any required gate is not
+  success. Collector fixtures 25/25 locally. The Windows package was
+  blocked by `BLOCKED_BY_UPSTREAM_TEST_FAILURE` — the missing ZIP is a
+  downstream symptom, NOT a proven packaging defect.
 - CodeQL workflow: analyze runs on `!cancelled() &&
   steps.codeql-init.outcome == 'success'` with `upload: always`;
   `collect-codeql-logs` reuses the same collector on `!cancelled()`.
-  CodeQL run 43630164359 (baseline): FAILURE — Analyze (go) exit 1 on
-  the same unused-`sh` defect; exact alert counts NOT retrievable here
-  (API rate-limited); the run link is in note.md for the operator.
-- Unix transport: the integration suite runs green on Linux and now
-  also proves the WS caller-cancel path and a procfs-inode-precise
-  no-TCP-listener contract (`TestNoNetworkListenerIsOpened` runs green
-  locally).
+  CodeQL run 43718750102 (baseline): all seven jobs SUCCESS — including
+  C++ SARIF upload and the alert-report export; the ONE warning is the
+  documented C++ manual-build-mode overlay-cache fallback (an
+  optimization warning, NOT an analysis failure — do not switch C++ to
+  build-mode: none merely to silence it). Open-alert counts were NOT
+  retrieved (API rate-limited); never claim a count without the report.
 - Dependency integrity: `go mod verify` passes and `go mod tidy` is
-  idempotent at chromedp v0.23.1 / cdproto v0.160.3. Fresh tag audit
-  (2026-11-15): winres v0.3.1 IS the latest real published tag (the
-  researched v0.3.3 does not exist); `fyne.io/systray` stays on the
-  pseudo-version because Fyne v2.8.2's own graph requires it.
-- Fyne button-fit: the rail grows to its content minimum, short labels
-  + wrapped captions policy landed, and the matrix/chrome/rail tests
-  now COMPILE AND PASS in this sandbox (the GL/CGO stack was assembled
-  user-locally: dev headers extracted from Debian packages + bridged
-  runtime libs). Full `go test ./ui/fyne` green; the hosted Linux lane
-  remains the CI authority.
-- CodeQL: the two documented actions/unpinned-tag warnings remain the
-  accepted baseline under the tag-only policy; the candidate has NOT
-  been scanned (unpushed) — never claim otherwise.
+  idempotent. Every DIRECT module is at its latest known stable tag
+  (fresh `go list -m -u all` on 2026-11-16); all newer versions are
+  indirect/transitive (Fyne-chain and chromedp-chain pins, test-only
+  objx/smetrics/check.v1) and are DECLINED with reasons in note.md —
+  `fyne.io/systray` stays on the pseudo-version because no newer
+  release exists and Fyne v2.8.2's own graph requires it.
+- Fyne button-fit/containment: the v1.11.1 policy (short labels +
+  wrapped captions, rail grows to content minimum, full-shell fit
+  sweep, viewport/boundary/degenerate matrices, structural goldens,
+  single-parent ownership) is in-tree and was hosted-green for
+  `94a97de` in run 43718750096's Fyne UI gate; this candidate changes
+  zero `ui/fyne` files.
+- CodeQL: the documented actions/unpinned-tag warnings remain the
+  accepted baseline under the operator's tag-only policy (zero
+  commit-hash pins present); the candidate has NOT been scanned
+  (unpushed) — never claim otherwise.
 
 ## Unresolved risks
 
@@ -111,15 +136,20 @@ version stays 1.11.1 everywhere. The full evidence inventory ships in
 ## Next actionable hand-off
 
 1. Operator reviews the candidate diff + `note.md`, pushes, and watches
-   the first hosted run of the new gates (Windows integration gate, IPC
-   smoke, button-fit stage).
+   the hosted run: the four formerly failing Windows tests must pass
+   natively and the new size-gate logs (`ci-logs/linux-size-audit.log`,
+   `ci-logs/win-size-audit.log`) must appear green.
 2. Any agent continuing here should re-verify with the smallest ladder
    prefix: `gofmt -l cmd internal ui`, `go build ./...`,
    `go test -tags headless ./internal/...`, then the touched packages —
    full ladder and evidence-class rules live in [`agent.md`](agent.md).
-3. If the hosted Windows lane is red, start from
-   `ci-logs/win-ipc-integration.log` and `data\logs\app.log` inside the
-   smoke output — the gates are named for their failure stage.
+   On a Windows host, run `go test -tags headless ./internal/localipc/ ./internal/releasecontract/`
+   natively — the two busy-dial tests are the first authority for the
+   fixture repair.
+3. If the hosted Windows lane is red, start from the failing test's own
+   failure line, then `ci-logs/win-ipc-integration.log` and
+   `data\logs\app.log` inside the smoke output — the gates are named for
+   their failure stage.
 
 ---
 

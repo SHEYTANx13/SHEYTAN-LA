@@ -101,6 +101,30 @@ func (f *busyPipeFixture) waitAcceptDone(t *testing.T) {
 // channels; cleanup cancels the outstanding accept with CancelIoEx and
 // reaps the goroutine with bounded waits before closing the handles, so
 // no handle or goroutine outlives the test on any exit path.
+//
+// Run-43718750096 correction: the arming of the overlapped accept was not
+// synchronized with the fixture's return, so the caller's first dial
+// could connect inside the CreateNamedPipe→ConnectNamedPipe window. In
+// that window ConnectNamedPipe does NOT return ERROR_IO_PENDING: it
+// completes INLINE with ERROR_PIPE_CONNECTED and the OVERLAPPED event is
+// NEVER signaled (there is no outstanding I/O). The old helper waited on
+// the event regardless of the completion mode, so acceptDone could not
+// arrive until the 5s event-timeout path — long past the 2s readiness
+// bound in waitAcceptDone — which is exactly how
+// TestDialContextCallerDeadlineBoundsBusyDial and
+// TestDialContextBusyBudgetExhaustsTyped failed on the hosted Windows
+// runner (~4s each: 2s readiness timeout + 2s cleanup reap). Two changes,
+// both fixture-only (the production dial is untouched and its deadline
+// semantics are asserted independently below):
+//  1. the accept is ISSUED before the fixture returns (bounded wait on
+//     the issued channel), so the listening instance is deterministically
+//     armed before the caller's first dial — no scheduling race;
+//  2. the helper branches on the actual ConnectNamedPipe completion mode
+//     (nil synchronous success / ERROR_PIPE_CONNECTED inline completion
+//     / ERROR_IO_PENDING armed) instead of assuming an event will fire.
+//
+// No timeout was lengthened and no assertion weakened: the 5s event bound,
+// the 2s reap bound and both deadline/budget assertions are unchanged.
 func busyPipeServer(t *testing.T) *busyPipeFixture {
 	t.Helper()
 
@@ -130,29 +154,72 @@ func busyPipeServer(t *testing.T) *busyPipeFixture {
 	ol.HEvent = evt
 
 	// Arm the single accept asynchronously. The overlapped call returns
-	// immediately (ERROR_IO_PENDING, or ERROR_PIPE_CONNECTED if a client
-	// was already queued); the OS signals the event on real completion.
+	// immediately in one of exactly three modes, each with its own
+	// completion path (run-43718750096: assuming the event always fires
+	// is the fixture defect — ERROR_PIPE_CONNECTED means there is no
+	// outstanding I/O to signal it):
+	//   - ERROR_IO_PENDING: armed; the OS signals the event when a real
+	//     client consumes the single listening instance (or when the
+	//     cleanup cancel aborts the accept);
+	//   - ERROR_PIPE_CONNECTED: a client already connected in the
+	//     pre-arm window — the accept completed inline, the instance IS
+	//     consumed, and no event will ever fire;
+	//   - nil: the accept completed synchronously — same semantics, the
+	//     instance is consumed and no event will fire.
 	issued := make(chan error, 1)
 	acceptDone := make(chan error, 1)
 	go func() {
-		issued <- windows.ConnectNamedPipe(handle, &ol)
-		// ERROR_PIPE_CONNECTED means the accept completed inline and
-		// no event will fire; otherwise wait for the event (client
-		// connect, or the cleanup cancel). Bounded so this goroutine
-		// always exits.
-		s, werr := windows.WaitForSingleObject(evt, busyFixtureAcceptMS)
-		if s == windows.WAIT_OBJECT_0 {
-			var n uint32
-			acceptDone <- windows.GetOverlappedResult(handle, &ol, &n, false)
-			return
+		cerr := windows.ConnectNamedPipe(handle, &ol)
+		issued <- cerr
+		switch {
+		case cerr == nil:
+			acceptDone <- nil
+		case errors.Is(cerr, windows.ERROR_PIPE_CONNECTED):
+			// Inline completion: the single instance was consumed
+			// by a client before the accept was armed. This is a
+			// SUCCESS of the readiness contract (the instance is
+			// occupied, every further dial is busy), not an error
+			// — and waiting on the event here is the old deadlock.
+			acceptDone <- nil
+		case errors.Is(cerr, windows.ERROR_IO_PENDING):
+			// Armed: completion is carried by the event (client
+			// connect, or the cleanup cancel). Bounded so this
+			// goroutine always exits.
+			s, werr := windows.WaitForSingleObject(evt, busyFixtureAcceptMS)
+			if s == windows.WAIT_OBJECT_0 {
+				var n uint32
+				acceptDone <- windows.GetOverlappedResult(handle, &ol, &n, false)
+				return
+			}
+			if werr == nil {
+				// x/sys/windows reports an errno only for
+				// WAIT_FAILED; a plain WAIT_TIMEOUT would
+				// otherwise surface as a false nil "success".
+				werr = fmt.Errorf("fixture accept event not signaled within %dms (wait state %d)",
+					busyFixtureAcceptMS, s)
+			}
+			acceptDone <- werr
+		default:
+			acceptDone <- cerr
 		}
-		acceptDone <- werr
 	}()
 
+	// Deterministic arming (run-43718750096): the accept must be issued
+	// before the fixture is handed to the caller, otherwise the first
+	// client dial can connect in the pre-arm window and force the inline
+	// path above. The overlapped call returns immediately, so this wait
+	// is instantaneous in practice; it is bounded only so a starved
+	// fixture goroutine fails loudly instead of deadlocking the test.
+	select {
+	case <-issued:
+	case <-time.After(busyFixtureReapWait):
+		t.Fatalf("overlapped accept was not issued within %v — the fixture goroutine never ran", busyFixtureReapWait)
+	}
+
 	t.Cleanup(func() {
-		// The call must have been issued before any cancellation so
-		// there is always something to reap (the overlapped call
-		// returns immediately, so this is instantaneous).
+		// The accept was issued before the fixture returned, so there
+		// is always something to reap (the overlapped call returns
+		// immediately, so this is instantaneous).
 		select {
 		case <-issued:
 		case <-time.After(busyFixtureReapWait):

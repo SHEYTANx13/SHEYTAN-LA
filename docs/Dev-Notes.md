@@ -4,9 +4,10 @@
 > developer intent and active work. AI agents must not edit it unless the
 > human explicitly authorizes it in the current prompt. Such one-time
 > authorizations exist for the v1.11.1 maintenance cleanups (2026-11-14
-> and the run-43630164424 repair, 2026-11-15): content refreshes under
-> the active maintenance work order only. They set no precedent — from
-> the next session onward the human-only rule applies again in full.
+> and the run-43630164424 repair, 2026-11-15) and for the single
+> run-43718750096 work-order refresh (2026-11-16): content refreshes
+> under the active maintenance work order only. They set no precedent —
+> from the next session onward the human-only rule applies again in full.
 
 *Long-term product direction lives in [`ROADMAP.md`](ROADMAP.md). Release
 history lives in [`changelog.md`](changelog.md). The agent operating
@@ -20,12 +21,12 @@ in [`ai-notes.md`](ai-notes.md). This file never duplicates them.*
 | Field | Value |
 |---|---|
 | **Owner** | Human developer |
-| **Objective** | Publish the v1.11.1 run-43630164424 CI-resilience repair candidate: review the local branch `maintenance/v1.11.1-ci-resilience` (built on the exact baseline commit `2bc66e5`, the red run's commit and current main HEAD), decide on push/tag timing, then watch the first hosted run of the independent-gates pipeline. |
-| **Priority** | P0 — the run-43630164424 red build: one `go vet` failure (unused `sh` in `ui/fyne/button_fit_test.go:234`) skipped ALL four independent validation gates (Core audit, Fyne UI, Windows x64, Linux x64), and the same defect killed CodeQL's Analyze (go) job (run 43630164359) before its database init. |
-| **Status** | Candidate complete locally (vet/build/gofmt, full headless suite 68 pkgs, full desktop sweep 72 pkgs, race gate 7/7, stress 47/47, collector fixtures 25/25, diagnostics self-test, module verify + tidy idempotent); hosted verification NOT RUN (no push authorized). Awaiting operator review. |
-| **Acceptance criteria** | (1) Hosted build-desktop run where a red preflight still leaves audit/ui/windows/linux running and the final-verdict job decides the overall conclusion. (2) Windows lane green including the named-pipe CoreClient integration gate and the IPC-aware launch smoke. (3) CodeQL run where Analyze (go) passes vet and reaches init/analyze; a failed manual build must still yield analysis + SARIF upload. (4) No version change anywhere — internal/config.AppVersion stays 1.11.1. |
-| **Dependencies / blockers** | None technical. Publishing requires the operator's push decision. The linked CodeQL run 43630164359 is confirmed FAILURE (Analyze (go) exit 1 on the same unused-`sh` defect; other language jobs and the alert export completed) — its exact alert counts were NOT retrievable from this environment (API rate-limited; run link recorded in note.md). |
-| **Evidence needed** | Hosted run log for the candidate commit; the final-verdict step output on any red gate; makensis /VERSION output (3.13.x) on the Windows lane; the named-pipe integration log `ci-logs/win-ipc-integration.log`. |
+| **Objective** | Publish the v1.11.1 run-43718750096 Windows-repair candidate: review the local branch `maintenance/v1.11.1-run43718750096` (built on the exact baseline commit `94a97de`, the failing run's commit and current main HEAD), decide on push timing, then watch the first hosted run. |
+| **Priority** | P0 — the run-43718750096 build: exactly one terminal job failed (Windows x64, two failing steps) on four Windows headless test failures — the two named-pipe busy-dial fixture deadlocks (`dial_windows_test.go` readiness wait) and two CRLF-portability release-contract failures (`workflow_dag_contract_test.go` mutation fixtures). The Windows package was blocked by `BLOCKED_BY_UPSTREAM_TEST_FAILURE`, not by a packaging defect. Linux x64, Fyne UI, Core audit and preflight were green; CodeQL run 43718750102 was all-success with one C++ overlay-cache warning. |
+| **Status** | Candidate complete locally on Linux (both Windows fixture defects fixed; headless suite 68 pkgs green, race gate 7/7, stress 47/47, collector fixtures 25/25, diagnostics self-test, gofmt/vet/build, module verify + tidy idempotent, Windows headless cross-vet clean, new §7.3 100 MB package-size gate added to both lanes with contract tests); hosted and native-Windows verification NOT RUN (no push authorized). Awaiting operator review. |
+| **Acceptance criteria** | (1) Hosted Windows headless suite where all four formerly failing tests pass natively (`TestDialContextCallerDeadlineBoundsBusyDial`, `TestDialContextBusyBudgetExhaustsTyped`, `TestOldPreflightDAGShapeIsRejected`, `TestContinueOnErrorIsRejected`). (2) Windows lane produces the portable ZIP + NSIS installer through the new size gates. (3) No version change anywhere — internal/config.AppVersion stays 1.11.1. (4) The independent-gates DAG stays green exactly as in run 43718750096. |
+| **Dependencies / blockers** | None technical. Publishing requires the operator's push decision. The two raw run logs (log43718750096.txt, codeql43718750102.txt) were not attached to the repair session — run facts come from the work order's authoritative summary; the GitHub API was rate-limited from that environment. |
+| **Evidence needed** | Hosted run log for the candidate commit; the four test names green on the hosted Windows lane; `ci-logs/linux-size-audit.log` + `ci-logs/win-size-audit.log`; the final-verdict step output on any red gate. |
 | **Next action** | Operator: review the candidate diff and `note.md` in the delivery, then push the branch or request changes. |
 
 ---
