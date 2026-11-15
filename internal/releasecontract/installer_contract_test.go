@@ -891,18 +891,23 @@ func TestNSISInstallUninstallSmokeEnforcedByWorkflow(t *testing.T) {
 	// The transcript reaches the consolidated report through the ONE
 	// collector: consolidate-logs captures the build-windows JOB LOG
 	// (which contains the tee'd transcript), and it runs after every
-	// upstream job with if: always() — so the transcript is present on
-	// red AND green runs.
+	// upstream job with if: !cancelled() (v1.11.1 run 43630164424 repair:
+	// the always() form was replaced by the !cancelled() status function —
+	// red runs keep the transcript, cancelled runs stop cleanly) — so the
+	// transcript is present on red AND green runs.
 	clStart := strings.Index(workflow, "  consolidate-logs:")
 	if clStart < 0 {
 		t.Fatalf("consolidate-logs job not found in the workflow")
 	}
 	clEnd := len(workflow)
-	if rel := strings.Index(workflow[clStart:], "\n  release:"); rel >= 0 {
-		clEnd = clStart + rel
+	for _, next := range []string{"\n  final-verdict:", "\n  release:"} {
+		if rel := strings.Index(workflow[clStart:], next); rel >= 0 {
+			clEnd = clStart + rel
+			break
+		}
 	}
 	clBody := workflow[clStart:clEnd]
-	if !strings.Contains(clBody, "build-windows") || !strings.Contains(clBody, "if: always()") {
-		t.Errorf("consolidate-logs must need build-windows and run with if: always() so the tee'd install/uninstall transcript reaches the consolidated report on red and green runs")
+	if !strings.Contains(clBody, "build-windows") || !strings.Contains(clBody, "!cancelled()") {
+		t.Errorf("consolidate-logs must need build-windows and run with if: !cancelled() so the tee'd install/uninstall transcript reaches the consolidated report on red and green runs")
 	}
 }

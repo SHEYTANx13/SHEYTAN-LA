@@ -86,9 +86,10 @@
 # production ones.
 set -uo pipefail
 
-usage() { echo "usage: $0 --out FILE [--repo OWNER/REPO] [--run-id ID] [--attempt N] [--commit SHA] [--ref REF] [--workflow NAME] [--trigger EVENT]" >&2; exit 64; }
+usage() { echo "usage: $0 --out FILE [--json-out FILE] [--repo OWNER/REPO] [--run-id ID] [--attempt N] [--commit SHA] [--ref REF] [--workflow NAME] [--trigger EVENT]" >&2; exit 64; }
 
 OUT="SHEYTAN-LA-all-logs.txt"
+JSON_OUT=""
 REPO="${CONSOLIDATE_REPO:-${GITHUB_REPOSITORY:-}}"
 RUN_ID="${CONSOLIDATE_RUN_ID:-${GITHUB_RUN_ID:-}}"
 ATTEMPT="${CONSOLIDATE_ATTEMPT:-${GITHUB_RUN_ATTEMPT:-1}}"
@@ -127,6 +128,7 @@ is_self_job() {  # $1 = job display name from the jobs API
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT="$2"; shift 2;;
+    --json-out) JSON_OUT="$2"; shift 2;;
     --repo) REPO="$2"; shift 2;;
     --run-id) RUN_ID="$2"; shift 2;;
     --attempt) ATTEMPT="$2"; shift 2;;
@@ -561,6 +563,41 @@ done
 
 # --- redact + write the final artifact -----------------------------------
 redact_stream "$RAW" > "$OUT"
+
+# --- machine-readable run diagnostics index (run 43630164424 repair) ------
+# One JSON object per run, from the SAME accounting data as the text report
+# (single source of truth): run identity, coverage totals, and every job
+# with its jobs-API status/conclusion/id and the collector's log-source
+# category (CAPTURED / SKIPPED / MISSING:* / IN_PROGRESS / SELF). Jobs-API
+# metadata only — no secrets, no signed URLs, so no redaction is needed.
+if [ -n "$JSON_OUT" ]; then
+  : > "$WORK/jobs-diag.ndjson"
+  for spec in "${JOB_SECTIONS[@]:-}"; do
+    [ -z "$spec" ] && continue
+    jname="${spec%%|*}"; rest="${spec#*|}"
+    jstatus="${rest%%|*}"; rest="${rest#*|}"
+    jconc="${rest%%|*}"; rest="${rest#*|}"
+    jid="${rest%%|*}"; state="${rest#*|}"
+    jq -cn --arg n "$jname" --arg s "$jstatus" --arg c "$jconc" \
+      --arg i "$jid" --arg l "$state" \
+      '{name: $n, status: $s, conclusion: (if $c == "null" then null else $c end), id: $i, log_source: $l}' \
+      >> "$WORK/jobs-diag.ndjson"
+  done
+  # --slurpfile inlines the per-job NDJSON rows as the jobs array (an
+  # empty file yields []; every row was jq-escaped at write time).
+  jq -n \
+    --arg schema "sheytan-la/run-diagnostics/1" \
+    --arg repo "$REPO" --arg run "$RUN_ID" --arg attempt "$ATTEMPT" \
+    --arg workflow "$WORKFLOW" --arg trigger "$TRIGGER" \
+    --arg commit "$COMMIT" --arg ref "$REF" --arg generated "$now_utc" \
+    --argjson totals "{\"jobs\": $TOTAL_JOBS, \"captured\": $CAPTURED, \"missing_log_source\": $MISSING, \"never_started\": $NEVER_STARTED, \"in_progress\": $IN_PROGRESS, \"self_in_progress\": $SELF_IN_PROGRESS, \"failed_jobs\": $FAILED_JOBS, \"collector_hard_errors\": $HARD_ERROR}" \
+    --slurpfile jobrows "$WORK/jobs-diag.ndjson" \
+    '{schema: $schema, repository: $repo, run_id: $run, attempt: $attempt,
+      workflow: $workflow, trigger: $trigger, commit: $commit, ref: $ref,
+      generated_utc: $generated, totals: $totals,
+      jobs: ($jobrows // []) }' > "$JSON_OUT"
+  [ -s "$JSON_OUT" ] || { hard_fail "--json-out produced an empty file"; }
+fi
 
 # --- verdict --------------------------------------------------------------
 # SELF never fails: the collector's own job cannot be terminal while the

@@ -425,6 +425,40 @@ func stressReleaseSurface() error {
 		return fmt.Errorf("upload-artifact contract: %w", err)
 	}
 
+	// 3d-v3 (v1.11.1, run 43630164424 repair, work order §9.6): the
+	// workflow FAILURE-RESILIENCE contracts, parsed from this same
+	// workflow file — preflight must not gate the four independent
+	// validation jobs, the collector and final verdict must be
+	// failure-tolerant, and no required gate may hide behind
+	// continue-on-error. The same validators run as Go contract tests
+	// with scheduling-simulation fixtures in
+	// internal/releasecontract/workflow_dag_contract_test.go.
+	if err := releasecontract.ValidateIndependentGatesDAG(w); err != nil {
+		return fmt.Errorf("independent-gates DAG contract: %w", err)
+	}
+
+	if err := releasecontract.ValidateFailureTolerantCollector(w); err != nil {
+		return fmt.Errorf("failure-tolerant collector contract: %w", err)
+	}
+
+	if err := releasecontract.ValidateFinalVerdictJob(w); err != nil {
+		return fmt.Errorf("final-verdict contract: %w", err)
+	}
+
+	// 3d-v4 (v1.11.1, run 43630164424 repair): the CodeQL workflow's
+	// resilience contract — independent triggers, analyze after a
+	// failed manual build when init succeeded, upload: always, and
+	// the failure-tolerant CodeQL log collector.
+	codeqlPath := filepath.Join(workflowsDir, "codeql.yml")
+	codeqlYAML, codeqlErr := os.ReadFile(codeqlPath)
+	if codeqlErr != nil {
+		return fmt.Errorf("read CodeQL workflow %q: %v", codeqlPath, codeqlErr)
+	}
+
+	if err := releasecontract.ValidateCodeQLWorkflowResilience(string(codeqlYAML)); err != nil {
+		return fmt.Errorf("CodeQL resilience contract: %w", err)
+	}
+
 	// 3e. The Node/frontend stack is RETIRED (v1.11.0 one-Go-UI): the
 	// workflow must not reinstall it — no Node pin, no setup-node, no
 	// npm/vite/web-static fragments. A reappearance means a second UI

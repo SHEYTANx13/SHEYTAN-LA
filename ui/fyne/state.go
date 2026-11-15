@@ -466,6 +466,17 @@ func (r *Runtime) pumpActivity(ctx context.Context, sessionID string) error {
 		}
 		_, payload, err := conn.ReadMessage()
 		if err != nil {
+			// Cancellation races the read: the abort goroutine
+			// closes the conn on ctx.Done(), so a blocked read
+			// fails with an incidental transport error ("use of
+			// closed network connection") BEFORE the loop's
+			// next ctx.Done() check. The context is the
+			// canonical cause — report it, never the racing
+			// close artifact (run 43630164424 follow-up: the
+			// canceled-attach contract, Unix and Windows).
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			return err
 		}
 		var ev StreamEvent

@@ -257,6 +257,16 @@ const fixtureUploadWorkflow = `jobs:
           retention-days: 14
           overwrite: true
           archive: false
+      - name: Upload the machine-readable run diagnostics index
+        if: always()
+        uses: actions/upload-artifact@%s
+        with:
+          name: run-diagnostics.json
+          path: run-diagnostics.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+          archive: false
 `
 
 // fixtureWithDuplicateLogUpload adds a SECOND consolidated log upload in
@@ -317,6 +327,13 @@ const fixtureWithExtraUpload = `jobs:
           path: SHEYTAN-LA-all-logs.txt
           archive: false
           overwrite: true
+      - name: Upload the machine-readable run diagnostics index
+        uses: actions/upload-artifact@` + "v7" + `
+        with:
+          name: run-diagnostics.json
+          path: run-diagnostics.json
+          archive: false
+          overwrite: true
   build-linux:
     name: Linux x64
     steps:
@@ -342,10 +359,10 @@ const fixtureWithExtraUpload = `jobs:
 // CRLF materialization, the exact shape the retired scanner broke on —
 // and both negative fixtures FAIL with the contract message.
 func TestUploadArtifactContractFixtures(t *testing.T) {
-	good := fmt.Sprintf(fixtureUploadWorkflow, "v7", "v7", "v7")
+	good := fmt.Sprintf(fixtureUploadWorkflow, "v7", "v7", "v7", "v7")
 
 	if err := ValidateUploadArtifactContract(good); err != nil {
-		t.Fatalf("the contracted three-upload fixture must pass: %v", err)
+		t.Fatalf("the contracted four-upload fixture must pass: %v", err)
 	}
 
 	// CRLF variant — the windows-latest checkout materialization. The
@@ -392,7 +409,7 @@ func TestUploadArtifactContractFixtures(t *testing.T) {
 // rejected.
 func TestUploadArtifactPinPolicyFixtures(t *testing.T) {
 	fixture := func(ref string) string {
-		return fmt.Sprintf(fixtureUploadWorkflow, ref, ref, ref)
+		return fmt.Sprintf(fixtureUploadWorkflow, ref, ref, ref, ref)
 	}
 
 	// Accepted: the maintained major release tag (the workflow's

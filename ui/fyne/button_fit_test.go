@@ -236,6 +236,31 @@ func TestShellChromeButtonsFit(t *testing.T) {
 	for _, sz := range fitSizes {
 		uiDoLocked(func() { w.Resize(sz) })
 		label := fmt.Sprintf("%dx%d", int(sz.Width), int(sz.Height))
+
+		// Coverage proof (run 43630164424 vet repair): the sweep
+		// below is only honest if its walk root actually reaches
+		// the shell's navigation chrome. The pre-v1.11.1 tree once
+		// mounted the rail inside the content border as well, and a
+		// walk that silently missed a region would recreate the
+		// exact partial-chrome blind spot this test exists to
+		// close. Whichever region navPolicy resolved to at this
+		// size must be reachable from the responsive container.
+		sawRail, sawStrip := false, false
+		walkCanvasObjects(rc, func(o fyne.CanvasObject, _ fyne.Position) {
+			if c, ok := o.(*fyne.Container); ok && c == sh.rail {
+				sawRail = true
+			}
+			if o == sh.topNav {
+				sawStrip = true
+			}
+		})
+		if sh.rail.Visible() && !sawRail {
+			t.Fatalf("%s: the visible navigation rail is not reachable from the chrome sweep root — the walk would repeat the partial-chrome blind spot", label)
+		}
+		if sh.topNav.Visible() && !sawStrip {
+			t.Fatalf("%s: the visible compact top strip is not reachable from the chrome sweep root — the walk would repeat the partial-chrome blind spot", label)
+		}
+
 		buttons := 0
 		// The window root is the responsive container (rail, topNav,
 		// content border): walking it covers every shell region with
@@ -267,14 +292,33 @@ func TestShellChromeButtonsFit(t *testing.T) {
 // size class — the exact assertion that failed to exist while Windows
 // text scaling clipped "Coding Lab"-class labels inside the fixed rail.
 func TestRailButtonsFitRailWidth(t *testing.T) {
-	_, sh, w, _, _ := matrixShell(t)
+	_, sh, w, rc, _ := matrixShell(t)
 
 	for _, sz := range []fyne.Size{
-		fyne.NewSize(600, 800),   // medium: compact rail
+		// 700x800 (not 600x800): the test canvas applies theme
+		// padding (16 logical px), so a raw 600 window carries an
+		// EFFECTIVE width of 584 — below the 600 breakpoint — and
+		// legitimately resolves to the top-strip zone with the
+		// rail hidden. 700 keeps the probe inside the medium
+		// class after padding (effective ~684, compact rail).
+		fyne.NewSize(700, 800),   // medium: compact rail
 		fyne.NewSize(1024, 768),  // desktop: wide rail
 		fyne.NewSize(1920, 1080), // wide rail
 	} {
 		uiDoLocked(func() { w.Resize(sz) })
+		// Guard the probe's intent: every target here must land
+		// in a RAIL zone. A target that silently resolves to the
+		// top-strip class would skip the rail assertions and
+		// recreate the blind spot this test closes (the exact
+		// latent failure the 600x800 probe carried).
+		eff := rc.Size().Width
+		if eff < 0 {
+			eff = 0
+		}
+		if navPolicy(eff) == navTopStrip {
+			t.Fatalf("%dx%d (effective width %.0f): rail-fit probe resolved to the top-strip zone — the medium-class target no longer lands in the medium class; fix the probe, do not skip the assertion",
+				int(sz.Width), int(sz.Height), eff)
+		}
 		railW := sh.rail.Size().Width
 		if minW := sh.rail.MinSize().Width; railW+0.5 < minW {
 			t.Fatalf("%dx%d: rail width %.0f < rail content minimum %.0f — nav labels clip",

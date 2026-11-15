@@ -46,6 +46,12 @@ import (
 // used by the workflow and the collector).
 const ConsolidatedLogArtifactName = "SHEYTAN-LA-all-logs.txt"
 
+// RunDiagnosticsArtifactName is the machine-readable run-level
+// diagnostics index uploaded by the same collector job (run 43630164424
+// repair, work order §9.2): one JSON object with every job's API
+// status/conclusion/id and the collector's log-source category.
+const RunDiagnosticsArtifactName = "run-diagnostics.json"
+
 // The two stable package artifact names.
 const (
 	WindowsPackageArtifactName = "windows-x64-package"
@@ -188,16 +194,53 @@ const releaseTagPattern = `^v[0-9]+(\.[0-9]+)*$`
 // SHA)` annotation on the uses: line.
 type workflowStep struct {
 	Name string         `yaml:"name"`
+	ID   string         `yaml:"id"`
 	Uses string         `yaml:"uses"`
 	Run  string         `yaml:"run"`
+	If   string         `yaml:"if"`
 	With map[string]any `yaml:"with"`
 }
 
-// workflowJob is the decoded subset of a job.
+// workflowJob is the decoded subset of a job. Needs and If feed the
+// DAG-resilience contract (run 43630164424): needs is the dependency
+// list (scalar or sequence spelling, like runs-on); If is the job-level
+// condition ("!cancelled()" keeps a job running after failed
+// dependencies).
 type workflowJob struct {
 	Name   string         `yaml:"name"`
 	RunsOn runnerLabels   `yaml:"runs-on"`
+	Needs  needsList      `yaml:"needs"`
+	If     string         `yaml:"if"`
 	Steps  []workflowStep `yaml:"steps"`
+}
+
+// needsList decodes a GitHub Actions needs field, which YAML may spell
+// as a scalar ("needs: analyze") or a sequence ("needs: [a, b]"). Both
+// decode into the same dependency list.
+type needsList []string
+
+// UnmarshalYAML implements yaml.v3 custom decoding for both spellings.
+func (n *needsList) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		if node.Tag == "!!null" {
+			*n = nil
+			return nil
+		}
+		*n = []string{node.Value}
+		return nil
+
+	case yaml.SequenceNode:
+		var out []string
+		if err := node.Decode(&out); err != nil {
+			return fmt.Errorf("needs: %w", err)
+		}
+		*n = out
+		return nil
+
+	default:
+		return fmt.Errorf("needs: unsupported YAML node kind %v", node.Kind)
+	}
 }
 
 // runnerLabels decodes a GitHub Actions runs-on field, which YAML may
@@ -231,8 +274,28 @@ func (r *runnerLabels) UnmarshalYAML(node *yaml.Node) error {
 }
 
 // workflowDoc is the decoded subset of a GitHub Actions workflow.
+// On is the RAW trigger node: trigger presence must survive null values
+// (`workflow_dispatch:` has no payload), and yaml.v3 neither calls a
+// custom unmarshaler for a null value nor decodes one into a non-nil
+// pointer - so the validator inspects the node's keys directly
+// (TriggerKeys).
 type workflowDoc struct {
 	Jobs map[string]workflowJob `yaml:"jobs"`
+	On   yaml.Node              `yaml:"on"`
+}
+
+// TriggerKeys returns the trigger keys present under the `on:` block.
+// A bare key with a null payload (e.g. `workflow_dispatch:`) is PRESENT
+// - presence, not payload, is the contract.
+func TriggerKeys(on yaml.Node) map[string]bool {
+	keys := map[string]bool{}
+	if on.Kind != yaml.MappingNode {
+		return keys
+	}
+	for i := 0; i+1 < len(on.Content); i += 2 {
+		keys[on.Content[i].Value] = true
+	}
+	return keys
 }
 
 // ArtifactStep is one artifact action use scoped to its owning job —
@@ -414,18 +477,22 @@ func ValidateUploadArtifactPins(workflowText string) error {
 	return nil
 }
 
-// ValidateUploadArtifactContract enforces the v1.11.1 single-log-artifact
-// upload surface, scoped per step and per owning job:
+// ValidateUploadArtifactContract enforces the v1.11.1 upload surface
+// (single-log-artifact contract + the two package uploads + the run
+// diagnostics index), scoped per step and per owning job:
 //
 //   - EXACTLY ONE upload named SHEYTAN-LA-all-logs.txt — the ONE
 //     consolidated log artifact — uploading the file itself
 //     (archive: false, path == the artifact name);
+//   - exactly ONE run-diagnostics.json upload from the SAME collector
+//     job (run 43630164424 repair: machine-readable diagnostics index,
+//     archive: false, path == the artifact name);
 //   - exactly one windows-x64-package and one linux-x64-package upload,
 //     each validated against its exact payload shapes (portable ZIP,
 //     NSIS installer under dist/) — package uploads are NEVER counted
 //     as log uploads because names match exactly;
 //   - NO other upload-artifact step may exist: the whole upload surface
-//     is exactly the three contracted artifacts.
+//     is exactly the four contracted artifacts.
 func ValidateUploadArtifactContract(workflowText string) error {
 	uploads, err := ArtifactSteps(workflowText, "actions/upload-artifact")
 	if err != nil {
@@ -440,7 +507,7 @@ func ValidateUploadArtifactContract(workflowText string) error {
 
 	var errs []string
 
-	logUploads, winUploads, linUploads := 0, 0, 0
+	logUploads, diagUploads, winUploads, linUploads := 0, 0, 0, 0
 
 	for _, u := range uploads {
 		switch u.Name {
@@ -457,6 +524,30 @@ func ValidateUploadArtifactContract(workflowText string) error {
 			if arch, ok := u.With["archive"]; !ok || arch != false {
 				errs = append(errs, fmt.Sprintf(
 					"job %q: the consolidated log upload must carry `archive: false` (the artifact must BE the plain-text file, not a ZIP wrapper)",
+					u.Job,
+				))
+			}
+
+		case RunDiagnosticsArtifactName:
+			diagUploads++
+
+			if u.Path != RunDiagnosticsArtifactName {
+				errs = append(errs, fmt.Sprintf(
+					"job %q: the run diagnostics upload must set with.path to the exact file %q (archive:false means the artifact IS the file), got %q",
+					u.Job, RunDiagnosticsArtifactName, u.Path,
+				))
+			}
+
+			if arch, ok := u.With["archive"]; !ok || arch != false {
+				errs = append(errs, fmt.Sprintf(
+					"job %q: the run diagnostics upload must carry `archive: false` (the artifact must BE the JSON file, not a ZIP wrapper)",
+					u.Job,
+				))
+			}
+
+			if u.Job != "consolidate-logs" {
+				errs = append(errs, fmt.Sprintf(
+					"job %q: the run diagnostics upload belongs to the consolidate-logs collector job (same collector, same evidence lifetime)",
 					u.Job,
 				))
 			}
@@ -493,9 +584,9 @@ func ValidateUploadArtifactContract(workflowText string) error {
 
 		default:
 			errs = append(errs, fmt.Sprintf(
-				"job %q step %q: unexpected upload-artifact name %q — the contracted upload surface is exactly %q, %q and %q (any extra upload breaks the single-log-artifact contract)",
+				"job %q step %q: unexpected upload-artifact name %q — the contracted upload surface is exactly %q, %q, %q and %q (any extra upload breaks the single-log-artifact contract)",
 				u.Job, u.Step, u.Name,
-				ConsolidatedLogArtifactName, WindowsPackageArtifactName, LinuxPackageArtifactName,
+				ConsolidatedLogArtifactName, RunDiagnosticsArtifactName, WindowsPackageArtifactName, LinuxPackageArtifactName,
 			))
 		}
 	}
@@ -504,6 +595,13 @@ func ValidateUploadArtifactContract(workflowText string) error {
 		errs = append(errs, fmt.Sprintf(
 			"exactly ONE consolidated log artifact upload is contracted (%q), found %d",
 			ConsolidatedLogArtifactName, logUploads,
+		))
+	}
+
+	if diagUploads != 1 {
+		errs = append(errs, fmt.Sprintf(
+			"exactly ONE run diagnostics artifact upload is contracted (%q), found %d",
+			RunDiagnosticsArtifactName, diagUploads,
 		))
 	}
 

@@ -19,33 +19,49 @@
 #      scripts/ci/consolidate-run-log.sh collector + mandatory upload.
 #   4. MINGW64 deprecation (msys2, October 2026) → UCRT64 toolchain.
 #
-# Job topology (preflight-first ordering, every job bounded and named):
+# Job topology (v1.11.1 run 43630164424 repair: INDEPENDENT parallel gates —
+# a red preflight must never prevent the four validation gates from running;
+# the strict overall verdict moved to the final-verdict job):
 #
-#   preflight      compile gate (go build ./... — includes the Fyne UI,
-#                  so the Fyne prerequisites install here) + gofmt + vet
-#   audit          headless core suite (-tags headless), race gates on the
-#                  critical concurrent packages, the HEADLESS stress
-#                  release-surface gate, the release/version contract
-#                  tests and the log-collector fixture suite
-#   ui             the Fyne UI contract + composition suite, the button
-#                  fit matrix (logical-size sweep), the FULL non-headless
-#                  test sweep, and the Linux desktop smoke: the real
-#                  SHEYTAN-LA binary under Xvfb (boot, window, clean
-#                  shutdown)
-#   Windows x64    native MSYS2/UCRT64 CGO build of SHEYTAN-LA.exe, the
-#                  named-pipe CoreClient integration gate (the REAL
-#                  production client over localipc.Serve), PE
-#                  verification, the IPC-aware launch smoke (window +
-#                  successful handshake + core read + logging persistence
-#                  + graceful close), portable ZIP + NSIS installer (no
-#                  Qt runtime, no second UI binary)
-#   Linux x64      native Linux build of SHEYTAN-LA (executable bit), ELF
-#                  verification, compiled-version cross-check, Xvfb
-#                  launch smoke, portable ZIP
-#   consolidate-logs   ONE plain-text run log (SHEYTAN-LA-all-logs.txt)
-#                  collected from the run-attempt logs API (always runs;
-#                  red runs keep their log)
-#   release        tags only: publishes the contracted artifacts
+#   preflight      INDEPENDENT fast compile gate (go build ./... — includes
+#                  the Fyne UI, so the Fyne prerequisites install here) +
+#                  gofmt + vet + module integrity. Required for the final
+#                  verdict, but NOT a prerequisite of any other job.
+#   audit          INDEPENDENT headless core suite (-tags headless), race
+#                  gates on the critical concurrent packages, the HEADLESS
+#                  stress release-surface gate, the release/version contract
+#                  tests and the log-collector fixture suite. Own checkout,
+#                  own toolchain setup, same github.sha.
+#   ui             INDEPENDENT Fyne UI contract + composition suite, the
+#                  button fit matrix (logical-size sweep), the FULL
+#                  non-headless test sweep, and the Linux desktop smoke.
+#                  Own checkout/setup; never waits for preflight.
+#   Windows x64    INDEPENDENT native MSYS2/UCRT64 CGO build of
+#                  SHEYTAN-LA.exe, the named-pipe CoreClient integration
+#                  gate (the REAL production client over localipc.Serve),
+#                  PE verification, the IPC-aware launch smoke, portable
+#                  ZIP + NSIS installer. Own checkout/setup.
+#   Linux x64      INDEPENDENT native Linux build of SHEYTAN-LA (executable
+#                  bit), ELF verification, compiled-version cross-check,
+#                  Xvfb launch smoke, portable ZIP. Own checkout/setup.
+#   consolidate-logs   ONE plain-text run log (SHEYTAN-LA-all-logs.txt) plus
+#                  a machine-readable run-diagnostics.json, collected from
+#                  the jobs/logs API (runs after every gate regardless of
+#                  outcome — !cancelled(); red runs keep their evidence)
+#   final-verdict  the STRICT overall verdict: needs every required gate
+#                  and the collector; fails if any required gate is not
+#                  success. A red preflight keeps the run red, but it can
+#                  never again hide the other four gates' evidence.
+#   release        tags only: publishes the contracted artifacts (needs
+#                  final-verdict — no release from a red run)
+#
+# Run 43630164424 root cause (DAG): preflight was a hard `needs:`
+# prerequisite of audit/ui/build-windows/build-linux, so its single `go
+# vet` failure skipped all four independent gates — zero evidence, red
+# run. The four gates each own their checkout/toolchain/setup now; no
+# continue-on-error exists anywhere (job continuation and verdict
+# acceptance are separate concerns), and final-verdict preserves the
+# strict "any required gate red = run red" contract.
 #
 # Honesty contract: a green run is build/test/smoke evidence on hosted
 # runners — NEVER a claim of physical-PC or mobile runtime verification.
@@ -256,7 +272,10 @@ jobs:
   audit:
     name: Core audit (headless)
     runs-on: ubuntu-26.04
-    needs: [preflight]
+    # v1.11.1 (run 43630164424 repair): NO needs: [preflight] — this gate
+    # is INDEPENDENT. A red preflight (even a vet failure) must never skip
+    # the headless core suite; the strict overall verdict is owned by
+    # final-verdict, not by this job's scheduling.
     timeout-minutes: 35
     steps:
       - name: Checkout
@@ -369,7 +388,8 @@ jobs:
   ui:
     name: Fyne UI gates (Linux)
     runs-on: ubuntu-26.04
-    needs: [preflight]
+    # v1.11.1 (run 43630164424 repair): NO needs: [preflight] — the Fyne
+    # suite runs independently of the preflight compile gate.
     timeout-minutes: 35
     steps:
       - name: Checkout
@@ -628,7 +648,10 @@ jobs:
     # alias. Verified against the actions/runner-images label list on
     # 2026-11-14; the OS build is recorded in ci-logs below.
     runs-on: windows-2025
-    needs: [preflight]
+    # v1.11.1 (run 43630164424 repair): NO needs: [preflight] — the
+    # Windows lane is INDEPENDENT (own checkout, MSYS2/UCRT64 setup,
+    # named-pipe gate, smoke, packaging) and must run even when the
+    # Ubuntu preflight is red; final-verdict owns the strict verdict.
     timeout-minutes: 45
     env:
       APP_VERSION: "1.11.1"
@@ -1911,7 +1934,9 @@ jobs:
   build-linux:
     name: Linux x64
     runs-on: ubuntu-26.04
-    needs: [preflight]
+    # v1.11.1 (run 43630164424 repair): NO needs: [preflight] — the Linux
+    # lane is INDEPENDENT (own checkout/toolchain/prerequisites) and must
+    # run even when preflight is red; final-verdict owns the strict verdict.
     timeout-minutes: 45
     env:
       APP_VERSION: "1.11.1"
@@ -2247,7 +2272,11 @@ jobs:
     name: Consolidate logs
     runs-on: ubuntu-26.04
     needs: [preflight, audit, ui, build-windows, build-linux]
-    if: always()
+    # v1.11.1 (run 43630164424 repair): !cancelled() — the collector runs
+    # after ANY gate outcome (failure or skipped-by-tag-policy), so red
+    # runs keep their evidence; it does not run after a cancelled run
+    # (deliberate: cancellation means the operator stopped the run).
+    if: ${{ !cancelled() }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -2256,15 +2285,16 @@ jobs:
       - name: Checkout (collector script)
         uses: actions/checkout@v7
 
-      # ONE collector, ONE plain-text artifact. The collector pulls the
+      # ONE collector, TWO run-level artifacts (plain-text report + a
+      # machine-readable run-diagnostics.json). The collector pulls the
       # COMPLETED JOB-SPECIFIC LOGS (GET /actions/jobs/{job_id}/logs) for
       # every upstream job that reached a terminal state, using the
       # paginated jobs metadata — never the run-attempt logs archive,
       # which may 404 while this very run is still in progress. The
       # collector's own progress is embedded as a local COLLECTOR SELF-LOG.
-      # Red/cancelled runs keep their log (the collector writes the report
-      # BEFORE exiting nonzero on coverage gaps, and the upload below runs
-      # with if: always()).
+      # Red runs keep their evidence (the collector writes the report
+      # BEFORE exiting nonzero on coverage gaps, and the uploads below
+      # run with if: !cancelled()).
       - name: Collect the run-attempt logs into one plain-text report
         id: collector
         env:
@@ -2279,7 +2309,9 @@ jobs:
         run: |
           set -uo pipefail
           rc=0
-          bash scripts/ci/consolidate-run-log.sh --out SHEYTAN-LA-all-logs.txt || rc=$?
+          bash scripts/ci/consolidate-run-log.sh \
+            --out SHEYTAN-LA-all-logs.txt \
+            --json-out run-diagnostics.json || rc=$?
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           if [ "$rc" -ne 0 ]; then
             echo "::error::Consolidate logs: collector reported a coverage/verification gap (rc=$rc) — the report artifact still carries the diagnosis"
@@ -2287,21 +2319,21 @@ jobs:
           {
             echo "## Consolidated run log"
             echo ""
-            echo "Artifact: \`SHEYTAN-LA-all-logs.txt\` — ONE plain-text file (upload-artifact archive:false), attempt ${{ github.run_attempt }} recorded INSIDE the report."
-            echo "If the artifact contains a '=== MISSING LOG SOURCE ===' section, job logs could not be recovered for those jobs and coverage is incomplete."
+            echo "Artifacts: \`SHEYTAN-LA-all-logs.txt\` (ONE plain-text file, upload-artifact archive:false) and \`run-diagnostics.json\` (machine-readable per-job index), attempt ${{ github.run_attempt }} recorded INSIDE both."
+            echo "If the report contains a '=== MISSING LOG SOURCE ===' section, job logs could not be recovered for those jobs and coverage is incomplete."
             echo ""
             echo "Job results: preflight=${{ needs.preflight.result }} audit=${{ needs.audit.result }} ui=${{ needs.ui.result }} windows=${{ needs.build-windows.result }} linux=${{ needs.build-linux.result }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # The ONE mandatory user-facing log artifact. upload-artifact is
-      # pinned to the verified immutable v7 commit SHA; archive:false
-      # uploads the file ITSELF (filename = artifact display name, no ZIP
-      # wrapper — verified against this revision's action.yml);
+      # The ONE mandatory user-facing log artifact. upload-artifact uses
+      # the upstream v7 RELEASE TAG (repo-wide action-reference policy);
+      # archive:false uploads the file ITSELF (filename = artifact display
+      # name, no ZIP wrapper — verified against this revision's action.yml);
       # if-no-files-found: error (never ignore — a silently absent log is
       # a contract breach); stable name — a rerun replaces the same
       # artifact; the attempt number lives inside the report content.
       - name: Upload the consolidated run log (single plain-text artifact)
-        if: always()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
           name: SHEYTAN-LA-all-logs.txt
@@ -2311,8 +2343,24 @@ jobs:
           overwrite: true
           archive: false
 
+      # The machine-readable run-level diagnostics index (§9.2): every
+      # job of the run with its API status/conclusion/id and the
+      # collector's per-job log-source category (CAPTURED / SKIPPED /
+      # MISSING / IN_PROGRESS / SELF). Red runs keep it: same
+      # !cancelled() condition as the plain-text report.
+      - name: Upload the machine-readable run diagnostics index
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: run-diagnostics.json
+          path: run-diagnostics.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+          archive: false
+
       - name: Collector verdict (fail the job on coverage gaps)
-        if: always()
+        if: ${{ !cancelled() }}
         run: |
           rc="${{ steps.collector.outputs.rc }}"
           if [ -z "$rc" ]; then
@@ -2326,12 +2374,62 @@ jobs:
           echo "collector verdict: complete report (rc=0)"
 
   # ==========================================================================
+  # Final verdict — the STRICT overall conclusion (run 43630164424
+  # repair). Separating evidence collection from the verdict means a red
+  # preflight can never again skip the four independent gates, while the
+  # workflow still fails whenever ANY required gate is not success.
+  #   - No continue-on-error anywhere: job continuation (gates run) and
+  #     result acceptance (gates must be green) are different concerns.
+  #   - The collector is NOT a required gate: a collector failure is
+  #     REPORTED here, but it can never turn a red run green (a failed
+  #     gate already failed the verdict) nor mask a green one (its own
+  #     job conclusion is independently red).
+  #   - Runs after every expected job reached a terminal state
+  #     (!cancelled()); a skipped REQUIRED gate (impossible while the
+  #     needs list is intact) also fails the verdict — only the tag-only
+  #     release job may legitimately be skipped.
+  # ==========================================================================
+  final-verdict:
+    name: Final verdict (all required gates)
+    runs-on: ubuntu-26.04
+    needs: [preflight, audit, ui, build-windows, build-linux, consolidate-logs]
+    if: ${{ !cancelled() }}
+    timeout-minutes: 5
+    steps:
+      - name: Render the gate matrix
+        run: |
+          echo "Required gates: preflight=${{ needs.preflight.result }} audit=${{ needs.audit.result }} ui=${{ needs.ui.result }} windows=${{ needs.build-windows.result }} linux=${{ needs.build-linux.result }}"
+          echo "Evidence collector: consolidate-logs=${{ needs.consolidate-logs.result }} (reported separately; never a required gate)"
+      - name: Verdict (fail unless every required gate is success)
+        run: |
+          verdict=0
+          for gate in "preflight:${{ needs.preflight.result }}" \
+                     "audit:${{ needs.audit.result }}" \
+                     "ui:${{ needs.ui.result }}" \
+                     "build-windows:${{ needs.build-windows.result }}" \
+                     "build-linux:${{ needs.build-linux.result }}"; do
+            name="${gate%%:*}"
+            result="${gate#*:}"
+            if [ "$result" != "success" ]; then
+              echo "::error::required gate '$name' concluded '$result' — the overall workflow verdict is FAILURE"
+              verdict=1
+            fi
+          done
+          if [ "${{ needs.consolidate-logs.result }}" != "success" ]; then
+            echo "::warning::evidence collector consolidate-logs concluded '${{ needs.consolidate-logs.result }}' — diagnostics coverage may be incomplete (reported separately; not a required gate)"
+          fi
+          if [ "$verdict" -ne 0 ]; then
+            exit 1
+          fi
+          echo "FINAL VERDICT: SUCCESS — every required gate (preflight, audit, ui, build-windows, build-linux) is green."
+
+  # ==========================================================================
   # Release — tags only. Publishes the contracted artifacts.
   # ==========================================================================
   release:
     name: Release (tags only)
     runs-on: ubuntu-26.04
-    needs: [audit, ui, build-windows, build-linux, consolidate-logs]
+    needs: [audit, ui, build-windows, build-linux, consolidate-logs, final-verdict]
     if: startsWith(github.ref, 'refs/tags/v')
     timeout-minutes: 15
     permissions:

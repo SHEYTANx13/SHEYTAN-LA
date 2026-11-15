@@ -116,6 +116,12 @@ jobs:
           go vet ./...
 
       - name: Initialize CodeQL
+        # v1.11.1 (run 43630164424 repair): the init step carries an explicit
+        # id so the analyze step can run EVEN WHEN A LATER MANUAL BUILD STEP
+        # FAILS — once the database is initialized, analysis of what was
+        # extracted is still valuable diagnostics and the SARIF upload must
+        # still happen. The analyze condition below keys off this outcome.
+        id: codeql-init
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
@@ -162,17 +168,33 @@ jobs:
           set -euo pipefail
           ctest --test-dir "$RUNNER_TEMP/shtn-native-codeql" --output-on-failure
 
+      # v1.11.1 (run 43630164424 repair, work order §9.4): analyze runs
+      # whenever the CodeQL database was initialized — including after a
+      # FAILED manual build step (the default implicit success() would skip
+      # it). A partial database still produces SARIF diagnostics; the job's
+      # own conclusion stays red from the failed build, so this never turns
+      # a failed build green. upload: always is explicit (its documented
+      # default): SARIF is uploaded for successful AND failed runs.
       - name: Analyze and upload CodeQL results
+        if: ${{ !cancelled() && steps.codeql-init.outcome == 'success' }}
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ matrix.language }}"
+          upload: always
 
-  # This report runs only after every language analysis has uploaded successfully.
+  # The alert report also runs after red analysis jobs (!cancelled()):
+  # partial SARIF inventories are diagnostics, and the report explicitly
+  # labels a zero-alert response as "not evidence that every possible
+  # defect is absent". A red analyze matrix no longer suppresses the
+  # report the way it used to suppress all CodeQL evidence.
+
+  # This report exports the complete alert inventory for the analyzed ref.
   # The Code Scanning API returns alert states (open/fixed/dismissed/closed)
   # without a state filter; pagination ensures that no later pages are omitted.
   export-alert-report:
     name: Export complete CodeQL alert report
     needs: analyze
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     permissions:
@@ -423,3 +445,96 @@ jobs:
           archive: false
           retention-days: 30
           if-no-files-found: error
+
+  # ===========================================================================
+  # Collect CodeQL logs — the failure-tolerant CodeQL diagnostics collector
+  # (work order §9.5, run 43630164424 repair). It REUSES the same hardened
+  # scripts/ci/consolidate-run-log.sh collector as build-desktop (no second
+  # copy of the URL/token logic): running inside THIS workflow means
+  # github.run_id selects the CodeQL run, so the collector needs no separate
+  # workflow selector. It runs after ANY analyze/export outcome
+  # (!cancelled()), so red CodeQL runs keep their job logs, the collector
+  # self-log and a machine-readable run-diagnostics.json — distinguishing
+  # ran-and-failed, skipped, in-progress, missing log sources and the
+  # collector's own job exactly like the build-desktop collector.
+  # Least privilege: contents: read + actions: read only (the SARIF-writing
+  # security-events: write permission stays on the analyze jobs alone).
+  # ===========================================================================
+  collect-codeql-logs:
+    name: Collect CodeQL logs
+    needs: [analyze, export-alert-report]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout (collector script)
+        uses: actions/checkout@v7
+
+      - name: Collect the CodeQL run logs into one plain-text report
+        id: collector
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONSOLIDATE_REPO: ${{ github.repository }}
+          CONSOLIDATE_RUN_ID: ${{ github.run_id }}
+          CONSOLIDATE_ATTEMPT: ${{ github.run_attempt }}
+          CONSOLIDATE_COMMIT: ${{ github.sha }}
+          CONSOLIDATE_REF: ${{ github.ref }}
+          CONSOLIDATE_WORKFLOW: ${{ github.workflow }}
+          CONSOLIDATE_TRIGGER: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          rc=0
+          bash scripts/ci/consolidate-run-log.sh \
+            --out SHEYTAN-LA-codeql-all-logs.txt \
+            --json-out run-diagnostics.json || rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Collect CodeQL logs: collector reported a coverage/verification gap (rc=$rc) — the report artifact still carries the diagnosis"
+          fi
+          {
+            echo "## CodeQL consolidated run log"
+            echo ""
+            echo "Artifacts: \`SHEYTAN-LA-codeql-all-logs.txt\` (ONE plain-text file, upload-artifact archive:false) and"
+            echo "\`run-diagnostics.json\` (machine-readable per-job index), attempt ${{ github.run_attempt }} recorded INSIDE both."
+            echo ""
+            echo "Analysis jobs: analyze=${{ needs.analyze.result }} export-alert-report=${{ needs.export-alert-report.result }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the consolidated CodeQL run log (single plain-text artifact)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: SHEYTAN-LA-codeql-all-logs.txt
+          path: SHEYTAN-LA-codeql-all-logs.txt
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+          archive: false
+
+      - name: Upload the machine-readable CodeQL run diagnostics index
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: codeql-run-diagnostics.json
+          path: run-diagnostics.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+          archive: false
+
+      - name: Collector verdict (fail the job on coverage gaps)
+        if: ${{ !cancelled() }}
+        run: |
+          rc="${{ steps.collector.outputs.rc }}"
+          if [ -z "$rc" ]; then
+            echo "::error::collector step produced no verdict — fail closed"
+            exit 1
+          fi
+          if [ "$rc" != "0" ]; then
+            echo "::error::collector exited $rc — the report artifact names the missing log sources / errors"
+            exit 1
+          fi
+          echo "collector verdict: complete report (rc=0)"

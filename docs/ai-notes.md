@@ -10,15 +10,15 @@ session; rewrite this note so it stays true.
 
 ---
 
-## Current state (2026-11-14, v1.11.1 maintenance candidate)
+## Current state (2026-11-15, v1.11.1 maintenance candidate)
 
-The branch `maintenance-v1.11.1` (local, unpushed) carries the
-run-43601915826 repair: the Windows IPC repair and the maintenance pass
-described in [`changelog.md`](changelog.md) under the existing 1.11.1
-maintenance heading. Baseline: `cbb07af` on main (the red run's commit;
-the earlier green run 43455711025 is historical only). Product version
-stays 1.11.1 everywhere. The full evidence inventory for this candidate
-ships in `note.md` beside the source ZIP.
+The branch `maintenance/v1.11.1-ci-resilience` (local, unpushed) carries
+the run-43630164424 CI-resilience repair on top of the earlier Windows
+IPC repair line. Baseline: `2bc66e5` on main — the red build run's
+commit AND the failing CodeQL run 43630164359's head (verified same
+SHA; the go-lane failure is the same unused-`sh` vet defect). Product
+version stays 1.11.1 everywhere. The full evidence inventory ships in
+`note.md` beside the source ZIP.
 
 ## Live architectural constraints (unchanged, load-bearing)
 
@@ -43,40 +43,58 @@ ships in `note.md` beside the source ZIP.
 ## Active blockers
 
 - **chromedp browser runtime smoke (physical class).** The v0.23.1 +
-  cdproto v0.160.2 migration is COMPLETE and compile-verified (headless
-  Linux build, GOOS=windows cross-build, full headless suite, 47/47
-  stress scenarios), but this sandbox has no Chrome: browser-tool runtime
-  behavior is NOT RUN until a Chrome-equipped lane exercises it. A
-  real-browser smoke is the next hosted verification item.
-- **Hosted verification of the IPC gates is pending the operator's push.**
-  No green-run claim exists for the candidate.
+  cdproto v0.160.3 migration is COMPLETE and suite-verified (full
+  desktop sweep, 72 packages, on this Linux sandbox), but there is no
+  Chrome here: browser-tool runtime behavior is NOT RUN until a
+  Chrome-equipped lane exercises it. A real-browser smoke is the next
+  hosted verification item.
+- **Hosted verification of the independent-gates pipeline and the IPC
+  gates is pending the operator's push.** No green-run claim exists for
+  the candidate. Native Windows tests (named-pipe dial/listener,
+  CoreClient Windows twin, PE packaging) are NOT RUN in this Linux
+  sandbox — the Windows lane is their runtime authority.
 
 ## Known evidence (current)
 
-- Run-43601915826 root causes fixed: the busy-pipe test fixture
-  deadlock (synchronous handle + OVERLAPPED mismatch in
-  `dial_windows_test.go`), the logging rotation-test handle leak
-  (Windows TempDir cleanup), and the stale `GO_VERSION: "1.27"` literal
-  in the release-surface gate (now derived from the go.mod toolchain
-  directive with exact workflow/runtime parity). Windows lanes are
-  compile-verified (`GOOS=windows go test -c`) — the runtime authority
-  is the hosted lane.
+- Run-43630164424 root causes fixed: (1) the unused `sh` at
+  `ui/fyne/button_fit_test.go:234` — now a real chrome-coverage
+  assertion (the sweep must reach the visible rail/strip); (2) the
+  never-run rail-fit probe defect — raw 600x800 is BELOW the 600
+  breakpoint after the test canvas applies theme padding (effective
+  584), so the probe now uses 700x800 with a fail-loud zone guard; (3)
+  the WebSocket caller-cancel race in `ui/fyne/state.go` — a canceled
+  attach returned the incidental close error instead of
+  `context.Canceled`; the pump now reports the context as the canonical
+  cause (the Windows twin asserts the same contract).
+- Build-workflow DAG: audit/ui/build-windows/build-linux have NO
+  `needs: [preflight]` (own checkout/setup, same SHA); a `final-verdict`
+  job fails unless every required gate concluded success; the collector
+  runs on `!cancelled()` and additionally uploads `run-diagnostics.json`
+  (collector `--json-out` mode). Pinned by parser-based contract tests
+  (`workflow_dag_contract.go`) + scheduling fixtures wired into the
+  stress gate (47/47) and the release-contract suite — the old DAG is a
+  failing test. Collector offline fixtures: 25/25.
+- CodeQL workflow: analyze runs on `!cancelled() &&
+  steps.codeql-init.outcome == 'success'` with `upload: always`;
+  `collect-codeql-logs` reuses the same collector on `!cancelled()`.
+  CodeQL run 43630164359 (baseline): FAILURE — Analyze (go) exit 1 on
+  the same unused-`sh` defect; exact alert counts NOT retrievable here
+  (API rate-limited); the run link is in note.md for the operator.
 - Unix transport: the integration suite runs green on Linux and now
   also proves the WS caller-cancel path and a procfs-inode-precise
   no-TCP-listener contract (`TestNoNetworkListenerIsOpened` runs green
   locally).
 - Dependency integrity: `go mod verify` passes and `go mod tidy` is
-  idempotent at chromedp v0.23.1 / cdproto v0.160.2. Fresh tag audit:
-  winres v0.3.1 IS the latest real tag (the researched v0.3.3 does not
-  exist); `fyne.io/systray` stays on the pseudo-version because Fyne
-  v2.8.2's own graph requires it.
-- Fyne button-fit: the rail now grows to its content minimum (the fixed
-  rail width was the Windows clipping mechanism), the Models panel's
-  orphaned "Open folder" button and restart-hint caption are wired, and
-  the engine-update actions are a real stacked column. The matrix,
-  chrome sweep and rail contract are compile-verified only in this
-  sandbox (no GL headers for the Fyne CGO build) — the Linux UI lane is
-  the compile/run authority.
+  idempotent at chromedp v0.23.1 / cdproto v0.160.3. Fresh tag audit
+  (2026-11-15): winres v0.3.1 IS the latest real published tag (the
+  researched v0.3.3 does not exist); `fyne.io/systray` stays on the
+  pseudo-version because Fyne v2.8.2's own graph requires it.
+- Fyne button-fit: the rail grows to its content minimum, short labels
+  + wrapped captions policy landed, and the matrix/chrome/rail tests
+  now COMPILE AND PASS in this sandbox (the GL/CGO stack was assembled
+  user-locally: dev headers extracted from Debian packages + bridged
+  runtime libs). Full `go test ./ui/fyne` green; the hosted Linux lane
+  remains the CI authority.
 - CodeQL: the two documented actions/unpinned-tag warnings remain the
   accepted baseline under the tag-only policy; the candidate has NOT
   been scanned (unpushed) — never claim otherwise.

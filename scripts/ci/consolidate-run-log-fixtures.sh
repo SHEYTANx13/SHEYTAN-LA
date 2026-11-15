@@ -33,11 +33,15 @@
 #  13. non-HTTPS redirect rejected — token never leaves the API host
 #  14. secret redaction — token values, headers, URL credentials, PEM
 #  15. same-named steps in different jobs — never flattened
-#  16. workflow shape — exactly ONE log upload (stable name, no
-#      attempt/run-id suffix), package uploads success-gated, immutable
-#      SHA pin on the log upload, job-scoped actions:read, and the
-#      consolidate-logs display name normalizes to its YAML key (so the
-#      runner's GITHUB_JOB self-detection keeps working)
+#  16. workflow shape — exactly ONE log upload + ONE run-diagnostics.json
+#      upload (stable names, no attempt/run-id suffix), package uploads
+#      success-gated, release-tag action references, job-scoped
+#      actions:read, and the consolidate-logs display name normalizes to
+#      its YAML key (so the runner's GITHUB_JOB self-detection keeps
+#      working). v1.11.1 run 43630164424 repair additions: the four
+#      validation gates have NO needs: [preflight]; the collector and
+#      its uploads run on !cancelled(); a final-verdict job fails when
+#      any required gate is not success.
 #  22. collector's OWN job in progress (run #144 production shape) — the
 #      self job is accounted as SELF, reported honestly and does NOT fail
 #      the verdict (the run #144 root cause: it used to)
@@ -448,26 +452,46 @@ yml_ok=1
 [ -f "$workflow" ] || yml_ok=0
 # exactly ONE upload of the single log artifact, by upstream release
 # tag (the v1.11.1 action-reference policy), archive:false, with the
-# stable display name
+# stable display name; plus exactly ONE machine-readable
+# run-diagnostics.json upload from the SAME collector job (run
+# 43630164424 repair: two run-level collector artifacts, archive:false)
 [ "$(grep -c 'path: SHEYTAN-LA-all-logs.txt' "$workflow")" = "1" ] || yml_ok=0
 grep -q 'name: SHEYTAN-LA-all-logs.txt' "$workflow" || yml_ok=0
 grep -q 'actions/upload-artifact@v7' "$workflow" || yml_ok=0
-[ "$(grep -c 'archive: false' "$workflow")" = "1" ] || yml_ok=0
-# no per-job log-part uploads and no smoke-output uploads remain
-[ "$(grep -c 'name: .*-logs-part' "$workflow")" = "0" ] || yml_ok=0
-[ "$(grep -c 'windows-smoke-app-output' "$workflow")" = "0" ] || yml_ok=0
-[ "$(grep -c 'SHEYTAN-LA-all-logs-run-' "$workflow")" = "0" ] || yml_ok=0
-# package uploads: success-gated (no if: always()) + error on missing files
-for step in "Upload Windows package" "Upload Linux package"; do
-  block="$(awk -v s="$step" 'index($0, "- name: " s) {found=1; print; next} found && /^  [^ ]/ {exit} found {print}' "$workflow")"
-  printf '%s\n' "$block" | grep -q 'if: always()' && yml_ok=0
-  printf '%s\n' "$block" | grep -q 'if-no-files-found: error' || yml_ok=0
+[ "$(grep -c 'archive: false' "$workflow")" = "2" ] || yml_ok=0
+[ "$(grep -c 'path: run-diagnostics.json' "$workflow")" = "1" ] || yml_ok=0
+grep -q -- '--json-out run-diagnostics.json' "$workflow" || yml_ok=0
+# run 43630164424 DAG repair: the four validation gates are INDEPENDENT
+# of preflight (a red preflight must never skip them) and no required
+# gate hides behind continue-on-error
+for job in audit ui build-windows build-linux; do
+  block="$(awk -v j="  $job:" '$0 == j {found=1; print; next} found && /^  [a-z-]+:$/ {exit} found {print}' "$workflow")"
+  # ACTIVE directive only (4-space key indentation) — explanatory comments
+  # such as "NO needs: [preflight]" must not trip the check.
+  printf '%s\n' "$block" | grep -qE '^    needs:.*preflight' && yml_ok=0
 done
-# collector job needs the actions:read scope at job level and needs every upstream job
-grep -A8 '^  consolidate-logs:' "$workflow" | grep -q 'actions: read' || yml_ok=0
+grep -qE '^[[:space:]]+continue-on-error:' "$workflow" && yml_ok=0
+# collector job: needs the actions:read scope at job level, needs every
+# upstream job, runs on !cancelled() (red runs keep evidence), and both
+# collector uploads share that condition
+grep -A16 '^  consolidate-logs:' "$workflow" | grep -q 'actions: read' || yml_ok=0
 needsline="$(grep -A4 '^  consolidate-logs:' "$workflow" | grep 'needs:')"
 for dep in preflight audit ui build-windows build-linux; do
   printf '%s' "$needsline" | grep -q "$dep" || yml_ok=0
+done
+grep -A16 '^  consolidate-logs:' "$workflow" | grep -q 'if: ${{ !cancelled() }}' || yml_ok=0
+[ "$(grep -c 'if: ${{ !cancelled() }}' "$workflow")" -ge 4 ] || yml_ok=0
+# final-verdict: the STRICT overall conclusion — needs every required
+# gate plus the collector, runs on !cancelled(), and its verdict step
+# fails unless every required gate concluded success (never blindly green)
+fv_block="$(awk '/^  final-verdict:/{f=1; print; next} f && /^  [a-z-]+:$/ {exit} f {print}' "$workflow")"
+[ -n "$fv_block" ] || yml_ok=0
+for dep in preflight audit ui build-windows build-linux consolidate-logs; do
+  printf '%s\n' "$fv_block" | grep -q "$dep" || yml_ok=0
+done
+printf '%s\n' "$fv_block" | grep -q 'if: ${{ !cancelled() }}' || yml_ok=0
+for gate in preflight audit ui build-windows build-linux; do
+  printf '%s\n' "$fv_block" | grep -q "needs.$gate.result" || yml_ok=0
 done
 # SELF-detection invariant (run #144 root cause fix): the collector
 # identifies its own job by normalizing the runner's GITHUB_JOB (the YAML
@@ -478,7 +502,7 @@ self_display="$(awk '/^  consolidate-logs:/{f=1; next} f && /^    name:/{sub(/^ 
 [ "$(norm_name "$self_display")" = "$(norm_name "consolidate-logs")" ] || yml_ok=0
 grep -q 'is_self_job' "$collector" || yml_ok=0
 if [ "$yml_ok" = 1 ]; then
-  ok "workflow shape: one SHA-pinned plain-text log upload (stable name, archive:false), zero part/smoke uploads, success-gated package uploads, job-scoped actions:read, collector needs every upstream job"
+  ok "workflow shape: two run-level collector artifacts (log + run-diagnostics.json, archive:false), zero part/smoke uploads, success-gated package uploads, job-scoped actions:read, collector needs every upstream job on !cancelled(), independent gates without needs:[preflight], final-verdict enforces the strict gate matrix"
 else
   bad "workflow shape contract"
 fi
@@ -658,6 +682,57 @@ if [ $rc -eq 1 ] \
   ok "non-self in-progress job remains a coverage gap: report written, exit 1 — the SELF fix does not weaken the contract"
 else
   bad "non-self in-progress coverage gap (rc=$rc)"
+fi
+
+# 24. --json-out machine-readable run diagnostics (run 43630164424 repair) -
+# The SAME accounting data as the text report, as one JSON object: run
+# identity, coverage totals, and every job with status/conclusion/id and
+# its log-source category. A red matrix (one failed gate, one skipped
+# tag-only release) must serialize faithfully — jq validates the file.
+f="$work/case24"; mkdir -p "$f"
+ids=($(mk_jobs "$f" \
+  "Preflight compile gate|completed|failure" \
+  "Core audit (headless)|completed|success" \
+  "Fyne UI gates (Linux)|completed|success" \
+  "Windows x64|completed|success" \
+  "Linux x64|completed|success" \
+  "Release (tags only)|completed|skipped" \
+  "Consolidate logs|in_progress|null"
+))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+ui/fyne/button_fit_test.go:234:5: declared and not used: sh
+EOF
+mk_joblog "$f" "${ids[1]}" <<'EOF'
+ok  internal/...
+EOF
+mk_joblog "$f" "${ids[2]}" <<'EOF'
+ok  ui/fyne
+EOF
+mk_joblog "$f" "${ids[3]}" <<'EOF'
+PE checks OK
+EOF
+mk_joblog "$f" "${ids[4]}" <<'EOF'
+ELF checks OK
+EOF
+COLLECTOR_ENV="GITHUB_JOB=consolidate-logs" \
+  run_collector "$f" --json-out "$f/run-diagnostics.json"; rc=$?
+out="$f/SHEYTAN-LA-all-logs.txt"
+json="$f/run-diagnostics.json"
+if [ $rc -eq 0 ] \
+  && [ -s "$json" ] \
+  && jq -e '.schema == "sheytan-la/run-diagnostics/1"' "$json" >/dev/null \
+  && jq -e '.totals.jobs == 7' "$json" >/dev/null \
+  && jq -e '.totals.captured == 5' "$json" >/dev/null \
+  && jq -e '.totals.never_started == 1' "$json" >/dev/null \
+  && jq -e '.totals.failed_jobs == 1' "$json" >/dev/null \
+  && jq -e '[.jobs[] | select(.log_source == "CAPTURED")] | length == 5' "$json" >/dev/null \
+  && jq -e '[.jobs[] | select(.log_source == "SKIPPED")] | length == 1' "$json" >/dev/null \
+  && jq -e '[.jobs[] | select(.log_source == "SELF")] | length == 1' "$json" >/dev/null \
+  && jq -e '[.jobs[] | select(.conclusion == "failure")][0].name == "Preflight compile gate"' "$json" >/dev/null \
+  && jq -e '(.jobs | length) == 7' "$json" >/dev/null; then
+  ok "machine-readable run-diagnostics.json: full red-run matrix (captured/skipped/self/failed) serialized from the same accounting, jq-valid"
+else
+  bad "run-diagnostics.json output (rc=$rc)"
 fi
 
 printf '\nfixtures: %d pass / %d fail\n' "$pass" "$fail"
