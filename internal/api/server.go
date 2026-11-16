@@ -5,6 +5,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1638,6 +1639,25 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// v1.11.1 content-integrity milestone: the recoverable-deletion
+	// surface. "trash" is a listing route (never a session id — the id
+	// grammar rejects it), restore/purge are per-session subresources with
+	// the same id validation as every other session operation.
+	if rest == "trash" {
+		s.handleSessionTrash(w, r)
+		return
+	}
+
+	if id, sub := splitSessionPath(rest); sub == "restore" {
+		s.handleSessionRestore(w, r, id)
+		return
+	}
+
+	if id, sub := splitSessionPath(rest); sub == "purge" {
+		s.handleSessionPurge(w, r, id)
+		return
+	}
+
 	id := rest
 
 	switch r.Method {
@@ -1656,8 +1676,24 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// v1.11.1: truthful recoverability. A persisted session is
+		// recoverable from the trash; a pending draft never had bytes,
+		// so there is nothing to restore (the restore route refuses
+		// honestly with 409 in that case). The response never claims a
+		// recovery that cannot happen.
+		recoverable := false
+		if tombs, terr := s.store.ListDeleted(); terr == nil {
+			for _, tb := range tombs {
+				if tb.ID == id {
+					recoverable = true
+					break
+				}
+			}
+		}
 		writeJSON(w, map[string]any{
-			"ok": true,
+			"ok":          true,
+			"recoverable": recoverable,
+			"restore":     "/api/sessions/" + id + "/restore",
 		})
 
 	case http.MethodPut:
@@ -1738,6 +1774,76 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
 	}
+}
+
+// handleSessionTrash serves GET /api/sessions/trash — the listing of
+// recoverably-deleted sessions (v1.11.1 content-integrity milestone).
+// Tombstones carry metadata only: id, title, mode, message count, delete
+// time and actor — never message payloads.
+func (s *Server) handleSessionTrash(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+
+	tombs, err := s.store.ListDeleted()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if tombs == nil {
+		tombs = []*sessions.Tombstone{}
+	}
+	writeJSON(w, tombs)
+}
+
+// handleSessionRestore serves POST /api/sessions/{id}/restore — undo a
+// recoverable delete. The store refuses occupied destinations and
+// verifies the restored file before reporting success; a conflict is a
+// 409, never a silent overwrite.
+func (s *Server) handleSessionRestore(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+
+	sess, err := s.store.Restore(id)
+	if err != nil {
+		if errors.Is(err, sessions.ErrNotTrashed) ||
+			errors.Is(err, sessions.ErrRestoreTargetOccupied) {
+			writeErr(w, http.StatusConflict, err)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, sess)
+}
+
+// handleSessionPurge serves POST /api/sessions/{id}/purge — the explicit
+// permanent destroy of an already-deleted session (the second, separate
+// step of the two-step destructive policy). It is refused unless the
+// session is already in the trash: a live session can never be purged
+// directly.
+func (s *Server) handleSessionPurge(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+
+	if err := s.store.PurgeDeleted(id); err != nil {
+		if errors.Is(err, sessions.ErrNotTrashed) {
+			writeErr(w, http.StatusConflict, err)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"ok":       true,
+		"purged":   true,
+		"duration": "permanent",
+	})
 }
 
 // redactedConfig returns a copy safe for API responses.

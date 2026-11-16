@@ -14,7 +14,7 @@ One Go process owns the runtime (`internal/runtime.Stack`). Every authority is c
 |-----------|---------|----------------|
 | Engine lifecycle | `internal/llm` | Managed llama.cpp + native C++ backend under one `llm.Backend` contract |
 | Run lifecycle | `internal/api` | Single registry, hub and authoritative state per session; pause/resume keeps one runId |
-| Session store | `internal/sessions` | Durable sessions + hot cache bounded by memory manager |
+| Session store | `internal/sessions` | Durable sessions + hot cache bounded by memory manager; v1.11.1: deletion is RECOVERABLE (trash + tombstone → restore; purge is the only permanent destroy, two-step) — see [`architecture/CONTENT-INTEGRITY.md`](architecture/CONTENT-INTEGRITY.md) |
 | Tool registry | `internal/tools` | Generation-aware schema cache; custom tools sync into the same registry |
 | Scheduler | `internal/scheduler` | Automations and timed tasks |
 | Downloader / updater | `internal/updater` | Single download authority + transactional engine install |

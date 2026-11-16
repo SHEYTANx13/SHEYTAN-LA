@@ -95,6 +95,22 @@ Evidence classes — never inflate:
   no Windows host is available; say so — the hosted lane is the runtime
   authority.
 
+## 5a. Content-mutation approval policy (v1.11.1, binding)
+
+- Persistent content mutates ONLY through the typed store/service APIs
+  (`internal/sessions`, `internal/artifacts`, `internal/memory`, …) —
+  never from raw model text, arbitrary JSON or shell commands.
+- Destructive operations are recoverable by default (session delete →
+  trash + tombstone; restore; see
+  [`architecture/CONTENT-INTEGRITY.md`](architecture/CONTENT-INTEGRITY.md)).
+  Permanent purge is a separate explicit second step; a UI confirm or a
+  model request is never treated as that second step.
+- Deleting a UI surface never deletes the persisted content behind it;
+  cancel stops a task and preserves its record.
+- Approval requirements are never lowered to make a demo flow work; if
+  a destructive path cannot be made safe in the timebox, it fails
+  closed and the gap is recorded.
+
 ## 6. Documentation obligations
 
 - Docs reflect implemented behavior and evidence, never intention.

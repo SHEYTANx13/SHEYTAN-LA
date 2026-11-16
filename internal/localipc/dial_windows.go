@@ -28,13 +28,17 @@ import (
 // returns as-is (ERROR_FILE_NOT_FOUND — the pipe does not exist — is
 // never retried into existence); a wait that reports ERROR_FILE_NOT_FOUND
 // returns that error (the pipe name vanished — the server is gone; not a
-// busy condition); a wait that times out with no instance (the server
-// stopped publishing — a real failure) or an unresolved WaitNamedPipe
-// proc (waiting is impossible; the loop never spins on a broken wait
-// facility) surfaces the ORIGINAL busy error. On deadline exhaustion the
-// typed ErrBusyDialBudgetExhausted names the budget and the elapsed time;
-// if the binding limit was the caller's context, the context error is
-// returned (errors.Is(err, context.DeadlineExceeded) stays true).
+// busy condition); an unresolved WaitNamedPipe proc or an unexpected
+// wait failure (waiting is impossible; the loop never spins on a broken
+// wait facility) surfaces the ORIGINAL busy error. A wait that TIMES OUT
+// with every instance still busy is NOT an early exit (v1.11.1, run
+// 43773885283): one per-wait cap is not the busy-dial budget, so the
+// documented wait/retry contract continues — each wait clamped to the
+// remaining budget — until the budget or the tighter caller deadline is
+// spent. On deadline exhaustion the typed ErrBusyDialBudgetExhausted
+// names the budget and the elapsed time; if the binding limit was the
+// caller's context, the context error is returned (errors.Is(err,
+// context.DeadlineExceeded) stays true).
 //
 // Context cancellation is checked before the first attempt, before every
 // readiness wait, and after a successful CreateFile (a connection the
@@ -126,10 +130,29 @@ func dialContext(ctx context.Context, endpoint string) (net.Conn, error) {
 			// is returned honestly; it is not a busy condition.
 			return nil, fmt.Errorf("localipc: dial %s: pipe vanished while busy-waiting: %w", name, werr)
 		}
-		// The wait did NOT report an instance: a timeout (the server
-		// stopped publishing — a real failure) or an unresolved proc
-		// (waiting is impossible). Surface the ORIGINAL busy error
-		// honestly.
+		// The wait did NOT report an instance. Distinguish the two honest
+		// outcomes (v1.11.1, run 43773885283):
+		if errors.Is(werr, windows.ERROR_SEM_TIMEOUT) {
+			// The bounded readiness wait expired with every instance
+			// still busy. ONE per-wait cap is not the busy-dial budget
+			// (the defect this closes: a single wait timeout used to
+			// return the generic "no listening pipe instance" error
+			// after 2000ms of a 10s budget, leaving the typed
+			// ErrBusyDialBudgetExhausted unreachable and
+			// TestDialContextBusyBudgetExhaustsTyped red on the hosted
+			// Windows runner). The documented client contract keeps
+			// waiting — each wait clamped to the remaining budget —
+			// until the budget, or the tighter caller deadline, is
+			// spent; the top-of-loop deadline check then returns the
+			// typed error. A timeout consumed waitMS of wall clock, so
+			// the loop can never spin: every iteration advances toward
+			// the deadline.
+			continue
+		}
+		// The wait facility itself failed (unresolved proc) or returned
+		// an unexpected error: waiting is impossible, so the budget
+		// cannot be honored — surface the ORIGINAL busy error honestly
+		// (never spin on a broken wait facility).
 		return nil, fmt.Errorf("localipc: dial %s: no listening pipe instance after a %dms busy wait: %w", name, waitMS, err)
 	}
 }

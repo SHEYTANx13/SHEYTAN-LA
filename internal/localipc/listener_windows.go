@@ -237,12 +237,15 @@ var ErrWaitNamedPipeUnresolved = errors.New("localipc: WaitNamedPipeW proc unres
 
 // ErrBusyDialBudgetExhausted (v1.10.12, W-BUDGET) marks the
 // deadline-bounded busy dial's exhaustion: the whole busy-dial budget
-// elapsed while the server kept publishing instances (every wait
-// succeeded) and this caller kept losing the CreateFile availability
-// race. Typed, so a caller can distinguish budget exhaustion from a
-// vanished server (ERROR_FILE_NOT_FOUND — the server is gone) and from
-// a server that stopped publishing (the raw ERROR_PIPE_BUSY surfaced
-// after a wait reported no instance).
+// elapsed while every pipe instance remained busy — whether this caller
+// kept losing the CreateFile availability race after successful
+// readiness waits, or no instance ever became available within the
+// bounded WaitNamedPipe waits (v1.11.1, run 43773885283: a wait timeout
+// is budget progress, NOT an early exit). Typed, so a caller can
+// distinguish budget exhaustion from a vanished server
+// (ERROR_FILE_NOT_FOUND — the server is gone) and from a broken wait
+// facility (the raw ERROR_PIPE_BUSY surfaced after an unresolved or
+// failed WaitNamedPipe).
 var ErrBusyDialBudgetExhausted = errors.New("no listening pipe instance after busy dial budget")
 
 // waitNamedPipe waits for a listening instance of the named pipe to become

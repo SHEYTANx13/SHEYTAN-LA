@@ -5,9 +5,11 @@
 > human explicitly authorizes it in the current prompt. Such one-time
 > authorizations exist for the v1.11.1 maintenance cleanups (2026-11-14
 > and the run-43630164424 repair, 2026-11-15) and for the single
-> run-43718750096 work-order refresh (2026-11-16): content refreshes
-> under the active maintenance work order only. They set no precedent —
-> from the next session onward the human-only rule applies again in full.
+> run-43718750096 work-order refresh (2026-11-16), plus one further
+> refresh for the run-43773885283 integrity-first milestone contract
+> (2026-11-16, later the same day): content refreshes under the active
+> maintenance work order only. They set no precedent — from the next
+> session onward the human-only rule applies again in full.
 
 *Long-term product direction lives in [`ROADMAP.md`](ROADMAP.md). Release
 history lives in [`changelog.md`](changelog.md). The agent operating
@@ -21,12 +23,12 @@ in [`ai-notes.md`](ai-notes.md). This file never duplicates them.*
 | Field | Value |
 |---|---|
 | **Owner** | Human developer |
-| **Objective** | Publish the v1.11.1 run-43718750096 Windows-repair candidate: review the local branch `maintenance/v1.11.1-run43718750096` (built on the exact baseline commit `94a97de`, the failing run's commit and current main HEAD), decide on push timing, then watch the first hosted run. |
-| **Priority** | P0 — the run-43718750096 build: exactly one terminal job failed (Windows x64, two failing steps) on four Windows headless test failures — the two named-pipe busy-dial fixture deadlocks (`dial_windows_test.go` readiness wait) and two CRLF-portability release-contract failures (`workflow_dag_contract_test.go` mutation fixtures). The Windows package was blocked by `BLOCKED_BY_UPSTREAM_TEST_FAILURE`, not by a packaging defect. Linux x64, Fyne UI, Core audit and preflight were green; CodeQL run 43718750102 was all-success with one C++ overlay-cache warning. |
-| **Status** | Candidate complete locally on Linux (both Windows fixture defects fixed; headless suite 68 pkgs green, race gate 7/7, stress 47/47, collector fixtures 25/25, diagnostics self-test, gofmt/vet/build, module verify + tidy idempotent, Windows headless cross-vet clean, new §7.3 100 MB package-size gate added to both lanes with contract tests); hosted and native-Windows verification NOT RUN (no push authorized). Awaiting operator review. |
-| **Acceptance criteria** | (1) Hosted Windows headless suite where all four formerly failing tests pass natively (`TestDialContextCallerDeadlineBoundsBusyDial`, `TestDialContextBusyBudgetExhaustsTyped`, `TestOldPreflightDAGShapeIsRejected`, `TestContinueOnErrorIsRejected`). (2) Windows lane produces the portable ZIP + NSIS installer through the new size gates. (3) No version change anywhere — internal/config.AppVersion stays 1.11.1. (4) The independent-gates DAG stays green exactly as in run 43718750096. |
-| **Dependencies / blockers** | None technical. Publishing requires the operator's push decision. The two raw run logs (log43718750096.txt, codeql43718750102.txt) were not attached to the repair session — run facts come from the work order's authoritative summary; the GitHub API was rate-limited from that environment. |
-| **Evidence needed** | Hosted run log for the candidate commit; the four test names green on the hosted Windows lane; `ci-logs/linux-size-audit.log` + `ci-logs/win-size-audit.log`; the final-verdict step output on any red gate. |
+| **Objective** | Publish the v1.11.1 integrity-first milestone candidate (run-43773885283 follow-up): review the local branch `work/v1.11.1-integrity-stability-uiux` (baseline commit `124b08a`, the run-43773885283 commit and current main HEAD), decide on push timing, then watch the hosted run. |
+| **Priority** | P0 — run 43773885283 left exactly ONE Windows headless failure: `TestDialContextBusyBudgetExhaustsTyped` received the generic "no listening pipe instance after a 2000ms busy wait" error because the production busy-dial loop exited after ONE per-wait cap (2000ms) instead of exhausting the 10s budget, leaving the typed `ErrBusyDialBudgetExhausted` unreachable. The candidate fixes that root cause and delivers the milestone's defining content-integrity work — recoverable session deletion (trash + tombstone + restore + two-step purge) with API surface and regression tests — plus the isolated Go-Gui v0.96.0 POC and the new architecture/diagnostics documentation set. |
+| **Status** | Candidate complete locally on Linux (Windows busy-dial fix compile-verified with `GOOS=windows go vet/build` and pinned by a new focused regression test; headless suite 68 pkgs green, race gate 7/7 incl. the new trash tests, stress 47/47, collector fixtures 25/25, diagnostics self-test, gofmt/vet, full desktop sweep 72 pkgs green incl. the Fyne UI gate under Xvfb, Go-Gui POC 5/5); hosted and native-Windows verification NOT RUN (no push authorized). Awaiting operator review. |
+| **Acceptance criteria** | (1) Hosted Windows headless suite green — `TestDialContextBusyBudgetExhaustsTyped` passes natively with the new `TestDialContextBusyDialCrossesWaitCap`. (2) The content-integrity suites (`internal/sessions`, `internal/api`) green on both hosted lanes. (3) No version change anywhere — `internal/config.AppVersion` stays 1.11.1 (version purity tests green). (4) The independent-gates DAG stays green exactly as in run 43773885283; the Windows package unblocks through the upstream test gate, never by bypassing it. |
+| **Dependencies / blockers** | None technical. Publishing requires the operator's push decision. The two research reports and the raw run log were not attached to the milestone session — requirements were mapped from the work order's §13 enumeration (see `docs/architecture/REQUIREMENTS-TRACEABILITY.md` provenance note); the Code Scanning inventory is BLOCKED (unauthenticated API rate-limited; recorded in the delivery's `code-scanning-alert-inventory.md`). |
+| **Evidence needed** | Hosted run log for the candidate commit; `TestDialContextBusyBudgetExhaustsTyped` + `TestDialContextBusyDialCrossesWaitCap` green on the hosted Windows lane; the Fyne UI gate green on the candidate; `note.md` beside the delivery ZIP. |
 | **Next action** | Operator: review the candidate diff and `note.md` in the delivery, then push the branch or request changes. |
 
 ---

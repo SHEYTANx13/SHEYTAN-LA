@@ -953,47 +953,11 @@ func (s *Store) ListFull() ([]*Session, error) {
 	return out, nil
 }
 
-// Delete removes a session (file + index entry + pending copy + activity
-// sidecar). Deleting an unknown id fails — callers rely on the second
-// delete erroring.
-func (s *Store) Delete(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.loadIndexLocked()
-
-	found := false
-	if _, ok := s.pending[id]; ok {
-		delete(s.pending, id)
-		found = true
-	}
-	for i, st := range s.index {
-		if st.ID == id {
-			s.index = append(s.index[:i], s.index[i+1:]...)
-			found = true
-			break
-		}
-	}
-	p, pErr := s.path(id)
-	if pErr != nil {
-		return pErr
-	}
-	if err := s.storeRemove(p); err == nil {
-		found = true
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	if ap, apErr := s.activityPath(id); apErr == nil {
-		_ = s.storeRemove(ap)
-	}
-	if sp, spErr := s.summaryPath(id); spErr == nil {
-		_ = s.storeRemove(sp)
-	}
-	delete(s.hot, id)
-	if !found {
-		return fmt.Errorf("session %s not found", id)
-	}
-	return s.saveIndexLocked()
-}
+// Delete moved to trash.go (v1.11.1 content-integrity milestone): the
+// same contract — remove the session from the active store, error on an
+// unknown id — but the file and sidecars are RECOVERABLY moved into
+// trash/<id>/ with a tombstone instead of destroyed, and PurgeDeleted is
+// the only permanent destroy.
 
 // AppendMessage appends one message to the session, persists it, and
 // returns the updated session. Concurrent calls are serialized; every

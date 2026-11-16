@@ -10,20 +10,50 @@ session; rewrite this note so it stays true.
 
 ---
 
-## Current state (2026-11-16, v1.11.1 maintenance candidate)
+## Current state (2026-11-16, v1.11.1 integrity-first milestone candidate)
 
-The branch `maintenance/v1.11.1-run43718750096` (local, unpushed) carries
-the run-43718750096 Windows-repair candidate. Baseline: `94a97de` on
-main — the failing build run's commit AND the successful CodeQL run
-43718750102's head (same SHA, branch main). The previous candidate from
-`2bc66e5` WAS published and hosted-verified as designed: its pipeline
-executed all independent gates (run 43718750096 — preflight, Core audit,
-Fyne UI, Linux x64 green; Windows x64 red on exactly two failing steps,
-final verdict red as designed), and CodeQL 43718750102 completed
-all-success. This candidate repairs the four Windows headless test
-failures exposed by that run and adds the §7.3 100 MB package-size
-gate. Product version stays 1.11.1 everywhere. The full evidence
-inventory ships in `note.md` beside the source ZIP.
+The branch `work/v1.11.1-integrity-stability-uiux` (local, unpushed)
+carries the run-43773885283 follow-up candidate. Baseline: `124b08a` on
+main — the run-43773885283 commit AND current main HEAD (the published
+run-43718750096 Windows-repair candidate). That hosted run left exactly
+ONE failure: `TestDialContextBusyBudgetExhaustsTyped` on Windows. This
+candidate fixes the production-dial root cause, delivers recoverable
+session deletion, the Go-Gui v0.96.0 POC and the v1.11.1 documentation
+set (`docs/architecture/`, `docs/diagnostics/`). Product version stays
+1.11.1 everywhere. Full evidence inventory ships in `note.md` beside the
+source ZIP.
+
+## What changed in this candidate (the three load-bearing facts)
+
+1. **Windows busy dial — production code fixed, not the fixture.** The
+   run-43718750096 fixture repair made the busy condition deterministic,
+   which exposed the real defect: `dial_windows.go` exited with the
+   generic "no listening pipe instance after a 2000ms busy wait" error
+   after ONE per-wait cap (pipeBusyWaitMS=2000) — 2s of the 10s
+   pipeBusyDialBudget — so the typed `ErrBusyDialBudgetExhausted` was
+   unreachable whenever every wait timed out. An `ERROR_SEM_TIMEOUT` wait
+   timeout now continues the documented wait/retry loop (each wait
+   clamped to the remaining budget) until the budget or the tighter
+   caller deadline is spent; only an unresolved/unexpected wait failure
+   surfaces the original busy error. New focused guard:
+   `TestDialContextBusyDialCrossesWaitCap` (a caller deadline above one
+   cap must cross the first wait timeout and still end at the deadline
+   with the typed context error). `GOOS=windows go vet/build` clean;
+   Linux localipc suite green.
+2. **Session deletion is recoverable now** (`internal/sessions/trash.go`):
+   delete moves file + sidecars into `trash/<id>/` with a metadata-only
+   tombstone; restore refuses occupied destinations and verifies by
+   re-reading; purge is the only permanent destroy and requires the
+   trash state (two-step policy); crash windows reconcile additively.
+   API: `GET /api/sessions/trash`, `POST .../restore`, `POST .../purge`,
+   and DELETE now reports truthful `recoverable`. The pre-existing
+   delete-contract tests pass UNCHANGED. Contract:
+   [`architecture/CONTENT-INTEGRITY.md`](architecture/CONTENT-INTEGRITY.md).
+3. **Go-Gui v0.96.0 POC exists and is isolated**:
+   `experiments/ui-engine-poc/go-gui` (nested module, zero production
+   dependency — `go list ./...` from root proves it). 5/5 headless
+   app-level tests + software-rendered screenshot. POC_ONLY. Decision:
+   KEEP_FYNE_FOR_1.11.1 ([`architecture/UI-ENGINE-DECISION.md`](architecture/UI-ENGINE-DECISION.md)).
 
 ## Live architectural constraints (unchanged, load-bearing)
 
@@ -33,123 +63,63 @@ inventory ships in `note.md` beside the source ZIP.
 - **The ONE local transport.** Every in-process client dials through
   `internal/localipc.DialContext` (Windows named pipe / Unix domain
   socket). No TCP fallback, no second dial implementation, no weakened
-  DACL/peer-credential/protocol checks. Source-contract tests in
-  `ui/fyne/client_source_contract_test.go` fail the build on regressions.
+  DACL/peer-credential/protocol checks.
+- **Content mutations flow through the typed store APIs only** — never
+  raw model text, arbitrary JSON or shell commands; destructive
+  operations are recoverable-by-default with permanent purge as a
+  separate explicit step (see CONTENT-INTEGRITY.md).
 - **No sleep-based correctness; bounded everything.** Retries are
   deadline-bounded (the Windows busy-dial budget), event-driven waits
   only.
 - **Evidence classes are `local-static`, `hosted`, `physical`.** Build
   success and a visible window prove nothing about IPC or runtime
-  behavior. The hosted Windows smoke now requires an IPC handshake
-  record — keep that meaning.
-- **Version identity from `internal/config.AppVersion` only.** No
-  version numbers in product-facing docs; no new tags without the human.
+  behavior.
+- **Version identity from `internal/config.AppVersion` only.**
 
 ## Active blockers
 
-- **Hosted verification of the four repaired Windows tests and the new
-  size gates is pending the operator's push.** No green-run claim
-  exists for THIS candidate. Native Windows execution (named-pipe
-  busy-dial fixtures, release-contract fixtures, PE packaging) is NOT
-  RUN in this Linux sandbox — the Windows lane is their runtime
-  authority. Windows headless cross-vet and test-binary compile are
-  clean locally (`GOOS=windows go vet -tags headless ./...`).
-- **chromedp browser runtime smoke (physical class).** The v0.23.1 +
-  cdproto v0.160.3 migration is COMPLETE and suite-verified, but there
-  is no Chrome here: browser-tool runtime behavior is NOT RUN until a
-  Chrome-equipped lane exercises it.
-- **This session's sandbox lacks the OpenGL/GL dev headers** (no sudo),
-  so the full CGO Fyne build/vet and the local `go test ./ui/fyne`
-  sweep were NOT RUN for this candidate — they were NOT needed either:
-  the candidate changes ZERO `ui/fyne` files, so the hosted Fyne UI
-  gate's green result for `94a97de` (run 43718750096) carries over
-  unchanged for the UI tree.
+- **Hosted verification of the Windows busy-dial fix, the content-
+  integrity suites and the Fyne gate on THIS candidate is pending the
+  operator's push.** No green-run claim exists for it. Native Windows
+  execution is NOT RUN in this Linux sandbox — the hosted Windows lane
+  is the runtime authority (`GOOS=windows go vet`/`go build` of
+  `internal/localipc` are the local compile evidence).
+- **Code Scanning inventory: BLOCKED.** The unauthenticated GitHub API
+  is rate-limited from this sandbox and no token was provided; alert
+  count/severities are UNKNOWN — recorded in the delivery's
+  `code-scanning-alert-inventory.md` with the exact refusal. Never
+  claim a clean alert state.
+- **The two research reports were not attached** to this session; the
+  traceability matrix follows the work order's §13 enumeration
+  (provenance note in
+  [`architecture/REQUIREMENTS-TRACEABILITY.md`](architecture/REQUIREMENTS-TRACEABILITY.md)).
+- **UI-frame percentiles / typing latency / same-hardware renderer
+  comparison: NOT RUN** (no comparable hardware budget); startup phase
+  telemetry and core benches exist and are green.
 
-## Known evidence (current)
+## Local environment note (differs from earlier sessions)
 
-- Run-43718750096 root causes fixed (fixture-only; production dial
-  untouched): (1) the busy-pipe fixture armed its overlapped accept
-  WITHOUT waiting for the issue, so the first client could connect in
-  the CreateNamedPipe→ConnectNamedPipe window — ConnectNamedPipe then
-  completes INLINE with ERROR_PIPE_CONNECTED and NO event ever fires,
-  but the helper still waited on the event (5s timeout vs the 2s
-  readiness bound — the exact hosted ~4s failure signature). The
-  fixture now (a) waits for the accept to be ISSUED before returning
-  and (b) branches on all three completion modes (nil /
-  ERROR_PIPE_CONNECTED / ERROR_IO_PENDING). (2) The two release-
-  contract mutation fixtures used LF-only needles against a CRLF
-  Windows checkout (autocrlf=true; `.gitattributes` pins only `*.go` /
-  `*.bat`): the mutations silently no-opped and the healthy workflow
-  passed the validators — the "broken detector" failures.
-  `loadWorkflowForDAG` now normalizes BOM/CRLF→LF and every mutation
-  carries an application guard (a future workflow reshape fails loudly
-  as a fixture-shape error, never as a silent no-op).
-- §7.3 hard 100,000,000-byte per-file payload ceiling is now ENFORCED:
-  shared fail-closed `scripts/ci/package-size-audit.sh` (staged tree +
-  UNCOMPRESSED archive members), invoked by BOTH lanes, plus a tree
-  scan + lane pins + mechanism test in
-  `internal/releasecontract/oversized_asset_policy_test.go`. Tree
-  scan: 804 tracked files, largest 5,959,200 bytes — zero violations.
-- Build-workflow DAG: audit/ui/build-windows/build-linux have NO
-  `needs: [preflight]` (own checkout/setup, same SHA) — PROVEN HOSTED by
-  run 43718750096 (all four gates executed with the Windows lane red);
-  the `final-verdict` job stays red when any required gate is not
-  success. Collector fixtures 25/25 locally. The Windows package was
-  blocked by `BLOCKED_BY_UPSTREAM_TEST_FAILURE` — the missing ZIP is a
-  downstream symptom, NOT a proven packaging defect.
-- CodeQL workflow: analyze runs on `!cancelled() &&
-  steps.codeql-init.outcome == 'success'` with `upload: always`;
-  `collect-codeql-logs` reuses the same collector on `!cancelled()`.
-  CodeQL run 43718750102 (baseline): all seven jobs SUCCESS — including
-  C++ SARIF upload and the alert-report export; the ONE warning is the
-  documented C++ manual-build-mode overlay-cache fallback (an
-  optimization warning, NOT an analysis failure — do not switch C++ to
-  build-mode: none merely to silence it). Open-alert counts were NOT
-  retrieved (API rate-limited); never claim a count without the report.
-- Dependency integrity: `go mod verify` passes and `go mod tidy` is
-  idempotent. Every DIRECT module is at its latest known stable tag
-  (fresh `go list -m -u all` on 2026-11-16); all newer versions are
-  indirect/transitive (Fyne-chain and chromedp-chain pins, test-only
-  objx/smetrics/check.v1) and are DECLINED with reasons in note.md —
-  `fyne.io/systray` stays on the pseudo-version because no newer
-  release exists and Fyne v2.8.2's own graph requires it.
-- Fyne button-fit/containment: the v1.11.1 policy (short labels +
-  wrapped captions, rail grows to content minimum, full-shell fit
-  sweep, viewport/boundary/degenerate matrices, structural goldens,
-  single-parent ownership) is in-tree and was hosted-green for
-  `94a97de` in run 43718750096's Fyne UI gate; this candidate changes
-  zero `ui/fyne` files.
-- CodeQL: the documented actions/unpinned-tag warnings remain the
-  accepted baseline under the operator's tag-only policy (zero
-  commit-hash pins present); the candidate has NOT been scanned
-  (unpushed) — never claim otherwise.
-
-## Unresolved risks
-
-- The r182→r187 Three.js refresh re-applied the vendored `generateUUID`
-  CSPRNG patch; the assets are embed/compile-verified, but 3D Studio
-  runtime behavior is physical class until a browser run happens.
-- Dependabot security-update PRs are governed by a separate GitHub
-  setting; the one-group YAML cannot cap them. The manual setting path is
-  documented in `.github/dependabot.yml` and `note.md`.
+This sandbox DID build the full CGO Fyne tree and run the Fyne UI gate
+under Xvfb: GL/X11/wayland dev packages were dpkg-extracted into a local
+prefix (`PKG_CONFIG_PATH` + a `wayland.pc` shim for glfw's pre-split
+module name — sandbox-only, NOT a repository change). Commands and the
+full gate matrix are recorded in `note.md`.
 
 ## Next actionable hand-off
 
 1. Operator reviews the candidate diff + `note.md`, pushes, and watches
-   the hosted run: the four formerly failing Windows tests must pass
-   natively and the new size-gate logs (`ci-logs/linux-size-audit.log`,
-   `ci-logs/win-size-audit.log`) must appear green.
+   the hosted run: `TestDialContextBusyBudgetExhaustsTyped` and
+   `TestDialContextBusyDialCrossesWaitCap` must pass natively on the
+   Windows lane; `internal/sessions` + `internal/api` green everywhere.
 2. Any agent continuing here should re-verify with the smallest ladder
-   prefix: `gofmt -l cmd internal ui`, `go build ./...`,
-   `go test -tags headless ./internal/...`, then the touched packages —
-   full ladder and evidence-class rules live in [`agent.md`](agent.md).
-   On a Windows host, run `go test -tags headless ./internal/localipc/ ./internal/releasecontract/`
-   natively — the two busy-dial tests are the first authority for the
-   fixture repair.
-3. If the hosted Windows lane is red, start from the failing test's own
-   failure line, then `ci-logs/win-ipc-integration.log` and
-   `data\logs\app.log` inside the smoke output — the gates are named for
-   their failure stage.
+   prefix: `gofmt -l cmd internal ui experiments`, `go build ./...`,
+   `go test -tags headless ./internal/...`, then the touched packages
+   (`internal/sessions`, `internal/api`, `internal/localipc`), then the
+   Fyne gate under Xvfb. Full ladder and evidence-class rules live in
+   [`agent.md`](agent.md).
+3. On a Windows host, run `go test ./internal/localipc -count=1 -v`
+   natively — the two busy-budget tests are the first authority for the
+   dial repair.
 
 ---
 

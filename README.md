@@ -85,6 +85,7 @@ The following are implemented and verified in this repository:
 - Optional 3D Studio — a read-only 3D map of the live system topology rendered with a locally embedded Three.js release in the user’s browser (loopback-only bind, per-launch fragment token, strict CSP, zero commands, honest textual fallback without WebGL). Full contract: [`docs/3dstudio.md`](docs/3dstudio.md)
 - On-demand Web Workspace — a read-only rich-content viewer (markdown, code, diffs, tables, chart specifications) issued through the versioned Go presentation contract; loopback-only bind, per-launch fragment token, strict CSP, offline embedded assets, zero command endpoints; unknown content kinds degrade to safe raw data
 - Session-list generation guard — every list write goes through one monotonic generation so stale responses can neither resurrect a deleted session nor drop a created one
+- Recoverable session deletion (v1.11.1) — deleting a session moves it into a local trash with a metadata tombstone; restore brings it back with messages and sidecars intact, and permanent purge is a separate explicit second step. Full contract: [`docs/architecture/CONTENT-INTEGRITY.md`](docs/architecture/CONTENT-INTEGRITY.md)
 - Live streaming that cannot wedge — triple-boundary flush + server-side conflation-aware queue
 - Four-level reasoning-depth control (Low / Mid / High / Ultra) with real numeric thinking-token budgets on the generation request
 - Zero-session Send — deleting the final session leaves a usable zero-session state; Send creates and activates a session in the current mode

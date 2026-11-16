@@ -355,6 +355,61 @@ func TestDialContextBusyBudgetExhaustsTyped(t *testing.T) {
 	}
 }
 
+// TestDialContextBusyDialCrossesWaitCap (v1.11.1, run 43773885283): the
+// budget-exhaustion contract regressed to an early exit — ONE
+// WaitNamedPipe timeout (the 2000ms per-wait cap) returned the generic
+// "no listening pipe instance" error after 2s of the 10s busy-dial
+// budget, so the typed ErrBusyDialBudgetExhausted was unreachable and
+// TestDialContextBusyBudgetExhaustsTyped failed on the hosted Windows
+// runner. This focused guard pins the loop semantics the 10s test
+// depends on, without paying the full 10s budget: a busy dial bounded by
+// a caller deadline LONGER than one per-wait cap must survive the first
+// wait timeout, keep the documented wait/retry contract, and still end
+// AT the caller's deadline with the typed context error — never early,
+// never generic.
+func TestDialContextBusyDialCrossesWaitCap(t *testing.T) {
+	if testing.Short() {
+		t.Skip("exercises multiple busy-wait caps")
+	}
+
+	fixture := busyPipeServer(t)
+
+	// Occupy the single instance: from here on every dial is busy.
+	held, err := DialContext(context.Background(), fixture.name)
+	if err != nil {
+		t.Fatalf("first client dial: %v", err)
+	}
+	defer held.Close()
+
+	// Deterministic readiness: the single instance is genuinely occupied
+	// before the bounded busy dial.
+	fixture.waitAcceptDone(t)
+
+	// Deadline comfortably above ONE per-wait cap (2000ms) but far below
+	// the full 10s busy-dial budget: the dial must cross at least one
+	// full wait timeout and end at the caller's deadline.
+	deadline := time.Duration(pipeBusyWaitMS)*time.Millisecond + 750*time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+
+	start := time.Now()
+	_, err = DialContext(ctx, fixture.name)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("busy dial must not succeed while the single instance is held")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("busy dial across a wait cap error = %v, want context.DeadlineExceeded (a single wait timeout must not end the dial early with a generic error)", err)
+	}
+	if elapsed < deadline-300*time.Millisecond {
+		t.Fatalf("busy dial ended after %v — before the caller deadline %v minus tolerance; the early-exit-after-one-wait-cap defect is back", elapsed, deadline)
+	}
+	if elapsed > deadline+2*time.Second {
+		t.Fatalf("busy dial took %v — the caller deadline did not bound it", elapsed)
+	}
+}
+
 // TestDialContextRoundTripsAuthenticatedHTTPOverServe drives the exact
 // production shape: the canonical dial behind an http.Transport against
 // the REAL core over the REAL localipc.Serve named pipe.
