@@ -7,9 +7,11 @@
 > and the run-43630164424 repair, 2026-11-15) and for the single
 > run-43718750096 work-order refresh (2026-11-16), plus one further
 > refresh for the run-43773885283 integrity-first milestone contract
-> (2026-11-16, later the same day): content refreshes under the active
-> maintenance work order only. They set no precedent — from the next
-> session onward the human-only rule applies again in full.
+> (2026-11-16, later the same day) and one for the run-43862893851
+> hybrid-native-UI milestone contract (2026-11-16, latest of the same
+> day): content refreshes under the active maintenance work order only.
+> They set no precedent — from the next session onward the human-only
+> rule applies again in full.
 
 *Long-term product direction lives in [`ROADMAP.md`](ROADMAP.md). Release
 history lives in [`changelog.md`](changelog.md). The agent operating
@@ -23,13 +25,13 @@ in [`ai-notes.md`](ai-notes.md). This file never duplicates them.*
 | Field | Value |
 |---|---|
 | **Owner** | Human developer |
-| **Objective** | Publish the v1.11.1 integrity-first milestone candidate (run-43773885283 follow-up): review the local branch `work/v1.11.1-integrity-stability-uiux` (baseline commit `124b08a`, the run-43773885283 commit and current main HEAD), decide on push timing, then watch the hosted run. |
-| **Priority** | P0 — run 43773885283 left exactly ONE Windows headless failure: `TestDialContextBusyBudgetExhaustsTyped` received the generic "no listening pipe instance after a 2000ms busy wait" error because the production busy-dial loop exited after ONE per-wait cap (2000ms) instead of exhausting the 10s budget, leaving the typed `ErrBusyDialBudgetExhausted` unreachable. The candidate fixes that root cause and delivers the milestone's defining content-integrity work — recoverable session deletion (trash + tombstone + restore + two-step purge) with API surface and regression tests — plus the isolated Go-Gui v0.96.0 POC and the new architecture/diagnostics documentation set. |
-| **Status** | Candidate complete locally on Linux (Windows busy-dial fix compile-verified with `GOOS=windows go vet/build` and pinned by a new focused regression test; headless suite 68 pkgs green, race gate 7/7 incl. the new trash tests, stress 47/47, collector fixtures 25/25, diagnostics self-test, gofmt/vet, full desktop sweep 72 pkgs green incl. the Fyne UI gate under Xvfb, Go-Gui POC 5/5); hosted and native-Windows verification NOT RUN (no push authorized). Awaiting operator review. |
-| **Acceptance criteria** | (1) Hosted Windows headless suite green — `TestDialContextBusyBudgetExhaustsTyped` passes natively with the new `TestDialContextBusyDialCrossesWaitCap`. (2) The content-integrity suites (`internal/sessions`, `internal/api`) green on both hosted lanes. (3) No version change anywhere — `internal/config.AppVersion` stays 1.11.1 (version purity tests green). (4) The independent-gates DAG stays green exactly as in run 43773885283; the Windows package unblocks through the upstream test gate, never by bypassing it. |
-| **Dependencies / blockers** | None technical. Publishing requires the operator's push decision. The two research reports and the raw run log were not attached to the milestone session — requirements were mapped from the work order's §13 enumeration (see `docs/architecture/REQUIREMENTS-TRACEABILITY.md` provenance note); the Code Scanning inventory is BLOCKED (unauthenticated API rate-limited; recorded in the delivery's `code-scanning-alert-inventory.md`). |
-| **Evidence needed** | Hosted run log for the candidate commit; `TestDialContextBusyBudgetExhaustsTyped` + `TestDialContextBusyDialCrossesWaitCap` green on the hosted Windows lane; the Fyne UI gate green on the candidate; `note.md` beside the delivery ZIP. |
-| **Next action** | Operator: review the candidate diff and `note.md` in the delivery, then push the branch or request changes. |
+| **Objective** | Publish the v1.11.1 hybrid-native-UI milestone candidate (run-43862893851 follow-up): review the local branch `hybrid-native-ui-v1111` (baseline commit `0d61aeb`, current main HEAD — the run-43862893851 commit), decide on push timing, then watch the hosted run. |
+| **Priority** | P0 — run 43862893851 left exactly TWO Windows headless failures (`TestDialContextCallerDeadlineBoundsBusyDial`, `TestDialContextBusyDialCrossesWaitCap`): both landed in the exhausted-deadline branch of `dial_windows.go`, which attributed every exhaustion to `ErrBusyDialBudgetExhausted` without re-examining the caller context — a scheduler race after the ms-truncated wait clamp. The candidate fixes that attribution deterministically (ctx-first, then the arithmetic caller-deadline check; the typed budget error only for a still-live context), fixes the core-audit AWK `\"` regexp warning at source (+ fixture case 25), extends the Go-Gui POC to 10/10 with the mandated responsive matrix (a real 640x480 containment defect found and fixed), adds the isolated GoGPU spectrum POC (software render verified; GPU HARDWARE NOT RUN), the `internal/webapphost` contract (8/8 policy tests), and the hybrid-stack documentation set. |
+| **Status** | Candidate complete locally on Linux (dial fix gofmt-clean, `GOOS=windows` build/vet/test-compile green with both tests' assertions unchanged; headless suite 69 pkgs green; race localipc+sessions green; releasecontract green; collector fixtures 26/0; Go-Gui POC 10/10; gogpu POC 2/2 plus a real software render and a bounded Xvfb windowed soak; webapphost 8/8); hosted and native-Windows verification NOT RUN (no push authorized). Awaiting operator review. |
+| **Acceptance criteria** | (1) Hosted Windows headless suite green — both run-43862893851 tests pass natively with unchanged assertions. (2) Full `internal/localipc` green on the Windows and POSIX lanes. (3) No version change anywhere — `internal/config.AppVersion` stays 1.11.1 (version purity green). (4) The independent-gates DAG unchanged; the Windows package unblocks through the upstream test gate, never by bypassing it. (5) The operator retrieves the live Code Scanning inventory (`security_events` scope, or the `code-scanning-alerts.txt` artifact the CodeQL workflow already exports per run) and files the two-warning fix as a follow-up work order — this candidate does NOT claim those warnings fixed. |
+| **Dependencies / blockers** | None technical for the push. The two research reports and the raw run log were again not attached (provenance recorded in `docs/architecture/REQUIREMENTS-TRACEABILITY.md`); Code Scanning retrieval is BLOCKED from the agent sandbox (unauthenticated API 401/403) — operator-side retrieval required. |
+| **Evidence needed** | Hosted run log for the candidate commit; both dial tests green on the hosted Windows lane; the Fyne UI gate green on the candidate; refreshed Code Scanning alert state after the new SARIF upload (until then the dial fix reports `FIXED_LOCALLY_AWAITING_HOSTED_RUN` — never green before the run). |
+| **Next action** | Operator: review the candidate diff and `note.md` in the delivery, push the branch, then retrieve the Code Scanning inventory and decide the follow-up. |
 
 ---
 

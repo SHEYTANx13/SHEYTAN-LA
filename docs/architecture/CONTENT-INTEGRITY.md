@@ -132,6 +132,20 @@ per-class impact analysis (link: [`../../ROADMAP.md`](../../ROADMAP.md)).
 Race gate: `internal/sessions` is one of the seven race-gate packages;
 `go test -race` is green including the new tests.
 
+## 6. Hybrid-stack boundary (v1.11.1 hybrid-native-UI milestone)
+
+The optional renderers added by the hybrid milestone (Go-Gui POC, GoGPU
+POC, native WebView contract) have NO store access by construction — they
+are client surfaces over the same typed-command boundary
+([`UI-ENGINE-STACK.md`](UI-ENGINE-STACK.md)). Renderer switching or web
+content cannot bypass app authorization: there is no path from any
+renderer to a store. The web layer's fail-closed policy is enforced code
+(`internal/webapphost`: privileged-scheme and private-network rejection,
+bridge fail-closed with per-capability grants, downloads handed to the
+existing safe downloader) with 8/8 policy tests green; pages are untrusted
+content. The Go-Gui POC carries deterministic sample state only — no app
+data path exists in it.
+
 ---
 
 *Proprietary material under the Proprietary License (see

@@ -46,6 +46,10 @@
 #      self job is accounted as SELF, reported honestly and does NOT fail
 #      the verdict (the run #144 root cause: it used to)
 #  23. a NON-self in-progress job — still a coverage gap, verdict fails
+#  25. AWK portability (v1.11.1, run 43862893851, log ~5206) - the
+#      self-display extraction must run warning-free (no escaped quote in
+#      the awk bracket expression) while preserving the quote/CR strip
+#      semantics on live and synthetic workflow shapes
 #
 # No fixture may assume a missing log means success: the missing-source
 # and hard-error cases must FAIL the collector AFTER the report exists,
@@ -497,7 +501,7 @@ done
 # identifies its own job by normalizing the runner's GITHUB_JOB (the YAML
 # job key "consolidate-logs") against the API display name — the workflow
 # must keep the display name normalizing to the YAML key.
-self_display="$(awk '/^  consolidate-logs:/{f=1; next} f && /^    name:/{sub(/^ +name: +/,""); gsub(/[\"\r]/,""); print; exit}' "$workflow")"
+self_display="$(awk '/^  consolidate-logs:/{f=1; next} f && /^    name:/{sub(/^ +name: +/,""); gsub(/["\r]/,""); print; exit}' "$workflow")"
 [ -n "$self_display" ] || yml_ok=0
 [ "$(norm_name "$self_display")" = "$(norm_name "consolidate-logs")" ] || yml_ok=0
 grep -q 'is_self_job' "$collector" || yml_ok=0
@@ -733,6 +737,31 @@ if [ $rc -eq 0 ] \
   ok "machine-readable run-diagnostics.json: full red-run matrix (captured/skipped/self/failed) serialized from the same accounting, jq-valid"
 else
   bad "run-diagnostics.json output (rc=$rc)"
+fi
+
+# 25. AWK portability (v1.11.1, run 43862893851, log line ~5206) --------
+# The hosted core-audit fixture run emitted: warning: regexp escape
+# sequence is not a known regexp operator. Root cause: the self-display
+# extraction's awk bracket expression escaped the quote - a form the
+# regexp parser does not recognize. The extraction now uses the portable
+# unescaped bracket form. This case pins both properties on the LIVE
+# workflow and on a synthetic snippet: warning-free stderr and the exact
+# quote/CR strip semantics (collector semantics unchanged).
+f="$work/case25"; mkdir -p "$f"
+err="$f/extract.stderr"
+got="$(awk '/^  consolidate-logs:/{f=1; next} f && /^    name:/{sub(/^ +name: +/,""); gsub(/["\r]/,""); print; exit}' "$workflow" 2>"$err")"
+snip="$f/workflow.yml"
+printf 'jobs:\n  consolidate-logs:\n    name: "Consolidate logs (v1.11.1)"\r\n' > "$snip"
+snip_err="$f/snip.stderr"
+got2="$(awk '/^  consolidate-logs:/{f=1; next} f && /^    name:/{sub(/^ +name: +/,""); gsub(/["\r]/,""); print; exit}' "$snip" 2>"$snip_err")"
+if [ -s "$err" ] || [ -s "$snip_err" ]; then
+  bad "self-display extraction emitted awk diagnostics: $(cat "$err" "$snip_err")"
+elif [ -z "$got" ]; then
+  bad "self-display extraction returned nothing for the live workflow"
+elif [ "$got2" != "Consolidate logs (v1.11.1)" ]; then
+  bad "strip semantics changed: extracted [$got2] from the synthetic snippet, want the unquoted CR-free display name"
+else
+  ok "self-display extraction: warning-free stderr on live and synthetic workflow shapes; quote/CR strip semantics preserved"
 fi
 
 printf '\nfixtures: %d pass / %d fail\n' "$pass" "$fail"

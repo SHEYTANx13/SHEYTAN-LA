@@ -10,7 +10,9 @@
 > `work/v1.11.1-integrity-stability-uiux` for the milestone changes).
 > When a report's full text becomes available, rows must be re-verified
 > against it — that re-verification is an explicit open item, not a
-> completed one.
+> completed one. The 2026-11-16 hybrid-native-UI milestone (run-43862893851
+> follow-up) contributes its rows under a dedicated section below; the same
+> provenance rule applies to them.
 
 Statuses (exact set): `IMPLEMENTED_AND_TESTED`, `EXISTING_AND_VERIFIED`,
 `FOUNDATION_IMPLEMENTED`, `STAGED_WITH_GATE`, `BLOCKED`.
@@ -26,7 +28,7 @@ Statuses (exact set): `IMPLEMENTED_AND_TESTED`, `EXISTING_AND_VERIFIED`,
 | §7 | SPCM (personal compute mesh) | No mesh code (correctly absent); boundary documented as future work with security invariants | STAGED_WITH_GATE | n/a (no code — by design) | ROADMAP.md | LAN MVP later |
 | §8 | Offline inference; detected/available/selected/executed/verified GPU states | `internal/llm` (capabilities, devices, admission), `internal/native/engine`, `internal/accelerator` (execution-truth contract) | EXISTING_AND_VERIFIED | `execution_truth_v186_test.go`, `devices_missing_test.go`, `gpu_activation_v186_test.go` | engine/platform docs | Existing verified; new runtimes staged |
 | §9 | Security/reliability/data ownership/self-improvement | Approval authority (`internal/approval`), os.Root path safety across stores, atomic writes, idempotent events, migrations; **v1.11.1 adds recoverable session delete/restore/purge** | IMPLEMENTED_AND_TESTED (sessions class) + EXISTING_AND_VERIFIED (controls) | `trash_test.go` (9), `sessions_trash_api_test.go`, pathsafety suites | CONTENT-INTEGRITY.md | Core controls now; full sync later |
-| §10 | WebAppHost and Godot/full 3D as separate runtimes | `internal/workspace` (loopback, token-gated, CSP-strict, zero commands) and `internal/studio` (read-only three.js viewer) are exactly that boundary; no embedded browser in the shell | EXISTING_AND_VERIFIED (boundary) / STAGED_WITH_GATE (runtimes) | `workspace/server_test.go`, security suites | ARCHITECTURE.md, ROADMAP.md | Interfaces now; runtimes later |
+| §10 | WebAppHost and Godot/full 3D as separate runtimes | `internal/workspace` (loopback, token-gated, CSP-strict, zero commands) and `internal/studio` (read-only three.js viewer) are exactly that boundary; no embedded browser in the shell; the hybrid milestone adds the native WebView CONTRACT `internal/webapphost` (policy enforced + tested; adapters STAGED_WITH_GATE) | EXISTING_AND_VERIFIED (workspace boundary) / FOUNDATION_IMPLEMENTED (webapphost contract) / STAGED_WITH_GATE (native adapters) | `workspace/server_test.go`, security suites, `webapphost` 8/8 policy tests | ARCHITECTURE.md, WEBVIEW-CAPABILITY-MATRIX.md | Interfaces now; runtimes later |
 | §11–13 | Roadmap, DoD, CI/release/dependencies/update rollback | `internal/releasecontract` (version, workflow-DAG, artifact-naming, packagegate, installer, oversized-asset contracts), independent CI gates, `internal/updater` (staged install, rollback identity) | EXISTING_AND_VERIFIED | `releasecontract` suite (green 2026-11-16), `rollback_identity_v181_test.go` | ROADMAP.md, changelog.md | CI/release safety now; five-platform release staged |
 | §14–16 | Risks and agent contract; no-main, no-hacks, no false runtime claims | `docs/agent.md` (non-negotiable rules), Dev-Notes governance, evidence-class discipline (`local-static`/`hosted`/`physical`) | EXISTING_AND_VERIFIED | the gates themselves + agent manual | agent.md, Dev-Notes.md | Now |
 
@@ -48,6 +50,21 @@ Statuses (exact set): `IMPLEMENTED_AND_TESTED`, `EXISTING_AND_VERIFIED`,
 | §15–17 | Concurrency, frame budgets, UI-thread ownership, benchmarks | `ui_marshal.go` (the ONE fyne.Do seam, test-mode serialization), bounded workers, startup phase telemetry (`internal/startup`), bench tests in core packages; P50/P95/P99 UI frame stats NOT measured in this pass | EXISTING_AND_VERIFIED (ownership) / STAGED_WITH_GATE (frame-time percentiles) | `workspace_hub_test.go`, `lifecycle_test.go`, startup tests | UI-ENGINE-DECISION.md, RUNTIME-DIAGNOSTICS.md | Ownership now; measurement staged |
 | §18–21 | Implementation order, pinned audited dependencies, deliverables, truthful milestone report | go.mod: every direct dep pinned at audited tags (Fyne v2.8.2, x/sys v0.50.0, …); `go mod verify` + tidy idempotent; delivery = source ZIP + completed note.md | EXISTING_AND_VERIFIED | `go mod verify`, version purity tests, releasecontract | changelog.md, note.md | Now |
 
+## Hybrid native-UI milestone (v1.11.1, run-43862893851 follow-up)
+
+| Requirement area (work order §4) | Discovered code path / evidence | Status | Owning test(s) | Doc destination |
+|---|---|---|---|---|
+| Fyne compatibility / production shell untouched | `ui/fyne` unchanged in this milestone; hosted Fyne gate green at the run-43862893851 baseline; responsive/boundary/degenerate matrices already shipped | EXISTING_AND_VERIFIED | hosted Fyne UI gate; `shell_responsive_test.go` | UI-PLATFORM-AUDIT.md |
+| Go-Gui v0.96.0 advanced workspace | POC extended to 10/10 incl. the mandated §4.4.5 responsive matrix; a real 640x480 containment defect found and fixed (900-unit narrow breakpoint) | FOUNDATION_IMPLEMENTED (POC) | `responsive_test.go` (matrix, screenshots, 2x proxy, close/reopen, focus at floor) | UI-PLATFORM-AUDIT.md, UI-ENGINE-DECISION.md |
+| Fyne-side launch action for the Go-Gui workspace | not added: the authoring host cannot compile `ui/fyne` (missing CGO headers); no blind edit made | STAGED_WITH_GATE (prerequisite: a compile-capable host) | n/a — recorded, never claimed | UI-ENGINE-STACK.md §3 |
+| GoGPU/WGPU graphics surface | isolated POC module (gogpu v0.54.1); deterministic spectrum; software render + bounded Xvfb windowed soak verified; GPU HARDWARE NOT RUN; separate surfaces, no bridge | FOUNDATION_IMPLEMENTED (software path) / STAGED_WITH_GATE (hardware, frame metrics) | gogpu POC 2/2 + screenshot/soak runs | GO-GUI-GOGPU-INTEROP.md |
+| Native WebView2/WKWebView/WebKitGTK | `internal/webapphost` typed contract + enforced policy (8/8); no adapter built (Linux headers absent in authoring env; Windows/macOS hosts not exercised) | FOUNDATION_IMPLEMENTED (contract) / STAGED_WITH_GATE (adapters) | `webapphost` policy tests | WEBVIEW-SECURITY.md, WEBVIEW-CAPABILITY-MATRIX.md |
+| Mobile WebView adapters (Android/iOS) | contract-level rows only; no SDK builds exist | STAGED_WITH_GATE | n/a | WEBVIEW-CAPABILITY-MATRIX.md |
+| Frame/surface IPC between engines | no bridge exists by design; Go-Gui and GoGPU keep separate surfaces; no zero-copy claim anywhere | STAGED_WITH_GATE (documented decision, not a gap) | n/a | GO-GUI-GOGPU-INTEROP.md |
+| Security isolation of the web layer | privileged-scheme/private-network rejection, bridge fail-closed, download handoff to the existing safe downloader — enforced code | IMPLEMENTED_AND_TESTED (policy level) | `webapphost` 8/8 | WEBVIEW-SECURITY.md |
+| Performance telemetry of the new layers | adapter-truth ladder documented; frame percentiles NOT MEASURED (no present loop beyond the software soak) | STAGED_WITH_GATE | n/a — labeled, never claimed | RUNTIME-DIAGNOSTICS.md |
+| Platform acceptance (five-platform) | not attempted in this milestone; the standing rule: no five-platform claim for any subsystem whose matrix is incomplete | STAGED_WITH_GATE | n/a | UI-PLATFORM-AUDIT.md |
+
 ## Open verification items (never marked done without evidence)
 
 1. **Source-report full-text cross-check** — BLOCKED (reports not
@@ -59,6 +76,14 @@ Statuses (exact set): `IMPLEMENTED_AND_TESTED`, `EXISTING_AND_VERIFIED`,
 3. **Go-Gui platform gates beyond the headless POC** — STAGED_WITH_GATE
    (accessibility trees, IME/CJK, native dialogs, physical devices).
 4. **Trash/restore for non-session content classes** — STAGED_WITH_GATE.
+5. **Fyne-side launch action for the Go-Gui workspace** — STAGED_WITH_GATE
+   (authoring host cannot compile `ui/fyne`; no blind edit made).
+6. **GoGPU hardware path and frame metrics** — STAGED_WITH_GATE (no
+   Vulkan ICD / no /dev/dri in the authoring environment; software render
+   verified, hardware NOT RUN).
+7. **Native WebView adapters** — STAGED_WITH_GATE (see
+   WEBVIEW-CAPABILITY-MATRIX.md; Linux WebKitGTK headers absent in the
+   authoring environment).
 
 ---
 

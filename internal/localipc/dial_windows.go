@@ -35,10 +35,12 @@ import (
 // 43773885283): one per-wait cap is not the busy-dial budget, so the
 // documented wait/retry contract continues — each wait clamped to the
 // remaining budget — until the budget or the tighter caller deadline is
-// spent. On deadline exhaustion the typed ErrBusyDialBudgetExhausted
-// names the budget and the elapsed time; if the binding limit was the
-// caller's context, the context error is returned (errors.Is(err,
-// context.DeadlineExceeded) stays true).
+// spent. On exhaustion the terminal identity is attributed
+// deterministically (v1.11.1, run 43862893851 repair): an observed — or
+// arithmetically passed — caller deadline/cancellation returns the context
+// error (errors.Is(err, context.DeadlineExceeded/Canceled) stays true);
+// only a context that is still live when the limit lands returns the typed
+// ErrBusyDialBudgetExhausted naming the budget and the elapsed time.
 //
 // Context cancellation is checked before the first attempt, before every
 // readiness wait, and after a successful CreateFile (a connection the
@@ -93,6 +95,39 @@ func dialContext(ctx context.Context, endpoint string) (net.Conn, error) {
 
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
+			// v1.11.1 (run 43862893851 repair): attribute the exhaustion
+			// honestly BEFORE returning. The two hosted Windows failures
+			// (TestDialContextCallerDeadlineBoundsBusyDial,
+			// TestDialContextBusyDialCrossesWaitCap) both landed here with
+			// the caller's deadline as the binding limit — 300ms and 2.75s,
+			// each far under the 10s budget — yet received
+			// ErrBusyDialBudgetExhausted, because this branch never
+			// re-examined the caller context. Reaching it with the context
+			// unobserved-as-done is a scheduling race, not a state decision:
+			// the wait clamp truncates to whole milliseconds, so the final
+			// sub-millisecond of a caller-deadline dial spends its last stretch
+			// between the top-of-loop check and this branch while the runtime's
+			// timer for the caller deadline is still being processed. The
+			// identity of the terminal error is now decided deterministically:
+			//
+			//   1. an observed context error (cancellation takes precedence,
+			//      then deadline) returns the context error — errors.Is(err,
+			//      context.Canceled/DeadlineExceeded) stays true;
+			//   2. a caller deadline that has passed arithmetically — even one
+			//      whose timer has not yet published it — returns the context
+			//      deadline error, because the binding limit was the CALLER's,
+			//      never the app budget;
+			//   3. only a context still live (no deadline, or one in the future)
+			//      returns the typed ErrBusyDialBudgetExhausted: the app's OWN
+			//      budget was the limit that expired.
+			if cerr := ctx.Err(); cerr != nil {
+				return nil, fmt.Errorf("localipc: dial %s: %w (busy %v): %w",
+					name, cerr, time.Since(start).Round(time.Millisecond), err)
+			}
+			if d, ok := ctx.Deadline(); ok && !d.After(time.Now()) {
+				return nil, fmt.Errorf("localipc: dial %s: %w (busy %v): %w",
+					name, context.DeadlineExceeded, time.Since(start).Round(time.Millisecond), err)
+			}
 			return nil, fmt.Errorf("localipc: dial %s: %w (%v budget, %v elapsed): %w",
 				name, ErrBusyDialBudgetExhausted, pipeBusyDialBudget,
 				time.Since(start).Round(time.Millisecond), err)

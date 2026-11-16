@@ -10,55 +10,54 @@ session; rewrite this note so it stays true.
 
 ---
 
-## Current state (2026-11-16, v1.11.1 integrity-first milestone candidate)
+## Current state (2026-11-16, hybrid-native-UI milestone candidate)
 
-The branch `work/v1.11.1-integrity-stability-uiux` (local, unpushed)
-carries the run-43773885283 follow-up candidate. Baseline: `124b08a` on
-main — the run-43773885283 commit AND current main HEAD (the published
-run-43718750096 Windows-repair candidate). That hosted run left exactly
-ONE failure: `TestDialContextBusyBudgetExhaustsTyped` on Windows. This
-candidate fixes the production-dial root cause, delivers recoverable
-session deletion, the Go-Gui v0.96.0 POC and the v1.11.1 documentation
-set (`docs/architecture/`, `docs/diagnostics/`). Product version stays
-1.11.1 everywhere. Full evidence inventory ships in `note.md` beside the
-source ZIP.
+The branch `hybrid-native-ui-v1111` (local, unpushed) carries the
+run-43862893851 follow-up candidate. Baseline: `0d61aeb` on main — the
+run-43862893851 commit AND current main HEAD. That hosted run left
+exactly TWO Windows failures (`TestDialContextCallerDeadlineBoundsBusyDial`,
+`TestDialContextBusyDialCrossesWaitCap`); this candidate fixes their
+production root cause, fixes the core-audit AWK warning at source,
+extends the Go-Gui POC with the mandated responsive matrix, adds the
+isolated GoGPU POC and the `internal/webapphost` contract, and ships the
+hybrid-stack documentation set. Version stays 1.11.1 everywhere.
 
-## What changed in this candidate (the three load-bearing facts)
+## What changed in this candidate (the load-bearing facts)
 
-1. **Windows busy dial — production code fixed, not the fixture.** The
-   run-43718750096 fixture repair made the busy condition deterministic,
-   which exposed the real defect: `dial_windows.go` exited with the
-   generic "no listening pipe instance after a 2000ms busy wait" error
-   after ONE per-wait cap (pipeBusyWaitMS=2000) — 2s of the 10s
-   pipeBusyDialBudget — so the typed `ErrBusyDialBudgetExhausted` was
-   unreachable whenever every wait timed out. An `ERROR_SEM_TIMEOUT` wait
-   timeout now continues the documented wait/retry loop (each wait
-   clamped to the remaining budget) until the budget or the tighter
-   caller deadline is spent; only an unresolved/unexpected wait failure
-   surfaces the original busy error. New focused guard:
-   `TestDialContextBusyDialCrossesWaitCap` (a caller deadline above one
-   cap must cross the first wait timeout and still end at the deadline
-   with the typed context error). `GOOS=windows go vet/build` clean;
-   Linux localipc suite green.
-2. **Session deletion is recoverable now** (`internal/sessions/trash.go`):
-   delete moves file + sidecars into `trash/<id>/` with a metadata-only
-   tombstone; restore refuses occupied destinations and verifies by
-   re-reading; purge is the only permanent destroy and requires the
-   trash state (two-step policy); crash windows reconcile additively.
-   API: `GET /api/sessions/trash`, `POST .../restore`, `POST .../purge`,
-   and DELETE now reports truthful `recoverable`. The pre-existing
-   delete-contract tests pass UNCHANGED. Contract:
-   [`architecture/CONTENT-INTEGRITY.md`](architecture/CONTENT-INTEGRITY.md).
-3. **Go-Gui v0.96.0 POC exists and is isolated**:
-   `experiments/ui-engine-poc/go-gui` (nested module, zero production
-   dependency — `go list ./...` from root proves it). 5/5 headless
-   app-level tests + software-rendered screenshot. POC_ONLY. Decision:
-   KEEP_FYNE_FOR_1.11.1 ([`architecture/UI-ENGINE-DECISION.md`](architecture/UI-ENGINE-DECISION.md)).
+1. **Windows busy dial — terminal identity is now a state decision, not
+   scheduler luck.** Root cause of both run-43862893851 failures: the
+   exhausted-deadline branch of `dial_windows.go` returned
+   `ErrBusyDialBudgetExhausted` without re-examining the caller context.
+   With the wait clamp truncating to whole milliseconds, the final
+   sub-millisecond of a caller-deadline dial raced the runtime's context
+   timer, so both tests (300ms / 2.75s caller deadlines, far under the 10s
+   budget) received the budget error where they demand
+   `context.DeadlineExceeded`. The branch now attributes deterministically:
+   observed context error first (cancellation precedence), then an
+   arithmetically-passed caller deadline, and only a still-live context
+   returns the typed budget error. No constants changed; both tests'
+   assertions untouched; `gofmt`/`GOOS=windows` build/vet/test-compile
+   clean; Linux localipc suite green.
+2. **Go-Gui POC: 10/10 with the mandated §4.4.5 matrix — and a real
+   containment defect fixed.** At 640x480 the `Send` button lost its
+   visible area inside the starved splitter pane; fixed in POC code
+   (never by weakening the test): below a 900-unit breakpoint the
+   workspace renders one content column (mirroring the Fyne shell's
+   compact contract). The Fyne-side launch action is STAGED_WITH_GATE —
+   the authoring host cannot compile `ui/fyne` (missing CGO headers), and
+   no blind edit was made.
+3. **GoGPU + WebView layers exist as honest POCs/contracts only.**
+   GoGPU: isolated module (gogpu v0.96.0→v0.54.1 pin matrix in the README),
+   deterministic LCG spectrum, real software render + bounded Xvfb
+   windowed soak; GPU HARDWARE NOT RUN; separate surfaces, no bridge, no
+   zero-copy claim. WebView: `internal/webapphost` typed contract with the
+   §4.6.6 policy as enforced code (8/8 fail-closed tests); zero adapters
+   (all STAGED_WITH_GATE with exact reasons).
 
 ## Live architectural constraints (unchanged, load-bearing)
 
 - **One authority per concern.** The Go core owns sessions, runs, models,
-  tools, approvals, policy, logging and persistence. The Fyne UI is a
+  tools, approvals, policy, logging and persistence. Every renderer is a
   client. Never add a second backend, UI stack or policy implementation.
 - **The ONE local transport.** Every in-process client dials through
   `internal/localipc.DialContext` (Windows named pipe / Unix domain
@@ -78,48 +77,26 @@ source ZIP.
 
 ## Active blockers
 
-- **Hosted verification of the Windows busy-dial fix, the content-
-  integrity suites and the Fyne gate on THIS candidate is pending the
-  operator's push.** No green-run claim exists for it. Native Windows
-  execution is NOT RUN in this Linux sandbox — the hosted Windows lane
-  is the runtime authority (`GOOS=windows go vet`/`go build` of
-  `internal/localipc` are the local compile evidence).
-- **Code Scanning inventory: BLOCKED.** The unauthenticated GitHub API
-  is rate-limited from this sandbox and no token was provided; alert
-  count/severities are UNKNOWN — recorded in the delivery's
-  `code-scanning-alert-inventory.md` with the exact refusal. Never
-  claim a clean alert state.
-- **The two research reports were not attached** to this session; the
-  traceability matrix follows the work order's §13 enumeration
-  (provenance note in
-  [`architecture/REQUIREMENTS-TRACEABILITY.md`](architecture/REQUIREMENTS-TRACEABILITY.md)).
-- **UI-frame percentiles / typing latency / same-hardware renderer
-  comparison: NOT RUN** (no comparable hardware budget); startup phase
-  telemetry and core benches exist and are green.
+1. Hosted verification of the whole candidate (both dial tests on a real
+   Windows lane) — requires the operator's push; nothing is claimed green
+   before that run completes.
+2. Code Scanning live inventory: BLOCKED from the agent sandbox
+   (unauthenticated API 401/403). The operator must retrieve it
+   (`security_events` scope, or the `code-scanning-alerts.txt` artifact
+   the CodeQL workflow already exports per run) and file the
+   two-warning fix as a follow-up work order. This candidate does NOT
+   claim those warnings fixed and does not guess their identities.
+3. Fyne-side launch action for the Go-Gui workspace: needs a host that
+   can compile `ui/fyne` (CGO headers); recorded STAGED_WITH_GATE.
+4. Native WebView adapters (all platforms) and the GoGPU hardware path:
+   STAGED_WITH_GATE with exact prerequisites (WEBVIEW-CAPABILITY-MATRIX.md,
+   GO-GUI-GOGPU-INTEROP.md).
 
-## Local environment note (differs from earlier sessions)
+## Next actionable step
 
-This sandbox DID build the full CGO Fyne tree and run the Fyne UI gate
-under Xvfb: GL/X11/wayland dev packages were dpkg-extracted into a local
-prefix (`PKG_CONFIG_PATH` + a `wayland.pc` shim for glfw's pre-split
-module name — sandbox-only, NOT a repository change). Commands and the
-full gate matrix are recorded in `note.md`.
-
-## Next actionable hand-off
-
-1. Operator reviews the candidate diff + `note.md`, pushes, and watches
-   the hosted run: `TestDialContextBusyBudgetExhaustsTyped` and
-   `TestDialContextBusyDialCrossesWaitCap` must pass natively on the
-   Windows lane; `internal/sessions` + `internal/api` green everywhere.
-2. Any agent continuing here should re-verify with the smallest ladder
-   prefix: `gofmt -l cmd internal ui experiments`, `go build ./...`,
-   `go test -tags headless ./internal/...`, then the touched packages
-   (`internal/sessions`, `internal/api`, `internal/localipc`), then the
-   Fyne gate under Xvfb. Full ladder and evidence-class rules live in
-   [`agent.md`](agent.md).
-3. On a Windows host, run `go test ./internal/localipc -count=1 -v`
-   natively — the two busy-budget tests are the first authority for the
-   dial repair.
+Operator: review the delivery (`note.md` beside the source ZIP), push
+`hybrid-native-ui-v1111`, watch the hosted run, then retrieve the Code
+Scanning inventory and decide the follow-up work order.
 
 ---
 

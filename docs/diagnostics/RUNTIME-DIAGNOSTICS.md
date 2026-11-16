@@ -44,6 +44,14 @@ persistence and core services are usable.
 - **IPC connection surface**: Connecting / Connected / Disconnected with
   the actionable typed error and a single-flight retry (`ui-contract.md`
   item 14).
+- **Optional hybrid layers (v1.11.1 hybrid milestone)**: the Go-Gui POC,
+  the GoGPU POC and the WebView contract use the same ladder — e.g. the
+  GoGPU software render reports itself as software (`adapter selected
+  name="Software Renderer" type=CPU`), never as GPU acceleration; frame
+  percentiles for the optional layers are NOT MEASURED in this milestone
+  (no present loop was exercised beyond the software soak). Layering and
+  ownership rules: `../architecture/UI-ENGINE-STACK.md`; the interop
+  decision: `../architecture/GO-GUI-GOGPU-INTEROP.md`.
 
 ## 4. Support bundle (`sheytan diagnostics`)
 

@@ -36,6 +36,19 @@ Exercised and green (`experiments/ui-engine-poc/go-gui`, `go test ./...`
   claim only — see limits);
 - software-rendered screenshot (`soft.RenderToPNG`, 126,746-byte PNG).
 
+v1.11.1 hybrid milestone extension (run-43862893851 follow-up): the POC
+suite is now **10/10** — the mandated responsive matrix (1280x720,
+1024x768, 800x600, 640x480) renders contained on both surfaces with
+per-size screenshots, a 2x sampling proxy (a sampling parameter, NOT a
+device-scaling claim), close/reopen, and typing focus at the 640x480
+floor. A REAL containment defect was found and fixed in POC code (never
+by weakening the test): at 640x480 the Send button lost its visible area
+inside the starved splitter pane, so the workspace now renders one
+content column below a 900-unit breakpoint, mirroring the Fyne shell's
+compact contract. The Fyne-side launch action stays STAGED_WITH_GATE (see
+[`UI-ENGINE-STACK.md`](UI-ENGINE-STACK.md) §3): no blind `ui/fyne` edit
+was made from a host that could not compile it.
+
 Notable framework finding (recorded for the next evaluation round): the
 widget-identity model scopes child ids under id-bearing ancestors with
 `:` (`gui/id_resolve.go`); the POC pins its interactive controls with
