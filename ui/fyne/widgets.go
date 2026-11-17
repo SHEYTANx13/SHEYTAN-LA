@@ -92,9 +92,22 @@ func ErrorSurface(what string, err error, retry func()) fyne.CanvasObject {
 }
 
 // wrappedLabel builds a word-wrapping label (no fixed geometry).
+// v1.11.1 renderer-convergence repair: the label is created EMPTY with
+// Wrapping applied BEFORE SetText. Creating it with the full text first
+// (widget.NewLabel) measures the unwrapped line and sizes the label to
+// it; a later Refresh re-measures the wrap AT that creation width, so the
+// min never shrinks and every owning container caches an inflated
+// MinSize — the exact mechanism that laid the Engines gallery's scroll
+// content out to 388 DIP wide inside a 304 DIP viewport (TestButtonFitMatrix:
+// the theme Select stretched to 364). With the wrap armed before the text
+// arrives, the re-measured minimum is the WRAPPED minimum (the longest
+// word), and the scroll content never inflates past the viewport.
 func wrappedLabel(s string) *widget.Label {
-	l := widget.NewLabel(s)
+	l := widget.NewLabel("")
 	l.Wrapping = fyne.TextWrapWord
+	if s != "" {
+		l.SetText(s)
+	}
 	return l
 }
 

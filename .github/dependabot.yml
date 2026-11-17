@@ -1,6 +1,13 @@
 # Dependabot — ONE multi-ecosystem update group for every supported
 # dependency ecosystem in this repository (github-actions + gomod).
 #
+# v1.11.1 (CodeQL run 43883548572, alerts #185/#186): external workflow
+# actions are pinned to immutable 40-hex commit SHAs with a synced
+# release-tag comment (# v7). The github-actions ecosystem below updates
+# those pins: Dependabot rewrites the SHA and keeps the version comment
+# synchronized; internal/releasecontract rejects any mutable ref so a
+# tag can never silently reappear.
+#
 # v1.11.1 maintenance: all version updates arrive as ONE combined
 # scheduled PR/branch per week (the all-dependencies group below), not
 # one PR per action or module. The open-pull-requests-limit of 1 per

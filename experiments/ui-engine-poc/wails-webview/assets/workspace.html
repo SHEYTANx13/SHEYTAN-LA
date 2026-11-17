@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<!-- workspace.html — the LOCAL fixture page for the Wails Web Workspace
+     POC. Served from the embedded assets ONLY; never fetched remotely.
+
+     The page runs the feature-detection probes pinned in features.go and
+     renders an honest capability table: supported features list their
+     probe result; unsupported ones show their declared fallback ("Open in
+     system browser" where the fallback policy says so, an explicit
+     unavailable state otherwise). No capability is claimed from mere
+     device detection. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>SHEYTAN-LA Web Workspace (POC)</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { font: 14px system-ui, sans-serif; margin: 24px; background: #121214; color: #e8e8ea; }
+    table { border-collapse: collapse; margin-top: 12px; }
+    th, td { text-align: left; padding: 6px 12px; border-bottom: 1px solid #3a3a42; }
+    th { color: #b9b9c0; font-weight: 600; }
+    .supported { color: #3ecf8e; }
+    .unsupported { color: #ff5d5d; }
+    .fallback { color: #ffb454; }
+    footer { margin-top: 16px; color: #8a8a94; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>SHEYTAN-LA Web Workspace</h1>
+  <p id="bridge">bridge: waiting…</p>
+  <table id="features">
+    <thead><tr><th>Feature</th><th>Probe</th><th>Result</th><th>Fallback</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <footer>
+    A WebView is not the newest Chrome/Edge/Safari on every OS — the host
+    engine controls what exists. Unsupported features degrade visibly and
+    offer the system browser where declared; nothing is claimed from
+    device detection.
+  </footer>
+  <script>
+    // The probes mirror features.go ONE-to-ONE; the honest table renders
+    // from the results below — never a hardcoded capability list.
+    const probes = {
+      "html5": () => !!document.doctype,
+      "modern-css": () => typeof CSS !== "undefined" && CSS.supports("display", "grid"),
+      "js-modules": () => typeof import.meta === "object",
+      "canvas": () => { try { return !!document.createElement("canvas").getContext("2d"); } catch { return false; } },
+      "webgl": () => { try { return !!document.createElement("canvas").getContext("webgl"); } catch { return false; } },
+      "webgl2": () => { try { return !!document.createElement("canvas").getContext("webgl2"); } catch { return false; } },
+      "webgpu": () => typeof navigator.gpu !== "undefined",
+      "webaudio": () => typeof AudioContext !== "undefined",
+      "video-codecs": () => { try { return !!document.createElement("video").canPlayType; } catch { return false; } },
+      "audio-codecs": () => { try { return !!document.createElement("audio").canPlayType; } catch { return false; } },
+      "webrtc": () => typeof RTCPeerConnection !== "undefined",
+      "media-devices": () => typeof navigator.mediaDevices !== "undefined",
+      "indexeddb": () => typeof indexedDB !== "undefined",
+      "service-workers": () => typeof navigator.serviceWorker !== "undefined",
+      "filesystem-access": () => typeof window.showSaveFilePicker === "function",
+      "downloads": () => typeof HTMLAnchorElement.prototype.download === "string",
+      "clipboard": () => typeof navigator.clipboard !== "undefined",
+    };
+    // The fallback policy ships with the manifest; the page never invents one.
+    const fallbacks = {
+      "webgl": "system-browser", "webgl2": "system-browser", "webgpu": "system-browser",
+      "video-codecs": "system-browser", "audio-codecs": "system-browser",
+      "webrtc": "system-browser", "filesystem-access": "system-browser",
+    };
+    const tbody = document.querySelector("#features tbody");
+    for (const [name, probe] of Object.entries(probes)) {
+      let ok;
+      try { ok = !!probe(); } catch { ok = false; }
+      const fb = fallbacks[name] || "unavailable";
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${name}</td><td>probe()</td>` +
+        `<td class="${ok ? "supported" : "unsupported"}">${ok ? "supported" : "unsupported"}</td>` +
+        `<td class="${fb === "system-browser" ? "fallback" : ""}">${fb}</td>`;
+      tbody.appendChild(tr);
+    }
+    document.getElementById("bridge").textContent =
+      "bridge: local embedded origin only — see the Go-side policy tests.";
+  </script>
+</body>
+</html>

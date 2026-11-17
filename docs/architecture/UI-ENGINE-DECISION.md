@@ -59,9 +59,13 @@ inside Splitter panes.
 
 - Real window-system input, IME, CJK composition, clipboard: NOT RUN.
 - Accessibility trees (Windows UIA, Linux AT-SPI, macOS VoiceOver,
-  TalkBack/VoiceOver on mobile): NOT RUN — and the candidate's own
-  published matrix marks Windows a11y not implemented, iOS a11y/URI
-  opening not implemented, native dialogs unavailable on Android/iOS.
+  TalkBack/VoiceOver on mobile): NOT RUN on hardware in this pass. The
+  corrected upstream Native Platform Matrix (2026-11-16, Mike Ward) marks
+  Windows accessibility IMPLEMENTED through a UI Automation provider for
+  Narrator/NVDA on amd64/arm64 (announcements need Windows 10 1709+);
+  the stale pre-correction claim that Windows a11y was unimplemented is
+  retired. iOS a11y/URI opening remain unimplemented upstream, and
+  native dialogs remain unavailable on Android/iOS.
 - Physical devices, high-DPI, safe-area, touch: NOT RUN.
 - Frame-time P50/P95/P99, typing latency, 10k-item virtualization soak,
   same-hardware comparison vs Fyne: NOT RUN (no comparable hardware

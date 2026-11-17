@@ -61,9 +61,9 @@ func goModToolchainVersion(path string) (string, error) {
 // RETIRED and BANNED.
 
 // workflowHasAction reports whether any `uses:` line in the workflow
-// references actionID with one of the accepted refs (a moving major tag
-// or its verified immutable commit SHA). The scan trims CRLF so the
-// check is line-ending-proof on every runner.
+// references actionID with one of the accepted refs (its verified
+// immutable commit SHA). The scan trims CRLF so the check is
+// line-ending-proof on every runner.
 func workflowHasAction(workflow, actionID string, acceptedRefs ...string) bool {
 	for _, line := range strings.Split(workflow, "\n") {
 		trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
@@ -389,10 +389,10 @@ func stressReleaseSurface() error {
 	// v8.0.2 (2026-10-07) is the verified latest major; the stale @v6
 	// floors here would fail the gate on a correct workflow (the
 	// run-#40 red's twin defect).
-	// v1.11.1 maintenance (2026-11-14, operator-directed policy change):
-	// external action references use ORDINARY UPSTREAM RELEASE TAGS —
-	// the immutable-SHA allowlist was retired with the policy, and the
-	// shared validator below now REJECTS commit-hash/branch refs on
+	// v1.11.1 policy reversal (2026-11-17, CodeQL run 43883548572,
+	// alerts #185/#186): external action references are IMMUTABLE
+	// 40-hex COMMIT PINS with a synced release-tag comment — the
+	// shared validator below now REJECTS mutable tags/branch refs on
 	// every external uses: line. Presence is still checked by PARSING
 	// the uses: reference (the run-41901967798 defect class: literal
 	// Contains spelling rejected a CORRECT workflow).
@@ -400,25 +400,26 @@ func stressReleaseSurface() error {
 		id   string
 		refs []string
 	}{
-		{id: "actions/checkout", refs: []string{"v7"}},
-		{id: "actions/setup-go", refs: []string{"v7"}},
-		{id: "actions/download-artifact", refs: []string{"v8"}},
-		{id: "softprops/action-gh-release", refs: []string{"v3"}},
-		{id: "msys2/setup-msys2", refs: []string{"v2"}},
+		{id: "actions/checkout", refs: []string{"3d3c42e5aac5ba805825da76410c181273ba90b1"}},
+		{id: "actions/setup-go", refs: []string{"b7ad1dad31e06c5925ef5d2fc7ad053ef454303e"}},
+		{id: "actions/download-artifact", refs: []string{"9000827ccba6bdab643e8b6fd33ac0654aef8333"}},
+		{id: "softprops/action-gh-release", refs: []string{"8a0cd651e5b2365bd640854a3fa5dfc70e4875f3"}},
+		{id: "msys2/setup-msys2", refs: []string{"ec48f7c5447b3140e2b088413ae3a55687bccb6e"}},
 	} {
 		if !workflowHasAction(w, required.id, required.refs...) {
 			return fmt.Errorf(
-				"workflow missing required action %s (accepted: upstream release tag)",
+				"workflow missing required action %s (accepted: the verified immutable commit SHA)",
 				required.id,
 			)
 		}
 	}
 
-	// 3d-v2 (v1.11.1): the shared action release-tag policy + upload
-	// contract validators — release tags only, per-job/per-step scoping,
-	// exactly one consolidated log upload, exact package payloads.
+	// 3d-v2 (v1.11.1): the shared immutable-SHA action policy + upload
+	// contract validators — 40-hex pins with synced version comments,
+	// per-job/per-step scoping, exactly one consolidated log upload,
+	// exact package payloads.
 	if err := releasecontract.ValidateUploadArtifactPins(w); err != nil {
-		return fmt.Errorf("action release-tag policy: %w", err)
+		return fmt.Errorf("action immutable-SHA policy: %w", err)
 	}
 
 	if err := releasecontract.ValidateUploadArtifactContract(w); err != nil {

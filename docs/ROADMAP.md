@@ -50,6 +50,29 @@ Status: **DELIVERED** — proven by current repository behaviour, code, tests or
 - Optional 3D Studio
 - CI visibility, stress gate, UCRT64 Windows, Xvfb Linux desktop smoke
 
+### Renderer convergence (v1.11.1, 2026-11-17 — delivered)
+- The shared design-token catalog (`internal/theme`, six themes,
+  WCAG-gated, JSON form for web surfaces) and the live switcher
+  (apply/cancel/save contract — navigation-preserving)
+- The renderer/engine registry (`internal/renderer`: manifests,
+  maturity, per-platform verification, capability truths, gaps) with
+  fail-closed vocabulary tests
+- The Engine Gallery in the Fyne shell (ninth destination, Ctrl+9):
+  registry-driven cards, honest not-built states with reasons, no fake
+  launch buttons
+- The window-controls trio with guaranteed 44×44 DIP hit areas; real
+  graceful-close funnel; minimize/tray disabled WITH reasons
+- Isolated POCs: Go-Gui v0.96.0 (10/10), GoGPU (2/2), Wails v3.0.0
+  Web Workspace (bridge/security/feature suites green; the WebView
+  window is `wails_runtime`-tagged)
+- Complete tracked-file catalog (`FILE_CATALOG.md`/`.json` + generator
+  + coverage contract test)
+- Immutable-SHA action pins in both workflows (CodeQL run-43883548572
+  alerts #185/#186 closed at source; hosted scan verification pending
+  the user's publish)
+- The NSIS 3.13 version-gate repair (run-43883548198 root cause) with
+  its fixture suite
+
 ---
 
 ## Evidence labels
@@ -95,6 +118,25 @@ and controllable than all of them.
 - MCP runtime wiring into the live tool registry
 - Oversized-output spool handles
 - Native-engine forward-pass arithmetic optimization (SIMD batched, evidence-gated)
+
+### Renderer convergence — remaining (gated, honest)
+
+- **Hosted verification of the v1.11.1 candidate** (the user owns the
+  publish): the Windows NSIS fix producing the real installer; the
+  CodeQL scan confirming alerts #185/#186 fixed; hosted Fyne gates on
+  the ninth destination.
+- **Companion-window launch path** for the preview engines (a managed
+  surface from the gallery, synchronized through the Go core) — after
+  a supported host/interop POC proves the boundary.
+- **Physical/hardware verification**: Narrator/NVDA (Go-Gui's corrected
+  Windows UIA), AT-SPI, VoiceOver, real touchscreens, real GPU adapters
+  (executed-backend telemetry only), IME/CJK fixtures.
+- **Wails WebView window** on a capable host (`wails_runtime` tag),
+  then its promotion gate (availability + sandbox + capability + IPC
+  tests on real runtimes; macOS only after its WebKit is actually
+  tested; mobile stays experimental).
+- Custom theme editing (validated against `internal/theme`'s
+  contract); per-frame telemetry; promotion-gate matrices per engine.
 
 ---
 

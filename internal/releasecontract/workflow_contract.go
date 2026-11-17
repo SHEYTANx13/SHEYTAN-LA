@@ -175,18 +175,28 @@ func ValidateLinuxRunnerContract(workflowText string) error {
 	return nil
 }
 
-// v1.11.1 maintenance policy change (operator-directed): external
-// workflow action references use ORDINARY UPSTREAM RELEASE TAGS
-// (checkout@v7, setup-msys2@v2, codeql-action@v4, ...), never
-// commit-hash pins, branch refs or moving aliases outside the tag
-// scheme. This is a deliberate maintainability choice: tags are mutable,
-// so the risk is mitigated by official upstream sources,
-// least-privilege permissions, the single weekly Dependabot update
-// group and the workflow contract below. The former immutable-SHA
-// allowlist was retired WITH this policy (the tag validator rejects any
-// 40-hex/partial-hash ref outright, so a hash pin can never reappear
-// silently).
-const releaseTagPattern = `^v[0-9]+(\.[0-9]+)*$`
+// v1.11.1 policy reversal (CodeQL run 43883548572, alerts #185 and #186,
+// operator-directed 2026-11-17): external workflow action references use
+// IMMUTABLE 40-hex COMMIT PINS carrying a synced human-readable
+// release-tag comment (`# v7`, `# v4.39.1`), never mutable tags or branch
+// refs. The two supplied actions/unpinned-tag findings — #185 at the
+// msys2/setup-msys2 step (build-desktop.yml line 817) and #186 at the
+// softprops/action-gh-release step (line 2573) — are closed at source by
+// pinning every external action in both workflow files; the retired
+// release-tag policy (the tag-only validator below, run 41901967798's
+// successor) is replaced WITH this change. Pins stay upgradeable: the
+// single weekly Dependabot group updates the SHA and rewrites the
+// version comment together, and the validator below rejects any mutable
+// ref so a tag can never silently reappear.
+const (
+	immutableActionRefPattern   = `^[0-9a-f]{40}$`
+	actionVersionCommentPattern = `^#\s*v[0-9]+(\.[0-9]+)*$`
+)
+
+var (
+	immutableActionRefRe   = regexp.MustCompile(immutableActionRefPattern)
+	actionVersionCommentRe = regexp.MustCompile(actionVersionCommentPattern)
+)
 
 // workflowStep is the decoded subset of a workflow step the contract
 // needs. The YAML parser decodes with-block scalars (multi-line path
@@ -434,14 +444,16 @@ func allActionSteps(workflowText string) ([]ArtifactStep, error) {
 	return out, nil
 }
 
-// ValidateUploadArtifactPins enforces the v1.11.1 release-tag policy for
-// EVERY external action use in the workflow: each uses: reference must
-// be an ordinary upstream release tag (v7, v6, v2, v4.39.1, ...).
-// Commit-hash pins (full or partial), branch refs (@main), moving
-// aliases outside the tag scheme and malformed references are rejected.
-// The workflow must carry at least one actions/upload-artifact step
-// (the consolidated log upload) or the contract is violated by
-// definition.
+// ValidateUploadArtifactPins enforces the v1.11.1 immutable-SHA action
+// policy for EVERY external action use in the workflow: each uses:
+// reference must be owner/repo@<40-hex commit> and the SAME line must
+// carry a synced release-tag comment (# v7, # v4.39.1, ...) — the
+// comment is what Dependabot rewrites together with the pin when it
+// bumps the version, so an uncommented SHA is an update dead-end and
+// fails too. Mutable tags (v7), branch refs (@main), partial hashes,
+// malformed references and SHA-without-comment are all rejected. The
+// workflow must carry at least one actions/upload-artifact step (the
+// consolidated log upload) or the contract is violated by definition.
 func ValidateUploadArtifactPins(workflowText string) error {
 	all, err := allActionSteps(workflowText)
 	if err != nil {
@@ -453,26 +465,96 @@ func ValidateUploadArtifactPins(workflowText string) error {
 
 	hasUpload := false
 	var bad []string
-	tagRe := regexp.MustCompile(releaseTagPattern)
 	for _, s := range all {
 		if s.Uses[:len(s.Uses)-len(s.Ref)-1] == "actions/upload-artifact" {
 			hasUpload = true
 		}
-		if !tagRe.MatchString(s.Ref) {
+		if !immutableActionRefRe.MatchString(s.Ref) {
 			bad = append(bad, fmt.Sprintf(
-				"job %q step %q uses %q — the ref is not an upstream release tag (vN or vN.N.N). Commit hashes, digest pins, branch refs and moving aliases are rejected by the v1.11.1 action-reference policy",
+				"job %q step %q uses %q — the ref is not an immutable 40-hex commit pin. Mutable release tags, partial hashes, branch refs and moving aliases are rejected by the v1.11.1 action-reference policy (CodeQL run 43883548572, alerts #185/#186)",
 				s.Job, s.Step, s.Uses,
 			))
 		}
 	}
 	if len(bad) > 0 {
 		return fmt.Errorf(
-			"action release-tag policy violated (%d of %d uses):\n  %s",
+			"action immutable-SHA policy violated (%d of %d uses):\n  %s",
 			len(bad), len(all), strings.Join(bad, "\n  "),
 		)
 	}
+
+	if err := validateUsesVersionComments(workflowText, len(all)); err != nil {
+		return err
+	}
+
 	if !hasUpload {
 		return errors.New("no actions/upload-artifact step found — the consolidated log upload is missing from the workflow")
+	}
+	return nil
+}
+
+// validateUsesVersionComments checks the RAW workflow text: every
+// `uses:` line referencing an external action (a value containing '@')
+// must pin the immutable 40-hex SHA and end with a synced release-tag
+// comment (# v7, # v4.39.1). The YAML parser strips comments before the
+// uses value reaches the structural pass above, so the comment contract
+// is enforced on the raw lines; the raw external uses-line count must
+// equal the structurally parsed action-step count so no uses: spelling
+// can dodge the audit (a uses: line embedded inside a run: script breaks
+// the parity and fails closed).
+func validateUsesVersionComments(workflowText string, parsedExternal int) error {
+	raw := 0
+	var bad []string
+	for _, line := range strings.Split(workflowText, "\n") {
+		trimmed := strings.TrimRight(line, " \t\r")
+		body := strings.TrimLeft(trimmed, " \t")
+		// Both step spellings: "- uses: …" (uses as the first list key) and
+		// an indented "uses: …" after a name: key.
+		if strings.HasPrefix(body, "-") {
+			body = strings.TrimLeft(body[1:], " \t")
+		}
+		if !strings.HasPrefix(body, "uses:") {
+			continue
+		}
+		rest := strings.TrimLeft(body[len("uses:"):], " \t")
+		value := rest
+		if i := strings.IndexAny(rest, " \t"); i >= 0 {
+			value = rest[:i]
+		}
+		if !strings.Contains(value, "@") {
+			continue // local composite action path — not governed
+		}
+		raw++
+		ref := value
+		if i := strings.LastIndex(value, "@"); i >= 0 {
+			ref = value[i+1:]
+		}
+		comment := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(rest, value), " \t"))
+		if !immutableActionRefRe.MatchString(ref) {
+			bad = append(bad, fmt.Sprintf(
+				"uses line %q: ref %q is not an immutable 40-hex commit pin",
+				strings.TrimSpace(line), ref,
+			))
+			continue
+		}
+		if !actionVersionCommentRe.MatchString(comment) {
+			bad = append(bad, fmt.Sprintf(
+				"uses line %q: the immutable SHA must carry a synced release-tag comment (# v7, # v4.39.1) — Dependabot rewrites the pin and this comment together",
+				strings.TrimSpace(line),
+			))
+		}
+	}
+	if len(bad) > 0 {
+		return fmt.Errorf(
+			"uses-line version-comment contract violated (%d lines):\n  %s",
+			len(bad), strings.Join(bad, "\n  "),
+		)
+	}
+	if raw != parsedExternal {
+		return fmt.Errorf(
+			"raw uses-line audit found %d external uses lines but the YAML parser found %d action steps — a uses: spelling outside a step key (for example inside a run: script) breaks the audit parity and fails closed",
+			raw, parsedExternal,
+		)
 	}
 	return nil
 }

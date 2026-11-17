@@ -112,7 +112,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Runner OS identity (Ubuntu 26.04 gate)
         run: |
           set -euo pipefail
@@ -137,7 +137,7 @@ jobs:
 
       - name: Setup Go
         id: setup-go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -279,7 +279,7 @@ jobs:
     timeout-minutes: 35
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Runner OS identity (Ubuntu 26.04 gate)
         run: |
           set -euo pipefail
@@ -304,7 +304,7 @@ jobs:
 
       - name: Setup Go
         id: setup-go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -393,7 +393,7 @@ jobs:
     timeout-minutes: 35
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Runner OS identity (Ubuntu 26.04 gate)
         run: |
           set -euo pipefail
@@ -418,7 +418,7 @@ jobs:
 
       - name: Setup Go
         id: setup-go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -660,11 +660,11 @@ jobs:
         shell: pwsh
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Go
         id: setup-go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -748,7 +748,7 @@ jobs:
       #   sha256       : 997123ef4ce8896204ab912d5b54f19372c487ff9835bcefafa2fca23b8953c2
       # ------------------------------------------------------------------
       - name: Restore pinned Mesa archive (cache, keyed by sha256)
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ runner.temp }}/mesa3d-26.2.5-release-msvc.7z
           key: mesa3d-26.2.5-release-msvc-sha256-997123ef4ce8896204ab912d5b54f19372c487ff9835bcefafa2fca23b8953c2
@@ -812,9 +812,13 @@ jobs:
       # the official Fyne Windows prerequisites). MINGW64 is deprecated per
       # msys2's October 2026 announcement — UCRT64 is the supported CRT.
       - name: Setup MSYS2 (UCRT64 GCC for Fyne CGO)
-        # v1.11.1 maintenance: ordinary upstream release tag (never a
-        # commit-hash pin — the repo-wide action-reference policy).
-        uses: msys2/setup-msys2@v2
+        # v1.11.1 (CodeQL run 43883548572, alert #185): immutable 40-hex
+        # commit pin for the verified upstream v2 tag (resolved from the
+        # msys2/setup-msys2 repository and matching the run-log commit) —
+        # the repo-wide action-reference policy. Mutable tags are
+        # rejected by internal/releasecontract.ValidateUploadArtifactPins;
+        # Dependabot keeps the SHA and the version comment in sync.
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
         with:
           msystem: UCRT64
           update: false
@@ -1101,6 +1105,18 @@ jobs:
         run: |
           ./scripts/ci/PackageGate.Tests.ps1
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::package gate fixture contract violated (exit $LASTEXITCODE) — the fail-closed gate truth table drifted"; throw "package gate fixture contract violated (exit $LASTEXITCODE)" }
+
+      # v1.11.1 (run 43883548198 repair): the NSIS version-gate decision
+      # contract is pinned by deterministic local fixtures BEFORE the real
+      # gate depends on it — the SAME Get-NsisVersionVerdict function the
+      # "Install NSIS" step runs, exercised with the accepted spellings
+      # (v3.13 / 3.13 / v3.13.0 / 3.13.0 / 3.13.1 / the Out-String newline)
+      # and the fail-closed matrix (3.12 / v3.12.9 / 3.130 / 3.14 / v4.0 /
+      # v3.13-preview / empty / whitespace-only / multiline / nonzero exit).
+      - name: NSIS version gate fixture contract
+        run: |
+          ./scripts/ci/NsisVersion.Tests.ps1
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::NSIS version gate fixture contract violated (exit $LASTEXITCODE) — the version parser semantics drifted"; throw "NSIS version gate fixture contract violated (exit $LASTEXITCODE)" }
 
       # Pre-launch dependency audit (run #119): 0xC0000135 is raised by
       # the Windows loader while resolving the STATIC import chain at
@@ -1610,12 +1626,29 @@ jobs:
           choco install nsis --version=3.13.0 -y --no-progress
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::NSIS 3.13.0 install failed (choco exit $LASTEXITCODE) — the installer job cannot build"; throw "NSIS install failed" }
           $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
-          if (-not (Test-Path $makensis)) { Write-Host "::error::makensis not found at $makensis after the NSIS install"; throw "makensis missing" }
-          $nsisVersion = (& $makensis "/VERSION") 2>&1
-          Write-Host "makensis /VERSION: $nsisVersion"
+          if (-not (Test-Path -LiteralPath $makensis)) { Write-Host "::error::makensis not found at $makensis after the NSIS install"; throw "makensis missing" }
+          # run 43883548198 repair: makensis 3.13 prints /VERSION as "v3.13"
+          # (leading v, no patch). The retired "^3\.13" prefix predicate
+          # rejected that VALID output and stopped this job — the package
+          # gate's "installer missing while portable ZIP exists" message
+          # downstream was the consequence, not a second packaging defect.
+          # The strict gate now lives in scripts/ci/NsisVersion.ps1 and is
+          # shared with its fixture test (NsisVersion.Tests.ps1): anchored
+          # ^v?3\.13(\.\d+)?$ on the trimmed output plus a zero process
+          # exit — 3.12 / v3.12.9 / 3.130 / 3.14 / v4.0 / v3.13-preview /
+          # empty / multiline garbage / nonzero exit all fail closed.
+          $nsisVersionRaw = (& $makensis "/VERSION" 2>&1 | Out-String)
+          $nsisExit = $LASTEXITCODE
+          Write-Host "makensis /VERSION (raw, exit $nsisExit): $($nsisVersionRaw.Trim())"
           New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
-          "makensis /VERSION: $nsisVersion" | Add-Content -Path ci-logs/win-nsis-version.log -Encoding utf8NoBOM
-          if ("$nsisVersion" -notmatch "^3\.13") { Write-Host "::error::makensis reports version '$nsisVersion', want 3.13.x — the pin did not take effect"; throw "NSIS version mismatch: $nsisVersion" }
+          "makensis=$makensis exit=$nsisExit raw=$($nsisVersionRaw.Trim())" | Add-Content -Path ci-logs/win-nsis-version.log -Encoding utf8NoBOM
+          . ./scripts/ci/NsisVersion.ps1
+          $verdict = Get-NsisVersionVerdict -RawOutput $nsisVersionRaw -ExitCode $nsisExit
+          if (-not $verdict.Accepted) {
+            Write-Host ("::error::NSIS version gate FAILED: executable={0} exit={1} raw='{2}' reason={3} — want the pinned 3.13 line (an optional leading v or a missing patch is valid)" -f $makensis, $nsisExit, $verdict.Normalized, $verdict.Reason)
+            throw ("NSIS version mismatch: '{0}' ({1})" -f $verdict.Normalized, $verdict.Reason)
+          }
+          Write-Host ("NSIS version gate OK: executable={0} normalized='{1}' (the pinned 3.13 line)" -f $makensis, $verdict.Normalized)
 
       - name: Generate payload-uninstall.nsh (uninstall symmetry)
         run: |
@@ -1965,7 +1998,7 @@ jobs:
       # always() — and only when BOTH verified distribution files exist
       # (error on missing): no partial or placeholder package bundles.
       - name: Upload Windows package
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: windows-x64-package
           path: |
@@ -1991,7 +2024,7 @@ jobs:
       APP_VERSION: "1.11.1"
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Runner OS identity (Ubuntu 26.04 gate)
         run: |
           set -euo pipefail
@@ -2016,7 +2049,7 @@ jobs:
 
       - name: Setup Go
         id: setup-go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -2305,7 +2338,7 @@ jobs:
       # always() — and only when the verified portable archive exists
       # (error on missing): no partial or placeholder package bundles.
       - name: Upload Linux package
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: linux-x64-package
           path: dist/${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64.zip
@@ -2349,7 +2382,7 @@ jobs:
       actions: read
     steps:
       - name: Checkout (collector script)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # ONE collector, TWO run-level artifacts (plain-text report + a
       # machine-readable run-diagnostics.json). The collector pulls the
@@ -2400,7 +2433,7 @@ jobs:
       # artifact; the attempt number lives inside the report content.
       - name: Upload the consolidated run log (single plain-text artifact)
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: SHEYTAN-LA-all-logs.txt
           path: SHEYTAN-LA-all-logs.txt
@@ -2416,7 +2449,7 @@ jobs:
       # !cancelled() condition as the plain-text report.
       - name: Upload the machine-readable run diagnostics index
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: run-diagnostics.json
           path: run-diagnostics.json
@@ -2504,13 +2537,13 @@ jobs:
       APP_VERSION: "1.11.1"
     steps:
       - name: Download Windows package
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: windows-x64-package
           path: dist/
 
       - name: Download Linux package
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: linux-x64-package
           path: dist/
@@ -2570,7 +2603,12 @@ jobs:
           echo "--- SHA256SUMS.txt ---"; cat dist/SHA256SUMS.txt
 
       - name: Publish the release
-        uses: softprops/action-gh-release@v3
+        # v1.11.1 (CodeQL run 43883548572, alert #186): immutable 40-hex
+        # commit pin for the verified upstream v3 tag (resolved from the
+        # softprops/action-gh-release repository; not covered by the
+        # run-log resolution table, so it was resolved fresh from upstream) —
+        # same policy as every external action in this workflow.
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
         with:
           files: |
             dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip

@@ -24,7 +24,8 @@ import (
 // AppID is the desktop identity (taskbar, settings storage).
 const AppID = "la.sheytan.localagent"
 
-// App carries the window, the runtime and the view registry.
+// App carries the window, the runtime, the view registry and the theme
+// service.
 type App struct {
 	a       fyne.App
 	w       fyne.Window
@@ -35,6 +36,7 @@ type App struct {
 	cancel  context.CancelFunc
 	rootCtx context.Context
 	coord   *shutdownCoordinator
+	themes  *themeService
 
 	// bootMu/bootInFlight serialize the bootstrap/retry path (v1.11.1):
 	// manual Retry clicks can never stack concurrent bootstraps.
@@ -60,14 +62,19 @@ func transportName() string {
 
 // NewApp builds the product application over an existing core client
 // (the caller owns the core lifecycle: api.New → EnsureSetup → localipc).
+// The theme service applies the persisted (or premium-default) theme on
+// construction — ONE write path for every later live switch.
 func NewApp(a fyne.App, client *CoreClient) *App {
-	return &App{a: a, client: client, rt: NewRuntime(client), ws: newWSHub()}
+	ap := &App{a: a, client: client, rt: NewRuntime(client), ws: newWSHub()}
+	ap.themes = newThemeService(a)
+	return ap
 }
 
-// NewDesktopApp is the production entry: a real app with metadata.
+// NewDesktopApp is the production entry: a real app with metadata. The
+// theme service (initialized in NewApp) owns the theme — NewDesktopApp no
+// longer sets it directly, so boot and every later switch share ONE path.
 func NewDesktopApp(client *CoreClient) *App {
 	a := app.NewWithID(AppID)
-	a.Settings().SetTheme(NewTheme())
 	return NewApp(a, client)
 }
 
@@ -240,6 +247,10 @@ func (ap *App) Window() fyne.Window { return ap.w }
 // Workspace exposes the presentation hub (views/tests register blocks;
 // the hub owns the one bounded presentation store of this process).
 func (ap *App) Workspace() *wsHub { return ap.ws }
+
+// Themes exposes the theme service (the Engines & Appearance surface and
+// tests drive live preview / save / cancel through it).
+func (ap *App) Themes() *themeService { return ap.themes }
 
 // Ctx is the app-lifetime context. Before Run() arms it (tests,
 // composition probes) the nil root falls back to Background — callers

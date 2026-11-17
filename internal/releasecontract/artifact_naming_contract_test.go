@@ -74,14 +74,28 @@ func mustArtifactSteps(t *testing.T, workflow, actionID string) []ArtifactStep {
 	return steps
 }
 
-// TestWorkflowUploadArtifactPinsMatchAllowlist: every upload-artifact
-// use in the REAL workflow is pinned to the reviewed immutable v7.0.2
-// commit SHA (the shared stress-gate validator — one authority).
+// TestWorkflowUploadArtifactPinsMatchAllowlist: every external action
+// use in the REAL workflow is an immutable 40-hex commit pin carrying a
+// synced release-tag comment (the shared stress-gate validator — one
+// authority; the CodeQL run 43883548572 alerts #185/#186 policy).
 func TestWorkflowUploadArtifactPinsMatchAllowlist(t *testing.T) {
 	workflow := readTreeFile(t, workflowRelPath)
 
 	if err := ValidateUploadArtifactPins(workflow); err != nil {
 		t.Fatalf("upload-artifact pin policy violated: %v", err)
+	}
+}
+
+// TestCodeQLWorkflowImmutablePins: the CodeQL workflow follows the SAME
+// immutable-SHA action-reference policy as the desktop workflow — both
+// workflow files are governed, not just build-desktop.yml (SEC-03:
+// pinning the refs never changes the analyzer configuration, the
+// manual C++ extraction or the SARIF uploads).
+func TestCodeQLWorkflowImmutablePins(t *testing.T) {
+	workflow := readTreeFile(t, ".github/workflows/codeql.yml")
+
+	if err := ValidateUploadArtifactPins(workflow); err != nil {
+		t.Fatalf("CodeQL workflow pin policy violated: %v", err)
 	}
 }
 
@@ -402,46 +416,43 @@ func TestUploadArtifactContractFixtures(t *testing.T) {
 	}
 }
 
-// TestUploadArtifactPinPolicyFixtures: under the v1.11.1 release-tag
-// policy every external uses: ref must be an upstream release tag —
-// major tags (@v7) and exact version tags (@v7.0.2) are accepted;
-// commit hashes (full or partial), branch refs, and malformed refs are
-// rejected.
+// TestUploadArtifactPinPolicyFixtures: under the v1.11.1 immutable-SHA
+// policy (CodeQL run 43883548572, alerts #185/#186) every external
+// uses: ref must be a full 40-hex commit pin carrying a synced
+// release-tag comment; mutable tags, branch refs, partial hashes,
+// malformed refs and uncommented SHAs are rejected.
 func TestUploadArtifactPinPolicyFixtures(t *testing.T) {
 	fixture := func(ref string) string {
 		return fmt.Sprintf(fixtureUploadWorkflow, ref, ref, ref, ref)
 	}
 
-	// Accepted: the maintained major release tag (the workflow's
-	// spelling since the v1.11.1 maintenance policy change).
-	if err := ValidateUploadArtifactPins(fixture("v7")); err != nil {
-		t.Fatalf("the v7 release tag must be accepted: %v", err)
+	// Accepted: the reviewed immutable v7 commit pin with the synced
+	// release-tag comment — the workflow's spelling since the policy
+	// reversal (the SHA is the verified actions/upload-artifact v7 pin,
+	// resolved from the upstream tag and matching the run-log table).
+	if err := ValidateUploadArtifactPins(fixture("cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7")); err != nil {
+		t.Fatalf("the immutable SHA pin with a synced version comment must be accepted: %v", err)
 	}
 
-	// Accepted: an exact version release tag.
-	if err := ValidateUploadArtifactPins(fixture("v7.0.2")); err != nil {
-		t.Fatalf("an exact version release tag must be accepted: %v", err)
+	// Accepted: an exact-version comment on the same pinned SHA.
+	if err := ValidateUploadArtifactPins(fixture("cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2")); err != nil {
+		t.Fatalf("an exact-version comment must be accepted: %v", err)
 	}
 
-	// Accepted: the tag with the workflow's trailing comment shape.
-	// (YAML strips comments before the value reaches the validator —
-	// asserted here so a comment regression cannot reappear.)
-	withComment := fixture("v7" + ` # release tag`)
-	if err := ValidateUploadArtifactPins(withComment); err != nil {
-		t.Fatalf("the release tag with a trailing comment must be accepted: %v", err)
-	}
-
-	// Rejected: commit-hash pins (full and partial), branch refs and
-	// malformed refs — the exact shapes the v1.11.1 policy forbids.
+	// Rejected: mutable tags (the retired spelling), partial hashes,
+	// branch refs, an uncommented SHA (a Dependabot update dead-end), a
+	// non-version comment and an empty ref.
 	for _, bad := range []string{
-		"cf430e030ddbb5b0abf93d22962f4752f3646cd9", // full commit SHA
+		"v7",            // mutable major tag — the retired policy's spelling
+		"v7.0.2",        // mutable exact tag
 		"cf430e030ddbb", // partial hash
 		"main",          // branch ref
-		"master",        // branch ref
-		"",              // empty ref
+		"cf430e030ddbb5b0abf93d22962f4752f3646cd9",          // immutable SHA WITHOUT the version comment
+		"cf430e030ddbb5b0abf93d22962f4752f3646cd9 # pinned", // SHA with a non-version comment
+		"", // empty ref
 	} {
 		if err := ValidateUploadArtifactPins(fixture(bad)); err == nil {
-			t.Errorf("ref %q must be REJECTED under the release-tag policy", bad)
+			t.Errorf("ref %q must be REJECTED under the immutable-SHA policy", bad)
 		}
 	}
 

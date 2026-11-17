@@ -247,13 +247,15 @@ func TestNavigationActionInvokedOnce(t *testing.T) {
 }
 
 // TestShortcutKeyMapCoversAllPrimaryViews pins the EXACT shortcut mapping:
-// Ctrl+1..8 in registry order, one key per primary view. (The pre-fix map
-// stopped at Ctrl+7 even though the registry holds eight destinations.)
-// The map is asserted against the registry so a future ninth view without
-// a key fails HERE instead of shipping silently — the view remains
-// pointer-reachable by contract, but the mapping must be documented.
+// Ctrl+1..9 in registry order, one key per primary view. (The pre-fix map
+// stopped at Ctrl+7 even though the registry held eight destinations; the
+// v1.11.1 renderer-convergence milestone adds the ninth — Engines — and
+// the mapping grew with it.) The map is asserted against the registry so
+// a future tenth view without a key fails HERE instead of shipping
+// silently — the view remains pointer-reachable by contract, but the
+// mapping must be documented.
 func TestShortcutKeyMapCoversAllPrimaryViews(t *testing.T) {
-	wantKeys := []fyne.KeyName{fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4, fyne.Key5, fyne.Key6, fyne.Key7, fyne.Key8}
+	wantKeys := []fyne.KeyName{fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4, fyne.Key5, fyne.Key6, fyne.Key7, fyne.Key8, fyne.Key9}
 	if len(wantKeys) < len(primaryViews) {
 		t.Fatalf("shortcut map covers %d keys for %d primary views — extend the documented mapping", len(wantKeys), len(primaryViews))
 	}
@@ -262,11 +264,11 @@ func TestShortcutKeyMapCoversAllPrimaryViews(t *testing.T) {
 			t.Fatalf("primary view %q (%d) has no shortcut key in the documented mapping", v.id, i)
 		}
 	}
-	// The registry order IS the shortcut order (Ctrl+1 = chat … Ctrl+8 = studio).
+	// The registry order IS the shortcut order (Ctrl+1 = chat … Ctrl+8 = studio, Ctrl+9 = engines).
 	expect := map[string]fyne.KeyName{
 		"chat": fyne.Key1, "agent": fyne.Key2, "workspace": fyne.Key3,
 		"lab": fyne.Key4, "automation": fyne.Key5, "system": fyne.Key6,
-		"settings": fyne.Key7, "studio": fyne.Key8,
+		"settings": fyne.Key7, "studio": fyne.Key8, "engines": fyne.Key9,
 	}
 	for i, v := range primaryViews {
 		if wantKeys[i] != expect[v.id] {

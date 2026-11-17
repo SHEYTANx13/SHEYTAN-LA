@@ -42,11 +42,13 @@ type primaryView struct {
 	build func(*App) fyne.CanvasObject
 }
 
-// primaryViews — the 8-layer IA (workspace.ts contract: ids, order, modes)
+// primaryViews — the 9-layer IA (workspace.ts contract: ids, order, modes)
 // plus the v1.11.0 optional 3D Studio entry (read-only topology viewer;
-// the view itself honors the studioEnabled setting). This is the ONE
-// canonical registry for primary destinations: the rail, the compact top
-// strip and the Ctrl+number shortcut map all derive from it.
+// the view itself honors the studioEnabled setting) and the v1.11.1
+// Engines & Appearance gallery (renderer catalog + themes + window
+// controls — the renderer-convergence milestone's in-app surface). This
+// is the ONE canonical registry for primary destinations: the rail, the
+// compact top strip and the Ctrl+number shortcut map all derive from it.
 var primaryViews = []primaryView{
 	{"chat", "Chat", theme.HomeIcon, buildChatView},
 	{"agent", "Agent", theme.ComputerIcon, buildAgentView},
@@ -56,6 +58,7 @@ var primaryViews = []primaryView{
 	{"system", "System", theme.InfoIcon, buildSystemView},
 	{"settings", "Settings", theme.SettingsIcon, buildSettingsView},
 	{"studio", "3D Studio", theme.ViewFullScreenIcon, buildStudioView},
+	{"engines", "Engines", theme.ColorPaletteIcon, buildEnginesView},
 }
 
 // subPanels — the secondary UTILITY surfaces. They are deliberately NOT
@@ -597,12 +600,12 @@ func (s *shell) updateStatus() {
 	}
 }
 
-// registerShortcuts wires desktop keyboard navigation (Ctrl+1..8 for the
+// registerShortcuts wires desktop keyboard navigation (Ctrl+1..9 for the
 // primary views in registry order — the number row exactly covers the
-// eight-entry registry — and Ctrl+N new session).
+// nine-entry registry — and Ctrl+N new session).
 func (ap *App) registerShortcuts() {
 	c := ap.w.Canvas()
-	keyByIndex := []fyne.KeyName{fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4, fyne.Key5, fyne.Key6, fyne.Key7, fyne.Key8}
+	keyByIndex := []fyne.KeyName{fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4, fyne.Key5, fyne.Key6, fyne.Key7, fyne.Key8, fyne.Key9}
 	for i, v := range primaryViews {
 		if i >= len(keyByIndex) {
 			break // number row exhausted; the view stays reachable by pointer

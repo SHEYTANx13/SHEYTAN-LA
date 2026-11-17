@@ -1,13 +1,14 @@
-# v1.11.1 maintenance: external action references use ordinary upstream
-# RELEASE TAGS (@v7 / @v4), never commit-hash pins — the repo-wide
-# action-reference policy (maintainability over immutability; the risk is
-# mitigated by official upstream sources, least-privilege permissions and
-# the single weekly Dependabot update group).
+# v1.11.1 (CodeQL run 43883548572, alerts #185/#186 remediation): external
+# action references are IMMUTABLE 40-hex COMMIT PINS with a synced
+# release-tag comment (# v7 / # v4) — the repo-wide action-reference
+# policy. Mutable tags are rejected by
+# internal/releasecontract.ValidateUploadArtifactPins; the single weekly
+# Dependabot group updates the pins and keeps the version comments in
+# sync. Analysis configuration, manual C++ extraction and SARIF uploads are
+# unchanged (SEC-03/SEC-04: no query-suite weakening, no suppressions).
 # SHEYTAN-LA: full CodeQL security + quality analysis.
 # Each language gets an independent CodeQL database and analysis category.
 # Go and C++ use explicit manual builds so CodeQL observes the real compilers.
-# External action references follow the repo-wide policy: ordinary upstream
-# release tags (never commit hashes, never moving branch refs).
 
 name: CodeQL Security & Quality
 
@@ -66,7 +67,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
@@ -94,7 +95,7 @@ jobs:
 
       - name: Set up Go
         if: matrix.language == 'go'
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           # Exact parity with build-desktop.yml and the canonical go.mod
           # toolchain directive (go1.27.4) — one Go patch everywhere.
@@ -122,7 +123,7 @@ jobs:
         # extracted is still valuable diagnostics and the SARIF upload must
         # still happen. The analyze condition below keys off this outcome.
         id: codeql-init
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -177,7 +178,7 @@ jobs:
       # default): SARIF is uploaded for successful AND failed runs.
       - name: Analyze and upload CodeQL results
         if: ${{ !cancelled() && steps.codeql-init.outcome == 'success' }}
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
         with:
           category: "/language:${{ matrix.language }}"
           upload: always
@@ -439,7 +440,7 @@ jobs:
           PY
 
       - name: Upload plain-text report (not ZIP-compressed)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           path: reports/code-scanning-alerts.txt
           archive: false
@@ -471,7 +472,7 @@ jobs:
       actions: read
     steps:
       - name: Checkout (collector script)
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Collect the CodeQL run logs into one plain-text report
         id: collector
@@ -505,7 +506,7 @@ jobs:
 
       - name: Upload the consolidated CodeQL run log (single plain-text artifact)
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: SHEYTAN-LA-codeql-all-logs.txt
           path: SHEYTAN-LA-codeql-all-logs.txt
@@ -516,7 +517,7 @@ jobs:
 
       - name: Upload the machine-readable CodeQL run diagnostics index
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: codeql-run-diagnostics.json
           path: run-diagnostics.json

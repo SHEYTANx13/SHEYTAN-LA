@@ -454,14 +454,16 @@ fi
 # 16. workflow shape contract ----------------------------------------------
 yml_ok=1
 [ -f "$workflow" ] || yml_ok=0
-# exactly ONE upload of the single log artifact, by upstream release
-# tag (the v1.11.1 action-reference policy), archive:false, with the
+# exactly ONE upload of the single log artifact, by immutable 40-hex
+# commit pin with the synced version comment (the v1.11.1
+# action-reference policy since the CodeQL run-43883548572 alerts
+# #185/#186 remediation), archive:false, with the
 # stable display name; plus exactly ONE machine-readable
 # run-diagnostics.json upload from the SAME collector job (run
 # 43630164424 repair: two run-level collector artifacts, archive:false)
 [ "$(grep -c 'path: SHEYTAN-LA-all-logs.txt' "$workflow")" = "1" ] || yml_ok=0
 grep -q 'name: SHEYTAN-LA-all-logs.txt' "$workflow" || yml_ok=0
-grep -q 'actions/upload-artifact@v7' "$workflow" || yml_ok=0
+grep -q 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9' "$workflow" || yml_ok=0
 [ "$(grep -c 'archive: false' "$workflow")" = "2" ] || yml_ok=0
 [ "$(grep -c 'path: run-diagnostics.json' "$workflow")" = "1" ] || yml_ok=0
 grep -q -- '--json-out run-diagnostics.json' "$workflow" || yml_ok=0
