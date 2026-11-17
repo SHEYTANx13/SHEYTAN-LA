@@ -21,7 +21,7 @@ func TestResolveReasonCodeAlwaysSet(t *testing.T) {
 			requested: RequestCPU,
 			ev:        Evidence{Workload: WorkloadChat},
 			want:      ReasonCodeRequestedCPU,
-			verified:  true,
+			verified:  false, // v1.11.1: requested CPU is a policy choice, not execution
 		},
 		{
 			name:      "enumerated GPU pending verify",
@@ -47,7 +47,7 @@ func TestResolveReasonCodeAlwaysSet(t *testing.T) {
 				Workload:             WorkloadChat,
 			},
 			want:     ReasonCodeBackendUnsupported,
-			verified: true, // CPU fallback is verified by definition
+			verified: false, // v1.11.1: CPU policy selection is NOT execution verification
 		},
 		{
 			name:      "DLL alone selects pending-verify, never verified",
@@ -71,7 +71,7 @@ func TestResolveReasonCodeAlwaysSet(t *testing.T) {
 				Workload:             WorkloadChat,
 			},
 			want:     ReasonCodeNoMatchingDevice,
-			verified: true,
+			verified: false, // v1.11.1: the AUTO→CPU fallback is a policy fallback, not execution
 		},
 	}
 

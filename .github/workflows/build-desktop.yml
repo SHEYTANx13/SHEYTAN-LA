@@ -536,6 +536,27 @@ jobs:
             kill "$XVFB_PID" 2>/dev/null || true
             exit 1
           fi
+          # v1.11.1 (run 43995689377) MANAGED-ENGINE SETTLE + VERDICT:
+          # the same false-green fix as the Windows smoke. The launch
+          # smoke above proves the SHELL only; on the pristine smoke copy
+          # the startup gate runs transactional engine maintenance in
+          # the background. Give it a BOUNDED window to reach a terminal
+          # record, then apply the SAME engine-ready verdict as Windows
+          # (rules mirror internal/smokeverdict): launch/resize alone
+          # never claims Linux AI-readiness. Failure evidence classes:
+          # update-failed-engine-unusable / prewarm BLOCKED / stage
+          # engine swap — the run-43995689377 failure shape.
+          app_log="data/logs/app.log"
+          maint_terminal=0
+          for i in $(seq 1 150); do
+            if ! kill -0 "$APP_PID" 2>/dev/null; then break; fi
+            if [ -f "$app_log" ] && grep -qE "prewarm released|engine is current|prewarm BLOCKED|no maintenance this boot|no recent release ships a prebuilt asset" "$app_log" 2>/dev/null; then
+              maint_terminal=1
+              break
+            fi
+            sleep 1
+          done
+          echo "engine maintenance settle window: terminal record observed = ${maint_terminal} (deadline 150s)"
           # Soak: the event loop must stay alive under a real desktop session.
           soak_ok=1
           for i in $(seq 1 20); do
@@ -568,7 +589,46 @@ jobs:
           fi
           wait "$APP_PID" 2>/dev/null || true
           kill "$XVFB_PID" 2>/dev/null || true
-          echo "SMOKE OK: window booted (observed in the X tree), event loop alive through the soak, clean SIGTERM shutdown with reap"
+
+          # v1.11.1 (run 43995689377) MANAGED-ENGINE-READY VERDICT (Linux
+          # mirror of the Windows gate; rules mirror
+          # internal/smokeverdict): the shell gate passed above; the
+          # Linux AI test-ready claim additionally requires the managed
+          # engine. Candidate-defect failure records make the gate RED
+          # with the explicit label. ONE distinct class is NOT a
+          # candidate defect: upstream llama.cpp ships no prebuilt
+          # engine asset for linux/amd64 (live-observed 2026-11-17) —
+          # the engine cannot be installed from upstream at all. That
+          # class is recorded as an explicit UPSTREAM-UNAVAILABLE
+          # warning: the Linux artifact stays honestly UI-ONLY-TEST
+          # (never TEST-READY-LINUX while upstream lacks the asset),
+          # and the shell gate result stands.
+          upstream_unavailable=0
+          if [ -f "$app_log" ] && grep -q "no recent release ships a prebuilt asset" "$app_log"; then upstream_unavailable=1; fi
+          engine_why=""
+          if [ -f "$app_log" ]; then
+            if grep -q "update-failed-engine-unusable" "$app_log"; then engine_why="${engine_why} maintenance BLOCKED (update-failed-engine-unusable);" ; fi
+            if grep -q "prewarm BLOCKED" "$app_log"; then engine_why="${engine_why} prewarm refused;" ; fi
+            if grep -q "stage engine swap" "$app_log"; then engine_why="${engine_why} engine swap failure;" ; fi
+          fi
+          engine_success=0
+          if [ -f "$app_log" ] && grep -qE "prewarm released|engine is current|keeping the last-known-good engine" "$app_log"; then engine_success=1; fi
+          if [ "$upstream_unavailable" -eq 1 ] && [ "$engine_success" -ne 1 ]; then
+            echo "::warning::desktop smoke MANAGED-ENGINE-READY: upstream publishes NO prebuilt engine asset for linux/amd64 — the managed engine cannot be installed from upstream (an upstream availability limit, NOT a candidate defect). The Linux artifact is UI-ONLY-TEST; TEST-READY-LINUX is impossible while upstream lacks the asset. Launch/resize evidence alone never claims Linux AI-readiness."
+            echo "SHELL SMOKE OK; ENGINE NOT READY (upstream-unavailable) — Linux artifact is UI-ONLY-TEST"
+            echo "RUN managed-engine verdict (upstream-unavailable, UI-ONLY-TEST label)" >> "$GITHUB_WORKSPACE/ci-logs/gate-order.txt"
+            echo "gate OK: desktop launch smoke (Xvfb) — shell green; engine upstream-unavailable (labelled)" >> "$GITHUB_WORKSPACE/ci-logs/gate-order.txt"
+          elif [ -n "$engine_why" ] || [ "$engine_success" -ne 1 ]; then
+            if [ -z "$engine_why" ]; then engine_why=" no managed-engine success record observed;" ; fi
+            echo "::error::desktop smoke stage MANAGED-ENGINE-READY: the Linux shell PASSED (window/soak/SIGTERM) but the managed engine is NOT ready — the Linux AI test-ready gate is RED. Engine evidence:${engine_why}"
+            if [ -f "$app_log" ]; then echo "--- data/logs/app.log tail ---"; tail -n 50 "$app_log"; fi
+            echo "SHELL SMOKE OK; ENGINE NOT READY — this artifact is UI-ONLY-TEST at best, never TEST-READY"
+            exit 1
+          else
+            echo "managed engine ready: maintenance success record observed, no BLOCKED/refused/swap-failure records"
+            echo "INFERENCE: NOT RUN (no model selected on the smoke profile — engine health is not inference proof)"
+            echo "SMOKE OK: window booted (observed in the X tree), event loop alive through the soak, clean SIGTERM shutdown with reap, managed engine ready"
+          fi
           mkdir -p "$GITHUB_WORKSPACE/ci-logs"
           cp smoke-stdout.log "$GITHUB_WORKSPACE/ci-logs/linux-smoke-stdout.log"
           echo "RUN desktop launch smoke (Xvfb)" >> "$GITHUB_WORKSPACE/ci-logs/gate-order.txt"
@@ -1308,6 +1368,38 @@ jobs:
           }
           Write-Host "IPC gate: handshake successful (windows-named-pipe), first core read succeeded, log directory recorded"
 
+          # ------------------------------------------------------------
+          # v1.11.1 (run 43995689377) MANAGED-ENGINE SETTLE WINDOW:
+          # the desktop shell gate above proves window/IPC/core-read —
+          # it says NOTHING about the managed llama.cpp engine. On the
+          # pristine smoke profile the startup gate runs transactional
+          # engine maintenance in the background (download → extract →
+          # validate → swap → commit); the observed run failed at
+          # 'stage engine swap ... Access is denied', entered BLOCKED
+          # with update-failed-engine-unusable and refused prewarm —
+          # while the shell was fully green. Before the soak, give the
+          # maintenance a BOUNDED window to reach a terminal state so
+          # the engine verdict below decides on evidence, not on a race.
+          # The verdict rules mirror internal/smokeverdict (the contract
+          # authority; its fixture tests pin the run-43995689377 shape).
+          # ------------------------------------------------------------
+          $engineBinRel = Join-Path "data" "bin" "llama-server.exe"
+          $maintenanceDeadline = (Get-Date).AddSeconds(150)
+          $maintenanceTerminal = $false
+          while ((Get-Date) -lt $maintenanceDeadline) {
+            if ($p.HasExited) { break }
+            if (Test-Path $appLog) {
+              $done = Select-String -LiteralPath $appLog -Pattern "prewarm released" -SimpleMatch
+              $current = Select-String -LiteralPath $appLog -Pattern "engine is current" -SimpleMatch
+              $blocked = Select-String -LiteralPath $appLog -Pattern "prewarm BLOCKED" -SimpleMatch
+              $off = Select-String -LiteralPath $appLog -Pattern "no maintenance this boot" -SimpleMatch
+              $upstreamNone = Select-String -LiteralPath $appLog -Pattern "no recent release ships a prebuilt asset" -SimpleMatch
+              if ($done -or $current -or $blocked -or $off -or $upstreamNone) { $maintenanceTerminal = $true; break }
+            }
+            Start-Sleep -Milliseconds 1000
+          }
+          Write-Host "engine maintenance settle window: terminal record observed = $maintenanceTerminal (deadline 150s)"
+
           $soakDeadline = (Get-Date).AddSeconds(12)
           while ((Get-Date) -lt $soakDeadline) {
             if ($p.HasExited) {
@@ -1409,7 +1501,48 @@ jobs:
             throw "Windows launch smoke failed at stage LOG-PERSISTENCE (no session banner)"
           }
 
-          Write-Host "SMOKE OK: window booted, IPC handshake succeeded (windows-named-pipe), core read succeeded, soak survived, graceful close, shutdown records persisted"
+          # ------------------------------------------------------------
+          # v1.11.1 (run 43995689377) MANAGED-ENGINE-READY GATE — the
+          # false-green fix. The shell assertions above ALL passed in the
+          # observed run while the same app.log recorded the engine
+          # update failing at 'stage engine swap ... Access is denied',
+          # the previous engine failing validation, maintenance BLOCKED
+          # with update-failed-engine-unusable and prewarm REFUSED — and
+          # the gate printed a generic SMOKE OK. The Windows AI
+          # test-ready artifact must depend on BOTH gates: shell green +
+          # engine red is a RED job with the explicit label. Rules mirror
+          # internal/smokeverdict (fixture-pinned contract).
+          # ------------------------------------------------------------
+          $engineReady = $false
+          $engineWhy = @()
+          if (Test-Path $appLog) {
+            if (Select-String -LiteralPath $appLog -Pattern "update-failed-engine-unusable" -SimpleMatch) { $engineWhy += "maintenance BLOCKED (update-failed-engine-unusable)" }
+            if (Select-String -LiteralPath $appLog -Pattern "prewarm BLOCKED" -SimpleMatch) { $engineWhy += "prewarm refused (prewarm BLOCKED)" }
+            if (Select-String -LiteralPath $appLog -Pattern "stage engine swap" -SimpleMatch) { $engineWhy += "engine swap failure (stage engine swap)" }
+          }
+          $engineBin = Join-Path (Split-Path $exe) $engineBinRel
+          $engineManifest = Join-Path (Split-Path $exe) (Join-Path "data" (Join-Path "bin" "engine-install.json"))
+          $engineFilesOK = (Test-Path $engineBin) -and (Test-Path $engineManifest)
+          $engineSuccessRecord = $false
+          if (Test-Path $appLog) {
+            $rel = Select-String -LiteralPath $appLog -Pattern "prewarm released" -SimpleMatch
+            $cur = Select-String -LiteralPath $appLog -Pattern "engine is current" -SimpleMatch
+            $validOld = Select-String -LiteralPath $appLog -Pattern "keeping the last-known-good engine" -SimpleMatch
+            if ($rel -or $cur -or $validOld) { $engineSuccessRecord = $true }
+          }
+          if ($engineSuccessRecord -and $engineFilesOK -and ($engineWhy.Count -eq 0)) { $engineReady = $true }
+          if (-not $engineReady) {
+            if (-not $engineSuccessRecord) { $engineWhy += "no maintenance success record (engine verified / current / last-known-good)" }
+            if (-not $engineFilesOK) { $engineWhy += "engine files missing (data\bin\llama-server.exe or data\bin\engine-install.json)" }
+            Write-Host "::error::launch smoke stage MANAGED-ENGINE-READY: the desktop shell PASSED but the managed engine is NOT ready — the Windows AI test-ready gate is RED. Engine evidence: $($engineWhy -join '; ')"
+            if (Test-Path $appLog) { Write-Host "--- data\logs\app.log tail ---"; Get-Content $appLog -Tail 50 }
+            Write-Host "SHELL SMOKE OK; ENGINE NOT READY — this artifact is UI-ONLY-TEST at best, never TEST-READY"
+            throw "Windows AI test-ready gate failed at stage MANAGED-ENGINE-READY (shell OK, engine not ready — the run-43995689377 false-green class)"
+          }
+          Write-Host "managed engine ready: install manifest + llama-server.exe present, maintenance success record observed, no BLOCKED/refused/swap-failure records"
+          Write-Host "INFERENCE: NOT RUN (no model selected on the smoke profile — engine health is not inference proof)"
+
+          Write-Host "SMOKE OK: window booted, IPC handshake succeeded (windows-named-pipe), core read succeeded, soak survived, graceful close, shutdown records persisted, managed engine ready"
           Write-Host "--- application output tail ---"
           if (Test-Path $smokeLog) { Get-Content $smokeLog -Tail 20 }
           Write-Host "--- data\logs\app.log tail ---"

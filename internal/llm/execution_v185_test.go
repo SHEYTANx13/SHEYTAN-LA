@@ -21,6 +21,8 @@ package llm
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/accelerator"
 )
 
 func TestExecutionLadderDetectionNeverEqualsVerified(t *testing.T) {
@@ -244,4 +246,61 @@ func containsStr(haystack, needle string) bool {
 	}
 
 	return false
+}
+
+// TestExecutionLadderCPUSelectionVsExecution (v1.11.1, run 43995689377):
+// the exact false-telemetry regression — the smoke app reported
+// "requested=AUTO selected=CPU executionVerified=true" while NO model had
+// executed. The ladder must keep the two claims apart: a CPU policy
+// SELECTION (no generations) never reaches execution-evidence, while a
+// CPU serving path WITH measured generations is real execution evidence —
+// and full verification still requires the selection authority's
+// execution-verified contract (the measured CPU receipt).
+func TestExecutionLadderCPUSelectionVsExecution(t *testing.T) {
+	base := ExecutionReportInputs{
+		DevicesKnown:   true,
+		BackendHealthy: true,
+		DeviceSelected: string(accelerator.KindCPU),
+		VerifiedModel:  "test.gguf",
+	}
+
+	// 1) CPU selected, model verified, but NOTHING has executed:
+	//    the ladder stops at model-loaded. Policy selection is not
+	//    execution — the run-43995689377 smoke condition.
+	idle := base
+	rep := ComposeExecutionReport(idle)
+	if rep.Stage != StageModelLoaded {
+		t.Fatalf("idle CPU selection staged %q, want %q (selection is not execution)", rep.Stage, StageModelLoaded)
+	}
+	if rep.ExecutionVerified || rep.GenerationExecuted {
+		t.Fatal("idle CPU selection must not claim execution or verification")
+	}
+
+	// 2) CPU serving path with MEASURED generations: real execution
+	//    evidence for the CPU package — StageExecutionEvidence.
+	ran := base
+	ran.GenerationSamples = 3
+	rep = ComposeExecutionReport(ran)
+	if rep.Stage != StageExecutionEvidence {
+		t.Fatalf("CPU execution with measured generations staged %q, want %q", rep.Stage, StageExecutionEvidence)
+	}
+	if rep.GenerationExecuted != true {
+		t.Fatal("measured generations must set generationExecuted")
+	}
+	if rep.ExecutionVerified {
+		t.Fatal("execution evidence alone must not set executionVerified — the selection contract (measured CPU receipt) is still required")
+	}
+
+	// 3) Measured generations + the selection authority's execution
+	//    contract (a valid CPU execution receipt): StageVerified.
+	verified := ran
+	verified.SelectionExecutionVerified = true
+	verified.Verification = "measured serving generations through the installed CPU engine package"
+	rep = ComposeExecutionReport(verified)
+	if rep.Stage != StageVerified {
+		t.Fatalf("verified CPU execution staged %q, want %q", rep.Stage, StageVerified)
+	}
+	if !rep.ExecutionVerified {
+		t.Fatal("the full CPU contract (generations + receipt) must set executionVerified")
+	}
 }

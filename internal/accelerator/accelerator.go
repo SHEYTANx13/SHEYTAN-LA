@@ -155,6 +155,14 @@ type Evidence struct {
 	// receipt.
 	GPUExecutionReceipt *ExecutionReceipt `json:"gpuExecutionReceipt,omitempty"`
 
+	// CPUExecutionReceipt (v1.11.1, run 43995689377 truth fix): measured
+	// CPU execution — real generations served through the installed CPU
+	// engine package. CPU policy selection alone produces NO receipt; a
+	// receipt exists only when a serving execution actually ran and was
+	// measured. This is the ONLY input that can make a CPU selection
+	// execution-verified.
+	CPUExecutionReceipt *ExecutionReceipt `json:"cpuExecutionReceipt,omitempty"`
+
 	// EngineTag / EngineVariant identify the CURRENT installed engine —
 	// the identity a receipt must still be valid FOR (stale-evidence
 	// invalidation; empty = unknown, identity checks are skipped).
@@ -254,7 +262,11 @@ type Resolution struct {
 
 	// Fallback is the safe posture if the selected-but-unverified
 	// backend fails to execute: "none" when the selection is verified,
-	// "safe" when the CPU path is the guaranteed fallback.
+	// "safe" when the CPU path is the guaranteed fallback, and "cpu"
+	// (v1.11.1) when the resolution itself IS the CPU fallback — AUTO
+	// (or a failed explicit accelerator request) fell back to CPU after
+	// the accelerator gates refused. "cpu" never implies execution: see
+	// ExecutionVerified for the execution claim.
 	Fallback string `json:"fallback"`
 }
 
@@ -307,6 +319,7 @@ type ExecutionReceipt struct {
 const (
 	ReceiptKindOffloadLine   = "offload-line"
 	ReceiptKindVerifiedProbe = "verified-probe"
+	ReceiptKindCPUServing    = "cpu-serving"
 )
 
 // ReceiptStatus values for persisted probe receipts.
@@ -360,10 +373,21 @@ const (
 	// VerificationPendingLog covers the enumeration-unsupported build.
 	VerificationPendingLog = "pending — device enumeration unsupported by this engine build; offload to be verified from the runtime log"
 
-	VerificationOffloadLog   = "runtime engine log measured real GPU offload"
-	VerificationReceipt      = "committed GPU execution receipt (bounded transaction: real generation + measured offload evidence)"
-	VerificationCPUExecution = "CPU execution is the definitionally available fallback"
-	VerificationNPUBench     = "measured NPU benchmark with OpenVINO runtime"
+	// VerificationCPUPending (v1.11.1, run 43995689377): CPU selected by
+	// POLICY — requested CPU, or the AUTO/failed-GPU fallback. Policy
+	// selection is not execution: no workload has run, nothing is
+	// verified yet. A real serving generation through the installed CPU
+	// package is required before the selection can claim execution.
+	VerificationCPUPending = "pending — CPU selected by policy; no measured CPU execution yet (a real serving generation through the CPU package is required)"
+
+	// VerificationCPUReceipt (v1.11.1): measured CPU execution — real
+	// generations were served and measured through the installed CPU
+	// engine package (identity-checked against the current engine).
+	VerificationCPUReceipt = "measured serving generations through the installed CPU engine package"
+
+	VerificationReceipt    = "committed GPU execution receipt (bounded transaction: real generation + measured offload evidence)"
+	VerificationOffloadLog = "runtime engine log measured real GPU offload"
+	VerificationNPUBench   = "measured NPU benchmark with OpenVINO runtime"
 )
 
 // NPU model-architecture support gate (extend ONLY with measured evidence
@@ -399,8 +423,19 @@ func Resolve(requested Requested, ev Evidence) Resolution {
 		res.AutoProfile = ProfileCPUSafe
 		res.Reason = "requested CPU"
 		res.ReasonCode = ReasonCodeRequestedCPU
-		res.ExecutionVerified = true
-		res.Verification = VerificationCPUExecution
+
+		// v1.11.1 (run 43995689377): requesting CPU is a POLICY choice,
+		// not an execution. Verification requires the measured CPU
+		// execution receipt — real generations served through the
+		// installed CPU package.
+		res.ExecutionVerified = cpuExecutionProven(ev)
+
+		if res.ExecutionVerified {
+			res.Verification = VerificationCPUReceipt
+		} else {
+			res.Verification = VerificationCPUPending
+		}
+
 		return res
 	}
 
@@ -463,10 +498,32 @@ func Resolve(requested Requested, ev Evidence) Resolution {
 	res.Selected = KindCPU
 	res.Reason = "no accelerator proven usable by measured evidence — CPU"
 	res.ReasonCode = cpuFallbackCode(ev)
-	res.ExecutionVerified = true
-	res.Verification = VerificationCPUExecution
-	res.Fallback = "none"
+
+	// v1.11.1 (run 43995689377): the AUTO→CPU transition is a REAL
+	// fallback and is recorded as one — never "fallback=none". The
+	// failed gates stay visible in Fallbacks; the typed cause is in
+	// ReasonCode. Execution verification still requires the measured
+	// CPU execution receipt (policy selection is not execution).
+	res.ExecutionVerified = cpuExecutionProven(ev)
+
+	if res.ExecutionVerified {
+		res.Verification = VerificationCPUReceipt
+	} else {
+		res.Verification = VerificationCPUPending
+	}
+
+	res.Fallback = "cpu"
 	return res
+}
+
+// cpuExecutionProven reports whether the evidence carries a MEASURED
+// CPU execution that is still valid for the current engine identity.
+// This is the only path that can execution-verify a CPU selection —
+// never the policy choice itself (v1.11.1, run 43995689377).
+func cpuExecutionProven(ev Evidence) bool {
+	return ev.CPUExecutionReceipt != nil &&
+		ev.CPUExecutionReceipt.Status == ReceiptStatusVerified &&
+		ev.CPUExecutionReceipt.ValidFor(ev.EngineTag, ev.EngineVariant)
 }
 
 // cpuFallbackCode picks the typed fallback cause: a supported engine with

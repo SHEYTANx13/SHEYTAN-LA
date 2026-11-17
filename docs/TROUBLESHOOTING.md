@@ -122,6 +122,45 @@ and any rollback; the Models page engine card shows the truthful state.
 repeatedly rolls back, the release asset or local disk is the problem —
 the log names which.
 
+## The engine update fails with "stage engine swap: … Access is denied" (Windows)
+
+**Likely cause (v1.11.1, run 43995689377 class)** — the swap step renames
+the whole `data\bin` directory aside (`data\bin` → `data\bin.update-old`).
+On Windows that rename fails with ERROR_ACCESS_DENIED whenever ANY handle
+is still open on the directory or one of its descendants: a retained
+`os.Root`, an open file, or a process whose working directory sits inside
+the tree. An internal handle leak of exactly this shape (an `os.Root` on
+`data\bin\.engine-download` held across the swap) was the observed
+run-43995689377 root cause and is fixed — the installer now closes every
+root it opens before the swap and refuses the transaction with a typed
+"engine swap blocked by a retained in-process os.Root handle" error
+while any tracked handle is still open (the previous engine is preserved
+untouched).
+
+**Diagnostics built into the message** — the wrapped error names the
+win32 cause class: `ERROR_ACCESS_DENIED` (a handle is held on the tree,
+or the ACL denies the move — check what still holds `data\bin`) versus
+`ERROR_SHARING_VIOLATION` (another process — antivirus, search indexer,
+backup — holds a transient handle; retry after it releases). The app
+never disables security software, never kills processes and never
+retries in a loop to work around the failure.
+
+**Recovery** — retry after the external holder releases the tree (a
+moment for AV/indexer scans); if the message names an in-process handle,
+that is a defect — report it with `app.log`.
+
+## The desktop starts fine but no model can ever run (engine BLOCKED)
+
+**Diagnostic** — the Models page engine card and `app.log` carry the
+truthful maintenance state. `update-failed-engine-unusable` with prewarm
+refused means the update failed AND the previously installed engine no
+longer validates — the app refuses to launch an unverified binary (the
+safety design). The smoke gates label this exact shape
+`SHELL SMOKE OK; ENGINE NOT READY`; it is never a green overall state.
+
+**Recovery** — retry the engine install (the transaction re-downloads
+and re-validates); the log names the exact failing stage.
+
 ## Buttons or text look cut off at very small window sizes
 
 The supported minimum logical width is 320 (phone-class portrait); at

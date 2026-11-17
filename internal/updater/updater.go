@@ -826,7 +826,9 @@ func extractZip(zipPath, dir string) error {
 	// neither escape lexically nor redirect a later write through a
 	// symlink planted in the staging tree. Symlink members are rejected
 	// outright — a staged engine update must be a plain file tree.
-	rooted, err := os.OpenRoot(dir)
+	// Tracked (roottrack.go) so the swap quiesce gate sees it; the defer
+	// closes it strictly before the swap step.
+	rooted, err := openTrackedRoot(dir)
 	if err != nil {
 		return err
 	}

@@ -412,15 +412,25 @@ func InstallStagedDeferredWithVariant(
 	// v1.11.1 sink-level rooting: the staging cleanup removes the archive
 	// THROUGH its own directory's os.Root (the name resolves inside the
 	// staged download directory or not at all).
-	stageDir := filepath.Dir(archive)
-	if cleanupRoot, openErr := os.OpenRoot(stageDir); openErr == nil {
-		defer func() {
-			_ = cleanupRoot.Remove(filepath.Base(archive))
-			cleanupRoot.Close()
-		}()
+	//
+	// v1.11.1 (run 43995689377) HANDLE-LIFECYCLE FIX: the cleanup root
+	// is opened and closed in a SHORT scope AFTER the transaction body —
+	// NEVER held across stageFromArchive. The previous code deferred
+	// cleanupRoot.Close() until this function returned, so during the
+	// transaction's SWAP step an os.Root handle on
+	// <binDir>/.engine-download (a descendant of the renamed directory)
+	// was still open — on Windows that blocks the bin-directory rename
+	// with ERROR_ACCESS_DENIED ("stage engine swap: rename of data\bin to
+	// data\bin.update-old returned Access is denied"). The swap now also
+	// asserts quiesce via the tracked-root registry (roottrack.go).
+	staged, serr := stageFromArchive(cfg, tag, archive, url, variant)
+
+	if cleanupRoot, openErr := openTrackedRoot(filepath.Dir(archive)); openErr == nil {
+		_ = cleanupRoot.Remove(filepath.Base(archive))
+		_ = cleanupRoot.Close()
 	}
 
-	return stageFromArchive(cfg, tag, archive, url, variant)
+	return staged, serr
 }
 
 // InstallStagedFromArchiveDeferred is the archive-seam variant of
@@ -667,12 +677,24 @@ func stageFromArchive(cfg *config.Config, tag, archive, url string, variant Asse
 	//
 	// .update-stage lives INSIDE binDir, so it travels with the rename
 	// and is renamed back out in one move. Same volume → atomic.
+	//
+	// v1.11.1 (run 43995689377) QUIESCE GATE: on Windows an open handle
+	// on binDir or ANY descendant (os.Root, open file, a process CWD)
+	// blocks this rename with ERROR_ACCESS_DENIED. Every os.Root this
+	// package opens is tracked (roottrack.go); refuse BEFORE mutating
+	// anything while one is still open — the retained-handle defect that
+	// failed the run-43995689377 Windows smoke update.
+	if err := assertSwapQuiesce(binDir); err != nil {
+		_ = os.RemoveAll(stageDir)
+		return nil, err
+	}
+
 	oldDir := binDir + ".update-old"
 	_ = os.RemoveAll(oldDir)
 
 	if err := os.Rename(binDir, oldDir); err != nil {
 		_ = os.RemoveAll(stageDir)
-		return nil, fmt.Errorf("stage engine swap: %w", err)
+		return nil, fmt.Errorf("stage engine swap: %w", swapRenameContext("rename "+binDir+" aside", err))
 	}
 
 	restore := func() {
@@ -684,7 +706,7 @@ func stageFromArchive(cfg *config.Config, tag, archive, url string, variant Asse
 	if err := os.Rename(filepath.Join(oldDir, ".update-stage"), binDir); err != nil {
 		restore()
 		_ = os.RemoveAll(stageDir)
-		return nil, fmt.Errorf("activate staged engine: %w", err)
+		return nil, fmt.Errorf("activate staged engine: %w", swapRenameContext("move staged engine into place", err))
 	}
 
 	// Merge-back: ONLY allowlisted non-engine companions (native host,
@@ -1361,8 +1383,9 @@ func extractArchiveBySuffix(archivePath, url, dir string) error {
 		// alone cannot stop a symlink planted in the staging tree from
 		// redirecting a later member write outside it. Link members are
 		// rejected outright: a staged engine archive must be a plain
-		// file tree.
-		rooted, err := os.OpenRoot(dir)
+		// file tree. Tracked (roottrack.go) so the swap quiesce gate
+		// sees it; the defer closes it strictly before the swap step.
+		rooted, err := openTrackedRoot(dir)
 		if err != nil {
 			return err
 		}

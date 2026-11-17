@@ -322,27 +322,93 @@ func TestEvidenceStateDLLFallbackSelectedButUnverified(t *testing.T) {
 	}
 }
 
-func TestEvidenceStateCPUAlwaysVerified(t *testing.T) {
-	// Zero evidence → CPU_SAFE, and CPU is definitionally verified.
+func TestEvidenceStateCPUPolicySelectionIsNotExecution(t *testing.T) {
+	// v1.11.1 (run 43995689377): zero evidence → CPU_SAFE, and the CPU
+	// selection is a POLICY fallback — NOT execution verification. No
+	// workload has run; nothing is verified.
 	res := Resolve(RequestAuto, Evidence{})
 
 	if res.Backend != KindCPU || res.Selected != KindCPU {
 		t.Fatalf("selected = %s, want CPU under zero evidence", res.Selected)
 	}
 
-	if !res.ExecutionVerified {
-		t.Fatal("CPU selection must be execution-verified (it is the definitionally available path)")
+	if res.ExecutionVerified {
+		t.Fatal("CPU policy selection must NOT be execution-verified — policy selection is not execution")
 	}
 
-	if res.Verification != VerificationCPUExecution {
-		t.Fatalf("verification = %q, want the CPU execution statement", res.Verification)
+	if res.Verification != VerificationCPUPending {
+		t.Fatalf("verification = %q, want the CPU pending-execution plan", res.Verification)
 	}
 
-	// Forced CPU is equally verified.
+	if res.Fallback != "cpu" {
+		t.Fatalf("fallback = %q, want \"cpu\" — the AUTO→CPU transition is a real fallback, never \"none\"", res.Fallback)
+	}
+
+	// Forced CPU is equally a policy choice: unverified until a real
+	// serving generation through the CPU package is measured.
 	forced := Resolve(RequestCPU, intelArcEvidence())
 
-	if forced.Backend != KindCPU || !forced.ExecutionVerified {
-		t.Fatal("forced CPU must be verified CPU")
+	if forced.Backend != KindCPU {
+		t.Fatal("forced CPU must select CPU")
+	}
+
+	if forced.ExecutionVerified {
+		t.Fatal("forced CPU must NOT be execution-verified without measured CPU execution")
+	}
+}
+
+func TestEvidenceStateCPUVerifiedOnlyWithMeasuredReceipt(t *testing.T) {
+	// v1.11.1: a measured, identity-valid CPU execution receipt — and
+	// ONLY that — execution-verifies the CPU selection.
+	receipt := func(tag, variant string) *ExecutionReceipt {
+		return &ExecutionReceipt{
+			Kind:      ReceiptKindCPUServing,
+			Line:      "measured serving generation: 12.3 tok/s decode",
+			EngineTag: tag,
+			Variant:   variant,
+			Model:     "test.gguf",
+			Status:    ReceiptStatusVerified,
+		}
+	}
+
+	ev := Evidence{
+		EngineTag:           "b12445",
+		EngineVariant:       "cpu",
+		CPUExecutionReceipt: receipt("b12445", "cpu"),
+	}
+
+	res := Resolve(RequestAuto, ev)
+	if res.Backend != KindCPU || !res.ExecutionVerified {
+		t.Fatalf("AUTO + valid CPU receipt must be verified CPU, got %s verified=%t", res.Backend, res.ExecutionVerified)
+	}
+	if res.Verification != VerificationCPUReceipt {
+		t.Fatalf("verification = %q, want the measured CPU receipt statement", res.Verification)
+	}
+
+	forced := Resolve(RequestCPU, ev)
+	if !forced.ExecutionVerified {
+		t.Fatal("forced CPU + valid receipt must be execution-verified")
+	}
+
+	// A stale receipt (produced by a previous engine build) never
+	// verifies the current selection.
+	stale := Evidence{
+		EngineTag:           "b12445",
+		EngineVariant:       "cpu",
+		CPUExecutionReceipt: receipt("b10642", "cpu"),
+	}
+	if res2 := Resolve(RequestAuto, stale); res2.ExecutionVerified {
+		t.Fatal("a stale CPU receipt (other engine tag) must not verify execution")
+	}
+
+	// A failed receipt is a NEGATIVE receipt.
+	failed := Evidence{
+		EngineTag:           "b12445",
+		EngineVariant:       "cpu",
+		CPUExecutionReceipt: &ExecutionReceipt{Status: ReceiptStatusFailed},
+	}
+	if res3 := Resolve(RequestAuto, failed); res3.ExecutionVerified {
+		t.Fatal("a failed CPU receipt must not verify execution")
 	}
 }
 

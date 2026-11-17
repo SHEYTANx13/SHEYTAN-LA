@@ -64,10 +64,15 @@ func TestExplicitGPURequestWithoutEvidenceFallsBackLoudly(t *testing.T) {
 		t.Fatalf("fallback chain must name the GPU refusal: %v", res.Fallbacks)
 	}
 
-	// The CPU fallback itself is verified (by definition) — but the
-	// REQUEST was GPU: any UI rendering this resolution shows both facts.
-	if !res.ExecutionVerified {
-		t.Fatal("CPU execution is definitionally verified")
+	// v1.11.1 (run 43995689377): the CPU fallback itself is a POLICY
+	// fallback — NOT execution-verified until real generations are
+	// measured through the CPU package. The REQUEST was GPU: any UI
+	// rendering this resolution shows both facts honestly.
+	if res.ExecutionVerified {
+		t.Fatal("CPU policy fallback must NOT be execution-verified (policy selection is not execution)")
+	}
+	if res.Verification != VerificationCPUPending {
+		t.Fatalf("the CPU fallback must state the pending plan, got %q", res.Verification)
 	}
 }
 
@@ -94,13 +99,14 @@ func TestAutoSelectsVulkanOnlyWithRuntimeEvidence(t *testing.T) {
 		t.Fatalf("verification must state the pending plan: %q", res.Verification)
 	}
 
-	// AUTO + zero evidence: CPU, honestly.
+	// AUTO + zero evidence: CPU, honestly (v1.11.1: the fallback is a
+	// POLICY choice — unverified until measured CPU execution exists).
 	res = Resolve(RequestAuto, Evidence{Workload: WorkloadChat})
 	if res.Backend != KindCPU || res.AutoProfile != ProfileCPUSafe {
 		t.Fatalf("AUTO without any evidence must resolve CPU_SAFE, got %s/%s", res.Backend, res.AutoProfile)
 	}
-	if !res.ExecutionVerified {
-		t.Fatal("CPU execution is definitionally verified")
+	if res.ExecutionVerified {
+		t.Fatal("the AUTO→CPU policy fallback must not be execution-verified")
 	}
 
 	// AUTO + runtime offload evidence: verified GPU.
@@ -120,8 +126,10 @@ func TestDescribeNeverHidesTheRequestedProfile(t *testing.T) {
 	d := res.Describe()
 
 	// The one-line summary carries the honest story: what was asked, what
-	// was selected, whether execution is proven, and why.
-	for _, want := range []string{"requested=GPU", "selected=CPU", "executionVerified=true"} {
+	// was selected, whether execution is proven, and why. v1.11.1: the
+	// unexecuted CPU fallback reports executionVerified=false — the exact
+	// field the run-43995689377 smoke log lied about.
+	for _, want := range []string{"requested=GPU", "selected=CPU", "executionVerified=false", "fallback=cpu"} {
 		if !strings.Contains(d, want) {
 			t.Fatalf("Describe must carry %q, got: %s", want, d)
 		}

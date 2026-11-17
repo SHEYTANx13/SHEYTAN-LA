@@ -90,26 +90,6 @@
     "status": "active"
   },
   {
-    "path": "baselines/perf-hosted-ci-v1.10.0.json",
-    "type": "data",
-    "language": "JSON",
-    "purpose": "Hosted-CI performance baseline (v1.10.0)",
-    "layer": "testdata",
-    "subsystem": "baselines",
-    "fixture": true,
-    "status": "fixture"
-  },
-  {
-    "path": "baselines/perf-hosted-v1.10.2.json",
-    "type": "data",
-    "language": "JSON",
-    "purpose": "Hosted performance baseline (v1.10.2)",
-    "layer": "testdata",
-    "subsystem": "baselines",
-    "fixture": true,
-    "status": "fixture"
-  },
-  {
     "path": "build/config.yml",
     "type": "config",
     "language": "YAML",
@@ -5995,6 +5975,25 @@
     "status": "test"
   },
   {
+    "path": "internal/smokeverdict/smokeverdict.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/smokeverdict (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/smokeverdict",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/smokeverdict/smokeverdict_v1111_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/smokeverdict (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/smokeverdict",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
     "path": "internal/startup/startup.go",
     "type": "go",
     "language": "Go",
@@ -6702,6 +6701,25 @@
   },
   {
     "path": "internal/updater/rollback_identity_v181_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/updater (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/updater",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/updater/roottrack.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/updater — Application/engine updater: staged updates, integrity verification, rollback",
+    "layer": "domain",
+    "subsystem": "internal/updater",
+    "status": "active"
+  },
+  {
+    "path": "internal/updater/roottrack_v1111_test.go",
     "type": "go",
     "language": "Go",
     "purpose": "Tests for internal/updater (deterministic, table-driven where applicable)",

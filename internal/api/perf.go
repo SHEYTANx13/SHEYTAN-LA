@@ -538,11 +538,31 @@ func (s *Server) gatherAcceleratorEvidence(cfg *config.Config, loadedModelPath s
 		}
 	}
 
-	// The generation telemetry's measured throughput feeds the NPU/GPU
-	// benchmark gates when samples exist.
+	// v1.11.1 (run 43995689377) truth fix: the measured generation
+	// throughput is attributed by what ACTUALLY served it. It feeds the
+	// GPU benchmark gate only when the current boot measured a real GPU
+	// offload line — otherwise a CPU package's throughput would be
+	// laundered into "GPU benchmark" evidence. When the installed engine
+	// IS the CPU package, the same measurement becomes the CPU execution
+	// receipt: real generations served through the CPU engine.
 	perf := llm.SnapshotEnginePerf()
 	if perf.HasSample && perf.GenTokPerSec > 0 {
-		ev.GPUBenchmarkTokPerSec = perf.GenTokPerSec
+		if ev.RuntimeOffloadEvidence != "" {
+			ev.GPUBenchmarkTokPerSec = perf.GenTokPerSec
+		}
+
+		if updater.InstalledEngineTag(cfg) != "" &&
+			updater.InstalledEngineVariant(cfg) == updater.VariantCPU {
+			ev.CPUExecutionReceipt = &accelerator.ExecutionReceipt{
+				Kind:      accelerator.ReceiptKindCPUServing,
+				Line:      fmt.Sprintf("measured serving generation: %.1f tok/s decode", perf.GenTokPerSec),
+				EngineTag: updater.InstalledEngineTag(cfg),
+				Variant:   string(updater.VariantCPU),
+				Model:     perf.Model,
+				Status:    accelerator.ReceiptStatusVerified,
+				At:        perf.At.UTC().Format(time.RFC3339),
+			}
+		}
 	}
 
 	return ev

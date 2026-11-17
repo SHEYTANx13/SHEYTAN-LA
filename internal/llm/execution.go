@@ -27,6 +27,8 @@ package llm
 // This file adds NO new sampler, NO new policy engine, NO new manager: it
 // is a pure composition over the existing execution-plane authorities.
 
+import "github.com/SHEYTANx13/SHEYTAN-LA/internal/accelerator"
+
 // ExecutionStage is one rung of the evidence ladder. The order is the
 // contract: each stage implies all stages below it.
 type ExecutionStage string
@@ -267,6 +269,14 @@ func ComposeExecutionReport(in ExecutionReportInputs) ExecutionReport {
 
 	// Rung 6 — execution/offload evidence for the SELECTED device.
 	hasOffload := in.OffloadEvidence != ""
+
+	// v1.11.1 (run 43995689377): a CPU-selected serving path that reached
+	// this rung has MEASURED generations (rung 5) — that is real
+	// execution evidence for the CPU package. CPU policy SELECTION alone
+	// (no generations) stops at rung 3/4 and can never reach here.
+	if !hasOffload && in.DeviceSelected == string(accelerator.KindCPU) {
+		hasOffload = true
+	}
 
 	if !hasOffload && !in.SelectionExecutionVerified {
 		rep.Gaps = append(rep.Gaps,

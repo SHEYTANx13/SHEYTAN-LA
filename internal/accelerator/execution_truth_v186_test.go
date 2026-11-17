@@ -165,17 +165,36 @@ func TestStaleReceiptCannotVerifyCurrentEngine(t *testing.T) {
 	}
 }
 
-// TestCPURemainsVerifiedByDefinition: the CPU rung stays verified by
-// definition of execution — forced CPU and CPU fallback alike.
-func TestCPURemainsVerifiedByDefinition(t *testing.T) {
+// TestCPUPolicySelectionIsNotExecutionVerification (v1.11.1, run
+// 43995689377): the OLD "CPU is verified by definition" contract is
+// RETIRED — it produced the false "requested=AUTO selected=CPU
+// executionVerified=true" telemetry while no model had executed. Forced
+// CPU and the AUTO→CPU fallback are POLICY selections; execution
+// verification requires the measured CPU execution receipt.
+func TestCPUPolicySelectionIsNotExecutionVerification(t *testing.T) {
 	forced := Resolve(RequestCPU, enumeratedArc())
-	if forced.Backend != KindCPU || !forced.ExecutionVerified {
-		t.Fatalf("forced CPU must stay verified-by-definition, got %s verified=%t", forced.Backend, forced.ExecutionVerified)
+	if forced.Backend != KindCPU {
+		t.Fatalf("forced CPU must select CPU, got %s", forced.Backend)
+	}
+	if forced.ExecutionVerified {
+		t.Fatalf("forced CPU is a policy choice — executionVerified must be false without measured execution, got %t", forced.ExecutionVerified)
+	}
+	if forced.Verification != VerificationCPUPending {
+		t.Fatalf("forced CPU must state the pending-execution plan, got %q", forced.Verification)
 	}
 
 	fallback := Resolve(RequestAuto, Evidence{Workload: WorkloadChat})
-	if fallback.Backend != KindCPU || !fallback.ExecutionVerified {
-		t.Fatalf("CPU fallback must stay verified-by-definition, got %s verified=%t", fallback.Backend, fallback.ExecutionVerified)
+	if fallback.Backend != KindCPU {
+		t.Fatalf("AUTO without evidence must fall back to CPU, got %s", fallback.Backend)
+	}
+	if fallback.ExecutionVerified {
+		t.Fatalf("the AUTO→CPU fallback is a policy fallback — executionVerified must be false, got %t", fallback.ExecutionVerified)
+	}
+	if fallback.Verification != VerificationCPUPending {
+		t.Fatalf("the CPU fallback must state the pending-execution plan, got %q", fallback.Verification)
+	}
+	if fallback.Fallback != "cpu" {
+		t.Fatalf("the AUTO→CPU transition must be recorded as fallback=cpu, got %q", fallback.Fallback)
 	}
 }
 

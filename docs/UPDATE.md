@@ -12,6 +12,35 @@ This document describes the **current** maintenance and update behavior of SHEYT
 - Explicit variant requests never fall back silently to CPU.
 - Models are managed in-app; GGUF files can also be imported from disk.
 
+### The engine-swap handle lifecycle (v1.11.1, run 43995689377)
+
+The swap step renames the whole managed `data/bin` directory aside and
+moves the staged, validated candidate into place. On Windows that rename
+fails with `Access is denied` while ANY handle is open on the directory
+or one of its descendants — including a Go `os.Root`, which keeps a
+directory handle until `Close`. The updater therefore:
+
+- closes every `os.Root` it opens before the swap (the archive-cleanup
+  root lives in a short scope after the transaction body — the observed
+  run held one on `data/bin/.engine-download` across the swap, which was
+  the root cause of the failed b12445 update in the Windows smoke);
+- registers every root it opens in an in-process registry and refuses
+  the swap with a typed error while any tracked root under the engine
+  directory is still open — before any mutation, previous engine
+  preserved byte-for-byte (see `internal/updater/roottrack.go` and its
+  regression fixtures);
+- classifies a genuine external rename failure by its win32 cause
+  (`ERROR_ACCESS_DENIED` vs `ERROR_SHARING_VIOLATION` — retained
+  handle/ACL vs antivirus/indexer contention) in the error itself.
+  Diagnostics only: no retries, no protection disabled, no sleeps.
+
+The smoke gates apply the same split truth: the desktop shell gate
+(window/IPC/first-read/soak/close) and the managed-engine-ready gate are
+separate claims — a shell green with a failed engine maintenance is
+labelled `SHELL SMOKE OK; ENGINE NOT READY` and is a red overall state,
+never a generic green. Engine-binary health is never inference proof;
+with no model selected the inference state is `NOT RUN`.
+
 ## Application updates
 
 - Release assets are published only on version tags.
