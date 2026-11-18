@@ -27,10 +27,55 @@
     "status": "active"
   },
   {
+    "path": ".github/workflows/build-android.yml",
+    "type": "config",
+    "language": "YAML",
+    "purpose": "Repository file — build-android.yml",
+    "layer": "ci",
+    "subsystem": ".github/workflows",
+    "status": "active"
+  },
+  {
     "path": ".github/workflows/build-desktop.yml",
     "type": "config",
     "language": "YAML",
     "purpose": "The desktop build/release workflow: Linux/Windows lanes, gates, packages, the collector and the release job",
+    "layer": "ci",
+    "subsystem": ".github/workflows",
+    "status": "active"
+  },
+  {
+    "path": ".github/workflows/build-ios.yml",
+    "type": "config",
+    "language": "YAML",
+    "purpose": "Repository file — build-ios.yml",
+    "layer": "ci",
+    "subsystem": ".github/workflows",
+    "status": "active"
+  },
+  {
+    "path": ".github/workflows/build-linux.yml",
+    "type": "config",
+    "language": "YAML",
+    "purpose": "Repository file — build-linux.yml",
+    "layer": "ci",
+    "subsystem": ".github/workflows",
+    "status": "active"
+  },
+  {
+    "path": ".github/workflows/build-macos.yml",
+    "type": "config",
+    "language": "YAML",
+    "purpose": "Repository file — build-macos.yml",
+    "layer": "ci",
+    "subsystem": ".github/workflows",
+    "status": "active"
+  },
+  {
+    "path": ".github/workflows/build-windows.yml",
+    "type": "config",
+    "language": "YAML",
+    "purpose": "Repository file — build-windows.yml",
     "layer": "ci",
     "subsystem": ".github/workflows",
     "status": "active"
@@ -116,6 +161,16 @@
     "layer": "cli",
     "subsystem": "cmd",
     "status": "active"
+  },
+  {
+    "path": "cmd/build_info_purity_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for cmd (deterministic, table-driven where applicable)",
+    "layer": "cli",
+    "subsystem": "cmd",
+    "testOnly": true,
+    "status": "test"
   },
   {
     "path": "cmd/context.go",
@@ -409,24 +464,6 @@
     "status": "active"
   },
   {
-    "path": "docs/architecture/FILE_CATALOG.json",
-    "type": "data",
-    "language": "JSON",
-    "purpose": "Documentation — FILE_CATALOG",
-    "layer": "docs",
-    "subsystem": "docs",
-    "status": "active"
-  },
-  {
-    "path": "docs/architecture/FILE_CATALOG.md",
-    "type": "doc",
-    "language": "Markdown",
-    "purpose": "Documentation — FILE_CATALOG",
-    "layer": "docs",
-    "subsystem": "docs",
-    "status": "active"
-  },
-  {
     "path": "docs/architecture/GO-GUI-GOGPU-INTEROP.md",
     "type": "doc",
     "language": "Markdown",
@@ -539,6 +576,15 @@
     "type": "doc",
     "language": "Markdown",
     "purpose": "Documentation — RUNTIME-DIAGNOSTICS",
+    "layer": "docs",
+    "subsystem": "docs",
+    "status": "active"
+  },
+  {
+    "path": "docs/diagnostics/run-44205355718-ledger.json",
+    "type": "data",
+    "language": "JSON",
+    "purpose": "Documentation — run-44205355718-ledger",
     "layer": "docs",
     "subsystem": "docs",
     "status": "active"
@@ -4887,6 +4933,16 @@
     "status": "active"
   },
   {
+    "path": "internal/preflight/preflight_codes_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/preflight (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/preflight",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
     "path": "internal/preflight/preflight_test.go",
     "type": "go",
     "language": "Go",
@@ -5192,6 +5248,16 @@
   },
   {
     "path": "internal/releasecontract/file_catalog_contract_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/releasecontract (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/releasecontract",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/releasecontract/five_platform_contract_test.go",
     "type": "go",
     "language": "Go",
     "purpose": "Tests for internal/releasecontract (deterministic, table-driven where applicable)",
@@ -7504,15 +7570,6 @@
     "status": "active"
   },
   {
-    "path": "packaging/nsis/installer.nsi",
-    "type": "other",
-    "language": "",
-    "purpose": "Repository file — installer.nsi",
-    "layer": "packaging",
-    "subsystem": "packaging",
-    "status": "active"
-  },
-  {
     "path": "scripts/ci/Capture-Step.ps1",
     "type": "script",
     "language": "PowerShell",
@@ -7537,26 +7594,6 @@
     "type": "script",
     "language": "PowerShell",
     "purpose": "The Windows static-import closure audit (pre-launch 0xC0000135 prevention)",
-    "layer": "ci-tooling",
-    "subsystem": "scripts/ci",
-    "sideEffects": "executes (writes logs/fixtures under its own contract when run)",
-    "status": "active"
-  },
-  {
-    "path": "scripts/ci/NsisVersion.Tests.ps1",
-    "type": "script",
-    "language": "PowerShell",
-    "purpose": "CI/tooling script — NsisVersion.Tests.ps1",
-    "layer": "ci-tooling",
-    "subsystem": "scripts/ci",
-    "sideEffects": "executes (writes logs/fixtures under its own contract when run)",
-    "status": "test"
-  },
-  {
-    "path": "scripts/ci/NsisVersion.ps1",
-    "type": "script",
-    "language": "PowerShell",
-    "purpose": "CI/tooling script — NsisVersion.ps1",
     "layer": "ci-tooling",
     "subsystem": "scripts/ci",
     "sideEffects": "executes (writes logs/fixtures under its own contract when run)",

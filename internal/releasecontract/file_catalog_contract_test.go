@@ -48,19 +48,32 @@ func TestFileCatalogCoversEveryTrackedFile(t *testing.T) {
 		t.Fatal("FILE_CATALOG.json is empty — the catalog was never generated (go run ./scripts/gen-filecatalog)")
 	}
 
-	// The inventory authority: git ls-files (tracked files ONLY — caches
-	// and build products never appear), executed from the REPO ROOT so
-	// the listing covers the whole tree with root-relative paths (the
-	// test's own working directory is the package dir, where a bare
-	// `git ls-files` would list only that subtree — the exact cwd-scoping
-	// defect this contract would otherwise miss).
+	// The inventory authority: git ls-files over the STAGING-
+	// INDEPENDENT universe — `--cached` (tracked files) plus
+	// `--others --exclude-standard` (untracked files that .gitignore
+	// does not exclude) — executed from the REPO ROOT so the listing
+	// covers the whole tree with root-relative paths (the test's own
+	// working directory is the package dir, where a bare
+	// `git ls-files` would list only that subtree — the exact
+	// cwd-scoping defect this contract would otherwise miss).
+	//
+	// Run 44205355718 repair (master work order §0.2 root cause A):
+	// the universe matches scripts/gen-filecatalog exactly, so a
+	// brand-new file that was never staged is still required to be
+	// cataloged — a forgotten `git add` before regenerating can no
+	// longer drift the checked-in catalog away from what CI sees.
+	// In a hosted CI checkout the tree is clean, so this universe is
+	// byte-identical to plain `git ls-files`; the assertion below is
+	// therefore still exactly "the generated catalog matches git
+	// ls-files" there — no weaker, and stricter on developer hosts.
+	// `-z` keeps every path verbatim (no core.quotePath escaping).
 	root := repoRoot(t)
-	out, err := exec.Command("git", "-C", root, "ls-files").Output()
+	out, err := exec.Command("git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z").Output()
 	if err != nil {
 		t.Fatalf("git ls-files failed (the coverage contract needs the tracked-file inventory): %v", err)
 	}
 	tracked := map[string]bool{}
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(string(out), "\x00") {
 		line = strings.TrimSpace(line)
 		if line != "" {
 			tracked[line] = true

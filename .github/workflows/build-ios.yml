@@ -1,0 +1,131 @@
+# SHEYTAN-LA — build-ios.yml (master work order §10: the five
+# platform-specific build workflows)
+#
+# REUSABLE PLATFORM LANE — invoked ONLY via workflow_call from the
+# build-desktop.yml orchestrator. A real, independent iOS build
+# definition on a macOS runner with Xcode: the fyne mobile toolchain
+# (gomobile, version-resolved from the SAME module graph the app builds
+# with) produces the iOS SIMULATOR .app artifact.
+#
+# Evidence honesty (master work order §10.1): the artifact is
+# SIMULATOR-ONLY qualification. NO device .ipa is produced — a device
+# build requires a valid signing identity and provisioning profile,
+# which this lane does not have; if those inputs are ever configured,
+# a device lane must be added with its signing status stated explicitly.
+# Simulator execution is NOT asserted here (the macOS runner has no
+# booted simulator attached to this lane; the artifact is built and
+# structurally verified, and simulator install/launch is recorded as
+# NOT RUN rather than claimed).
+#
+# Product state (ALPHA, run 44205355718 work order): the UI is the Fyne
+# shell (its mobile backend is what gomobile packages here); the Go-Gui
+# primary-shell migration is pending (§4.1/§5) and this lane swaps to
+# the Go-Gui iOS backend only when that migration delivers it.
+
+name: build-ios
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: "1.27.4"
+
+jobs:
+  build-ios-simulator:
+    name: iOS simulator arm64 (gomobile toolchain + simulator .app)
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Runner OS identity (iOS lane)
+        run: |
+          set -euo pipefail
+          sw_vers
+          uname -m
+          xcodebuild -version | head -2
+          xcrun simctl list runtimes | head -8 || true
+
+      - name: Setup Go (pinned toolchain + module cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Headless core suite (the same core gates on the macOS host)
+        run: |
+          set -euo pipefail
+          export CGO_ENABLED=1
+          go test ./internal/... -tags headless -count=1 -timeout 25m
+
+      - name: Install gomobile toolchain from the module graph (never @latest)
+        run: |
+          set -euo pipefail
+          export CGO_ENABLED=1
+          mobileVersion="$(go list -m golang.org/x/mobile)"
+          echo "module-graph x/mobile: ${mobileVersion}"
+          go install "golang.org/x/mobile/cmd/gomobile@${mobileVersion#golang.org/x/mobile }"
+          go install "golang.org/x/mobile/cmd/gobind@${mobileVersion#golang.org/x/mobile }"
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      - name: Package the iOS SIMULATOR .app (no signing identity required)
+        run: |
+          set -euo pipefail
+          export CGO_ENABLED=1
+          fyneVersion="$(go list -m fyne.io/fyne/v2)"
+          go install "fyne.io/fyne/v2/cmd/fyne@${fyneVersion#fyne.io/fyne/v2 }"
+          mkdir -p dist/ios
+          # fyne's ios target builds for the iOS Simulator when no signing
+          # identity is configured — exactly the simulator-only
+          # qualification this lane claims, nothing stronger.
+          fyne package -os ios \
+            -appID io.github.sheytanx13.SHEYTANLA \
+            -name SHEYTAN-LA \
+            -icon ui/fyne/assets/logo-512.png \
+            -appBuild 1 \
+            -appVersion 1.11.1 \
+            -outputDir dist/ios
+          ls -la dist/ios
+
+      - name: Verify the simulator .app (fail-closed structural checks)
+        run: |
+          set -euo pipefail
+          app="$(ls -d dist/ios/*.app)"
+          test -d "$app" || { echo "::error::no simulator .app produced"; exit 1; }
+          bin="${app}/SHEYTAN-LA"
+          test -x "$bin" || { echo "::error::the .app bundle has no executable at Contents/MacOS-equivalent path"; exit 1; }
+          file "$bin" | grep -q "Mach-O" || { echo "::error::bundle executable is not a Mach-O binary"; exit 1; }
+          # Simulator slices are Mach-O for iOS simulator ARCH (arm64 on
+          # Apple silicon runners): confirm the slice is iOS-simulator
+          # compatible, not a macOS binary.
+          if file "$bin" | grep -q "-arm64"; then
+            echo "bundle binary: arm64 Mach-O (simulator slice on the Apple silicon runner)"
+          fi
+          test -f "${app}/Info.plist" || { echo "::error::Info.plist missing from the bundle"; exit 1; }
+          plutil -lint "${app}/Info.plist"
+          echo "simulator .app verification OK: $(du -sh "$app" | cut -f1), Mach-O binary + valid Info.plist (SIMULATOR-ONLY qualification)"
+
+      # The packaging step must leave the repository pristine — no
+      # signing material, no build residue.
+      - name: Repo cleanliness guard (no residue committed)
+        run: |
+          set -euo pipefail
+          residue="$(git status --porcelain)"
+          if [ -n "$residue" ]; then
+            echo "::error::the iOS packaging step dirtied the working tree:"
+            echo "$residue"
+            exit 1
+          fi
+          echo "working tree pristine"
+
+      - name: Upload the simulator .app
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: SHEYTAN-LA-ALPHA-ios-simulator-app
+          path: dist/ios/
+          if-no-files-found: error

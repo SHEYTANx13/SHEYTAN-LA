@@ -37,6 +37,44 @@ production (portable artifacts only); update all documentation and make
 ALPHA the only user-facing product label; keep every quality gate
 evidence-based — never obtain green by skipping or masking a failure.
 
+Status (2026-11-18, session 2 — run-44205355718 CI repair):
+
+- DONE: the RED run's three root causes fixed at main HEAD
+  `79b21a4` (ancestry verified: direct child of the older green base
+  `f29d759`; the local `work/alpha-transition` f0a03e6 candidate was NOT
+  available to this session and nothing was reused from it). A: catalog
+  generator made cwd-/staging-independent (`git rev-parse --show-toplevel`
+  + `ls-files --cached --others --exclude-standard -z`), coverage test
+  universe aligned, new audit-lane freshness gate (regeneration must be a
+  byte-level no-op). B: installer-retirement scanner enumerates the
+  TRACKED tree via `git ls-files -z` (forward slashes on every OS — the
+  Windows self-match died with `filepath.Rel` backslashes) with
+  unconditional slash normalization + regression pins; guard intent and
+  negative tests preserved. C: new read-only machine-readable
+  `build-info` JSON identity probe (product_stage=ALPHA asserted
+  separately from build_id=1.11.1), Linux gate rewritten to it, the
+  retired semver scrape removed; human `version` output untouched.
+  §10: the five platform workflows (build-windows/linux/macos/android/
+  ios.yml) delivered as real reusable workflow_call lanes with the
+  orchestrator's final verdict requiring and inspecting all of them
+  (platform-* jobs; native lanes kept per the §4.1 no-deletion rule);
+  machine-readable failure ledger:
+  [`diagnostics/run-44205355718-ledger.json`](diagnostics/run-44205355718-ledger.json).
+- LOCAL EVIDENCE (linux/amd64, go1.27.4): the exact failed hosted lanes
+  re-run green — `go test ./internal/... -tags headless` (all packages),
+  release-contract suite, cmd purity suite, stress 47/0 (incl. the
+  workflow-contract validators); gofmt clean; catalog regeneration
+  deterministic. BLOCKED IN THIS ENVIRONMENT: full Fyne CGO build (no
+  GL/wayland dev headers, no sudo), PowerShell/Windows-hosted re-runs,
+  mobile toolchains, hosted CI (no push/dispatch authorized).
+- NOT DONE (unchanged from session 1, per the work order's priority
+  order): the Go-Gui primary-UI migration (all 49 ui/fyne files remain
+  the active shell), GoGPU/Wails integration phases, downloads/Git
+  clone/continuation/queue/security feature phases. Do not read the five
+  new workflow files as Go-Gui gates — they truthfully build the current
+  Fyne product and are swapped only when the migration delivers the new
+  shell.
+
 Status (2026-11-17, session 1):
 
 - DONE: preflight/evidence baseline; §12.1 ALPHA identity split

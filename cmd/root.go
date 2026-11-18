@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"runtime"
@@ -333,6 +334,9 @@ func earlyVersionDispatch(args []string) (int, bool) {
 	case "version", "-v", "--version":
 		printVersionInfo()
 		return 0, true
+	case "build-info":
+		printBuildInfo()
+		return 0, true
 	default:
 		return 0, false
 	}
@@ -346,6 +350,52 @@ func printVersionInfo() {
 	fmt.Printf("  %s\n", brand.Notice())
 	fmt.Printf("  go: %s\n", goVersion())
 	fmt.Printf("  os: %s/%s\n", osName(), osArch())
+}
+
+// buildInfo is the machine-readable build-identity contract (run
+// 44205355718 repair, master work order §0.2 root cause C): the Linux
+// compiled-version gate used to grep the HUMAN `version` banner for a
+// numeric semver, which broke the moment the product identity became
+// ALPHA. The fields are separate concerns and CI asserts them
+// independently:
+//   - product_stage — the PUBLIC identity (internal/brand.Stage);
+//   - build_id      — the INTERNAL numeric build identifier
+//     (internal/config.AppVersion), for reproducibility/package
+//     metadata only; it must never resurface as user-facing branding.
+//
+// The struct fixes the JSON field order so the contract is byte-stable
+// across runs; encoding/json emits fields in declaration order.
+type buildInfo struct {
+	App          string `json:"app"`
+	ProductStage string `json:"product_stage"`
+	BuildID      string `json:"build_id"`
+	Go           string `json:"go"`
+	OS           string `json:"os"`
+	Arch         string `json:"arch"`
+}
+
+// printBuildInfo emits the machine-readable build identity as ONE line
+// of compact JSON on stdout with ZERO filesystem side effects — the
+// same read-only early-dispatch contract as `version` (run #41415240891
+// Failure A). The probe must stay read-only and leave its working
+// directory empty.
+func printBuildInfo() {
+	info := buildInfo{
+		App:          config.AppName,
+		ProductStage: brand.Stage,
+		BuildID:      config.AppVersion,
+		Go:           goVersion(),
+		OS:           osName(),
+		Arch:         osArch(),
+	}
+	encoded, err := json.Marshal(info)
+	if err != nil {
+		// The struct carries only string fields; encoding cannot fail.
+		// Fail closed rather than print a partial identity.
+		fmt.Fprintf(os.Stderr, "build-info: %v\n", err)
+		os.Exit(2)
+	}
+	fmt.Println(string(encoded))
 }
 
 func configPath() string {
@@ -379,6 +429,7 @@ func printHelp() {
 	fmt.Println("  context      Show / regenerate the AI instruction file (AI-CONTEXT.md)")
 	fmt.Println("  stress       Run the stress test suite")
 	fmt.Println("  version      Print version info")
+	fmt.Println("  build-info   Print machine-readable build identity (JSON)")
 	fmt.Println("  help         Show this help")
 
 	fmt.Println()

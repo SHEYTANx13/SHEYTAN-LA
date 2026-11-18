@@ -1,0 +1,189 @@
+# SHEYTAN-LA — build-windows.yml (master work order §10: the five
+# platform-specific build workflows)
+#
+# REUSABLE PLATFORM LANE — invoked ONLY via workflow_call from the
+# build-desktop.yml orchestrator (the orchestrator owns the push/PR
+# triggers; there are no duplicate push builds). This file is a real,
+# independent Windows build definition, not a stub: it compiles the full
+# desktop application natively on a Windows runner, runs the headless
+# core suite and the release-contract suite on windows/amd64, stages the
+# portable ZIP with ALPHA build metadata and fail-closes through an
+# archive-verification gate.
+#
+# Product state (ALPHA, run 44205355718 work order): the application UI
+# is the Fyne shell and the Go-Gui primary-shell migration is pending
+# (master work order §4.1/§5); the gates here exercise the CURRENT
+# product truthfully and are swapped to Go-Gui gates only when the
+# migration actually delivers the new shell. NO installer is produced —
+# installer production is retired (NSIS/MSI/MSIX must never reappear;
+# internal/releasecontract installer contracts + the PackageGate guard
+# enforce it fail-closed).
+#
+# Transitional duplication note (§4.1 no-deletion rule): the native
+# in-orchestrator build-windows lane remains the RELEASE packaging
+# authority (dependency closure + PackageGate.ps1 + smoke) while this
+# reusable lane proves the standalone §10 definition with equivalent
+# compile/test/package verification under a distinct artifact name.
+# Consolidation happens only when this lane's coverage matches the
+# native lane's.
+
+name: build-windows
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+env:
+  # ONE canonical toolchain: the exact go.mod toolchain directive (the
+  # rule the stress release-surface gate enforces for the orchestrator).
+  GO_VERSION: "1.27.4"
+  GO_TEST_TIMEOUT: "25m"
+  WIN_PKG_ROOT: "SHEYTAN-LA"
+
+jobs:
+  build-windows-x64:
+    name: Windows x64 (native compile + core/contract suites + portable ZIP)
+    runs-on: windows-2025
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Runner OS identity (Windows)
+        run: |
+          Write-Host "ImageOS=${env:ImageOS} ImageVersion=${env:ImageVersion}"
+          (Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, OSArchitecture) | Format-List | Out-String | Write-Host
+
+      - name: Setup Go (pinned toolchain + module cache)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: gofmt (enforced)
+        run: |
+          $unformatted = gofmt -l cmd internal ui scripts
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::gofmt invocation failed"; exit 1 }
+          if ($unformatted) {
+            Write-Host "::error::gofmt violations — run gofmt -w on:`n$unformatted"
+            exit 1
+          }
+          Write-Host "gofmt OK"
+
+      - name: Headless core suite (windows/amd64)
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go test ./internal/... -tags headless -count=1 -timeout $env:GO_TEST_TIMEOUT
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::headless core tests failed on windows/amd64"; exit 1 }
+          Write-Host "headless core suite OK (windows/amd64)"
+
+      - name: Release-contract suite (windows/amd64)
+        run: |
+          go test ./internal/releasecontract/ -count=1
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::release-contract tests failed on windows/amd64"; exit 1 }
+          Write-Host "release-contract suite OK (windows/amd64)"
+
+      # MSYS2 UCRT64 toolchain for Fyne's CGO build (the same pinned
+      # package set the native lane uses; MINGW64 is deprecated per
+      # msys2's October 2026 announcement — UCRT64 is the supported CRT).
+      - name: Setup MSYS2 (UCRT64 GCC for Fyne CGO)
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-cairo
+            mingw-w64-ucrt-x86_64-pango
+            mingw-w64-ucrt-x86_64-gtk3
+
+      - name: Build the full desktop application (native windows/amd64)
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          New-Item -ItemType Directory -Force -Path "dist/windows/app/${env:WIN_PKG_ROOT}" | Out-Null
+          go build -trimpath -o "dist/windows/app/${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe" ./cmd/sheytan-local-agent
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::native Windows build failed (exit $LASTEXITCODE)"; exit 1 }
+          $bin = Get-Item "dist/windows/app/${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe"
+          Write-Host ("build OK: {0} ({1} bytes)" -f $bin.FullName, $bin.Length)
+
+      # Machine-readable identity probe on the COMPILED binary: the same
+      # run 44205355718 contract the Linux lane asserts (product_stage
+      # and build_id are separate concerns and are asserted separately).
+      - name: Cross-check the compiled binary's build identity
+        run: |
+          $bin = "dist/windows/app/${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe"
+          $raw = & $bin build-info 2>$null
+          if ($LASTEXITCODE -ne 0 -or -not $raw) { Write-Host "::error::the compiled build-info probe exited $LASTEXITCODE or produced no output"; exit 1 }
+          Write-Host "compiled build-info: $raw"
+          $info = $raw | ConvertFrom-Json
+          if ($info.product_stage -ne "ALPHA") { Write-Host "::error::compiled product_stage is '$($info.product_stage)', want the public ALPHA identity"; exit 1 }
+          if (-not $info.build_id) { Write-Host "::error::build-info carries no build_id field"; exit 1 }
+          Write-Host "compiled build identity OK: product_stage=$($info.product_stage) build_id=$($info.build_id) (asserted independently)"
+
+      - name: Stage portable package content (no installer)
+        run: |
+          $root = "dist/windows/app/${env:WIN_PKG_ROOT}"
+          Copy-Item packaging/SHEYTAN-LA.bat "$root/" -ErrorAction Stop
+          New-Item -ItemType Directory -Force -Path "$root/resources/docs" | Out-Null
+          Set-Content -Path "$root/resources/docs/BUILD-INFO.txt" -Value @("product: SHEYTAN-LA", "stage: ALPHA", "build_id: 1.11.1", "commit: ${{ github.sha }}", "ui: fyne (one Go UI)") -Encoding utf8NoBOM
+          Set-Content -Path "$root/resources/docs/README.txt" -Value @("SHEYTAN-LA — ALPHA. Run SHEYTAN-LA.exe. Models are downloaded in-app; user data lives under data\ next to the executable. Static package content lives under resources\.") -Encoding utf8NoBOM
+          foreach ($f in @("$root/resources/docs/BUILD-INFO.txt", "$root/resources/docs/README.txt")) {
+            if (-not (Test-Path $f)) { Write-Host "::error::staging guard: $f missing after write"; exit 1 }
+            if ((Get-Item $f).Length -le 0) { Write-Host "::error::staging guard: $f is empty"; exit 1 }
+          }
+          Write-Host "staged package content OK (BUILD-INFO carries the internal build_id, never user-facing branding)"
+
+      - name: Staged payload size gate (100 MB per file)
+        run: |
+          $sizeLimit = 100000000
+          $files = @(Get-ChildItem -Recurse -File "dist/windows/app/${env:WIN_PKG_ROOT}")
+          $violations = @($files | Where-Object { $_.Length -gt $sizeLimit })
+          foreach ($v in $violations) {
+            Write-Host ("::error::size-audit violation: {0} is {1} bytes (limit {2}) — classify required-runtime-component vs optional-downloadable; never truncate or silently drop" -f $v.FullName, $v.Length, $sizeLimit)
+          }
+          if ($violations.Count -gt 0) { exit 1 }
+          Write-Host ("size-audit staged OK: {0} files" -f $files.Count)
+
+      - name: Create the portable ZIP (distinct reusable-lane artifact name)
+        run: |
+          Compress-Archive -Path "dist/windows/app/${env:WIN_PKG_ROOT}" -DestinationPath "dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip" -Force -ErrorAction Stop
+          Write-Host "portable ZIP created (no installer)"
+
+      - name: Verify the portable ZIP (fail-closed archive gate)
+        run: |
+          $zip = "dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip"
+          if (-not (Test-Path $zip)) { Write-Host "::error::portable ZIP missing after staging"; exit 1 }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip))
+          try {
+            if ($archive.Entries.Count -lt 2) { Write-Host "::error::archive holds fewer than 2 entries — packaging is broken"; exit 1 }
+            $required = @("${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe", "${env:WIN_PKG_ROOT}/SHEYTAN-LA.bat")
+            foreach ($want in $required) {
+              $hit = $archive.Entries | Where-Object { $_.FullName -eq $want }
+              if (-not $hit) { Write-Host "::error::archive verification: required entry '$want' missing"; exit 1 }
+            }
+            # Installer-remnant guard: no NSIS/MSI/MSIX payload may ride
+            # along under a portable label (master work order §10).
+            $remnants = @($archive.Entries | Where-Object { $_.FullName -match '\.(nsi|msi|msix|exe\.config)$' -and $_.FullName -notmatch 'SHEYTAN-LA\.exe$' })
+            foreach ($r in $remnants) { Write-Host "::error::installer remnant in the portable archive: $($r.FullName)" }
+            if ($remnants.Count -gt 0) { exit 1 }
+            Write-Host ("archive verification OK: {0} entries, exe + launcher present, no installer remnants" -f $archive.Entries.Count)
+          } finally {
+            $archive.Dispose()
+          }
+
+      - name: Upload the portable ZIP
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: SHEYTAN-LA-ALPHA-windows-x64-portable
+          path: dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip
+          if-no-files-found: error

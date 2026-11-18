@@ -1,0 +1,109 @@
+{
+  "schema": "sheytan-la.failure-ledger/v1",
+  "run": {
+    "id": 44205355718,
+    "workflow": "build-desktop",
+    "repository": "SHEYTANx13/SHEYTAN-LA",
+    "tested_commit": "79b21a4440f1e3a9237db22396fd84a7ff4df7b9",
+    "ref": "refs/heads/main",
+    "attempt": 1,
+    "verdict": "RED",
+    "authoritative_evidence": "consolidated run log for run 44205355718 (supplied by the human as the master work order §0 evidence digest); the raw log/NOTE44205355718.md/app(8).log files were NOT present in this session's input, so the §0.2/§3.1 digests were treated as the authoritative root-cause record per the work order's own instruction",
+    "hosted_run_page_verified_this_session": false,
+    "hosted_run_page_note": "GitHub Actions API/page not re-fetched: unauthenticated API rate-limited from this sandbox; the commit SHA was independently verified as main HEAD via git ls-remote"
+  },
+  "root_causes": [
+    {
+      "id": "A",
+      "title": "generated file catalog is stale",
+      "failing_test": "TestFileCatalogCoversEveryTrackedFile",
+      "failing_jobs": ["Core audit (headless)", "Fyne UI gates (Linux)", "Windows x64"],
+      "exact_location": "internal/releasecontract/file_catalog_contract_test.go; generator scripts/gen-filecatalog/main.go",
+      "defect": "internal/preflight/preflight_codes_test.go was tracked but absent from the checked-in FILE_CATALOG; the generator enumerated only the caller's cwd via bare `git ls-files` and depended on accidental developer staging state, so a new file committed without a final regeneration drifted CI",
+      "fix": [
+        "generator: resolve repo root via `git rev-parse --show-toplevel` and anchor enumeration + both output files to it (cwd-independent)",
+        "generator: enumerate `git ls-files --cached --others --exclude-standard -z` (staging-independent universe; .gitignore still filters caches/build products)",
+        "generator: skip the catalog's own two files (matches the coverage contract's catalogPolicyExclusions)",
+        "coverage test: same enumeration universe so the two sides can never disagree on a clean hosted checkout (byte-identical to plain git ls-files there)",
+        "CI: new audit-lane freshness gate — regenerate and `git diff --exit-code` the two artifacts; regeneration must be a byte-level no-op"
+      ],
+      "regression_evidence": [
+        "baseline reproduction: test FAILED at 79b21a4 with exactly [internal/preflight/preflight_codes_test.go] missing",
+        "after fix: internal/releasecontract suite green on linux/amd64 go1.27.4",
+        "determinism: two consecutive `go run ./scripts/gen-filecatalog` runs byte-identical (cmp)"
+      ],
+      "status": "FIXED_LOCAL_GREEN"
+    },
+    {
+      "id": "B",
+      "title": "installer-retirement scanner self-matching false positives",
+      "failing_test": "TestTrackedTreeHasNoInstallerRecipes",
+      "failing_jobs": ["Windows x64"],
+      "exact_location": "internal/releasecontract/installer_contract_test.go (scanner inline in the test)",
+      "defect": "the scanner walked the filesystem and matched forward-slash guard prefixes (internal/releasecontract/, cmd/stress_release_surface.go) against the RAW filepath.Rel result; on Windows filepath.Rel yields backslash separators, so the guard never exempted itself and flagged cmd/stress_release_surface.go, internal/releasecontract/installer_contract_test.go and internal/releasecontract/packagegate_contract_test.go — the very files that must NAME makensis to keep it forbidden",
+      "fix": [
+        "enumeration switched to `git ls-files -z` from the repo root (tracked files only; git emits forward slashes on every OS — platform separators can no longer defeat the guard)",
+        "exemption classification extracted into isInstallerScanExempt with unconditional backslash-to-slash normalization (strings.ReplaceAll, NOT filepath.ToSlash which is a no-op for backslashes on non-Windows hosts)",
+        "scan targets extracted into installerScanTargets; offense semantics unchanged (makensis literal or .nsi script)",
+        "security intent preserved: no installer restored, negative regression tests kept and strengthened"
+      ],
+      "regression_evidence": [
+        "TestInstallerScanExemptPathsSurviveWindowsSeparators pins backslash-shaped guard/history paths classify as exempt on every OS",
+        "TestInstallerScanEnumeratesTrackedFilesWithForwardSlashes pins the enumeration emits no backslash paths on the real repo",
+        "guard-literal load-bearing check: the three guard sources still contain makensis and are still exempt",
+        "full tracked-tree scan green on linux/amd64 (the Windows-hosted re-run remains a hosted gate)"
+      ],
+      "status": "FIXED_LOCAL_GREEN"
+    },
+    {
+      "id": "C",
+      "title": "Linux build-version gate parses user-facing output",
+      "failing_test": "workflow step 'Cross-check the compiled binary's version' (build-desktop.yml Linux x64 lane)",
+      "failing_jobs": ["Linux x64"],
+      "exact_location": ".github/workflows/build-desktop.yml (grep -m1 -oE 'v[0-9]+\\.[0-9]+\\.[0-9]+' on `$bin version` compared to APP_VERSION=1.11.1); cmd/root.go earlyVersionDispatch",
+      "defect": "the gate grepped the HUMAN `version` banner for a numeric semver; the ALPHA identity change made `version` print brand.Stage (correctly), the grep returned <none> and the gate went red — a workflow-contract bug, not a build failure",
+      "fix": [
+        "new read-only machine-readable identity probe: `SHEYTAN-LA build-info` handled by earlyVersionDispatch (zero filesystem side effects, same contract as `version`), emitting one compact JSON line with fixed field order: app, product_stage, build_id, go, os, arch",
+        "product_stage = internal/brand.Stage (public ALPHA identity); build_id = internal/config.AppVersion (internal numeric build identifier) — asserted INDEPENDENTLY by the workflow",
+        "human `version` output unchanged (ALPHA branding, never leaks the numeric identifier — existing purity suite untouched)",
+        "Linux workflow cross-check step rewritten to the build-info JSON contract with independent field assertions and the preserved isolated-probe residue check",
+        "printversion (--plain/--json) and APP_VERSION=1.11.1 chain untouched (internal reproducibility/packaging metadata)"
+      ],
+      "regression_evidence": [
+        "baseline reproduction at 79b21a4: headless binary `version` prints ALPHA identity; the retired grep returns <none> (rc=1) — matches the consolidated log exactly",
+        "after fix: `build-info` emits the JSON; the workflow's exact sed extraction + independent assertions pass; probe dir left empty",
+        "cmd unit tests green: TestBuildInfoDispatchIsReadOnlyAndExact (exact field set, field-by-field authority checks, read-only probe) and TestBuildInfoIsHandledByTheEarlyDispatch",
+        "existing TestVersionDispatchIsReadOnly / TestNonVersionArgsAreNotHandledEarly still green"
+      ],
+      "status": "FIXED_LOCAL_GREEN"
+    },
+    {
+      "id": "D",
+      "title": "package jobs blocked by upstream test failures",
+      "failing_jobs": ["Linux x64 package production", "Windows package gate"],
+      "exact_location": "downstream of root causes A/B/C",
+      "defect": "NOT an independent packaging bug: the Linux portable archive was not produced because the compiled-version gate failed first; the Windows package gate reported blocking by the failed Windows headless core test. First-failure attribution and fail-closed package gates behaved CORRECTLY",
+      "fix": "none required — re-run the package jobs after A/B/C are proven green; keep fail-closed gates and precise first-failure attribution",
+      "status": "BLOCKED_BY_A_B_C_RERUN_PENDING_HOSTED_CI"
+    }
+  ],
+  "downstream_scope_delivered_this_session": [
+    "five §10 platform workflows created as real reusable definitions (build-windows.yml, build-linux.yml, build-macos.yml, build-android.yml, build-ios.yml): workflow_call-only, least-privilege permissions, immutable 40-hex action pins, pinned toolchain, honest product-state comments (Fyne shell until the Go-Gui migration lands), portable artifacts only (no installers), distinct artifact names (no collision with the release-lane contract names)",
+    "orchestrator rewiring: five platform-* invocation jobs; consolidate-logs waits for all ten gate jobs; final-verdict needs + inspects all ten results — a red platform lane renders the whole run red",
+    "new contract test TestFivePlatformWorkflowsAreRealReusableDefinitions + TestFivePlatformWorkflowsAreInvokedAndRequiredByTheVerdict pinning the §10 wiring",
+    "new CI audit-lane catalog freshness gate (regeneration is a byte-level no-op)"
+  ],
+  "not_delivered_this_session": [
+    "Go-Gui primary-UI migration (§4.1/§5): all 49 ui/fyne files remain the active product shell — the work order's own handoff note says the migration was never started and source inspection confirms it",
+    "GoGPU integration slices, Wails v3 Web Workspace integration, download-manager UX rebuild, Git-clone UI workflow, smart conversation continuation, queue/governor UX surfaces, privileged broker — the §5–§9 feature phases remain untouched",
+    "hosted CI verification of this candidate (no push/workflow dispatch authorized); all hosted-run conclusions remain NOT RUN for the new commit"
+  ],
+  "evidence_classes_this_session": {
+    "static_analysis": "gofmt -l cmd internal ui scripts: clean (go1.27.4); go vet on cmd, internal/releasecontract, scripts/gen-filecatalog: clean",
+    "unit_integration_host": "go test ./internal/... -tags headless -count=1: ALL packages ok (the exact lane that failed hosted); ./internal/releasecontract + ./cmd suites green; stress gate (incl. release-surface workflow contracts) 47 pass / 0 fail",
+    "race_fuzz_stress": "NOT RUN this session (host race lanes exist in CI; unchanged packages)",
+    "cross_compilation": "headless windows/amd64 build of ./cmd/sheytan-local-agent compiles (GOOS=windows, CGO disabled for the headless surface); full non-headless cross-build NOT possible (Fyne CGO needs the Windows toolchain)",
+    "native_runtime": "linux/amd64 headless binary version/build-info probes run in isolated dirs (read-only contract observed); full Fyne GUI build NOT possible on this host (missing GL/wayland dev headers, no sudo) — recorded as environment blocker, not a product defect",
+    "hosted_ci": "NOT RUN for the candidate commit — no remote writes authorized"
+  }
+}

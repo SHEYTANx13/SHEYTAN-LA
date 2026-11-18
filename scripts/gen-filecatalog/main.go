@@ -368,15 +368,51 @@ func subsystemFor(path string) string {
 }
 
 func main() {
-	out, err := exec.Command("git", "ls-files").Output()
+	// Repo-root anchoring (run 44205355718 repair, master work order
+	// §0.2 root cause A): the old generator ran `git ls-files` in the
+	// CALLER's working directory — from a subdirectory it enumerated
+	// only that subtree and spelled its paths relative to it, the exact
+	// cwd-scoping defect the coverage contract guards against. Resolve
+	// the toplevel once and anchor BOTH the enumeration and the two
+	// output files to it, so regeneration is deterministic from any cwd.
+	topOut, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve repo root (git rev-parse --show-toplevel) failed: %v\n", err)
+		os.Exit(1)
+	}
+	root := strings.TrimSpace(string(topOut))
+
+	// Staging-independent enumeration (run 44205355718 repair): CACHED
+	// (tracked) files PLUS untracked-but-not-ignored files. A brand-new
+	// source/test/workflow file that a developer has not staged yet is
+	// still enumerated, so regenerating the catalog can never depend on
+	// an accidental `git add` — the drift that left
+	// internal/preflight/preflight_codes_test.go out of the checked-in
+	// catalog (run 44205355718, root cause A). `.gitignore` still
+	// filters caches and build products (dist/, ci-logs/, runtime data),
+	// so the inventory stays source-only. `-z` keeps every path
+	// verbatim (no core.quotePath escaping, no newline splitting).
+	//
+	// In a hosted CI checkout the tree is clean, so this universe is
+	// byte-identical to plain `git ls-files`; the coverage contract
+	// (internal/releasecontract) uses the same enumeration, keeping the
+	// two sides aligned on every host.
+	out, err := exec.Command("git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z").Output()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "git ls-files failed: %v\n", err)
 		os.Exit(1)
 	}
+	// The catalog does not describe itself (self-reference would churn
+	// every regeneration); the coverage contract excludes exactly these
+	// two paths (catalogPolicyExclusions).
+	catalogSelfExclusions := map[string]bool{
+		"docs/architecture/FILE_CATALOG.json": true,
+		"docs/architecture/FILE_CATALOG.md":   true,
+	}
 	var entries []entry
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(string(out), "\x00") {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if line == "" || catalogSelfExclusions[line] {
 			continue
 		}
 		entries = append(entries, classify(line))
@@ -389,7 +425,7 @@ func main() {
 		os.Exit(1)
 	}
 	raw = append(raw, '\n')
-	if err := os.WriteFile("docs/architecture/FILE_CATALOG.json", raw, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "docs/architecture/FILE_CATALOG.json"), raw, 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "write json failed: %v\n", err)
 		os.Exit(1)
 	}
@@ -430,7 +466,7 @@ func main() {
 		}
 		b.WriteString("\n")
 	}
-	if err := os.WriteFile("docs/architecture/FILE_CATALOG.md", []byte(b.String()), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "docs/architecture/FILE_CATALOG.md"), []byte(b.String()), 0o644); err != nil {
 		fmt.Fprintf(os.Stderr, "write md failed: %v\n", err)
 		os.Exit(1)
 	}
