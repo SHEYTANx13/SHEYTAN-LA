@@ -14,14 +14,24 @@
 # build; Gatekeeper on a user Mac will require an explicit right-click
 # open. That limitation is stated on the artifact, never papered over.
 #
-# Product state (ALPHA, run 44205355718 work order): the application UI
+# Product state (ALPHA, current master work order): the application UI
 # is the Fyne shell and the Go-Gui primary-shell migration is pending
 # (§4.1/§5); the gates here exercise the CURRENT product truthfully.
 
 name: build-macos
 
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      go_version:
+        description: "Exact Go toolchain version (the go.mod toolchain directive is the one authority)"
+        required: false
+        type: string
+        default: "1.27.4"
+    outputs:
+      artifact_name:
+        description: The exact uploaded portable artifact name (arm64 matrix leg)
+        value: ${{ jobs.build-macos-app.outputs.artifact_name }}
 
 permissions:
   contents: read
@@ -57,7 +67,7 @@ jobs:
       - name: Setup Go (pinned toolchain + module cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version: ${{ inputs.go_version }}
           cache: true
           cache-dependency-path: go.sum
 
@@ -93,7 +103,11 @@ jobs:
       - name: Cross-check the compiled binary's build identity
         run: |
           set -euo pipefail
-          bin="dist/macos-${{ matrix.arch }}/app/SHEYTAN-LA"
+          # Work order 4.3: resolve the ABSOLUTE canonical path and verify it
+          # is executable BEFORE changing into the isolated probe directory
+          # (a relative path after cd is exactly the run-443 Linux exit 127).
+          bin="$(realpath "dist/macos-${{ matrix.arch }}/app/SHEYTAN-LA")"
+          test -x "$bin" || { echo "::error::built executable missing or not executable: $bin"; exit 1; }
           probeDir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/build-info-probe.XXXXXX")"
           cd "$probeDir"
           raw="$("$bin" build-info 2>/dev/null)"
@@ -172,14 +186,14 @@ jobs:
           set -euo pipefail
           cd "dist/macos-${{ matrix.arch }}"
           # ditto preserves the bundle layout exactly (no resource forks).
-          ditto -c -k --keepParent "SHEYTAN-LA.app" "SHEYTAN-LA-ALPHA-macos-${{ matrix.arch }}.zip"
-          test -s "SHEYTAN-LA-ALPHA-macos-${{ matrix.arch }}.zip"
+          ditto -c -k --keepParent "SHEYTAN-LA.app" "SHEYTAN-LA-ALPHA-macos-${{ matrix.arch }}-portable.zip"
+          test -s "SHEYTAN-LA-ALPHA-macos-${{ matrix.arch }}-portable.zip"
           echo "portable .zip created (no installer)"
 
       - name: Verify the portable .zip (fail-closed)
         run: |
           set -euo pipefail
-          zip="dist/macos-${{ matrix.arch }}/SHEYTAN-LA-ALPHA-macos-${{ matrix.arch }}.zip"
+          zip="dist/macos-${{ matrix.arch }}/SHEYTAN-LA-ALPHA-macos-${{ matrix.arch }}-portable.zip"
           members="$(unzip -Z1 "$zip")"
           echo "$members" | grep -q "SHEYTAN-LA.app/Contents/MacOS/SHEYTAN-LA" || { echo "::error::required member missing from the bundle zip"; exit 1; }
           echo "$members" | grep -q "SHEYTAN-LA.app/Contents/Info.plist" || { echo "::error::Info.plist missing from the bundle zip"; exit 1; }
@@ -191,6 +205,6 @@ jobs:
       - name: Upload the portable .zip
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: SHEYTAN-LA-ALPHA-macos-${{ matrix.arch }}-app
+          name: SHEYTAN-LA-ALPHA-macos-${{ matrix.arch }}-portable
           path: dist/macos-${{ matrix.arch }}/SHEYTAN-LA-ALPHA-macos-${{ matrix.arch }}.zip
           if-no-files-found: error

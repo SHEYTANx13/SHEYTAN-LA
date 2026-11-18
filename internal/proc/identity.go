@@ -2,8 +2,11 @@
 // or reports against a process listening on its engine port, the process
 // must be identifiable through real OS APIs — never shell parsing.
 //
-// This file carries the shared contract; identity_windows.go and
-// identity_unix.go carry the per-OS implementations.
+// This file carries the shared contract; identity_windows.go,
+// identity_linux.go and identity_darwin.go carry the per-OS
+// implementations (run 44306343338 repair §4.7: the Linux /proc path is
+// Linux-tagged; darwin carries typed UNSUPPORTED results instead of
+// compiling Linux-only code).
 package proc
 
 import "errors"
@@ -15,6 +18,18 @@ var (
 	// ErrPortOwnerUnknown is returned when the OS could not attribute
 	// the listening port to a PID (permission or platform limits).
 	ErrPortOwnerUnknown = errors.New("port owner could not be determined")
+
+	// ErrPortOwnerUnsupported is the typed UNSUPPORTED answer for port
+	// ownership on platforms whose discovery mechanism is not linked
+	// in this build (run 44306343338 repair §4.7: darwin). Callers
+	// keep the operation fail-closed and surface the limitation —
+	// ownership is never faked.
+	ErrPortOwnerUnsupported = errors.New("port ownership lookup unsupported on this platform")
+
+	// ErrProcessMetadataUnsupported is the typed UNSUPPORTED answer for
+	// other process-metadata probes (image path, start time) on
+	// platforms whose mechanism is not linked in this build.
+	ErrProcessMetadataUnsupported = errors.New("process metadata probe unsupported on this platform")
 )
 
 // ListeningProcess identifies the process listening on 127.0.0.1:port

@@ -57,28 +57,34 @@ func TestCurrentIdentityIsV1111(t *testing.T) {
 func TestWorkflowAppVersionTracksAuthority(t *testing.T) {
 	root := findRepoRoot(t)
 
-	raw, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "build-desktop.yml"))
-	if err != nil {
-		t.Fatalf("read build-desktop.yml: %v", err)
+	laneFiles := []string{"build-windows.yml", "build-linux.yml"}
+	texts := map[string]string{}
+	for _, lane := range laneFiles {
+		raw, err := os.ReadFile(filepath.Join(root, ".github", "workflows", lane))
+		if err != nil {
+			t.Fatalf("read %s: %v", lane, err)
+		}
+		texts[lane] = string(raw)
 	}
-
-	text := string(raw)
 
 	decl := regexp.MustCompile(`APP_VERSION:\s*"([^"]+)"`)
-	matches := decl.FindAllStringSubmatch(text, -1)
-	if len(matches) == 0 {
-		t.Fatal("no APP_VERSION declaration found in build-desktop.yml — the version chain is broken")
-	}
 
-	for _, m := range matches {
-		if m[1] != config.AppVersion {
-			t.Errorf("workflow APP_VERSION = %q, want the Go authority %q (the hosted cross-check would fail AFTER the artifacts were built)", m[1], config.AppVersion)
+	for lane, text := range texts {
+		matches := decl.FindAllStringSubmatch(text, -1)
+		if len(matches) == 0 {
+			t.Fatalf("no APP_VERSION declaration found in %s — the version chain is broken", lane)
 		}
-	}
 
-	// The live resolution must still come from the ONE CGO-free helper.
-	if !strings.Contains(text, "go run ./cmd/printversion --plain") {
-		t.Error("build-desktop.yml no longer resolves APP_VERSION through cmd/printversion — a second hardcoded authority has appeared")
+		for _, m := range matches {
+			if m[1] != config.AppVersion {
+				t.Errorf("%s APP_VERSION = %q, want the Go authority %q (the hosted cross-check would fail AFTER the artifacts were built)", lane, m[1], config.AppVersion)
+			}
+		}
+
+		// The live resolution must still come from the ONE CGO-free helper.
+		if !strings.Contains(text, "go run ./cmd/printversion --plain") {
+			t.Error("build-windows.yml lost the printversion resolution step — the version chain is broken")
+		}
 	}
 }
 

@@ -1,8 +1,10 @@
 package resources
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -134,10 +136,22 @@ func TestClearDir(t *testing.T) {
 }
 
 func TestProcRAMSelf(t *testing.T) {
-	// The test process always exists.
-	if _, err := ProcRAM(os.Getpid()); err != nil {
+	// The test process always exists: the probe must return either a
+	// real value or the typed platform limitation — never a fabricated
+	// zero (work order §4.6.3).
+	rss, err := ProcRAM(os.Getpid())
+	switch {
+	case err == nil:
+		if rss <= 0 {
+			t.Errorf("ProcRAM(self) = %d, want a positive resident size", rss)
+		}
+	case runtime.GOOS == "darwin" && errors.Is(err, ErrProcRAMUnsupported):
+		// Typed limitation (darwin build without the Mach probe
+		// linkage) — honest unknown, acceptable here.
+	default:
 		t.Errorf("ProcRAM(self) failed: %v", err)
 	}
+
 	if _, err := ProcRAM(-1); err == nil {
 		t.Error("ProcRAM(-1) must fail")
 	}

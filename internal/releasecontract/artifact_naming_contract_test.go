@@ -107,10 +107,21 @@ func TestCodeQLWorkflowImmutablePins(t *testing.T) {
 func TestWorkflowStableArtifactNamesExact(t *testing.T) {
 	workflow := readTreeFile(t, workflowRelPath)
 
-	// The shared validator carries the exact contract semantics — the
-	// stress gate runs the SAME function, so the two gates cannot drift.
+	// The shared validators carry the exact contract semantics — the
+	// stress gate runs the SAME functions, so the gates cannot drift.
+	// The orchestrator owns the two evidence uploads; the package
+	// uploads live in their single authoritative reusable lanes.
 	if err := ValidateUploadArtifactContract(workflow); err != nil {
-		t.Fatalf("upload-artifact contract violated: %v", err)
+		t.Fatalf("orchestrator upload-artifact contract violated: %v", err)
+	}
+
+	if err := ValidatePlatformPackageUploadContract(
+		readTreeFile(t, windowsLaneRelPath), readTreeFile(t, linuxLaneRelPath)); err != nil {
+		t.Fatalf("platform package upload contract violated: %v", err)
+	}
+	if err := ValidateMobileArtifactUploadContract(
+		readTreeFile(t, macosLaneRelPath), readTreeFile(t, androidLaneRelPath), readTreeFile(t, iosLaneRelPath)); err != nil {
+		t.Fatalf("mobile/platform upload contract violated: %v", err)
 	}
 
 	downloads := mustArtifactSteps(t, workflow, "actions/download-artifact")
@@ -233,30 +244,12 @@ func TestAttemptSurvivesOnlyAsReportMetadata(t *testing.T) {
 // fixtureUploadWorkflow is a structurally faithful three-upload
 // workflow: both package uploads plus the single consolidated log
 // upload. The %s slots receive the upload-artifact refs.
+// fixtureUploadWorkflow is the ORCHESTRATOR upload surface fixture
+// (work order §6.2/§7): the consolidated errors/warnings-only diagnostic
+// and the machine-readable index. Package uploads live in the reusable
+// platform lanes and are contracted by ValidatePlatformPackageUploadContract
+// (fixture below).
 const fixtureUploadWorkflow = `jobs:
-  build-windows:
-    name: Windows x64
-    steps:
-      - name: Upload Windows package
-        uses: actions/upload-artifact@%s
-        with:
-          name: windows-x64-package
-          path: |
-            dist/SHEYTAN-LA-v1.11.1-windows-x64.zip
-          retention-days: 14
-          if-no-files-found: error
-          overwrite: true
-  build-linux:
-    name: Linux x64
-    steps:
-      - name: Upload Linux package
-        uses: actions/upload-artifact@%s
-        with:
-          name: linux-x64-package
-          path: dist/SHEYTAN-LA-v1.11.1-linux-x64.zip
-          retention-days: 14
-          if-no-files-found: error
-          overwrite: true
   consolidate-logs:
     name: Consolidate logs
     steps:
@@ -264,8 +257,8 @@ const fixtureUploadWorkflow = `jobs:
         if: always()
         uses: actions/upload-artifact@%s
         with:
-          name: SHEYTAN-LA-all-logs.txt
-          path: SHEYTAN-LA-all-logs.txt
+          name: SHEYTAN-LA-errors-warnings.txt
+          path: SHEYTAN-LA-errors-warnings.txt
           if-no-files-found: error
           retention-days: 14
           overwrite: true
@@ -285,24 +278,14 @@ const fixtureUploadWorkflow = `jobs:
 // fixtureWithDuplicateLogUpload adds a SECOND consolidated log upload in
 // another job — the negative contract case.
 const fixtureWithDuplicateLogUpload = `jobs:
-  build-windows:
-    name: Windows x64
-    steps:
-      - name: Upload Windows package
-        uses: actions/upload-artifact@` + "v7" + `
-        with:
-          name: windows-x64-package
-          path: |
-            dist/SHEYTAN-LA-v1.11.1-windows-x64.zip
-          overwrite: true
   consolidate-logs:
     name: Consolidate logs
     steps:
       - name: Upload the consolidated run log (single plain-text artifact)
         uses: actions/upload-artifact@` + "v7" + `
         with:
-          name: SHEYTAN-LA-all-logs.txt
-          path: SHEYTAN-LA-all-logs.txt
+          name: SHEYTAN-LA-errors-warnings.txt
+          path: SHEYTAN-LA-errors-warnings.txt
           archive: false
           overwrite: true
   debug-logs:
@@ -311,8 +294,8 @@ const fixtureWithDuplicateLogUpload = `jobs:
       - name: Upload the consolidated run log AGAIN (contract breach)
         uses: actions/upload-artifact@` + "v7" + `
         with:
-          name: SHEYTAN-LA-all-logs.txt
-          path: SHEYTAN-LA-all-logs.txt
+          name: SHEYTAN-LA-errors-warnings.txt
+          path: SHEYTAN-LA-errors-warnings.txt
           archive: false
           overwrite: true
 `
@@ -320,23 +303,14 @@ const fixtureWithDuplicateLogUpload = `jobs:
 // fixtureWithExtraUpload carries an unrelated fourth upload — the
 // closed-surface negative case.
 const fixtureWithExtraUpload = `jobs:
-  build-windows:
-    name: Windows x64
-    steps:
-      - name: Upload Windows package
-        uses: actions/upload-artifact@` + "v7" + `
-        with:
-          name: windows-x64-package
-          path: dist/SHEYTAN-LA-v1.11.1-windows-x64.zip
-          overwrite: true
   consolidate-logs:
     name: Consolidate logs
     steps:
       - name: Upload the consolidated run log (single plain-text artifact)
         uses: actions/upload-artifact@` + "v7" + `
         with:
-          name: SHEYTAN-LA-all-logs.txt
-          path: SHEYTAN-LA-all-logs.txt
+          name: SHEYTAN-LA-errors-warnings.txt
+          path: SHEYTAN-LA-errors-warnings.txt
           archive: false
           overwrite: true
       - name: Upload the machine-readable run diagnostics index
@@ -371,7 +345,7 @@ const fixtureWithExtraUpload = `jobs:
 // CRLF materialization, the exact shape the retired scanner broke on —
 // and both negative fixtures FAIL with the contract message.
 func TestUploadArtifactContractFixtures(t *testing.T) {
-	good := fmt.Sprintf(fixtureUploadWorkflow, "v7", "v7", "v7", "v7")
+	good := fmt.Sprintf(fixtureUploadWorkflow, "v7", "v7")
 
 	if err := ValidateUploadArtifactContract(good); err != nil {
 		t.Fatalf("the contracted four-upload fixture must pass: %v", err)
@@ -387,7 +361,7 @@ func TestUploadArtifactContractFixtures(t *testing.T) {
 
 	if err := ValidateUploadArtifactContract(fixtureWithDuplicateLogUpload); err == nil {
 		t.Fatal("a duplicate consolidated log upload must FAIL the contract")
-	} else if !strings.Contains(err.Error(), "exactly ONE consolidated log artifact upload") {
+	} else if !strings.Contains(err.Error(), "exactly ONE consolidated diagnostic artifact upload") {
 		t.Fatalf("duplicate-log failure must name the one-log rule, got: %v", err)
 	}
 
@@ -402,13 +376,52 @@ func TestUploadArtifactContractFixtures(t *testing.T) {
 	pkgOnly := `jobs:
   build-windows:
     steps:
-      - name: Upload Windows package
+      - name: Upload the portable ZIP
         uses: actions/upload-artifact@` + "v7" + `
         with:
-          name: windows-x64-package
-          path: dist/SHEYTAN-LA-v1.11.1-windows-x64.zip
+          name: SHEYTAN-LA-ALPHA-windows-x64-portable
+          path: dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip
           overwrite: true
 `
+
+	// The reusable-lane package upload contract (section 6.3 names) and
+	// its negative case: a retired artifact name fails the per-lane
+	// validator.
+	laneGood := `jobs:
+  build-windows-x64:
+    steps:
+      - name: Upload the portable ZIP
+        uses: actions/upload-artifact@v7
+        with:
+          name: SHEYTAN-LA-ALPHA-windows-x64-portable
+          path: dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip
+          overwrite: true
+  build-linux-x64:
+    steps:
+      - name: Upload the portable archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: SHEYTAN-LA-ALPHA-linux-x64-portable
+          path: dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz
+          overwrite: true
+`
+	// The per-lane validator scopes each lane's text to ITS OWN upload
+	// surface: split the combined fixture at the second job boundary.
+	split := strings.Index(laneGood, "  build-linux-x64:")
+	if split < 0 {
+		t.Fatal("lane fixture lost the linux job boundary")
+	}
+	winOnly := laneGood[:split]
+	linOnly := "jobs:\n" + laneGood[split:]
+	if err := ValidatePlatformPackageUploadContract(winOnly, linOnly); err != nil {
+		t.Fatalf("the contracted two-lane package fixture must pass: %v", err)
+	}
+
+	laneBad := strings.Replace(laneGood, "SHEYTAN-LA-ALPHA-windows-x64-portable\n", "windows-x64-package\n", 1)
+	if err := ValidatePlatformPackageUploadContract(laneBad, laneGood); err == nil {
+		t.Fatal("a lane upload carrying a retired package name must FAIL the per-lane contract")
+	}
+
 	if err := ValidateUploadArtifactContract(pkgOnly); err == nil {
 		t.Fatal("a package-only upload surface must FAIL (zero consolidated log uploads)")
 	}
@@ -421,7 +434,7 @@ func TestUploadArtifactContractFixtures(t *testing.T) {
 // malformed refs and uncommented SHAs are rejected.
 func TestUploadArtifactPinPolicyFixtures(t *testing.T) {
 	fixture := func(ref string) string {
-		return fmt.Sprintf(fixtureUploadWorkflow, ref, ref, ref, ref)
+		return fmt.Sprintf(fixtureUploadWorkflow, ref, ref)
 	}
 
 	// Accepted: the reviewed immutable v7 commit pin with the synced

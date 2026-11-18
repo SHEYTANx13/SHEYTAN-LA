@@ -1,46 +1,17 @@
 //go:build !windows
 
-// sysinfo_fast_other.go — fast facts on non-Windows platforms (v1.2.6).
-// /proc/meminfo (Linux) and statfs (darwin/bsd) are in-process reads —
-// no external command is spawned.
+// sysinfo_fast_other.go — shared non-Windows fast facts (v1.2.6). The
+// fastRAM probe is per-OS (run 44306343338 repair §4.6):
+// sysinfo_fast_linux.go (/proc/meminfo), sysinfo_fast_darwin.go
+// (hw.memsize sysctl) and sysinfo_fast_otherunix.go (honest unknown).
+// statfs (darwin/bsd/linux) is an in-process read — no external command
+// is spawned.
 package sysinfo
 
 import (
-	"os"
 	"runtime"
-	"strconv"
-	"strings"
 	"syscall"
 )
-
-func fastRAM() RAMInfo {
-	r := RAMInfo{}
-
-	if runtime.GOOS == "linux" {
-		if data, err := os.ReadFile("/proc/meminfo"); err == nil {
-			for _, line := range strings.Split(string(data), "\n") {
-				parts := strings.SplitN(line, ":", 2)
-				if len(parts) != 2 {
-					continue
-				}
-				key := strings.TrimSpace(parts[0])
-				val := strings.TrimSpace(parts[1])
-				val = strings.TrimSuffix(val, " kB")
-				n, _ := strconv.ParseUint(val, 10, 64)
-				switch key {
-				case "MemTotal":
-					r.TotalBytes = n * 1024
-				case "MemFree":
-					r.FreeBytes = n * 1024
-				case "MemAvailable":
-					r.Available = n * 1024
-				}
-			}
-		}
-	}
-
-	return r
-}
 
 func fastDisk(path string) DiskInfo {
 	d := DiskInfo{Path: path}

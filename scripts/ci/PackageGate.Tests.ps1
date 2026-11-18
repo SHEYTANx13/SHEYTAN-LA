@@ -81,7 +81,12 @@ Set-Content -Path $script:fixtureLog -Value ("package gate fixtures — " + [Sys
 
 function Invoke-Gate {
     param([string[]]$GateArgs)
-    $out = & ./scripts/ci/PackageGate.ps1 @GateArgs *&1 | Out-String
+    # Work order §4.2 (run 44306343338): PackageGate.ps1 is a PowerShell
+    # SCRIPT — an in-process & invocation does not reliably set
+    # $LASTEXITCODE (it may stay unset under strict mode or keep a STALE
+    # value from an earlier native command). Invoke the gate as a NATIVE
+    # child process so the $LASTEXITCODE read below is genuine.
+    $out = & pwsh -NoProfile -NonInteractive -File ./scripts/ci/PackageGate.ps1 @GateArgs *&1 | Out-String
     $code = $LASTEXITCODE
     foreach ($line in ($out -split "`r?`n")) {
         if ($line.Trim().Length -gt 0) {

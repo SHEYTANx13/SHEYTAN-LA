@@ -135,6 +135,45 @@ func TestCurrentPlatformResolvable(t *testing.T) {
 	}
 }
 
+// TestMatrixCoversEverySupportedPlatformPair (work order §4.8.1): the
+// matrix must contain an explicit record for every supported OS/arch
+// pair for EACH renderer — omission is never a truthful representation,
+// and each record carries its evidence boundary in the Note.
+func TestMatrixCoversEverySupportedPlatformPair(t *testing.T) {
+	pairs := []struct{ os, arch string }{
+		{"windows", "amd64"}, {"windows", "arm64"},
+		{"linux", "amd64"}, {"linux", "arm64"},
+		{"darwin", "amd64"}, {"darwin", "arm64"},
+		{"android", "arm64"},
+		{"ios", "arm64"},
+	}
+	validStatus := map[string]bool{
+		PlatformVerified:    true,
+		PlatformExpected:    true,
+		PlatformUnsupported: true,
+	}
+
+	for _, m := range Catalog() {
+		for _, pair := range pairs {
+			status, known := m.Supported(pair.os, pair.arch)
+			if !known {
+				t.Errorf("renderer %q: no platform record for %s/%s — missing records are forbidden (§4.8)", m.ID, pair.os, pair.arch)
+				continue
+			}
+			if !validStatus[status] {
+				t.Errorf("renderer %q: %s/%s has invalid status %q", m.ID, pair.os, pair.arch, status)
+			}
+			if status != PlatformVerified {
+				for _, p := range m.Platforms {
+					if p.OS == pair.os && p.Arch == pair.arch && p.Note == "" {
+						t.Errorf("renderer %q: %s/%s non-verified record needs a truthful limitation/reason", m.ID, pair.os, pair.arch)
+					}
+				}
+			}
+		}
+	}
+}
+
 // TestValidateRejectsBrokenManifests: fail-closed manifest validation.
 func TestValidateRejectsBrokenManifests(t *testing.T) {
 	base, _ := Get(Fyne)

@@ -22,6 +22,15 @@ import (
 // tests read from the tracked tree.
 const workflowRelPath = ".github/workflows/build-desktop.yml"
 
+// The five reusable platform lanes (run 44306343338 §6.2 topology).
+const (
+	windowsLaneRelPath = ".github/workflows/build-windows.yml"
+	linuxLaneRelPath   = ".github/workflows/build-linux.yml"
+	macosLaneRelPath   = ".github/workflows/build-macos.yml"
+	androidLaneRelPath = ".github/workflows/build-android.yml"
+	iosLaneRelPath     = ".github/workflows/build-ios.yml"
+)
+
 // readTreeFile reads one tracked file relative to the repository root —
 // the shared helper for tree-content contract tests.
 func readTreeFile(t *testing.T, rel string) string {

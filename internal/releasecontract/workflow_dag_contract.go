@@ -43,8 +43,11 @@ var RequiredGateJobs = []string{
 	"preflight",
 	"audit",
 	"ui",
-	"build-windows",
-	"build-linux",
+	"platform-windows",
+	"platform-linux",
+	"platform-macos",
+	"platform-android",
+	"platform-ios",
 }
 
 // IndependentGateJobs are the validation jobs that must NOT depend on
@@ -53,9 +56,29 @@ var RequiredGateJobs = []string{
 var IndependentGateJobs = []string{
 	"audit",
 	"ui",
-	"build-windows",
-	"build-linux",
+	"platform-windows",
+	"platform-linux",
+	"platform-macos",
+	"platform-android",
+	"platform-ios",
 }
+
+// laneWorkflowUses maps each platform gate to the reusable workflow file
+// it must invoke EXACTLY ONCE (run 44306343338 work order §6.2: one
+// authoritative build path per platform, five reusable files, no
+// duplicate legacy lanes).
+var laneWorkflowUses = map[string]string{
+	"platform-windows": "./.github/workflows/build-windows.yml",
+	"platform-linux":   "./.github/workflows/build-linux.yml",
+	"platform-macos":   "./.github/workflows/build-macos.yml",
+	"platform-android": "./.github/workflows/build-android.yml",
+	"platform-ios":     "./.github/workflows/build-ios.yml",
+}
+
+// retiredLaneJobKeys are the legacy in-orchestrator platform lanes the
+// consolidation retired; their reappearance recreates the duplicate
+// platform-build topology the work order forbids (§3.1/§6.2).
+var retiredLaneJobKeys = []string{"build-windows", "build-linux"}
 
 // ValidateIndependentGatesDAG enforces the run-43630164424 repair: the
 // four validation gates are parallel, self-contained jobs — preflight is
@@ -85,7 +108,17 @@ func ValidateIndependentGatesDAG(workflowText string) error {
 				}
 			}
 		}
-		// Self-contained: each gate checks out and sets up its own toolchain.
+		// Self-contained: step-owned gates check out their own tree;
+		// reusable-lane gates invoke their ONE authoritative file.
+		if want, ok := laneWorkflowUses[key]; ok {
+			if job.Uses != want {
+				errs = append(errs, fmt.Sprintf(
+					"job %q must invoke %q via workflow_call exactly once (the single authoritative build path per platform), got %q",
+					key, want, job.Uses,
+				))
+			}
+			continue
+		}
 		hasCheckout := false
 		for _, step := range job.Steps {
 			if strings.HasPrefix(step.Uses, "actions/checkout") {
@@ -97,6 +130,15 @@ func ValidateIndependentGatesDAG(workflowText string) error {
 			errs = append(errs, fmt.Sprintf(
 				"job %q has no actions/checkout step — an independent gate must own its checkout (own prerequisites, same github.sha)",
 				key,
+			))
+		}
+	}
+
+	for _, retired := range retiredLaneJobKeys {
+		if _, ok := doc.Jobs[retired]; ok {
+			errs = append(errs, fmt.Sprintf(
+				"retired legacy lane job %q is present again — duplicate platform builds are forbidden (work order §6.2/§3.1: ONE authoritative build path per platform)",
+				retired,
 			))
 		}
 	}
@@ -518,4 +560,60 @@ func joinErrors(errs []string) error {
 		return nil
 	}
 	return fmt.Errorf("workflow DAG contract violated (%d):\n  %s", len(errs), strings.Join(errs, "\n  "))
+}
+
+// ValidateFiveReusableLanesInvokedOnce enforces the §6.2 topology end to
+// end: the orchestrator invokes each of the five reusable platform
+// workflows EXACTLY ONCE, no job outside the five platform-* lanes
+// invokes a platform workflow, and every reusable file subscribes to
+// workflow_call ONLY (the orchestrator owns push/PR triggers; a platform
+// file with its own push trigger would silently rebuild a platform
+// outside the orchestrated DAG).
+func ValidateFiveReusableLanesInvokedOnce(orchestratorText string, laneTexts map[string]string) error {
+	doc, err := parseWorkflow(orchestratorText)
+	if err != nil {
+		return err
+	}
+
+	var errs []string
+
+	counts := map[string]int{}
+	for jobKey, job := range doc.Jobs {
+		if job.Uses == "" {
+			continue
+		}
+		counts[job.Uses]++
+		if _, isLane := laneWorkflowUses[jobKey]; !isLane {
+			errs = append(errs, fmt.Sprintf(
+				"job %q invokes %q — the orchestrator must not invoke platform workflows outside the five contracted platform-* lanes",
+				jobKey, job.Uses,
+			))
+		}
+	}
+
+	for _, want := range laneWorkflowUses {
+		if n := counts[want]; n != 1 {
+			errs = append(errs, fmt.Sprintf(
+				"%q must be invoked EXACTLY ONCE by the orchestrator (work order §6.2), found %d invocations",
+				want, n,
+			))
+		}
+	}
+
+	for laneFile, text := range laneTexts {
+		laneDoc, err := parseWorkflow(text)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", laneFile, err))
+			continue
+		}
+		triggers := TriggerKeys(laneDoc.On)
+		if len(triggers) != 1 || !triggers["workflow_call"] {
+			errs = append(errs, fmt.Sprintf(
+				"%s must subscribe to workflow_call ONLY (the orchestrator owns push/PR triggers), got %v",
+				laneFile, triggers,
+			))
+		}
+	}
+
+	return joinErrors(errs)
 }

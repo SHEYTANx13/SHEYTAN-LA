@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build linux
 
 package proc
 
@@ -13,8 +13,9 @@ import (
 
 // listeningProcessImpl resolves the PID owning a listening TCP socket on
 // Linux through /proc/net/tcp{,6} + /proc/<pid>/fd socket-inode matching.
-// It compiles on every Unix; on non-Linux Unixes /proc may not exist and
-// the implementation reports ErrPortOwnerUnknown (fail closed).
+// Linux-only by build tag (run 44306343338 repair §4.7): the /proc
+// discovery path must never be compiled for darwin again — darwin gets
+// its own typed implementation (identity_darwin.go).
 func listeningProcessImpl(port int) (int, string, bool, error) {
 	inodes, err := listeningInodes(port)
 	if err != nil {

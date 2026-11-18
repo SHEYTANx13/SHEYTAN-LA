@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build linux
 
 package resources
 
@@ -9,6 +9,7 @@ import (
 	"strings"
 )
 
+// procRAMImpl (Linux): VmRSS from /proc/<pid>/status.
 func procRAMImpl(pid int) (int64, error) {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
 	if err != nil {

@@ -17,7 +17,7 @@
 # structurally verified, and simulator install/launch is recorded as
 # NOT RUN rather than claimed).
 #
-# Product state (ALPHA, run 44205355718 work order): the UI is the Fyne
+# Product state (ALPHA, current master work order): the UI is the Fyne
 # shell (its mobile backend is what gomobile packages here); the Go-Gui
 # primary-shell migration is pending (§4.1/§5) and this lane swaps to
 # the Go-Gui iOS backend only when that migration delivers it.
@@ -25,7 +25,17 @@
 name: build-ios
 
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      go_version:
+        description: "Exact Go toolchain version (the go.mod toolchain directive is the one authority)"
+        required: false
+        type: string
+        default: "1.27.4"
+    outputs:
+      artifact_name:
+        description: The exact uploaded artifact name
+        value: ${{ jobs.build-ios-simulator.outputs.artifact_name }}
 
 permissions:
   contents: read
@@ -53,7 +63,7 @@ jobs:
       - name: Setup Go (pinned toolchain + module cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version: ${{ inputs.go_version }}
           cache: true
           cache-dependency-path: go.sum
 
@@ -123,9 +133,37 @@ jobs:
           fi
           echo "working tree pristine"
 
-      - name: Upload the simulator .app
+      # Work order §6.3: the artifact is the .app bundle wrapped in ONE
+      # portable zip named SHEYTAN-LA-ALPHA-ios-simulator-arm64.zip. The
+      # bundle stays SIMULATOR-ONLY: an unsigned simulator .app is not a
+      # device IPA and is never labelled as one.
+      - name: Bundle the simulator .app as the portable zip (SIMULATOR-ONLY)
+        run: |
+          set -euo pipefail
+          cd dist/ios
+          app="$(ls -d *.app)"
+          ditto -c -k --keepParent "$app" "SHEYTAN-LA-ALPHA-ios-simulator-arm64.zip"
+          test -s "SHEYTAN-LA-ALPHA-ios-simulator-arm64.zip"
+          echo "simulator zip created (SIMULATOR-ONLY qualification)"
+
+      - name: Verify the simulator zip (fail-closed)
+        run: |
+          set -euo pipefail
+          zip="dist/ios/SHEYTAN-LA-ALPHA-ios-simulator-arm64.zip"
+          members="$(unzip -Z1 "$zip")"
+          echo "$members" | grep -q "SHEYTAN-LA.app/" || { echo "::error::simulator zip is missing the .app bundle"; exit 1; }
+          if echo "$members" | grep -Eqi '\.(ipa|pkg|dmg|mobileprovision)$'; then
+            echo "::error::device-package payload found in the SIMULATOR-ONLY artifact"; exit 1
+          fi
+          echo "simulator zip verification OK: bundle complete, no device/signing payloads"
+
+      - name: Upload the simulator portable zip
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: SHEYTAN-LA-ALPHA-ios-simulator-app
-          path: dist/ios/
+          name: SHEYTAN-LA-ALPHA-ios-simulator-arm64
+          path: dist/ios/SHEYTAN-LA-ALPHA-ios-simulator-arm64.zip
           if-no-files-found: error
+
+      - name: Publish the artifact-name output
+        run: |
+          echo "artifact_name=SHEYTAN-LA-ALPHA-ios-simulator-arm64" >> "$GITHUB_OUTPUT"

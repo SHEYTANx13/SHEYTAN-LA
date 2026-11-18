@@ -17,7 +17,7 @@
 # recorded as such anywhere this artifact is described. Physical-device
 # behavior is never asserted from this workflow.
 #
-# Product state (ALPHA, run 44205355718 work order): the UI is the Fyne
+# Product state (ALPHA, current master work order): the UI is the Fyne
 # shell (its mobile backend is what gomobile packages here); the Go-Gui
 # primary-shell migration is pending (§4.1/§5) and this lane swaps to
 # the Go-Gui Android backend only when that migration delivers it.
@@ -25,7 +25,17 @@
 name: build-android
 
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      go_version:
+        description: "Exact Go toolchain version (the go.mod toolchain directive is the one authority)"
+        required: false
+        type: string
+        default: "1.27.4"
+    outputs:
+      artifact_name:
+        description: The exact uploaded artifact name
+        value: ${{ jobs.build-android-apk.outputs.artifact_name }}
 
 permissions:
   contents: read
@@ -52,7 +62,7 @@ jobs:
       - name: Setup Go (pinned toolchain + module cache)
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version: ${{ inputs.go_version }}
           cache: true
           cache-dependency-path: go.sum
 
@@ -135,6 +145,10 @@ jobs:
       - name: Upload the development APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: SHEYTAN-LA-ALPHA-android-arm64-apk
+          name: SHEYTAN-LA-ALPHA-android-arm64-debug-apk
           path: dist/android/*.apk
           if-no-files-found: error
+
+      - name: Publish the artifact-name output
+        run: |
+          echo "artifact_name=SHEYTAN-LA-ALPHA-android-arm64-debug-apk" >> "$GITHUB_OUTPUT"

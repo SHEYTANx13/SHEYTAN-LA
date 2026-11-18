@@ -7,6 +7,67 @@ Every release ships with the same invariants: one authority per concern, evidenc
 
 ---
 
+## ALPHA — run-44306343338 repair + single-authority CI consolidation (session 3) — 2026-11-18, local candidate on `work/alpha-run443063-repair` (base `7c6678f`), hosted verification pending
+
+The RED run-44306343338 (main HEAD `7c6678f`) root-caused and repaired
+from a verified clean preflight (HEAD == origin/main == the reference
+commit; `79b21a4` is the direct parent; no tags; clean tree). Candidate
+commits: `caf6c83`, `9c5d9f6`.
+
+Breaking/migration notes for operators:
+
+- The consolidated CI diagnostic is now `SHEYTAN-LA-errors-warnings.txt`
+  (errors/warnings/coverage only, ASCII, deterministic). The verbose
+  `SHEYTAN-LA-all-logs.txt` artifact is RETIRED; `run-diagnostics.json`
+  remains the machine-readable index. Application runtime logs are NOT
+  affected (separate systems, unchanged levels).
+- The orchestrator now invokes exactly five reusable platform lanes
+  (`build-windows/linux/macos/android/ios.yml`), each once. The legacy
+  in-orchestrator `build-windows`/`build-linux` lanes are retired; their
+  unique checks were transferred byte-exact into the reusable lanes
+  (named-pipe CoreClient integration, gen-syso + windowsgui PE verify,
+  Mesa-pinned Windows launch smoke, ImportAudit/PackageGate contracts,
+  upstream-failure markers, size gates, richer build-info probe, Xvfb
+  boot/window/SIGTERM-reap smoke, per-job diagnostics index). Package
+  artifacts use the exact §6.3 portable names
+  (`SHEYTAN-LA-ALPHA-<platform>-<arch>-portable.<ext>`); the release
+  job consumes those artifacts and its SHA256SUMS message bug (3 vs 4)
+  is fixed. `cancel-in-progress` is false — evidence is never cancelled.
+- Android/iOS toolchain: `golang.org/x/mobile` is now PINNED in go.mod
+  (`v0.0.0-20261117202452-47699113848a`); the gomobile toolchain is the
+  module graph's version by construction and a contract test bans
+  regression to the 2023 graph (x/tools v0.16.0 is broken under Go
+  1.27.4 — reproduced during the repair).
+
+Repairs by lane (all with tests; hosted execution NOT RUN — no push/dispatch authorized):
+
+- Windows: PowerShell step-invocation contract — `$?` captured after
+  pure .ps1 invocations, `$LASTEXITCODE` only after native executables;
+  PackageGate/ImportAudit run as native `pwsh -File` children;
+  `scripts/ci/StepInvocationContract.Tests.ps1` pins the contract under
+  strict mode with no inherited exit-code variable (run-443 root cause).
+- Linux (+ the identical macOS probe): the compiled build-info probe
+  uses the ABSOLUTE canonical binary path (realpath + exec-bit check)
+  before entering the isolated temp directory (run-443 exit 127 root
+  cause); richer identity assertions (exit code, exact JSON fields,
+  residue check) transferred and kept.
+- macOS: `internal/localipc` split into Linux (`SO_PASSCRED`/`SO_PEERCRED`)
+  and Darwin (`SOL_LOCAL`/`LOCAL_PEERCRED` xucred against pinned
+  golang.org/x/sys v0.50.0; typed malformed-credential rejection; peer
+  PID never claimed); `internal/engcheck` gained genuine Mach-O
+  thin/fat parsing (`debug/macho`) with strict architecture validation
+  and synthetic fixtures; darwin host RAM via `hw.memsize`, process RSS
+  via Mach `task_info` (cgo) with typed unsupported fallbacks (no
+  fabricated values); darwin listener ownership is a typed
+  UNSUPPORTED result (fail-closed) pending a verified libproc fd walk;
+  the renderer matrix now covers every supported OS/arch pair per
+  renderer including darwin/arm64, every non-verified record carrying
+  its evidence boundary.
+- Identity: the Cyrillic U+0422 homoglyph in the product name
+  (`REQUIREMENTS-TRACEABILITY.md`) fixed; a tracked-tree scan test bans
+  spaced variants, doubled separators and non-ASCII lookalikes at the
+  T position, plus the retired artifact names.
+
 ## ALPHA — run-44205355718 CI repair + five-platform §10 lanes (session 2) — 2026-11-18, local candidate on `work/alpha-ci-repair` (base `79b21a4`), hosted verification pending
 
 The RED run-44205355718 (main HEAD `79b21a4` — the direct child of the older green base `f29d759`) root-caused and repaired. Nothing was reused from the unavailable `f0a03e6` local candidate. The machine-readable failure ledger lives at [`diagnostics/run-44205355718-ledger.json`](diagnostics/run-44205355718-ledger.json).

@@ -1,7 +1,7 @@
 # Requirements Traceability — Stability & Advanced UI/UX Reports → Code
 
 > Provenance note (recorded honestly): the two source reports
-> (`SHEYТAN-LA-Stability-and-Roadmap.md`,
+> (`SHEYTAN-LA-Stability-and-Roadmap.md`,
 > `SHEYTAN-LA-Advanced-UI-UX.md`) were **not attached** to the 2026-11-16
 > integrity-first milestone session; this matrix is built from the
 > requirement-area enumeration of those reports as bound into the
@@ -17,7 +17,7 @@
 Statuses (exact set): `IMPLEMENTED_AND_TESTED`, `EXISTING_AND_VERIFIED`,
 `FOUNDATION_IMPLEMENTED`, `STAGED_WITH_GATE`, `BLOCKED`.
 
-## Stability report (SHEYТAN-LA-Stability-and-Roadmap.md)
+## Stability report (SHEYTAN-LA-Stability-and-Roadmap.md)
 
 | Report § | Requirement area | Discovered code path / evidence | Status | Owning test(s) | Doc destination | Phase |
 |---|---|---|---|---|---|---|

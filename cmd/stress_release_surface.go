@@ -280,6 +280,30 @@ func stressReleaseSurface() error {
 
 	w := string(wf)
 
+	// Run 44306343338 §6.2 consolidation: the platform build lanes live in
+	// the five reusable workflow files; the orchestrator invokes each one
+	// exactly once. Platform-specific release-surface anchors below are
+	// validated against the LANE files, and the action-pin presence check
+	// sees the combined workflow set.
+	lanePaths := []string{
+		filepath.Join(workflowsDir, "build-windows.yml"),
+		filepath.Join(workflowsDir, "build-linux.yml"),
+		filepath.Join(workflowsDir, "build-macos.yml"),
+		filepath.Join(workflowsDir, "build-android.yml"),
+		filepath.Join(workflowsDir, "build-ios.yml"),
+	}
+	laneTexts := make([]string, 0, len(lanePaths))
+	for _, lp := range lanePaths {
+		laneBytes, laneErr := os.ReadFile(lp)
+		if laneErr != nil {
+			return fmt.Errorf("read reusable lane %q: %v (the §6.2 five-lane topology requires all five files)", lp, laneErr)
+		}
+		laneTexts = append(laneTexts, string(laneBytes))
+	}
+	winLane := laneTexts[0]
+	linLane := laneTexts[1]
+	allWorkflows := w + strings.Join(laneTexts, "\n")
+
 	// 3a. The workflow must pin Go instead of floating on "stable".
 	if strings.Contains(w, "go-version: 'stable'") ||
 		strings.Contains(w, `go-version: stable`) {
@@ -328,20 +352,21 @@ func stressReleaseSurface() error {
 		)
 	}
 
-	// 3b. Both target platforms must remain part of the desktop release.
-	if !strings.Contains(w, "name: Windows x64") {
-		return fmt.Errorf("Windows x64 build job is missing")
+	// 3b. Both target platforms must remain part of the desktop release,
+	// in their single authoritative reusable lanes (§6.2).
+	if !strings.Contains(winLane, "name: Windows x64 (single authoritative lane)") {
+		return fmt.Errorf("the authoritative Windows x64 build lane is missing from build-windows.yml")
 	}
 
-	if !strings.Contains(w, "name: Linux x64") {
-		return fmt.Errorf("Linux x64 build job is missing")
+	if !strings.Contains(linLane, "name: Linux x64 (single authoritative lane)") {
+		return fmt.Errorf("the authoritative Linux x64 build lane is missing from build-linux.yml")
 	}
 
 	// v1.11.1 maintenance: the EXPLICIT supported label (windows-2025)
 	// replaces the moving windows-latest alias (verified against the
 	// actions/runner-images label list on 2026-11-14).
-	if !strings.Contains(w, "runs-on: windows-2025") {
-		return fmt.Errorf("Windows build must pin the explicit windows-2025 runner label (the moving windows-latest alias was replaced by policy)")
+	if !strings.Contains(winLane, "runs-on: windows-2025") {
+		return fmt.Errorf("the Windows build lane must pin the explicit windows-2025 runner label (the moving windows-latest alias was replaced by policy)")
 	}
 
 	// v1.11.1 (run 42127523923, work order §4): the Linux x64 runner
@@ -354,7 +379,7 @@ func stressReleaseSurface() error {
 	// ID=ubuntu/VERSION_ID=26.04/amd64 guard, while this gate kept
 	// demanding the retired image (the gate-must-follow-the-current-
 	// contract defect class of run-#40 and run-38569081029).
-	if err := releasecontract.ValidateLinuxRunnerContract(w); err != nil {
+	if err := releasecontract.ValidateLinuxRunnerContract(linLane); err != nil {
 		return fmt.Errorf("Linux build runner contract: %w", err)
 	}
 
@@ -406,7 +431,7 @@ func stressReleaseSurface() error {
 		{id: "softprops/action-gh-release", refs: []string{"8a0cd651e5b2365bd640854a3fa5dfc70e4875f3"}},
 		{id: "msys2/setup-msys2", refs: []string{"ec48f7c5447b3140e2b088413ae3a55687bccb6e"}},
 	} {
-		if !workflowHasAction(w, required.id, required.refs...) {
+		if !workflowHasAction(allWorkflows, required.id, required.refs...) {
 			return fmt.Errorf(
 				"workflow missing required action %s (accepted: the verified immutable commit SHA)",
 				required.id,
@@ -561,14 +586,14 @@ func stressReleaseSurface() error {
 	// 3g. The Windows build must carry the brand resources: gen-syso
 	// (icon + Parsa Tak signature + DPI-aware manifest) and the
 	// windowsgui subsystem flag (no console flash on double-click).
-	if !strings.Contains(w, "go run ./scripts/gen-syso") {
+	if !strings.Contains(winLane, "go run ./scripts/gen-syso") {
 		return fmt.Errorf(
 			"Windows build lost the gen-syso resource step (icon + version info + DPI manifest)",
 		)
 	}
 
-	if !strings.Contains(w, "-H=windowsgui") &&
-		!strings.Contains(w, "-H windowsgui") {
+	if !strings.Contains(winLane, "-H=windowsgui") &&
+		!strings.Contains(winLane, "-H windowsgui") {
 		return fmt.Errorf(
 			"Windows build lost the -H=windowsgui subsystem flag",
 		)
@@ -587,6 +612,10 @@ func stressReleaseSurface() error {
 	// Master work order §10 (installer retirement): the portable ZIPs are
 	// the ONLY supported packages; every retired installer spelling is a
 	// forbidden fragment below.
+	// Run 44306343338 §6.2/§6.3 consolidation: the package lifecycle
+	// lives in the reusable LANES (one authoritative build path per
+	// platform), so the fragments are validated against the combined
+	// workflow set; the orchestrator only downloads and publishes.
 	requiredWorkflowFragments := []string{
 		contract.WindowsZipWorkflowSlot,
 		contract.LinuxZipWorkflowSlot,
@@ -595,18 +624,13 @@ func stressReleaseSurface() error {
 		releasecontract.WindowsAppDirWorkflowSlot,
 		releasecontract.LinuxAppDirWorkflowSlot,
 		"Create Windows ZIP",
-		"Create Linux ZIP",
 		"Verify Windows ZIP",
-		"Verify Linux ZIP",
-		// Renamed in v1.1.2 when download-artifact moved to the
-		// tag-agnostic release job; the artifact-upload steps are
-		// "Upload Windows package" / "Upload Linux package".
-		"Upload Windows package",
-		"Upload Linux package",
+		"Upload the portable ZIP",
+		"Upload the portable archive",
 	}
 
 	for _, fragment := range requiredWorkflowFragments {
-		if !strings.Contains(w, fragment) {
+		if !strings.Contains(allWorkflows, fragment) {
 			return fmt.Errorf(
 				"desktop workflow missing release-package contract %q",
 				fragment,
@@ -634,7 +658,7 @@ func stressReleaseSurface() error {
 		}
 	}
 
-	if err := checkWorkflowArtifactAgreement(w, contract); err != nil {
+	if err := checkWorkflowArtifactAgreement(allWorkflows, contract); err != nil {
 		return err
 	}
 
@@ -650,7 +674,7 @@ func stressReleaseSurface() error {
 		contract.RequiredWindowsZipWorkflowEntries(),
 		contract.RequiredLinuxZipWorkflowEntries()...,
 	) {
-		if !strings.Contains(w, fragment) {
+		if !strings.Contains(allWorkflows, fragment) {
 			return fmt.Errorf(
 				"portable ZIP contract missing %q",
 				fragment,
@@ -673,7 +697,7 @@ func stressReleaseSurface() error {
 		"./cmd/sheytan-local-agent",
 		"packaging/SHEYTAN-LA.bat",
 	} {
-		if !strings.Contains(w, fragment) {
+		if !strings.Contains(allWorkflows, fragment) {
 			return fmt.Errorf(
 				"UI/package release gate missing %q",
 				fragment,
@@ -693,7 +717,9 @@ func stressReleaseSurface() error {
 	// presentation format either: no `| head -1 |` pipelines and no sed
 	// extraction of the human-readable banner. The retired
 	// package.json / release-version.mjs authorities must not return.
-	if !strings.Contains(w, "go run ./cmd/printversion --plain") {
+	// The version resolution lives in the reusable LANES after the §6.2
+	// consolidation (both desktop lanes resolve and cross-check it).
+	if !strings.Contains(allWorkflows, "go run ./cmd/printversion --plain") {
 		return fmt.Errorf(
 			"workflow does not resolve APP_VERSION from the Go authority via the CGO-free resolver (expected `go run ./cmd/printversion --plain` with CGO_ENABLED=0)",
 		)
@@ -702,7 +728,7 @@ func stressReleaseSurface() error {
 		"version | head -1 | sed",
 		"| head -1 | sed -n",
 	} {
-		if strings.Contains(w, staleParse) {
+		if strings.Contains(allWorkflows, staleParse) {
 			return fmt.Errorf(
 				"workflow re-parses the agent's presentation output with %q — resolve the version via cmd/printversion --plain (machine-readable, fail-closed) instead of scraping the banner",
 				staleParse,
@@ -741,7 +767,7 @@ func stressReleaseSurface() error {
 		"/ucrt64/bin",
 		"C:\\msys64\\ucrt64\\bin",
 	} {
-		if !strings.Contains(w, ucrt) {
+		if !strings.Contains(winLane, ucrt) {
 			return fmt.Errorf(
 				"Windows CI must provision the UCRT64 toolchain (missing %q) — MINGW64 is deprecated per msys2's October 2026 announcement",
 				ucrt,
@@ -754,7 +780,7 @@ func stressReleaseSurface() error {
 		"/mingw64/bin",
 		"C:\\msys64\\mingw64\\bin",
 	} {
-		if strings.Contains(w, mingw64) {
+		if strings.Contains(winLane, mingw64) {
 			return fmt.Errorf(
 				"deprecated MINGW64 fragment %q still in the workflow — migrate to UCRT64 (mingw-w64-ucrt-x86_64-*, /ucrt64/bin) per msys2's October 2026 deprecation",
 				mingw64,
@@ -767,21 +793,26 @@ func stressReleaseSurface() error {
 	// identically named logs — gate-order.txt — overwrote each other
 	// before concatenation, and if-no-files-found: ignore could drop
 	// the mandatory artifact silently).
-	// v1.11.1 single-artifact rework (run #41548925352): the per-job
-	// log parts and their run-id-suffixed consolidated name are
-	// RETIRED — the collector pulls every job's log from the paginated
-	// jobs API and uploads the ONE stable-name artifact
-	// SHEYTAN-LA-all-logs.txt (archive:false); the attempt number
-	// lives ONLY inside the report (CONSOLIDATE_ATTEMPT). The retired
-	// name is BANNED by the artifact-naming contract test, so the old
-	// anchor here contradicted the release contract and failed every
-	// correct workflow. The anchors below ARE the current contract,
-	// shared with internal/releasecontract.
+	// v1.11.1 single-artifact rework (run #41548925352), updated by the
+	// run 44306343338 §7 contract: the per-job log parts, their
+	// run-id-suffixed consolidated name and the verbose all-logs artifact
+	// are RETIRED — the collector pulls every job's log from the paginated
+	// jobs API and uploads the ONE errors/warnings-only plain-text
+	// diagnostic named by releasecontract.ConsolidatedLogArtifactName
+	// (archive:false); the attempt number lives ONLY inside the report
+	// (CONSOLIDATE_ATTEMPT). The retired name is BANNED by the
+	// artifact-naming contract test, so a stale anchor here contradicted
+	// the release contract and failed every correct workflow. The anchors
+	// below ARE the current contract, shared with internal/releasecontract.
+	// Run 44306343338 §7: the consolidated artifact is the
+	// errors/warnings-only plain-text diagnostic; the verbose all-logs
+	// artifact and its "===" decorated section markers are retired. The
+	// anchor uses the SHARED releasecontract constant so this gate and
+	// the contract tests can never drift apart again.
 	for _, consolidation := range []string{
-		"SHEYTAN-LA-all-logs.txt",
+		releasecontract.ConsolidatedLogArtifactName,
 		"CONSOLIDATE_ATTEMPT: ${{ github.run_attempt }}",
 		"scripts/ci/consolidate-run-log.sh",
-		"=== MISSING LOG SOURCE ===",
 	} {
 		if !strings.Contains(w, consolidation) {
 			return fmt.Errorf(
@@ -800,8 +831,14 @@ func stressReleaseSurface() error {
 	}
 
 	for _, marker := range []string{
-		"=== MISSING LOG SOURCE ===",
-		"=== ERROR INDEX ===",
+		// Run 44306343338 §7: the report's simple headings carry no
+		// decorative separators; the missing-source heading is the
+		// plain MISSSING LOG SOURCES section (grep the script for it).
+		"MISSING LOG SOURCES",
+		// Run 44306343338 §7 headings: simple names, no separators. The
+		// error/test-failure classifiers are pinned by their function
+		// names instead of decorative heading spellings.
+		"classify_job_log",
 	} {
 		if !strings.Contains(string(collector), marker) {
 			return fmt.Errorf(
@@ -833,7 +870,7 @@ func checkWorkflowArtifactAgreement(
 	// Every artifact path the workflow writes under dist/ (PowerShell
 	// `${env:APP_VERSION}`, bash `${APP_VERSION}` and `${{ env.APP_VERSION }}`
 	// spellings are all captured by the placeholder wildcard).
-	artifactRe := regexp.MustCompile(`dist/[A-Za-z0-9._${}(){}:-]+?\.(?:zip|exe|msix)`)
+	artifactRe := regexp.MustCompile(`dist/[A-Za-z0-9._${}(){}:/-]+?\.(?:zip|exe|msix|tar\.gz)`)
 
 	found := map[string]bool{}
 	for _, m := range artifactRe.FindAllString(workflow, -1) {
@@ -898,14 +935,18 @@ func checkWorkflowArtifactAgreement(
 	// the canonical root variables: the portable ZIP builds from them
 	// (v1.2.1 — slot spellings, so a
 	// duplicated literal no longer satisfies this check).
-	for _, slot := range []string{
-		releasecontract.WindowsAppDirWorkflowSlot,
-		releasecontract.LinuxAppDirWorkflowSlot,
+	// The staging slots live in the reusable LANES after the §6.2
+	// consolidation; the orchestrator stages nothing itself.
+	laneIdx := strings.Index(workflow, "jobs:")
+	_ = laneIdx
+	for _, pair := range []struct{ lane, slot string }{
+		{"build-windows.yml", releasecontract.WindowsAppDirWorkflowSlot},
+		{"build-linux.yml", releasecontract.LinuxAppDirWorkflowSlot},
 	} {
-		if !strings.Contains(workflow, slot) {
+		if !strings.Contains(workflow, pair.slot) {
 			return fmt.Errorf(
 				"workflow no longer stages the application at %q — packaging identity drifted",
-				slot,
+				pair.slot,
 			)
 		}
 	}

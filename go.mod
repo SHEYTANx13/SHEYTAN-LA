@@ -49,5 +49,6 @@ require (
 	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/yuin/goldmark v1.8.7 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	golang.org/x/mobile v0.0.0-20261117202452-47699113848a // indirect
 	golang.org/x/text v0.44.0 // indirect
 )

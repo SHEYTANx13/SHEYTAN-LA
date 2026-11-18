@@ -120,9 +120,13 @@ func TestOldPreflightDAGShapeIsRejected(t *testing.T) {
 	old := w
 	applied := 0
 	for _, job := range IndependentGateJobs {
-		mutated := strings.Replace(old,
-			"  "+job+":\n    name:",
-			"  "+job+":\n    needs: [preflight]\n    name:", 1)
+		needle := "  " + job + ":\n    name:"
+		injection := "  " + job + ":\n    needs: [preflight]\n    name:"
+		if _, isLane := laneWorkflowUses[job]; isLane {
+			needle = "  " + job + ":\n"
+			injection = "  " + job + ":\n    needs: [preflight]\n"
+		}
+		mutated := strings.Replace(old, needle, injection, 1)
 		if mutated != old {
 			applied++
 		}
@@ -161,14 +165,14 @@ func TestRedPlatformGateKeepsOthersRunning(t *testing.T) {
 	w := loadWorkflowForDAG(t, dagWorkflowRelPath)
 
 	outcomes, err := SimulateGateMatrix(w, map[string]string{
-		"preflight":     "success",
-		"build-windows": "failure",
+		"preflight":        "success",
+		"platform-windows": "failure",
 	})
 	if err != nil {
 		t.Fatalf("simulate: %v", err)
 	}
 
-	for _, gate := range []string{"audit", "ui", "build-linux"} {
+	for _, gate := range []string{"audit", "ui", "platform-linux", "platform-macos", "platform-android", "platform-ios"} {
 		if outcomes[gate] != "success" {
 			t.Fatalf("unrelated gate %q must still run to success, got %q", gate, outcomes[gate])
 		}
@@ -177,7 +181,7 @@ func TestRedPlatformGateKeepsOthersRunning(t *testing.T) {
 		t.Fatalf("collector must run after the red platform gate, got %q", outcomes["consolidate-logs"])
 	}
 	if !verdictFails(outcomes) {
-		t.Fatalf("final verdict must be FAILURE when build-windows failed: %+v", outcomes)
+		t.Fatalf("final verdict must be FAILURE when platform-windows failed: %+v", outcomes)
 	}
 }
 
@@ -346,5 +350,39 @@ func TestCodeQLResilienceRejectsRegressions(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "language") && !strings.Contains(err.Error(), "security-and-quality") {
 		t.Fatalf("expected a scanning-scope failure, got: %v", err)
+	}
+}
+
+// TestFiveReusableLanesInvokedOnce is the run 44306343338 §6.2 regression
+// fixture: the orchestrator invokes each of the five reusable platform
+// workflows EXACTLY ONCE, no other job invokes platform workflows, every
+// reusable file subscribes to workflow_call ONLY, and the retired legacy
+// in-orchestrator platform lanes never reappear (one authoritative build
+// path per platform).
+func TestFiveReusableLanesInvokedOnce(t *testing.T) {
+	orchestrator := loadWorkflowForDAG(t, dagWorkflowRelPath)
+
+	laneFiles := []string{
+		"build-windows.yml", "build-linux.yml", "build-macos.yml",
+		"build-android.yml", "build-ios.yml",
+	}
+	laneTexts := map[string]string{}
+	for _, f := range laneFiles {
+		laneTexts[".github/workflows/"+f] = loadWorkflowForDAG(t,
+			filepath.Join("..", "..", ".github", "workflows", f))
+	}
+
+	if err := ValidateFiveReusableLanesInvokedOnce(orchestrator, laneTexts); err != nil {
+		t.Fatalf("five-lane work-order-6.2 topology contract: %v", err)
+	}
+
+	doc, err := parseWorkflow(orchestrator)
+	if err != nil {
+		t.Fatalf("parse orchestrator: %v", err)
+	}
+	for _, retired := range retiredLaneJobKeys {
+		if _, ok := doc.Jobs[retired]; ok {
+			t.Errorf("retired legacy lane job %q reappeared in the orchestrator", retired)
+		}
 	}
 }

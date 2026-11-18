@@ -41,10 +41,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The consolidated run log artifact: the ONE log upload contracted by
-// the v1.11.1 single-artifact run-log contract (exact ASCII spelling as
-// used by the workflow and the collector).
-const ConsolidatedLogArtifactName = "SHEYTAN-LA-all-logs.txt"
+// ConsolidatedLogArtifactName is the ONE run-level plain-text
+// diagnostic artifact: errors/warnings-only per the run 44306343338
+// work order §7 (exact ASCII spelling as used by the workflow and the
+// collector; the verbose all-logs artifact is retired).
+const ConsolidatedLogArtifactName = "SHEYTAN-LA-errors-warnings.txt"
 
 // RunDiagnosticsArtifactName is the machine-readable run-level
 // diagnostics index uploaded by the same collector job (run 43630164424
@@ -52,10 +53,21 @@ const ConsolidatedLogArtifactName = "SHEYTAN-LA-all-logs.txt"
 // status/conclusion/id and the collector's log-source category.
 const RunDiagnosticsArtifactName = "run-diagnostics.json"
 
-// The two stable package artifact names.
+// The stable package artifact names (work order §6.3: the exact
+// platform/arch-qualified portable names; the generic -package names
+// are retired with the duplicate legacy lanes they belonged to).
 const (
-	WindowsPackageArtifactName = "windows-x64-package"
-	LinuxPackageArtifactName   = "linux-x64-package"
+	WindowsPackageArtifactName = "SHEYTAN-LA-ALPHA-windows-x64-portable"
+	LinuxPackageArtifactName   = "SHEYTAN-LA-ALPHA-linux-x64-portable"
+)
+
+// The macOS/Android/iOS reusable-lane artifact names (work order §6.3).
+// The macOS matrix spells arch through an expression, so the contract
+// matches the surrounding literal skeleton.
+const (
+	MacOSPackageArtifactSkeleton = "SHEYTAN-LA-ALPHA-macos-${{ matrix.arch }}-portable"
+	AndroidArtifactName          = "SHEYTAN-LA-ALPHA-android-arm64-debug-apk"
+	IOSArtifactName              = "SHEYTAN-LA-ALPHA-ios-simulator-arm64"
 )
 
 // The Linux build lane runner identity (v1.11.1, run 42127523923, work
@@ -67,7 +79,7 @@ const (
 // gate-must-follow-the-contract-forward defect class as the run-#40
 // Go-version pin and the run-38569081029 retired GTK dependency).
 const (
-	LinuxJobName       = "Linux x64"
+	LinuxJobName       = "Linux x64 (single authoritative lane)"
 	LinuxRunnerLabel   = "ubuntu-26.04"
 	RetiredLinuxRunner = "ubuntu-24.04"
 )
@@ -218,6 +230,7 @@ type workflowStep struct {
 // dependencies).
 type workflowJob struct {
 	Name   string         `yaml:"name"`
+	Uses   string         `yaml:"uses"`
 	RunsOn runnerLabels   `yaml:"runs-on"`
 	Needs  needsList      `yaml:"needs"`
 	If     string         `yaml:"if"`
@@ -590,7 +603,7 @@ func ValidateUploadArtifactContract(workflowText string) error {
 
 	var errs []string
 
-	logUploads, diagUploads, winUploads, linUploads := 0, 0, 0, 0
+	logUploads, diagUploads := 0, 0
 
 	for _, u := range uploads {
 		switch u.Name {
@@ -599,14 +612,14 @@ func ValidateUploadArtifactContract(workflowText string) error {
 
 			if u.Path != ConsolidatedLogArtifactName {
 				errs = append(errs, fmt.Sprintf(
-					"job %q: the consolidated log upload must set with.path to the exact file %q (archive:false means the artifact IS the file), got %q",
+					"job %q: the consolidated diagnostic upload must set with.path to the exact file %q (archive:false means the artifact IS the file), got %q",
 					u.Job, ConsolidatedLogArtifactName, u.Path,
 				))
 			}
 
 			if arch, ok := u.With["archive"]; !ok || arch != false {
 				errs = append(errs, fmt.Sprintf(
-					"job %q: the consolidated log upload must carry `archive: false` (the artifact must BE the plain-text file, not a ZIP wrapper)",
+					"job %q: the consolidated diagnostic upload must carry `archive: false` (the artifact must BE the plain-text file, not a ZIP wrapper)",
 					u.Job,
 				))
 			}
@@ -635,55 +648,18 @@ func ValidateUploadArtifactContract(workflowText string) error {
 				))
 			}
 
-		case WindowsPackageArtifactName:
-			winUploads++
-
-			if !strings.Contains(u.Path, "dist/") {
-				errs = append(errs, fmt.Sprintf(
-					"job %q: the Windows package upload payload must stage from dist/, got %q",
-					u.Job, u.Path,
-				))
-			}
-
-			// Master work order §10: the upload must carry the
-			// portable ZIP and must NOT list the retired installer
-			// artifact anymore.
-			if !strings.Contains(u.Path, "-windows-x64.zip") {
-				errs = append(errs, fmt.Sprintf(
-					"job %q: the Windows package upload payload must include the %q artifact, got %q",
-					u.Job, "-windows-x64.zip", u.Path,
-				))
-			}
-			if strings.Contains(u.Path, "-windows-x64-installer.exe") {
-				errs = append(errs, fmt.Sprintf(
-					"job %q: the Windows package upload still lists the retired installer artifact — installer production is removed (master work order §10), got %q",
-					u.Job, u.Path,
-				))
-			}
-
-		case LinuxPackageArtifactName:
-			linUploads++
-
-			if !strings.Contains(u.Path, "dist/") ||
-				!strings.Contains(u.Path, "-linux-x64.zip") {
-				errs = append(errs, fmt.Sprintf(
-					"job %q: the Linux package upload payload must be the dist/ portable archive (*-linux-x64.zip), got %q",
-					u.Job, u.Path,
-				))
-			}
-
 		default:
 			errs = append(errs, fmt.Sprintf(
-				"job %q step %q: unexpected upload-artifact name %q — the contracted upload surface is exactly %q, %q, %q and %q (any extra upload breaks the single-log-artifact contract)",
+				"job %q step %q: unexpected upload-artifact name %q — the orchestrator's contracted upload surface is exactly the consolidated diagnostic %q and the machine-readable index %q; platform packages upload from their OWN reusable lanes",
 				u.Job, u.Step, u.Name,
-				ConsolidatedLogArtifactName, RunDiagnosticsArtifactName, WindowsPackageArtifactName, LinuxPackageArtifactName,
+				ConsolidatedLogArtifactName, RunDiagnosticsArtifactName,
 			))
 		}
 	}
 
 	if logUploads != 1 {
 		errs = append(errs, fmt.Sprintf(
-			"exactly ONE consolidated log artifact upload is contracted (%q), found %d",
+			"exactly ONE consolidated diagnostic artifact upload is contracted (%q), found %d",
 			ConsolidatedLogArtifactName, logUploads,
 		))
 	}
@@ -695,23 +671,122 @@ func ValidateUploadArtifactContract(workflowText string) error {
 		))
 	}
 
-	if winUploads != 1 {
-		errs = append(errs, fmt.Sprintf(
-			"exactly ONE %q upload is contracted, found %d",
-			WindowsPackageArtifactName, winUploads,
-		))
+	if len(errs) > 0 {
+		return fmt.Errorf(
+			"upload-artifact contract violated:\n  %s",
+			strings.Join(errs, "\n  "),
+		)
 	}
 
-	if linUploads != 1 {
-		errs = append(errs, fmt.Sprintf(
-			"exactly ONE %q upload is contracted, found %d",
-			LinuxPackageArtifactName, linUploads,
-		))
+	return nil
+}
+
+// ValidatePlatformPackageUploadContract enforces the §6.3 package
+// upload surface of the two desktop reusable lanes (work order §6.2:
+// the package artifacts live with the single authoritative build path,
+// not in the orchestrator): exactly ONE upload per lane, carrying the
+// exact portable name and staging from dist/.
+func ValidatePlatformPackageUploadContract(windowsText, linuxText string) error {
+	var errs []string
+
+	type lane struct {
+		name     string
+		text     string
+		artifact string
+		pathNeed string
+	}
+	lanes := []lane{
+		{"windows", windowsText, WindowsPackageArtifactName, "-portable.zip"},
+		{"linux", linuxText, LinuxPackageArtifactName, "-portable.tar.gz"},
+	}
+
+	for _, l := range lanes {
+		uploads, err := ArtifactSteps(l.text, "actions/upload-artifact")
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s lane: %v", l.name, err))
+			continue
+		}
+		hits := 0
+		for _, u := range uploads {
+			if u.Name != l.artifact {
+				errs = append(errs, fmt.Sprintf(
+					"%s lane job %q step %q: unexpected upload name %q, want %q (work order §6.3 exact platform/arch-qualified portable name)",
+					l.name, u.Job, u.Step, u.Name, l.artifact,
+				))
+				continue
+			}
+			hits++
+			if !strings.Contains(u.Path, "dist/") || !strings.Contains(u.Path, l.pathNeed) {
+				errs = append(errs, fmt.Sprintf(
+					"%s lane job %q: the %q upload must stage the dist/ portable artifact (%s), got %q",
+					l.name, u.Job, l.artifact, l.pathNeed, u.Path,
+				))
+			}
+		}
+		if hits != 1 {
+			errs = append(errs, fmt.Sprintf(
+				"%s lane: exactly ONE %q upload is contracted, found %d",
+				l.name, l.artifact, hits,
+			))
+		}
 	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf(
-			"upload-artifact contract violated:\n  %s",
+			"platform package upload contract violated:\n  %s",
+			strings.Join(errs, "\n  "),
+		)
+	}
+
+	return nil
+}
+
+// ValidateMobileArtifactUploadContract enforces the §6.3 upload surface
+// of the three remaining reusable lanes: macOS arm64/x64 portable zips
+// (spelled through the matrix expression), the Android debug APK and
+// the SIMULATOR-ONLY iOS zip.
+func ValidateMobileArtifactUploadContract(macosText, androidText, iosText string) error {
+	var errs []string
+
+	type lane struct {
+		name     string
+		text     string
+		contains string
+		banned   []string
+	}
+	lanes := []lane{
+		{"macos", macosText, MacOSPackageArtifactSkeleton, []string{"-app"}},
+		{"android", androidText, AndroidArtifactName, []string{}},
+		{"ios", iosText, IOSArtifactName, []string{"simulator-app"}},
+	}
+
+	for _, l := range lanes {
+		uploads, err := ArtifactSteps(l.text, "actions/upload-artifact")
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s lane: %v", l.name, err))
+			continue
+		}
+		if len(uploads) != 1 {
+			errs = append(errs, fmt.Sprintf(
+				"%s lane: exactly ONE upload is contracted, found %d", l.name, len(uploads)))
+			continue
+		}
+		u := uploads[0]
+		if !strings.Contains(u.Name, l.contains) {
+			errs = append(errs, fmt.Sprintf(
+				"%s lane: upload name %q must carry the §6.3 skeleton %q", l.name, u.Name, l.contains))
+		}
+		for _, b := range l.banned {
+			if strings.Contains(u.Name, b) {
+				errs = append(errs, fmt.Sprintf(
+					"%s lane: retired artifact name fragment %q must not reappear", l.name, b))
+			}
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf(
+			"mobile/platform upload contract violated:\n  %s",
 			strings.Join(errs, "\n  "),
 		)
 	}

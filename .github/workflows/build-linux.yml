@@ -1,51 +1,56 @@
-# SHEYTAN-LA — build-linux.yml (master work order §10: the five
-# platform-specific build workflows)
+# SHEYTAN-LA — build-linux.yml
 #
-# REUSABLE PLATFORM LANE — invoked ONLY via workflow_call from the
-# build-desktop.yml orchestrator (the orchestrator owns the push/PR
-# triggers; there are no duplicate push builds). A real, independent
-# Linux build definition: native compile on an Ubuntu 26.04 runner with
-# the Fyne prerequisites, the headless core suite, the release-contract
-# suite, an Xvfb/software-render launch smoke, ELF verification and a
-# portable archive gate.
+# THE ONE AUTHORITATIVE Linux build lane (run 44306343338 repair, work
+# order §6.2): the legacy in-orchestrator build-linux job is RETIRED and
+# every distinct check it performed was transferred verbatim into this
+# reusable lane — Go-authority version resolution, the richer absolute
+# build-info probe (exit code, exact identity fields, residue check),
+# ELF verification, the Xvfb boot/window/shutdown smoke with zombie-safe
+# reaping, BUILD-INFO/metadata staging, archive verification, the 100 MB
+# size gate, the fail-closed package gate and the per-job diagnostics
+# index. Invoked EXACTLY ONCE per orchestrated run by build-desktop.yml
+# (workflow_call only — no push, PR, dispatch, schedule or tag triggers).
 #
-# Product state (ALPHA, run 44205355718 work order): the application UI
-# is the Fyne shell and the Go-Gui primary-shell migration is pending
-# (§4.1/§5). The launch smoke therefore exercises the CURRENT shell
-# truthfully under Xvfb with the software renderer; it is swapped to a
-# Go-Gui smoke only when the migration delivers the new shell. X11 and
-# Wayland native runtime coverage remains recorded by the native
-# in-orchestrator lane until the Go-Gui gate swap. NO DEB/RPM installer
-# is produced — portable archives only.
+# Work order §4.3 (run 443 exit 127): the compiled binary is resolved to
+# an ABSOLUTE canonical path (realpath) and verified executable BEFORE
+# the probe changes into the isolated temporary directory.
 #
-# Transitional duplication note (§4.1 no-deletion rule): the native
-# in-orchestrator build-linux lane remains the RELEASE packaging
-# authority while this reusable lane proves the standalone §10
-# definition with equivalent compile/test/package verification under a
-# distinct artifact name.
+# Product state (ALPHA): the application UI is the Fyne shell; the Go-Gui
+# primary-shell migration is pending. The launch smoke exercises the
+# CURRENT shell truthfully under Xvfb. NO DEB/RPM installer is produced —
+# portable archives only.
 
 name: build-linux
 
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      go_version:
+        description: "Exact Go toolchain version (the go.mod toolchain directive is the one authority)"
+        required: false
+        type: string
+        default: "1.27.4"
+    outputs:
+      artifact_name:
+        description: The exact uploaded portable artifact name
+        value: ${{ jobs.build-linux-x64.outputs.artifact_name }}
 
 permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.27.4"
   GO_TEST_TIMEOUT: "25m"
   LINUX_PKG_ROOT: "SHEYTAN-LA"
+  APP_VERSION: "1.11.1"
 
 jobs:
   build-linux-x64:
-    name: Linux x64 (native compile + core/contract suites + Xvfb smoke + portable archive)
+    name: Linux x64 (single authoritative lane)
     runs-on: ubuntu-26.04
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
       - name: Runner OS identity (Ubuntu 26.04 gate)
         run: |
           set -euo pipefail
@@ -56,14 +61,19 @@ jobs:
             echo "::error::runner identity: expected ubuntu-26.04, got ${ID}-${VERSION_ID}"
             exit 1
           fi
-
+          # Runtime x64 verification (releasecontract Linux runner contract):
+          # the pinned image must actually BE amd64, not merely declared.
+          if [ "$(dpkg --print-architecture)" != "amd64" ]; then
+            echo "::error::runner architecture: expected amd64, got $(dpkg --print-architecture)"
+            exit 1
+          fi
       - name: Setup Go (pinned toolchain + module cache)
+        id: setup-go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version: ${{ inputs.go_version }}
           cache: true
           cache-dependency-path: go.sum
-
       - name: gofmt (enforced)
         run: |
           set -euo pipefail
@@ -74,17 +84,37 @@ jobs:
             exit 1
           fi
           echo "gofmt OK"
-
       - name: Headless core suite (linux/amd64)
         run: |
           set -euo pipefail
           go test ./internal/... -tags headless -count=1 -timeout "${GO_TEST_TIMEOUT}"
-
       - name: Release-contract suite (linux/amd64)
         run: |
           set -euo pipefail
           go test ./internal/releasecontract/ -count=1
-
+      - name: Resolve APP_VERSION from the Go authority
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          set +e
+          raw="$(CGO_ENABLED=0 go run ./cmd/printversion --plain 2>&1)"
+          rc=$?
+          set -e
+          printf '%s\n' "EXIT_CODE: $rc" "$raw" | tee ci-logs/linux-version-resolution.log
+          if [ $rc -ne 0 ]; then
+            echo "::error::printversion exited $rc — version resolution failed (raw output above)"
+            exit 1
+          fi
+          resolved="$(printf '%s' "$raw" | tr -d '[:space:]')"
+          if ! [[ "$resolved" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::printversion produced a malformed version: '$resolved'"
+            exit 1
+          fi
+          if [ "$resolved" != "$APP_VERSION" ]; then
+            echo "::error::workflow APP_VERSION ($APP_VERSION) disagrees with internal/config.AppVersion ($resolved)"
+            exit 1
+          fi
+          echo "APP_VERSION = $resolved (matches internal/config.AppVersion)"
       - name: Install Fyne build prerequisites
         run: |
           set -euo pipefail
@@ -95,111 +125,235 @@ jobs:
             libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev \
             libwayland-dev libxkbcommon-dev \
             xorg-dev xauth xvfb x11-utils zip unzip
-
       - name: Build the full desktop application (native linux/amd64)
         run: |
           set -euo pipefail
           mkdir -p "dist/linux/app/${LINUX_PKG_ROOT}"
           go build -trimpath -o "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA" ./cmd/sheytan-local-agent
           chmod +x "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA"
-
       - name: Cross-check the compiled binary's build identity
         run: |
           set -euo pipefail
-          bin="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA"
+          repoDir="$(pwd)"
+          bin="$(realpath "${repoDir}/dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA")"
+          test -x "$bin" || { echo "::error::built executable missing or not executable: $bin (work order 4.3: resolve the absolute canonical path before changing directories)"; exit 1; }
           probeDir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/build-info-probe.XXXXXX")"
           trap 'rm -rf "$probeDir"' EXIT
           cd "$probeDir"
+          set +e
           raw="$("$bin" build-info 2>/dev/null)"
-          if [ -z "$raw" ]; then
-            echo "::error::the compiled build-info probe produced no output — the machine-readable build-identity contract is broken"
+          rc=$?
+          set -e
+          printf 'compiled build-info reports (exit %s): %s\n' "$rc" "$raw" | tee "${repoDir}/ci-logs/linux-build-info.log"
+          if [ $rc -ne 0 ] || [ -z "$raw" ]; then
+            echo "::error::the compiled SHEYTAN-LA build-info probe exited $rc or produced no output — the machine-readable build-identity contract is broken"
             exit 1
           fi
-          echo "compiled build-info: $raw"
           stage="$(printf '%s' "$raw" | sed -n 's/.*"product_stage":"\([^"]*\)".*/\1/p')"
           build_id="$(printf '%s' "$raw" | sed -n 's/.*"build_id":"\([^"]*\)".*/\1/p')"
+          if [ -z "$stage" ]; then
+            echo "::error::build-info carries no product_stage field — the public identity contract is broken"
+            exit 1
+          fi
           if [ "$stage" != "ALPHA" ]; then
-            echo "::error::compiled product_stage is '$stage', want the public ALPHA identity"
+            echo "::error::compiled product_stage is '$stage', want the public ALPHA identity (master work order §12.1)"
             exit 1
           fi
           if [ -z "$build_id" ]; then
-            echo "::error::build-info carries no build_id field"
+            echo "::error::build-info carries no build_id field — the internal build-identifier contract is broken"
+            exit 1
+          fi
+          if [ "$build_id" != "$APP_VERSION" ]; then
+            echo "::error::compiled build_id ($build_id) disagrees with the internal authority APP_VERSION ($APP_VERSION)"
             exit 1
           fi
           echo "compiled build identity OK: product_stage=$stage (public) build_id=$build_id (internal) — asserted independently"
           residue="$(ls -A "$probeDir" || true)"
           if [ -n "$residue" ]; then
-            echo "::error::build-info probe created filesystem residue: $residue — the identity dispatch must stay read-only"
+            echo "::error::build-info probe created filesystem residue in the isolated probe dir: $residue — the identity dispatch must stay read-only (run #41415240891 Failure A)"
             exit 1
           fi
-
+          echo "build-info probe left the probe directory clean"
       - name: Verify the ELF (x86-64, executable bit)
         run: |
           set -euo pipefail
           bin="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA"
           test -x "$bin" || { echo "::error::the Linux binary lost its executable bit"; exit 1; }
+          file "$bin" | tee ci-logs/linux-elf-check.log
           file "$bin" | grep -q "ELF 64-bit LSB.*x86-64" || { echo "::error::not an x86-64 ELF binary"; exit 1; }
-
-      # Bounded observable launch smoke under Xvfb with the software
-      # renderer: the binary must keep a live process for the bounded
-      # window and shut down cleanly on SIGTERM. This proves the shell
-      # boots on a real Linux desktop stack — it is NOT a full UI
-      # qualification (honest evidence class: native runtime smoke).
-      - name: Xvfb launch smoke (software render, bounded)
+      # Same smoke contract as the ui job: bounded observable readiness,
+      # soak, real SIGTERM with zombie-safe reaping.
+      - name: "Launch smoke (Xvfb: boot, window, clean shutdown)"
         run: |
           set -euo pipefail
-          smokeDir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/linux-smoke.XXXXXX")"
-          cp -r "dist/linux/app/${LINUX_PKG_ROOT}" "${smokeDir}/SHEYTAN-LA"
-          cd "${smokeDir}/SHEYTAN-LA"
-          export SHEYTAN_DATA_DIR="${smokeDir}/data"
-          xvfb-run -a -s "-screen 0 1280x800x24" timeout 30 ./SHEYTAN-LA &
-          appPid=$!
-          sleep 15
-          if ! kill -0 "$appPid" 2>/dev/null; then
-            wait "$appPid" || true
-            echo "::error::the SHEYTAN-LA process exited before the bounded smoke window elapsed — the shell did not stay alive under Xvfb"
-            exit 1
-          fi
-          kill -TERM "$appPid" 2>/dev/null || true
+          work="$RUNNER_TEMP/linux-smoke"
+          mkdir -p "$work" && cp "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA" "$work/"
+          cd "$work"
+          Xvfb :92 -screen 0 1280x800x24 >/dev/null 2>&1 &
+          XVFB_PID=$!
+          xvfb_ready=0
           for i in $(seq 1 20); do
-            kill -0 "$appPid" 2>/dev/null || break
-            sleep 1
+            [ -e "/tmp/.X92-lock" ] && { xvfb_ready=1; break; }
+            sleep 0.5
           done
-          if kill -0 "$appPid" 2>/dev/null; then
-            kill -KILL "$appPid" 2>/dev/null || true
-            echo "::error::the SHEYTAN-LA process ignored SIGTERM for 20s — graceful shutdown regressed"
+          if [ "$xvfb_ready" -ne 1 ]; then
+            echo "::error::desktop smoke: Xvfb never became ready within 10s"
             exit 1
           fi
-          echo "Xvfb launch smoke OK: process alive at t+15s, SIGTERM honored within the grace window"
-
-      - name: Stage the portable archive (no DEB/RPM)
+          DISPLAY=:92 ./SHEYTAN-LA > smoke-stdout.log 2>&1 &
+          APP_PID=$!
+          app_ready=0
+          for i in $(seq 1 60); do
+            if ! kill -0 "$APP_PID" 2>/dev/null; then break; fi
+            if DISPLAY=:92 xwininfo -root -tree 2>/dev/null | grep -q "SHEYTAN-Local-Agent"; then
+              app_ready=1
+              break
+            fi
+            sleep 0.5
+          done
+          if [ "$app_ready" -ne 1 ]; then
+            echo "::error::desktop smoke: the application window was never observable within 30s (see smoke-stdout.log)"
+            cat smoke-stdout.log || true
+            kill "$XVFB_PID" 2>/dev/null || true
+            exit 1
+          fi
+          soak_ok=1
+          for i in $(seq 1 20); do
+            if ! kill -0 "$APP_PID" 2>/dev/null; then soak_ok=0; break; fi
+            sleep 0.5
+          done
+          if [ "$soak_ok" -ne 1 ]; then
+            echo "::error::desktop smoke: the application exited during the 10s soak (see smoke-stdout.log)"
+            cat smoke-stdout.log || true
+            kill "$XVFB_PID" 2>/dev/null || true
+            exit 1
+          fi
+          kill -TERM "$APP_PID"
+          reaped=0
+          for i in $(seq 1 30); do
+            st="$(ps -o stat= -p "$APP_PID" 2>/dev/null || true)"
+            if [ -z "$st" ]; then reaped=1; break; fi
+            case "$st" in
+              *Z*) wait "$APP_PID" 2>/dev/null || true; reaped=1; break;;
+            esac
+            sleep 0.5
+          done
+          if [ "$reaped" -ne 1 ]; then
+            echo "::error::desktop smoke: the application ignored SIGTERM"
+            kill -KILL "$APP_PID" 2>/dev/null || true
+            wait "$APP_PID" 2>/dev/null || true
+            kill "$XVFB_PID" 2>/dev/null || true
+            exit 1
+          fi
+          wait "$APP_PID" 2>/dev/null || true
+          kill "$XVFB_PID" 2>/dev/null || true
+          echo "SMOKE OK: window booted, event loop alive, clean SIGTERM shutdown with reap"
+          cp smoke-stdout.log "$GITHUB_WORKSPACE/ci-logs/linux-smoke-stdout.log"
+      # v1.11.1 minimal root (same contract as Windows): static package
+      # content under resources/docs; no root-level models/workspace
+      # placeholders — the canonical data root is <AppRoot>/data.
+      - name: Write BUILD-INFO.txt and portable metadata
         run: |
           set -euo pipefail
           root="dist/linux/app/${LINUX_PKG_ROOT}"
-          mkdir -p "${root}/resources/docs"
-          printf 'product: SHEYTAN-LA\nstage: ALPHA\nbuild_id: 1.11.1\ncommit: %s\nui: fyne (one Go UI)\n' "${{ github.sha }}" > "${root}/resources/docs/BUILD-INFO.txt"
-          printf 'SHEYTAN-LA — ALPHA. Run ./SHEYTAN-LA. Models are downloaded in-app; user data lives under data/ next to the executable. Static package content lives under resources/.\n' > "${root}/resources/docs/README.txt"
+          mkdir -p "$root/resources/docs"
+          cat > "$root/resources/docs/BUILD-INFO.txt" <<EOF
+          product: SHEYTAN-LA
+          version: ${APP_VERSION}
+          commit: ${GITHUB_SHA}
+          ui: fyne (one Go UI)
+          EOF
+          echo "SHEYTAN-LA ${APP_VERSION} — run ./SHEYTAN-LA. Models are downloaded in-app; user data lives under data/ next to the executable. Static package content lives under resources/." > "$root/resources/docs/README.txt"
+          for f in "$root/resources/docs/BUILD-INFO.txt" "$root/resources/docs/README.txt"; do
+            test -s "$f" || { echo "::error::metadata file missing or empty: $f"; exit 1; }
+          done
+          grep -q "version: ${APP_VERSION}" "$root/resources/docs/BUILD-INFO.txt" || { echo "::error::BUILD-INFO.txt lacks the version line"; exit 1; }
+          cp LICENSE.md "$root/resources/docs/LICENSE.md"
+          cp SIGNATURE "$root/resources/docs/SIGNATURE"
+      - name: Create the portable archive (no DEB/RPM)
+        run: |
+          set -euo pipefail
+          root="dist/linux/app/${LINUX_PKG_ROOT}"
+          test -x "${root}/SHEYTAN-LA" || { echo "::error::staging tree lost the executable before archiving"; exit 1; }
           find "${root}" -type f -size +100000000c -print -exec false {} + || {
             echo "::error::staged payload exceeds the 100 MB per-file ceiling"; exit 1; }
           tar -czf "dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz" -C "dist/linux/app" "${LINUX_PKG_ROOT}"
           echo "portable archive created (no installer)"
-
       - name: Verify the portable archive (fail-closed)
         run: |
           set -euo pipefail
           archive="dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz"
           test -s "$archive" || { echo "::error::portable archive missing or empty"; exit 1; }
           members="$(tar -tzf "$archive")"
-          echo "$members" | grep -qx "SHEYTAN-LA/SHEYTAN-LA" || { echo "::error::required member SHEYTAN-LA/SHEYTAN-LA missing"; exit 1; }
+          # The required entries are spelled through the canonical root
+          # variable slot — the same variable that builds the archive.
+          echo "$members" | grep -qx "${LINUX_PKG_ROOT}/SHEYTAN-LA" || { echo "::error::required member SHEYTAN-LA/SHEYTAN-LA missing"; exit 1; }
+          echo "$members" | grep -qx "${LINUX_PKG_ROOT}/resources/docs/BUILD-INFO.txt" || { echo "::error::required member BUILD-INFO.txt missing"; exit 1; }
+          echo "$members" | grep -qx "${LINUX_PKG_ROOT}/resources/docs/README.txt" || { echo "::error::required member README.txt missing"; exit 1; }
+          echo "$members" | grep -qx "${LINUX_PKG_ROOT}/resources/docs/LICENSE.md" || { echo "::error::required member LICENSE.md missing"; exit 1; }
           if echo "$members" | grep -Eqi '\.(deb|rpm|nsi|msi|msix)$'; then
             echo "::error::installer-class payload found in the portable archive"; exit 1
           fi
+          if echo "$members" | grep -Eq "^SHEYTAN-LA/(data|models|workspace)/"; then
+            echo "::error::archive purity violation: data-root residue or retired root-level placeholders present"; exit 1
+          fi
+          rm -rf "$RUNNER_TEMP/tarcheck" && mkdir -p "$RUNNER_TEMP/tarcheck"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/tarcheck"
+          test -x "$RUNNER_TEMP/tarcheck/SHEYTAN-LA/SHEYTAN-LA" || { echo "::error::executable bit lost in the archive"; exit 1; }
           count="$(echo "$members" | wc -l)"
-          echo "archive verification OK: ${count} members, binary present, no installer payloads"
-
+          echo "archive verification OK: ${count} members, binary + metadata present, executable bit preserved, no installer payloads"
+      # v1.11.1 maintenance (run 43718750096 work order §7.3): the hard
+      # 100,000,000-byte per-file ceiling — the staged tree via the shared
+      # fail-closed scripts/ci/package-size-audit.sh AND every tar member's
+      # UNCOMPRESSED size (compressed size is never a compliance argument).
+      - name: Payload size gate (100 MB per file)
+        run: |
+          set -euo pipefail
+          bash scripts/ci/package-size-audit.sh \
+            --dir "dist/linux/app/${LINUX_PKG_ROOT}" \
+            | tee ci-logs/linux-size-audit.log
+          tar -tzvf "dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz" \
+            | awk '$3 ~ /^[0-9]+$/ && ($3 + 0) > 100000000 { printf "::error::size-audit violation: %s is %s bytes (limit 100000000, UNCOMPRESSED)\n", $6, $3; bad = 1 } END { exit (bad ? 1 : 0) }'
+      # Package gate: report the root failure HERE rather than letting the
+      # upload step emit a vague "no files were found" annotation.
+      # FAIL-CLOSED (matching the Windows lane): a missing archive is a hard
+      # failure, and the success line prints ONLY when the verified archive
+      # exists (work order §4.2.5: packaging failures are never invented
+      # when an upstream gate already failed — the job's first failed step
+      # names the root cause in the errors-warnings-only artifact).
+      - name: Package gate (root-cause reporter)
+        if: always()
+        run: |
+          set -uo pipefail
+          archive="dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz"
+          if [ ! -f "$archive" ]; then
+            echo "::error::the Linux portable package was not produced — see the FIRST failed step of this job for the root cause (this gate intentionally reports the missing package once, with cause context)"
+            exit 1
+          fi
+          echo "package gate: reached"
+      # F6 (run 43008361835): the per-job machine-readable diagnostics
+      # index — always built, printed to the step log (so it reaches the
+      # consolidated run-log artifact) and written to
+      # ci-logs/diagnostics-index.json. Best-effort: never masks the
+      # original job conclusion.
+      - name: Build the per-job diagnostics index (always run)
+        if: always()
+        run: |
+          set -uo pipefail
+          bash scripts/ci/diagnostics-index.sh --job "Linux x64" \
+            || echo "::error::diagnostics index build failed (non-masking; original job conclusion stands)"
+        env:
+          DIAGNOSTICS_CACHE_HIT: ${{ steps.setup-go.outputs.cache-hit }}
+      # v1.11.1 §7.4: the bundle uploads only on job success — never on
+      # always() — and only when the verified portable archive exists
+      # (error on missing): no partial or placeholder package bundles.
       - name: Upload the portable archive
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: SHEYTAN-LA-ALPHA-linux-x64-portable
           path: dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz
+          retention-days: 14
           if-no-files-found: error
+      - name: Publish the artifact-name output
+        run: |
+          echo "artifact_name=SHEYTAN-LA-ALPHA-linux-x64-portable" >> "$GITHUB_OUTPUT"

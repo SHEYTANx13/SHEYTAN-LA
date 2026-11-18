@@ -5,14 +5,20 @@
 // v1.3.6: both the engine preflight (internal/llm) and the transactional
 // updater/discovery validation validate candidates through THIS package
 // so the consumers can never drift apart. It intentionally uses only the
-// standard library (debug/pe, debug/elf, crypto/sha256) — no third-party
-// dependency was added for this (spec §4/§12).
+// standard library (debug/pe, debug/elf, debug/macho, crypto/sha256) —
+// no third-party dependency was added for this (spec §4/§12). Mach-O
+// support (thin and universal/fat, run 44306343338 repair) makes the
+// darwin/macOS production format a first-class candidate format: a Go
+// test binary or a llama.cpp engine build on macOS must sniff and
+// validate, never "unrecognized executable format".
 package engcheck
 
 import (
 	"crypto/sha256"
 	"debug/elf"
+	"debug/macho"
 	"debug/pe"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -29,7 +35,7 @@ type Identity struct {
 	Size    int64  `json:"size"`
 	ModTime int64  `json:"modTimeUnix"`
 	Arch    string `json:"arch,omitempty"`
-	Format  string `json:"format,omitempty"` // "pe" | "elf" | ""
+	Format  string `json:"format,omitempty"` // "pe" | "elf" | "macho" | "macho-fat" | ""
 }
 
 func timeNowUnix() int64 {
@@ -91,11 +97,13 @@ func IdentityOf(path string) (Identity, error) {
 }
 
 // SniffArch inspects the file header and returns ("arch", "format").
-// Supported: PE images ("pe") and ELF objects ("elf"). Anything else
-// returns ("", "").
+// Supported: PE images ("pe"), ELF objects ("elf") and Mach-O images
+// ("macho" for thin binaries, "macho-fat" for universal/fat binaries).
+// Anything else returns ("", "").
 //
 // The magic-byte sniff works on every host OS — a Windows engine
-// candidate can be validated from the Linux test suite.
+// candidate can be validated from the Linux test suite and a macOS
+// Mach-O candidate from any host.
 func SniffArch(path string) (arch, format string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -121,6 +129,18 @@ func SniffArch(path string) (arch, format string) {
 			return "", "elf"
 		}
 		return elfArch, "elf"
+	case isMachOThinMagic(head):
+		mArch, err := machoArchOf(path)
+		if err != nil {
+			return "", "macho"
+		}
+		return mArch, "macho"
+	case isMachOFatMagic(head):
+		mArch, err := machoFatArchOf(path)
+		if err != nil {
+			return "", "macho-fat"
+		}
+		return mArch, "macho-fat"
 	default:
 		return "", ""
 	}
@@ -166,6 +186,83 @@ func elfArchOf(path string) (string, error) {
 	default:
 		return fmt.Sprintf("elf-0x%04x", f.Machine), nil
 	}
+}
+
+// isMachOThinMagic reports whether the 4 header bytes are a Mach-O thin
+// binary magic in either byte order (MH_MAGIC / MH_MAGIC_64 and their
+// swapped spellings).
+func isMachOThinMagic(head [4]byte) bool {
+	le := binary.LittleEndian.Uint32(head[:])
+	be := binary.BigEndian.Uint32(head[:])
+	return le == macho.Magic32 || le == macho.Magic64 ||
+		be == macho.Magic32 || be == macho.Magic64
+}
+
+// isMachOFatMagic reports whether the 4 header bytes are a Mach-O
+// universal (fat) binary magic. NOTE: 0xcafebabe is also the legacy Java
+// class-file magic — a Java class file fails macho.OpenFat's fat_arch
+// validation and therefore sniffs as ("", "macho-fat"), which the static
+// gate then rejects (fail closed, never "looks executable enough").
+func isMachOFatMagic(head [4]byte) bool {
+	return binary.BigEndian.Uint32(head[:]) == macho.MagicFat ||
+		binary.LittleEndian.Uint32(head[:]) == macho.MagicFat
+}
+
+// machoCpuArch maps a Mach-O CPU type to the GOARCH vocabulary used by
+// every other format in this package.
+func machoCpuArch(cpu macho.Cpu) string {
+	switch cpu {
+	case macho.CpuAmd64:
+		return "amd64"
+	case macho.CpuArm64:
+		return "arm64"
+	case macho.Cpu386:
+		return "386"
+	case macho.CpuArm:
+		return "arm"
+	default:
+		return fmt.Sprintf("macho-0x%08x", uint32(cpu))
+	}
+}
+
+// machoArchOf parses a thin Mach-O image and maps its CPU type to the
+// supported GOARCH vocabulary. Malformed/truncated files return an
+// error — the caller reports the format without an architecture and the
+// static gate rejects it.
+func machoArchOf(path string) (string, error) {
+	f, err := macho.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	return machoCpuArch(f.Cpu), nil
+}
+
+// machoFatArchOf parses a universal (fat) Mach-O binary and returns the
+// architecture usable on the RUNNING host: the matching slice when one
+// exists, otherwise the first slice so the caller reports a precise
+// architecture mismatch. Duplicate/ambiguous slices are rejected by
+// macho.OpenFat itself; a fat binary with no images errors out.
+func machoFatArchOf(path string) (string, error) {
+	ff, err := macho.OpenFat(path)
+	if err != nil {
+		return "", err
+	}
+	defer ff.Close()
+
+	if len(ff.Arches) == 0 {
+		return "", fmt.Errorf("%s: universal binary contains no images", path)
+	}
+
+	host := runtime.GOARCH
+	for _, fa := range ff.Arches {
+		if machoCpuArch(fa.Cpu) == host {
+			return host, nil
+		}
+	}
+
+	return machoCpuArch(ff.Arches[0].Cpu), nil
 }
 
 // ArchMatchesHost reports whether the candidate architecture is usable on

@@ -76,11 +76,14 @@ type Contract struct {
 	WindowsZip string // SHEYTAN-LA-v1.3.1-windows-x64.zip
 	LinuxZip   string // SHEYTAN-LA-v1.2.1-linux-x64.zip
 
-	// Workflow placeholders: the exact spellings used inside
-	// build-desktop.yml, with the version slot left to the workflow env
-	// and the package root slot left to the canonical root variables.
-	WindowsZipWorkflowSlot string // ${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip
-	LinuxZipWorkflowSlot   string // ${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip
+	// Workflow package artifacts: after the run-44306343338 §6.2/§6.3
+	// consolidation the portable package names carry NO version slot and
+	// NO duplicated root literal — the exact platform/arch-qualified
+	// portable names are the contract (the build identity lives inside
+	// the package's BUILD-INFO.txt and the release manifest, never in a
+	// mutable filename).
+	WindowsZipWorkflowSlot string // SHEYTAN-LA-ALPHA-windows-x64-portable.zip
+	LinuxZipWorkflowSlot   string // SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz
 }
 
 // For resolves the artifact-name contract for a semantic version (with or
@@ -94,8 +97,8 @@ func For(version string) Contract {
 		WindowsZip: fmt.Sprintf("%s-v%s-windows-x64.zip", WindowsAppRoot, v),
 		LinuxZip:   fmt.Sprintf("%s-v%s-linux-x64.zip", LinuxAppRoot, v),
 
-		WindowsZipWorkflowSlot: WinRootPwsh + "-v${env:APP_VERSION}-windows-x64.zip",
-		LinuxZipWorkflowSlot:   LinuxRootBash + "-v${APP_VERSION}-linux-x64.zip",
+		WindowsZipWorkflowSlot: "SHEYTAN-LA-ALPHA-windows-x64-portable.zip",
+		LinuxZipWorkflowSlot:   "SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz",
 	}
 }
 

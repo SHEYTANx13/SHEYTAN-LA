@@ -17,11 +17,11 @@ func loadDesktopWorkflow(t *testing.T) string {
 	t.Helper()
 
 	root := findRepoRoot(t)
-	path := filepath.Join(root, workflowRelPath)
+	path := filepath.Join(root, linuxLaneRelPath)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read desktop workflow: file %s (repo root %s, relative %s): %v", path, root, workflowRelPath, err)
+		t.Fatalf("read linux lane workflow: file %s (repo root %s, relative %s): %v", path, root, linuxLaneRelPath, err)
 	}
 
 	return string(data)
@@ -79,7 +79,7 @@ func TestLinuxRunnerContractRejectsRetired2404Rollback(t *testing.T) {
 //
 // Root cause this fixture fixes (run 42405993776, Windows x64 red): the
 // former RejectsExtraLabels precondition grepped the real build-desktop.yml
-// with a multi-line LF literal ("name: Linux x64\n    runs-on: ...");
+// with a multi-line LF literal ("name: Linux x64 (single authoritative lane)\n    runs-on: ...");
 // windows-latest materializes the unpinned .yml as CRLF (no .gitattributes
 // eol pin for *.yml), the LF literal never matched, and the test failed its
 // precondition while the validator itself was correct — the same
@@ -94,7 +94,7 @@ on:
 
 jobs:
   fixture-linux:
-    name: Linux x64
+    name: Linux x64 (single authoritative lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     env:
@@ -152,13 +152,13 @@ func TestLinuxRunnerContractRejectsExtraLabels(t *testing.T) {
 	mutate := func(replacement string) string {
 		return strings.Replace(
 			linuxRunnerFixture,
-			"name: Linux x64\n    runs-on: ubuntu-26.04\n",
+			"name: Linux x64 (single authoritative lane)\n    runs-on: ubuntu-26.04\n",
 			replacement,
 			1,
 		)
 	}
 
-	composite := mutate("name: Linux x64\n    runs-on: [ubuntu-26.04, self-hosted]\n")
+	composite := mutate("name: Linux x64 (single authoritative lane)\n    runs-on: [ubuntu-26.04, self-hosted]\n")
 
 	err := ValidateLinuxRunnerContract(composite)
 	if err == nil {
@@ -175,12 +175,12 @@ func TestLinuxRunnerContractRejectsExtraLabels(t *testing.T) {
 		name string
 		repl string
 	}{
-		{"reversed composite [self-hosted, ubuntu-26.04]", "name: Linux x64\n    runs-on: [self-hosted, ubuntu-26.04]\n"},
-		{"duplicate labels [ubuntu-26.04, ubuntu-26.04]", "name: Linux x64\n    runs-on: [ubuntu-26.04, ubuntu-26.04]\n"},
-		{"retired 24.04 image", "name: Linux x64\n    runs-on: ubuntu-24.04\n"},
-		{"non-x64 arm image", "name: Linux x64\n    runs-on: ubuntu-26.04-arm\n"},
+		{"reversed composite [self-hosted, ubuntu-26.04]", "name: Linux x64 (single authoritative lane)\n    runs-on: [self-hosted, ubuntu-26.04]\n"},
+		{"duplicate labels [ubuntu-26.04, ubuntu-26.04]", "name: Linux x64 (single authoritative lane)\n    runs-on: [ubuntu-26.04, ubuntu-26.04]\n"},
+		{"retired 24.04 image", "name: Linux x64 (single authoritative lane)\n    runs-on: ubuntu-24.04\n"},
+		{"non-x64 arm image", "name: Linux x64 (single authoritative lane)\n    runs-on: ubuntu-26.04-arm\n"},
 		{"missing runs-on", "name: Linux x64\n"},
-		{"empty runs-on", "name: Linux x64\n    runs-on: \"\"\n"},
+		{"empty runs-on", "name: Linux x64 (single authoritative lane)\n    runs-on: \"\"\n"},
 		{"mapping-form runs-on (unsupported node kind)", "name: Linux x64\n    runs-on:\n      group: x64\n"},
 	}
 
@@ -332,7 +332,7 @@ func TestBuildDesktopWorkflowLinuxX64Conformance(t *testing.T) {
 			buildsBinary = true
 		}
 
-		if strings.Contains(step.Run, "-linux-x64.zip") {
+		if strings.Contains(step.Run, "SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz") {
 			buildsPortableZip = true
 		}
 	}
@@ -346,7 +346,7 @@ func TestBuildDesktopWorkflowLinuxX64Conformance(t *testing.T) {
 
 	if !buildsPortableZip {
 		t.Fatalf(
-			"production workflow drift: job %q (YAML key %q) does not produce the portable -linux-x64.zip archive",
+			"production workflow drift: job %q (YAML key %q) does not produce the SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz archive",
 			LinuxJobName, linuxKey,
 		)
 	}
@@ -360,7 +360,7 @@ func TestBuildDesktopWorkflowLinuxX64Conformance(t *testing.T) {
 
 	for _, u := range uploads {
 		if u.Job == linuxKey && u.Name == LinuxPackageArtifactName &&
-			strings.Contains(u.Path, "dist/") && strings.Contains(u.Path, "-linux-x64.zip") {
+			strings.Contains(u.Path, "dist/") && strings.Contains(u.Path, "-linux-x64-portable.tar.gz") {
 			uploadsPackage = true
 
 			break

@@ -346,6 +346,16 @@
     "status": "active"
   },
   {
+    "path": "cmd/stress_release_surface_check_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for cmd (deterministic, table-driven where applicable)",
+    "layer": "cli",
+    "subsystem": "cmd",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
     "path": "cmd/update.go",
     "type": "go",
     "language": "Go",
@@ -410,6 +420,15 @@
     "status": "active"
   },
   {
+    "path": "docs/OPERATOR-TEST-GUIDE.md",
+    "type": "doc",
+    "language": "Markdown",
+    "purpose": "Documentation — OPERATOR-TEST-GUIDE",
+    "layer": "docs",
+    "subsystem": "docs",
+    "status": "active"
+  },
+  {
     "path": "docs/ROADMAP.md",
     "type": "doc",
     "language": "Markdown",
@@ -450,6 +469,15 @@
     "type": "doc",
     "language": "Markdown",
     "purpose": "Agent working notes (protected doc): rewritten as a current snapshot each session",
+    "layer": "docs",
+    "subsystem": "docs",
+    "status": "active"
+  },
+  {
+    "path": "docs/architecture/CI-TOPOLOGY.md",
+    "type": "doc",
+    "language": "Markdown",
+    "purpose": "Documentation — CI-TOPOLOGY",
     "layer": "docs",
     "subsystem": "docs",
     "status": "active"
@@ -2996,6 +3024,16 @@
     "status": "active"
   },
   {
+    "path": "internal/engcheck/engcheck_macho_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/engcheck (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/engcheck",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
     "path": "internal/engcheck/engcheck_test.go",
     "type": "go",
     "language": "Go",
@@ -4225,6 +4263,54 @@
     "status": "active"
   },
   {
+    "path": "internal/localipc/listener_cred_darwin_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/localipc (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/localipc",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/localipc/listener_cred_linux_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/localipc (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/localipc",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/localipc/listener_cred_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/localipc (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/localipc",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/localipc/listener_darwin.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/localipc — The ONE local transport: named-pipe / Unix-socket client and protocol",
+    "layer": "domain",
+    "subsystem": "internal/localipc",
+    "status": "active"
+  },
+  {
+    "path": "internal/localipc/listener_linux.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/localipc — The ONE local transport: named-pipe / Unix-socket client and protocol",
+    "layer": "domain",
+    "subsystem": "internal/localipc",
+    "status": "active"
+  },
+  {
     "path": "internal/localipc/listener_unix.go",
     "type": "go",
     "language": "Go",
@@ -4990,6 +5076,24 @@
     "status": "active"
   },
   {
+    "path": "internal/proc/alive_darwin.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/proc — Bounded subprocess runner: hidden windows, sanitized environment, process-group kill",
+    "layer": "domain",
+    "subsystem": "internal/proc",
+    "status": "active"
+  },
+  {
+    "path": "internal/proc/alive_linux.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/proc — Bounded subprocess runner: hidden windows, sanitized environment, process-group kill",
+    "layer": "domain",
+    "subsystem": "internal/proc",
+    "status": "active"
+  },
+  {
     "path": "internal/proc/alive_unix.go",
     "type": "go",
     "language": "Go",
@@ -5028,6 +5132,24 @@
     "status": "active"
   },
   {
+    "path": "internal/proc/identity_darwin.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/proc — Bounded subprocess runner: hidden windows, sanitized environment, process-group kill",
+    "layer": "domain",
+    "subsystem": "internal/proc",
+    "status": "active"
+  },
+  {
+    "path": "internal/proc/identity_linux.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/proc — Bounded subprocess runner: hidden windows, sanitized environment, process-group kill",
+    "layer": "domain",
+    "subsystem": "internal/proc",
+    "status": "active"
+  },
+  {
     "path": "internal/proc/identity_test.go",
     "type": "go",
     "language": "Go",
@@ -5036,16 +5158,6 @@
     "subsystem": "internal/proc",
     "testOnly": true,
     "status": "test"
-  },
-  {
-    "path": "internal/proc/identity_unix.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Implementation file in internal/proc — Bounded subprocess runner: hidden windows, sanitized environment, process-group kill",
-    "layer": "domain",
-    "subsystem": "internal/proc",
-    "platform": "platform-specific",
-    "status": "active"
   },
   {
     "path": "internal/proc/identity_windows.go",
@@ -5267,6 +5379,16 @@
     "status": "test"
   },
   {
+    "path": "internal/releasecontract/identity_contract_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/releasecontract (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/releasecontract",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
     "path": "internal/releasecontract/installer_contract_test.go",
     "type": "go",
     "language": "Go",
@@ -5288,6 +5410,16 @@
   },
   {
     "path": "internal/releasecontract/linux_runner_contract_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/releasecontract (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/releasecontract",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/releasecontract/mobile_dependency_contract_test.go",
     "type": "go",
     "language": "Go",
     "purpose": "Tests for internal/releasecontract (deterministic, table-driven where applicable)",
@@ -5667,7 +5799,34 @@
     "status": "active"
   },
   {
-    "path": "internal/resources/resources_other.go",
+    "path": "internal/resources/resources_darwin_cgo.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/resources — Resource budgets",
+    "layer": "domain",
+    "subsystem": "internal/resources",
+    "status": "active"
+  },
+  {
+    "path": "internal/resources/resources_darwin_nocgo.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/resources — Resource budgets",
+    "layer": "domain",
+    "subsystem": "internal/resources",
+    "status": "active"
+  },
+  {
+    "path": "internal/resources/resources_errors.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/resources — Resource budgets",
+    "layer": "domain",
+    "subsystem": "internal/resources",
+    "status": "active"
+  },
+  {
+    "path": "internal/resources/resources_linux.go",
     "type": "go",
     "language": "Go",
     "purpose": "Implementation file in internal/resources — Resource budgets",
@@ -6267,7 +6426,34 @@
     "status": "active"
   },
   {
+    "path": "internal/sysinfo/sysinfo_fast_darwin.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/sysinfo — Hardware/system probes with truthful detection states",
+    "layer": "domain",
+    "subsystem": "internal/sysinfo",
+    "status": "active"
+  },
+  {
+    "path": "internal/sysinfo/sysinfo_fast_linux.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/sysinfo — Hardware/system probes with truthful detection states",
+    "layer": "domain",
+    "subsystem": "internal/sysinfo",
+    "status": "active"
+  },
+  {
     "path": "internal/sysinfo/sysinfo_fast_other.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/sysinfo — Hardware/system probes with truthful detection states",
+    "layer": "domain",
+    "subsystem": "internal/sysinfo",
+    "status": "active"
+  },
+  {
+    "path": "internal/sysinfo/sysinfo_fast_otherunix.go",
     "type": "go",
     "language": "Go",
     "purpose": "Implementation file in internal/sysinfo — Hardware/system probes with truthful detection states",
@@ -7618,6 +7804,16 @@
     "subsystem": "scripts/ci",
     "sideEffects": "executes (writes logs/fixtures under its own contract when run)",
     "status": "active"
+  },
+  {
+    "path": "scripts/ci/StepInvocationContract.Tests.ps1",
+    "type": "script",
+    "language": "PowerShell",
+    "purpose": "CI/tooling script — StepInvocationContract.Tests.ps1",
+    "layer": "ci-tooling",
+    "subsystem": "scripts/ci",
+    "sideEffects": "executes (writes logs/fixtures under its own contract when run)",
+    "status": "test"
   },
   {
     "path": "scripts/ci/capture.sh",

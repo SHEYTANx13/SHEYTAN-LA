@@ -1,9 +1,11 @@
 package proc
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"testing"
 )
 
@@ -17,22 +19,43 @@ func TestListeningProcessFindsSelfOwnedListener(t *testing.T) {
 	port := l.Addr().(*net.TCPAddr).Port
 
 	pid, exe, ok, err := ListeningProcess(port)
-	if err != nil {
-		// Identity failure on a process WE own is an environment
-		// limitation (e.g. restricted /proc) — report, don't fail CI.
-		t.Skipf("port owner lookup unavailable on this runner: %v", err)
-	}
 
-	if !ok {
-		t.Fatalf("a live listener must be attributable")
-	}
+	switch runtime.GOOS {
+	case "linux":
+		if err != nil {
+			// Identity failure on a process WE own is an environment
+			// limitation (e.g. restricted /proc) — report, don't fail CI.
+			t.Skipf("port owner lookup unavailable on this runner: %v", err)
+		}
 
-	if pid != os.Getpid() {
-		t.Fatalf("the listener belongs to pid %d, want %d", pid, os.Getpid())
-	}
+		if !ok {
+			t.Fatalf("a live listener must be attributable")
+		}
 
-	if exe == "" {
-		t.Fatalf("the executable path must resolve for our own process")
+		if pid != os.Getpid() {
+			t.Fatalf("the listener belongs to pid %d, want %d", pid, os.Getpid())
+		}
+
+		if exe == "" {
+			t.Fatalf("the executable path must resolve for our own process")
+		}
+	case "darwin":
+		// Typed platform limitation (run 44306343338 repair §4.7): the
+		// darwin ownership probe is fail-closed UNSUPPORTED in this
+		// build (no libproc fd walk linked). The typed result is
+		// asserted explicitly — never a silent skip and never a
+		// fabricated owner.
+		if !errors.Is(err, ErrPortOwnerUnsupported) {
+			t.Fatalf("darwin must return the typed ErrPortOwnerUnsupported, got %v", err)
+		}
+		if ok {
+			t.Fatalf("darwin must not claim ownership evidence while unsupported")
+		}
+		if pid != 0 || exe != "" {
+			t.Fatalf("darwin must not fabricate pid/exe, got (%d, %q)", pid, exe)
+		}
+	default:
+		t.Skipf("no per-OS expectation for %s", runtime.GOOS)
 	}
 }
 

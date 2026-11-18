@@ -64,7 +64,7 @@ func workflowStepIndex(workflow, step string) int {
 // must never return, and the retired -Installer parameter must never come
 // back (master work order §10).
 func TestWindowsPackageGateIsFailClosed(t *testing.T) {
-	workflow := readTreeFile(t, workflowRelPath)
+	workflow := readTreeFile(t, windowsLaneRelPath)
 
 	body := workflowStepBody(t, workflow, "Package gate (root-cause reporter)")
 	for _, need := range []struct {
@@ -72,7 +72,7 @@ func TestWindowsPackageGateIsFailClosed(t *testing.T) {
 		why      string
 	}{
 		{"scripts/ci/PackageGate.ps1", "the gate must be the fail-closed script, not an inline predicate"},
-		{`-Zip "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip"`, "the gate must independently verify the contracted portable ZIP path"},
+		{`-Zip "dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip"`, "the gate must independently verify the contracted portable ZIP path"},
 		{`-DistDir "dist"`, "the gate must guard the distribution directory against stale installer remnants"},
 		{"$LASTEXITCODE -ne 0", "a non-zero gate exit must fail the job"},
 		{"ci-logs/win-package-gate.log", "the gate transcript must land in the consolidated run-log artifact"},
@@ -96,14 +96,21 @@ func TestWindowsPackageGateIsFailClosed(t *testing.T) {
 // truth table of the gate is exercised by a deterministic fixture suite on
 // the Windows runner before the real gate runs.
 func TestWindowsPackageGateTruthTableFixtureRunsHosted(t *testing.T) {
-	workflow := readTreeFile(t, workflowRelPath)
+	workflow := readTreeFile(t, windowsLaneRelPath)
 
 	body := workflowStepBody(t, workflow, "Package gate fixture contract")
 	if !strings.Contains(body, "./scripts/ci/PackageGate.Tests.ps1") {
 		t.Fatalf("the 'Package gate fixture contract' step must run scripts/ci/PackageGate.Tests.ps1 on the runner")
 	}
-	if !strings.Contains(body, "$LASTEXITCODE -ne 0") {
-		t.Fatalf("the fixture step must fail the job when the truth-table fixtures report violations")
+	// Work order section 4.2 (run 44306343338): a pure PowerShell script
+	// invocation is judged through $?, and the terminating error
+	// propagates as a throw — $LASTEXITCODE is NEVER read after the
+	// script invocation (unset under strict mode, stale otherwise).
+	if !strings.Contains(body, "throw \"PackageGate PowerShell fixtures failed\"") {
+		t.Fatalf("the fixture step must fail the job when the truth-table fixtures report violations (the section-4.2 dollar-question contract)")
+	}
+	if strings.Contains(body, "$LASTEXITCODE") {
+		t.Fatalf("the fixture step must NOT read $LASTEXITCODE after a pure PowerShell script invocation (work order section 4.2) — capture $? immediately instead")
 	}
 }
 
@@ -112,7 +119,7 @@ func TestWindowsPackageGateTruthTableFixtureRunsHosted(t *testing.T) {
 // precede the gate, and the gate precedes the upload — so an upload can
 // never run with an incomplete or unvalidated package set.
 func TestWindowsPackageProducerOrdering(t *testing.T) {
-	workflow := readTreeFile(t, workflowRelPath)
+	workflow := readTreeFile(t, windowsLaneRelPath)
 
 	ordered := []string{
 		"Headless core tests (windows/amd64)",
@@ -121,7 +128,7 @@ func TestWindowsPackageProducerOrdering(t *testing.T) {
 		"Create Windows ZIP",
 		"Verify Windows ZIP",
 		"Package gate (root-cause reporter)",
-		"Upload Windows package",
+		"Upload the portable ZIP",
 	}
 	prev := -1
 	for _, step := range ordered {
@@ -141,14 +148,14 @@ func TestWindowsPackageProducerOrdering(t *testing.T) {
 // the portable ZIP listed — a partial package set can never upload, and a
 // retired installer artifact can never ride along (master work order §10).
 func TestWindowsPackageUploadIsSuccessGatedAndComplete(t *testing.T) {
-	workflow := readTreeFile(t, workflowRelPath)
+	workflow := readTreeFile(t, windowsLaneRelPath)
 
-	body := workflowStepBody(t, workflow, "Upload Windows package")
+	body := workflowStepBody(t, workflow, "Upload the portable ZIP")
 	if strings.Contains(body, "if: always()") {
 		t.Errorf("the Windows package upload must be success-gated — an always() upload can bundle an incomplete package set after an upstream failure")
 	}
 	for _, need := range []string{
-		`dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip`,
+		`dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip`,
 		"if-no-files-found: error",
 	} {
 		if !strings.Contains(body, need) {
@@ -165,7 +172,7 @@ func TestWindowsPackageUploadIsSuccessGatedAndComplete(t *testing.T) {
 // reject Qt runtime DLL entries (Qt5*/Qt6*/libQt* shapes) — a windeployqt-
 // style payload or a Qt plugin tree fails the build instead of shipping.
 func TestWindowsZipPurityBansQtRuntime(t *testing.T) {
-	workflow := readTreeFile(t, workflowRelPath)
+	workflow := readTreeFile(t, windowsLaneRelPath)
 
 	body := workflowStepBody(t, workflow, "Verify Windows ZIP")
 	for _, need := range []string{
@@ -185,7 +192,7 @@ func TestWindowsZipPurityBansQtRuntime(t *testing.T) {
 // version-gate or upload surface may reappear in build-desktop.yml. The
 // portable ZIP is the ONE supported Windows package.
 func TestWindowsInstallerSurfaceIsRetired(t *testing.T) {
-	workflow := readTreeFile(t, workflowRelPath)
+	workflow := readTreeFile(t, windowsLaneRelPath)
 
 	for _, gone := range []string{
 		"Install NSIS",

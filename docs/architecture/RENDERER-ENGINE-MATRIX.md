@@ -17,6 +17,22 @@
 
 ## 2. Platform verification status (never inflated)
 
+> **Update 2026-11-18 (run-44306343338 §4.8):** the registry now carries
+> an explicit record for EVERY supported OS/arch pair per renderer —
+> windows amd64/arm64, linux amd64/arm64, darwin amd64/arm64, android
+> arm64, ios arm64 — each non-verified record carrying its truthful
+> evidence boundary in the note (supported=false with a reason is
+> represented; omission is not). The darwin/arm64 rows for Go-Gui,
+> GoGPU UI and Wails are `expected` with explicit
+> not-built/not-verified notes pending native evidence; Go-Gui's
+> darwin/arm64 Metal path is claimed only when the pinned go-gui build
+> is verified on darwin/arm64 (§4.8.3). GoGPU and Wails rows are never
+> derived from Go-Gui's rows (§4.8.4). The table below keeps the
+> per-platform summary; `internal/renderer/registry.go` remains the
+> authority and `TestMatrixCoversEverySupportedPlatformPair` enforces
+> the coverage rule.
+
+
 | Engine | linux/amd64 | windows/amd64 | darwin | android/ios |
 |---|---|---|---|---|
 | Fyne | **verified** (local + hosted gates; UI matrix under Xvfb) | **verified** (hosted run 43883548198 lanes) | expected (not tested this run) | unsupported this milestone |

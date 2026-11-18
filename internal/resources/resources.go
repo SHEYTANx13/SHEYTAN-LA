@@ -100,9 +100,12 @@ func HumanBytes(n int64) string {
 // --- live process memory ------------------------------------------------------
 
 // ProcRAM returns the resident memory (working set) of a process in bytes.
-// Windows: psapi GetProcessMemoryInfo via a limited-information handle;
-// other platforms: /proc/<pid>/status VmRSS. Returns an error when the
-// process is gone (callers show "—").
+// Per-OS implementations (run 44306343338 repair §4.6): Windows psapi
+// GetProcessMemoryInfo via a limited-information handle; Linux
+// /proc/<pid>/status VmRSS; darwin the Mach task_info(TASK_VM_INFO)
+// self-probe (other PIDs return the typed ErrProcRAMUnsupported —
+// missing values are never silently represented as zero or fabricated).
+// Returns an error when the process is gone (callers show "—").
 func ProcRAM(pid int) (int64, error) {
 	if pid <= 0 {
 		return 0, fmt.Errorf("invalid pid %d", pid)

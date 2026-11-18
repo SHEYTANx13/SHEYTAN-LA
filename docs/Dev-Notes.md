@@ -37,6 +37,28 @@ production (portable artifacts only); update all documentation and make
 ALPHA the only user-facing product label; keep every quality gate
 evidence-based — never obtain green by skipping or masking a failure.
 
+Status (2026-11-18, session 3 — run-44306343338 repair):
+
+- DONE on `work/alpha-run443063-repair` (base `7c6678f` = the exact
+  commit run 44306343338 tested): the four failed lanes' root causes
+  repaired (Android x/tools graph via the x/mobile proxy-verified pin;
+  Windows PowerShell $?-vs-LASTEXITCODE contract with a strict-mode
+  fixture; Linux/macOS absolute build-info probe paths; the darwin
+  local-IPC/Mach-O/RAM/proc/renderer cluster), the duplicate platform
+  topology CONSOLIDATED (legacy in-orchestrator Windows/Linux lanes
+  retired with byte-exact transfer into the reusable lanes — this
+  authorizes the §4.1 no-deletion transition OUT of session 2's state;
+  the current work order's §6.2 requires exactly one build path per
+  platform), the errors-warnings-only consolidated artifact delivered
+  with a 23-case offline fixture suite, and the identity homoglyph
+  (U+0422) fixed with a tracked-tree scan tripwire. Full local evidence
+  and the honest NOT-DONE list (Go-Gui migration NOT started; hosted CI
+  NOT RUN) live in [`ai-notes.md`](ai-notes.md); changelog carries the
+  per-item detail. Candidate tip: 9c5d9f6 and later (see worklog).
+- EVIDENCE CLASSES recorded per claim; nothing is claimed green from
+  code review alone. The five platform lanes remain NOT-RUN hosted
+  until the operator authorizes push + run (Gate H).
+
 Status (2026-11-18, session 2 — run-44205355718 CI repair):
 
 - DONE: the RED run's three root causes fixed at main HEAD

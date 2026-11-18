@@ -1,8 +1,16 @@
 //go:build !windows
 
 // Unix (Linux/macOS) transport: Unix domain socket with per-connection
-// SO_PEERCRED identity verification. A foreign-uid connection is closed
-// before the first byte of HTTP is read.
+// peer-credential identity verification. A foreign-uid connection is
+// closed before the first byte of HTTP is read.
+//
+// The credential MECHANISM is OS-specific (run 44306343338 repair, §4.4:
+// Linux SO_PASSCRED/SO_PEERCRED vs Darwin SOL_LOCAL/LOCAL_PEERCRED — the
+// Linux-only implementation must never be compiled under a broad Unix
+// build tag again). This file carries the shared transport and the uid
+// policy; listener_linux.go and listener_darwin.go carry the per-OS peer
+// credential implementations. Windows named-pipe peer identity stays a
+// separate implementation (listener_windows.go).
 package localipc
 
 import (
@@ -21,9 +29,17 @@ func dialEndpoint(endpoint string) (net.Conn, error) {
 	return dialContext(context.Background(), endpoint)
 }
 
-// listenEndpoint binds the per-user Unix socket in SOCK_STREAM mode with
-// the credential-passing option, so every accepted connection carries the
-// peer's uid.
+// peerIdentity is the OS-provided identity of one accepted connection.
+type peerIdentity struct {
+	UID      int
+	GID      int
+	PID      int  // 0 when the OS API does not supply it
+	PIDKnown bool // true ONLY when the OS API genuinely provides the peer PID
+}
+
+// listenEndpoint binds the per-user Unix socket in SOCK_STREAM mode and
+// enables the OS-specific peer-credential mechanism, so every accepted
+// connection carries the peer's identity.
 func listenEndpoint(endpoint string) (net.Listener, error) {
 	if removed, err := cleanStaleEndpoint(endpoint); err != nil {
 		return nil, err
@@ -54,10 +70,9 @@ func listenEndpoint(endpoint string) (net.Listener, error) {
 		return nil, fmt.Errorf("localipc: listen: %w", err)
 	}
 
-	// With CREDENTIALS the conn carries the peer uid for verification.
-	if err := unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_PASSCRED, 1); err != nil {
+	if err := enablePeerCredentials(fd); err != nil {
 		_ = unix.Close(fd)
-		return nil, fmt.Errorf("localipc: SO_PASSCRED: %w", err)
+		return nil, fmt.Errorf("localipc: peer credentials: %w", err)
 	}
 
 	files := make([]*os.File, 1)
@@ -106,29 +121,15 @@ func (l *verifiedListener) Accept() (net.Conn, error) {
 	}
 }
 
-// verifyPeer reads the SO_PEERCRED structure from the connection.
+// verifyPeer resolves the peer identity through the OS-specific
+// credential mechanism and applies the uid policy.
 func verifyPeer(c *net.UnixConn) error {
-	raw, err := c.SyscallConn()
+	id, err := peerIdentityOf(c)
 	if err != nil {
 		return err
 	}
 
-	var ucred *unix.Ucred
-	var sockErr error
-	ctrlErr := raw.Control(func(fd uintptr) {
-		ucred, sockErr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
-	})
-	if ctrlErr != nil {
-		return ctrlErr
-	}
-	if sockErr != nil {
-		return sockErr
-	}
-	if ucred == nil {
-		return ErrUnauthorized
-	}
-
-	if !credAllowed(int(ucred.Uid)) {
+	if !credAllowed(id.UID) {
 		return ErrUnauthorized
 	}
 	return nil

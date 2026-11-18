@@ -1,94 +1,95 @@
 #!/usr/bin/env bash
-# consolidate-run-log.sh — build the ONE consolidated plain-text run log
-# for the build-desktop workflow, collected from COMPLETED JOB-SPECIFIC
-# LOGS via the GitHub jobs API (v1.11.1 single-artifact contract, work
-# order for run #41851100943 §3.2/§8):
+# consolidate-run-log.sh — build the ONE consolidated ERRORS-AND-WARNINGS
+# plain-text run report for the build-desktop workflow, collected from
+# COMPLETED JOB-SPECIFIC LOGS via the GitHub jobs API (work order for run
+# #41851100943 §3.2/§8, errors-and-warnings output contract v2):
 #
 #   GET /repos/{owner}/{repo}/actions/runs/{run_id}
 #   GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100&page=N
 #   GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs
+#   GET /repos/{owner}/{repo}/check-runs/{check_run_id}/annotations?per_page=100&page=N
 #
-# WHY NOT THE RUN-ATTEMPT ARCHIVE: GitHub may return HTTP 404 for
-# /runs/{id}/attempts/{n}/logs while the run is still in progress — and
-# the collector itself runs INSIDE that very run. The archive can never
-# contain this collector's own still-running step log either. The
-# collector therefore depends ONLY on job-specific logs of upstream jobs
-# that have already reached a terminal state (the consolidate-logs job
-# `needs:` every upstream job and runs with if: always()), and embeds its
-# own progress as a local COLLECTOR SELF-LOG. It NEVER calls the
-# run-attempt archive endpoint. (Post-run operators may still use the
-# archive externally; it is not this script's runtime dependency.)
+# WHY NOT THE RUN-ATTEMPT ARCHIVE: GitHub may return HTTP 404 for the
+# run-attempt logs while the run is still in progress — and the collector
+# itself runs INSIDE that very run. The collector therefore depends ONLY
+# on job-specific logs of upstream jobs that have already reached a
+# terminal state (the consolidate-logs job `needs:` every upstream job and
+# runs with if: always()), and reconciles its own job as COLLECTOR SELF.
 #
-# Contract:
-#   - Output: exactly ONE plain-text file (default SHEYTAN-LA-all-logs.txt).
-#     The workflow uploads it with upload-artifact archive:false and
-#     name: SHEYTAN-LA-all-logs.txt, so the artifact downloads as the
-#     file itself and the display name equals the file name.
-#   - Every job from the paginated jobs API appears in EXACTLY ONE
-#     accounting category, and the categories reconcile to the jobs list:
-#       CAPTURED (terminal job, full log retrieved via jobs/{id}/logs),
-#       SKIPPED/NEVER_STARTED (conclusion "skipped" — no log exists),
-#       COLLECTOR SELF-LOG (this collector's local diagnostics),
-#       SELF IN_PROGRESS (the collector's OWN job — the only job that can
-#              legitimately lack a terminal state while the collector runs;
-#              its GitHub-hosted step log is by construction unavailable and
-#              its progress is embedded as the COLLECTOR SELF-LOG),
-#       IN_PROGRESS (a NON-self job without a terminal state — a coverage
-#              gap: the consolidate-logs job `needs:` every upstream job, so
-#              any other still-running job means the report cannot be
-#              complete),
-#       MISSING LOG SOURCE (terminal job whose log endpoint failed).
-#
-#   Run #144 (43008361835) root cause, fixed here: the collector used to
-#   count its OWN in-progress job as a plain IN_PROGRESS coverage gap, so
-#   the "Collector verdict" step failed EVERY green run after the report
-#   was written. The self job is now reconciled separately (SELF), reported
-#   honestly, and no longer fails the verdict. A NON-self in-progress job
-#   still fails closed exactly as before.
-#   - Invariant: a jobs list with at least one job but zero CAPTURED,
-#     zero MISSING, zero SKIPPED and zero IN_PROGRESS is impossible and
-#     is treated as a collector integrity failure.
-#   - A red or cancelled upstream run is NOT a collector failure: as long
-#     as every terminal job contributed its log, the collector exits 0
-#     and the report says what failed upstream.
-#   - A terminal job whose log endpoint genuinely fails is a MISSING LOG
-#     SOURCE: the partial report is still written (and uploaded by the
-#     workflow's if: always() step) and only then the collector exits 1.
-#   - Job boundaries are preserved: one "===== JOB … =====" section per
-#     job with its exact status/conclusion and job id; no flattening.
+# OUTPUT CONTRACT (errors-and-warnings report, ASCII-only, English,
+# deterministic — no wall-clock values, stable ordering):
+#   - Section headings, exactly and only when non-empty:
+#       RUN SUMMARY, FAILED JOBS, ERRORS, WARNINGS, MISSING LOG SOURCES,
+#       TEST FAILURES, ROOT CAUSE, COVERAGE.
+#   - INCLUDED: actual errors; warnings (from successful AND failed jobs);
+#     failed assertions/test names with concise detail; failed/cancelled
+#     job+step metadata; missing-log-source and cancelled-job coverage
+#     facts; a concise run/failure summary.
+#   - EXCLUDED: successful actions/steps/test output/OK/PASS/informational
+#     lines/raw successful logs. No decorative separator rows.
+#   - FORBIDDEN SUBSTRINGS: "===" and "---" never appear in the output.
+#     transform_separator_runs rewrites every run of >=3 '=' to
+#     EQUALS_RUN(n) and every run of >=3 '-' to HYPHENS_RUN(n).
+#     Test markers are normalized first: "--- FAIL: TestX" becomes
+#     "TEST_FAILURE: TestX" (name + concise following detail preserved).
+#   - Non-ASCII is deterministically mapped to an ASCII equivalent or
+#     escaped as \uXXXX / \UXXXXXXXX; nothing is silently dropped.
+#   - METADATA IS AUTHORITATIVE: failed/cancelled jobs and failed steps
+#     come from the jobs API, never from grepping log text. A failed
+#     step/job with NO annotation is still represented from metadata.
+#   - ANNOTATION CHANNEL vs ECHO: native ::error::/::warning:: annotations
+#     are authoritative. When the jobs payload carries check_run ids, the
+#     collector fetches the per-job check-run annotations (paginated). A
+#     literal ::error:: in log text that matches NO fetched annotation is
+#     echoed command source, not a real error (unless it also matches a
+#     rule-(d) diagnostic pattern). Without a check-run channel the
+#     legacy echo-heuristic applies.
+#   - Rule (d): diagnostics parsed from log text even without
+#     annotations — compiler error lines, test-runner failure markers
+#     (normalized per above), PowerShell/tool error prefixes, nonzero
+#     gate exit markers, and structured PACKAGE_GATE_RESULT <TOKEN> lines
+#     (non-OK tokens are errors; BLOCKED_BY_UPSTREAM* marks the package
+#     blocked and reports the FIRST upstream failure).
+#   - PACKAGING: report the first upstream failure and mark the package
+#     blocked; a missing-package error is reported only when packaging
+#     actually ran and failed to produce a gate result.
+#   - Coverage: every job appears in exactly one category (CAPTURED /
+#     SKIPPED / MISSING:* / IN_PROGRESS / SELF) and the categories
+#     reconcile to the jobs list. The collector's OWN job is SELF
+#     (IN_PROGRESS_DURING_COLLECTION), never "missing terminal".
+#     Cancelled terminal jobs are represented distinctly (conclusion
+#     recorded, never folded into failure). Missing terminal job log ->
+#     one MISSING LOG SOURCES row and state coverage=INCOMPLETE.
+#   - A red or cancelled upstream run is NOT a collector failure; a
+#     terminal job whose log endpoint fails IS (fail closed: the report
+#     is always written first, the verdict exits nonzero after).
 #   - Signed-URL token isolation: the bearer token is sent ONLY to the
 #     API host on the job-log header-capture request. The redirect's
 #     Location must be an https URL; the signed URL is fetched by a
 #     SEPARATE curl invocation carrying NO Authorization header.
 #     --location-trusted is never used. Signed URLs are never written
 #     into the report.
-#   - Secret redaction is applied to the whole report: the caller's own
+#   - Secret redaction before the artifact is written: the caller's own
 #     token value, ghp_/gho_/ghs_/github_pat_ tokens, AWS access-key ids,
-#     PEM private-key headers, Authorization header values and
-#     user:password@ URL credentials are REDACTED before the file is
-#     written. Environment variables are never printed.
-#   - Fail closed: any jobs-API, pagination, accounting-invariant or
-#     missing-log-source condition produces the best-available report
-#     FIRST and exits nonzero AFTER — a red run keeps its log.
-#   - Collector self-diagnostics: the collector's own progress log (API
-#     statuses, per-job decisions) is embedded in the report under
-#     COLLECTOR SELF-LOG. The GitHub-hosted copy of this job's own step
-#     log is unavailable while the run is in progress; the report says so.
+#     PEM private-key headers, Authorization header values, URL
+#     credentials and signed-URL values are REDACTED. Environment
+#     variables are never printed.
 #
 # Test seam (offline fixture suite, no network): set CONSOLIDATE_FIXTURE_DIR
 # to a directory containing run.json (optional), jobs-page-N.json pages,
-# and a job-logs/<job_id>/ directory per job with:
-#   code      (optional) HTTP code the API call returns (e.g. 404, 403);
+# check-runs/<id>-annotations-page-N.json (optional; default []), and a
+# job-logs/<job_id>/ directory per job with:
+#   code      (optional) HTTP code the job-log API call returns (404, 403…);
 #   location  (optional) the redirect Location value (default: a valid
 #             https signed-URL placeholder);
 #   body      (optional) the payload the signed-URL fetch returns.
-# The fetch layer is swapped; all parsing/reporting code paths are the
-# production ones.
+# The fetch layer is swapped; all parsing/reporting/redaction code paths
+# are the production ones.
 set -uo pipefail
 
 usage() { echo "usage: $0 --out FILE [--json-out FILE] [--repo OWNER/REPO] [--run-id ID] [--attempt N] [--commit SHA] [--ref REF] [--workflow NAME] [--trigger EVENT]" >&2; exit 64; }
 
-OUT="SHEYTAN-LA-all-logs.txt"
+OUT="SHEYTAN-LA-errors-warnings.txt"
 JSON_OUT=""
 REPO="${CONSOLIDATE_REPO:-${GITHUB_REPOSITORY:-}}"
 RUN_ID="${CONSOLIDATE_RUN_ID:-${GITHUB_RUN_ID:-}}"
@@ -109,11 +110,7 @@ JOBLOG_MAX_BYTES=268435456      # 256 MiB cap per job log
 #   1. CONSOLIDATE_SELF_JOB_NAME — explicit display-name override;
 #   2. GITHUB_JOB — the runner-provided YAML job key (e.g. "consolidate-logs"),
 #      matched against the API display name with a normalized comparison
-#      (case-insensitive, spaces/dashes/underscores stripped) so
-#      "consolidate-logs" == "Consolidate logs".
-# If neither is set (manual post-run use), nothing can be SELF and the
-# collector keeps the strict pre-fix semantics: every in-progress job is a
-# coverage gap that fails the verdict.
+#      (case-insensitive, spaces/dashes/underscores stripped).
 SELF_JOB_NAME="${CONSOLIDATE_SELF_JOB_NAME:-${GITHUB_JOB:-}}"
 
 normalize_job_name() {  # lowercase, strip spaces/dashes/underscores
@@ -145,18 +142,30 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 DIAG="$WORK/collector-diagnostics.log"
 RAW="$WORK/report-raw.txt"
+tabchar="$(printf '\t')"
+
+# Classified-entry indexes (tab fields: job-index, timestamp, seq, text).
+# They exist from the very first hard error so collector faults land in
+# the report's ERRORS section too.
+ERRIDX="$WORK/erridx.txt"; WARNIDX="$WORK/warnidx.txt"; TFAILIDX="$WORK/tfailidx.txt"
+FAILEDJOBS="$WORK/failed-jobs.txt"; MISSINGROWS="$WORK/missing-rows.txt"
+JNAMES="$WORK/jnames.txt"; PKGJOBS="$WORK/pkgjobs.txt"
+: > "$ERRIDX"; : > "$WARNIDX"; : > "$TFAILIDX"
+: > "$FAILEDJOBS"; : > "$MISSINGROWS"; : > "$JNAMES"; : > "$PKGJOBS"
 
 diag() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >>"$DIAG"; }
 
 # --- controlled exit: report first, then the verdict -------------------
 HARD_ERROR=0; CAPTURED=0; MISSING=0; NEVER_STARTED=0; IN_PROGRESS=0; SELF_IN_PROGRESS=0
-# v1.11.1 (run 41933333132, P1-D): failures come from METADATA, not from
-# grepping log text. The old "files/lines with failed commands" count
-# grepped every log line for ::error:: — including the runner's ECHOED
-# step source (a script line `echo "::error::gofmt violations"` is
-# source code, not an executed failure) — and reported 78 failed
-# commands for a run whose jobs metadata showed exactly ONE failed job.
-hard_fail() { diag "HARD ERROR: $*"; HARD_ERROR=$((HARD_ERROR+1)); }
+FAILED_JOBS=0; CANCELLED=0
+FIRST_FAIL_NAME=""; FIRST_FAIL_ID=""; FIRST_FAIL_JIDX=""
+# Failures come from METADATA, not from grepping log text for annotation
+# tokens — runner-echoed command source is never a failure fact.
+hard_fail() {
+  diag "HARD ERROR: $*"
+  HARD_ERROR=$((HARD_ERROR+1))
+  printf '0\t0000\t%d\tcollector: %s\n' "$HARD_ERROR" "$*" >> "$ERRIDX"
+}
 
 # --- redaction ----------------------------------------------------------
 redact_stream() {  # $1 = raw file; writes redacted content to stdout
@@ -171,8 +180,137 @@ redact_stream() {  # $1 = raw file; writes redacted content to stdout
     -e 's/AKIA[0-9A-Z]{16}/REDACTED_AWS_KEY/g' \
     -e 's/([Aa]uthorization:[[:space:]]*).*/\1REDACTED/' \
     -e 's#(https?://)[^/:[:space:]]+:[^@[:space:]]+@#\1REDACTED_CREDENTIALS@#g' \
-    -e 's/^-----BEGIN [A-Z ]*PRIVATE KEY-----/[REDACTED:ssh_private_key]/' \
+    -e 's/-----BEGIN [A-Z ]*PRIVATE KEY-----/[REDACTED:ssh_private_key]/g' \
+    -e 's#https://objects\.githubusercontent\.com/[^[:space:]]*#[REDACTED:signed_url]#g' \
+    -e 's#(X-Amz-[A-Za-z-]+=)[^&[:space:]]*#\1REDACTED#g' \
+    -e 's#([?&]token=)[^&[:space:]]*#\1REDACTED#g' \
     "$1"
+}
+
+# --- text cleaning pipeline ----------------------------------------------
+# strip_ansi_stream: byte-level removal of ANSI escape sequences (CSI,
+# OSC, two-byte ESC forms) and CR bytes; applied before classification
+# so patterns never see escape noise.
+strip_ansi_stream() {  # $1 = input file; stdout = cleaned
+  LC_ALL=C awk '
+    BEGIN { for (i = 1; i < 256; i++) ORD[sprintf("%c", i)] = i }
+    {
+      s = $0; out = ""; n = length(s); i = 1
+      while (i <= n) {
+        c = substr(s, i, 1); b = ORD[c] + 0
+        if (b == 27) {
+          if (i + 1 <= n) {
+            db = ORD[substr(s, i + 1, 1)] + 0
+            if (db == 91) {            # CSI: ESC [ ... final-byte >= 64
+              j = i + 2
+              while (j <= n && (ORD[substr(s, j, 1)] + 0) < 64) j++
+              i = j + 1; continue
+            } else if (db == 93) {     # OSC: ESC ] ... BEL or ESC \
+              j = i + 2
+              while (j <= n) {
+                pb = ORD[substr(s, j, 1)] + 0
+                if (pb == 7) break
+                if (pb == 27) { if (substr(s, j + 1, 1) == "\\") j++; break }
+                j++
+              }
+              i = j + 1; continue
+            } else { i = i + 2; continue }
+          } else { i++; continue }
+        }
+        if (b != 13) out = out c
+        i++
+      }
+      print out
+    }' "$1"
+}
+
+# clean_stream: the ASCII/forbidden-substring normalization applied to the
+# assembled report (and usable on any text stream):
+#   1. non-ASCII -> ASCII equivalent or \uXXXX / \UXXXXXXXX escape;
+#   2. test markers: "--- FAIL: X" -> "TEST_FAILURE: X";
+#   3. transform_separator_runs: every run of >=3 '=' -> EQUALS_RUN(n),
+#      every run of >=3 '-' -> HYPHENS_RUN(n) — "===" and "---" can never
+#      survive into the artifact, and the runs are counted, not dropped.
+clean_stream() {  # $1 = input file; stdout = normalized
+  LC_ALL=C awk '
+    BEGIN { for (i = 1; i < 256; i++) ORD[sprintf("%c", i)] = i }
+    function esc_cp(cp) {
+      if (cp <= 65535) return sprintf("\\u%04X", cp)
+      return sprintf("\\U%08X", cp)
+    }
+    function map_cp(cp) {
+      if (cp == 160) return " "
+      if (cp == 169) return "(c)"
+      if (cp == 174) return "(r)"
+      if (cp == 171) return "<"
+      if (cp == 187) return ">"
+      if (cp == 183) return "."
+      if (cp == 215) return "x"
+      if (cp == 8211 || cp == 8722) return "-"
+      if (cp == 8212 || cp == 8213) return "--"
+      if (cp >= 8216 && cp <= 8219) return "\047"
+      if (cp >= 8220 && cp <= 8223) return "\""
+      if (cp == 8224 || cp == 8225 || cp == 8226) return "*"
+      if (cp == 8230) return "..."
+      if (cp == 8249) return "<"
+      if (cp == 8250) return ">"
+      if (cp == 8592) return "<-"
+      if (cp == 8594) return "->"
+      if (cp == 8656) return "<="
+      if (cp == 8658) return "=>"
+      if (cp == 8800) return "!="
+      if (cp == 8804) return "<="
+      if (cp == 8805) return ">="
+      if (cp == 9474 || cp == 9475 || cp == 9553) return "|"
+      if (cp == 9484 || cp == 9488 || cp == 9492 || cp == 9496 || cp == 9516 || cp == 9524 || cp == 9532) return "+"
+      if (cp >= 9472 && cp <= 9599) return "-"
+      if (cp >= 9600 && cp <= 9631) return "#"
+      if (cp == 9642 || cp == 9656 || cp == 9657 || cp == 9679) return "*"
+      return ""
+    }
+    function transform_separator_runs(s, re, name,   r, run) {
+      r = ""
+      while (match(s, re)) {
+        run = substr(s, RSTART, RLENGTH)
+        if (length(run) >= 3) {
+          r = r substr(s, 1, RSTART - 1) name "(" length(run) ")"
+        } else {
+          r = r substr(s, 1, RSTART + RLENGTH - 1)
+        }
+        s = substr(s, RSTART + RLENGTH)
+      }
+      return r s
+    }
+    {
+      s = $0; out = ""; n = length(s); i = 1
+      while (i <= n) {
+        c = substr(s, i, 1); b = ORD[c] + 0
+        if (b >= 128) {
+          cp = 0; len = 0
+          if (b >= 194 && b <= 223) { cp = b - 192; len = 2 }
+          else if (b >= 224 && b <= 239) { cp = b - 224; len = 3 }
+          else if (b >= 240 && b <= 247) { cp = b - 240; len = 4 }
+          if (len == 0) { out = out esc_cp(b); i++; continue }
+          ok = 1
+          for (k = 1; k < len; k++) {
+            nb = ORD[substr(s, i + k, 1)] + 0
+            if (i + k > n || nb < 128 || nb > 191) { ok = 0; break }
+            cp = cp * 64 + (nb - 128)
+          }
+          if (!ok) { out = out esc_cp(b); i++; continue }
+          m = map_cp(cp)
+          if (m != "") out = out m; else out = out esc_cp(cp)
+          i += len; continue
+        }
+        if ((b < 32 && b != 9) || b == 127) { out = out esc_cp(b); i++; continue }
+        out = out c
+        i++
+      }
+      gsub(/--- FAIL: ?/, "TEST_FAILURE: ", out)
+      out = transform_separator_runs(out, "==+", "EQUALS_RUN")
+      out = transform_separator_runs(out, "--+", "HYPHENS_RUN")
+      print out
+    }' "$1"
 }
 
 # --- fetch layer (network or fixture seam) ------------------------------
@@ -180,6 +318,17 @@ fetch_json() {  # $1 = api path, $2 = outfile; echoes HTTP code
   local path="$1" outfile="$2" code=""
   if [ -n "$FIXTURE_DIR" ]; then
     case "$path" in
+      *"/check-runs/"*)
+        # Per-job check-run annotations (the authoritative annotation
+        # channel). Fixture seam: check-runs/<id>-annotations-page-N.json,
+        # defaulting to an empty array exactly like the live endpoint.
+        crid="$(printf '%s' "$path" | sed -E 's#^.*/check-runs/([0-9]+)/.*$#\1#')"
+        annf="$FIXTURE_DIR/check-runs/$crid-annotations-page-$FETCH_PAGE.json"
+        if [ -f "$annf" ]; then
+          cp "$annf" "$outfile"; echo "200"
+        else
+          printf '[]' > "$outfile"; echo "200"
+        fi;;
       *"/jobs"*)
         if [ -f "$FIXTURE_DIR/jobs-http-code" ]; then
           cat "$FIXTURE_DIR/jobs-http-code"; return 0
@@ -206,6 +355,28 @@ fetch_json() {  # $1 = api path, $2 = outfile; echoes HTTP code
     -H "X-GitHub-Api-Version: 2022-11-28" \
     "$API$path")" || { echo "000"; return 0; }
   echo "$code"
+}
+
+# Per-job check-run annotations — the authoritative annotation channel.
+# Returns 1 (fetched) via stdout when the endpoint answered 200 for every
+# page; 0 means unavailable (fall back to the echo heuristic).
+fetch_annotations() {  # $1 = check-run id, $2 = ndjson outfile (level \t message)
+  local crid="$1" out="$2" page=1 code="" n=""
+  : > "$out"
+  while [ "$page" -le 20 ]; do
+    code="$(fetch_json "/repos/$REPO/check-runs/$crid/annotations?per_page=100&page=$page" "$WORK/ann-$crid-$page.json")"
+    if [ "$code" != "200" ]; then echo 0; return 0; fi
+    if ! timeout 10 jq -e 'type == "array"' "$WORK/ann-$crid-$page.json" >/dev/null 2>&1; then
+      echo 0; return 0
+    fi
+    timeout 10 jq -r '.[] | [(.annotation_level // ""), (((.path // "") + ":" + ((.start_line // 0) | tostring) + ": " + (.message // "")) | gsub("\\s+"; " "))] | @tsv' \
+      "$WORK/ann-$crid-$page.json" >> "$out" 2>>"$DIAG" || { echo 0; return 0; }
+    n="$(timeout 10 jq -r 'length' "$WORK/ann-$crid-$page.json" 2>/dev/null || echo 0)"
+    [ "${n:-0}" -lt 100 ] && break
+    page=$((page+1))
+  done
+  echo 1
+  return 0
 }
 FETCH_PAGE=1
 
@@ -236,6 +407,7 @@ fi
 
 # --- 2. jobs metadata with pagination (REQUIRED) ------------------------
 : > "$WORK/jobs.ndjson"
+: > "$WORK/jobs-diag.ndjson"
 page=1; pages=0
 while [ "$page" -le 50 ]; do
   FETCH_PAGE="$page"
@@ -249,10 +421,12 @@ while [ "$page" -le 50 ]; do
     break
   fi
   n="$(timeout 10 jq -r '.jobs | length' "$WORK/jobs-$page.json")"
-  # v1.11.1 (P1-D): carry the per-job STEPS (name + conclusion) from the
-  # jobs API response — the authoritative per-step failure facts the
-  # summary reports. Jobs without a steps array normalize to [] .
-  timeout 10 jq -c '.jobs[] | {id, name, status, conclusion, steps: [(.steps // [])[] | {name, conclusion}]}' "$WORK/jobs-$page.json" >> "$WORK/jobs.ndjson" 2>>"$DIAG" \
+  # Carry the per-job STEPS (authoritative per-step failure facts), the
+  # check_run id (the annotation channel key), and the terminal facts.
+  timeout 10 jq -c '.jobs[] | {id, name, status, conclusion,
+    check_run_id: (if ((.check_run_url // "") | contains("check-runs/")) then (.check_run_url | sub(".*check-runs/"; "")) else "" end),
+    steps: [(.steps // [] | to_entries[]) | {number: (.key + 1), name: .value.name, conclusion: .value.conclusion}]}' \
+    "$WORK/jobs-$page.json" >> "$WORK/jobs.ndjson" 2>>"$DIAG" \
     || hard_fail "failed to normalize jobs metadata on page $page"
   pages=$((pages+1))
   [ "$n" -eq 0 ] && break
@@ -264,8 +438,8 @@ diag "jobs metadata: $pages page(s) fetched, $TOTAL_JOBS job(s)"
 # --- 3. per-job logs — the ONLY log source (REQUIRED) --------------------
 # Terminal job  -> GET /actions/jobs/{id}/logs (302 + signed URL, no
 #                  credentials on the signed fetch).
-# skipped       -> NEVER_STARTED: no fetch, no log, never "missing".
-# not terminal  -> IN_PROGRESS: represented explicitly, not a missing log.
+# skipped       -> SKIPPED: no fetch, no log, never "missing".
+# not terminal  -> IN_PROGRESS (SELF for the collector's own job).
 # endpoint fail -> MISSING LOG SOURCE for that job; everything else is
 #                  still captured and the report is still written.
 capture_job_log() {  # $1 = job id; on success writes $2 = log file; echoes "" on success, "MISSING:<reason>" otherwise
@@ -334,92 +508,196 @@ capture_job_log() {  # $1 = job id; on success writes $2 = log file; echoes "" o
   return 0
 }
 
-# --- 4. report ------------------------------------------------------------
-now_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-ERRIDX="$WORK/erridx.txt"; WARNIDX="$WORK/warnidx.txt"
-: > "$ERRIDX"; : > "$WARNIDX"
-NEVER_LIST="$WORK/never.txt"; MISSING_LIST="$WORK/missing.txt"
-: > "$NEVER_LIST"; : > "$MISSING_LIST"
-
-# v1.11.1 (P1-D) two labeled data sources, never mixed again:
-#   AUTHORITATIVE — job/step conclusions from the paginated jobs API
-#   (metadata; the only thing that can call a job failed).
-#   ANNOTATIONS   — runner annotation tokens found in the captured log
-#   OUTPUT, EXCLUDING runner-echoed command SOURCE lines (the literal
-#   `echo "::error::…"` / `Write-Host "::error::…"` statements the
-#   runner prints when echoing the step's script). Raw log lines are
-#   never discarded — only the indexes are classified.
-FAILED_JOBS=0; FAILED_JOB_LIST=""; STEP_FAILURES=0
-ANN_ERRORS=0; ANN_WARNINGS=0; ECHOED_SOURCE=0
-
-is_echoed_annotation_source() {  # $1 = one log line (no line-number prefix)
-  # A command SOURCE echo whose string LITERAL contains the annotation
-  # token: bash `echo/printf`, PowerShell `Write-*`, and the repo's Log
-  # helper. An ACTUAL emitted annotation is command OUTPUT — the token
-  # is not a quoted literal after a print command on the same line.
-  printf '%s\n' "$1" | grep -qE "(^|[;&|[:space:]+(-])(echo|printf|Write-Host|Write-Output|Write-Warning|Write-Error|Log)[[:space:]].*[\"'](::error::|##\\[error\\]|::warning::|##\\[warning\\])"
+# --- 4. classification ----------------------------------------------------
+# classify_job_log — rule (d) diagnostics + annotation-channel matching,
+# per captured job. Entry rows are TAB-separated:
+#   job-index \t timestamp \t seq \t text
+# so each section can be sorted by workflow job order, then timestamp.
+classify_job_log() {  # $1 = job index; $2 = has_ann(0/1); $3 = annotations ndjson; $4 = package-state file; log on stdin
+  LC_ALL=C awk -v jidx="$1" -v has_ann="$2" -v annfile="$3" -v pkgfile="$4" \
+    -v errfile="$ERRIDX" -v warnfile="$WARNIDX" -v tfailfile="$TFAILIDX" -v sq="'" '
+    function normmsg(m) { gsub(/[ \t]+/, " ", m); sub(/^ /, "", m); sub(/ $/, "", m); return m }
+    function emit(lvl, t, txt,   k) {
+      if (length(txt) > 240) txt = substr(txt, 1, 240)
+      if (t == "") t = "0000"
+      k = ++SEQ
+      if (lvl == "error") print jidx "\t" t "\t" k "\t" txt >> errfile
+      else if (lvl == "warn") print jidx "\t" t "\t" k "\t" txt >> warnfile
+      else print jidx "\t" t "\t" k "\t" txt >> tfailfile
+    }
+    function is_echo_source(s,   re) {
+      # A command SOURCE echo whose string LITERAL contains the annotation
+      # token: bash echo/printf, PowerShell Write-*, and the repo Log helper.
+      re = "(^|[;&|[ \t+(-])(echo|printf|Write-Host|Write-Output|Write-Warning|Write-Error|Log)[ \t].*(\"|" sq ")(::error::|##\\[error\\]|::warning::|##\\[warning\\])"
+      return s ~ re
+    }
+    BEGIN {
+      NA = 0
+      if (has_ann && annfile != "") {
+        while ((getline aline < annfile) > 0) {
+          if (aline == "") continue
+          p = index(aline, "\t")
+          NA++
+          annlvl[NA] = substr(aline, 1, p - 1)
+          annmsg[NA] = substr(aline, p + 1)
+          if (annlvl[NA] == "failure") annerr[normmsg(annmsg[NA])] = 1
+          else if (annlvl[NA] == "warning") annwarn[normmsg(annmsg[NA])] = 1
+        }
+        close(annfile)
+      }
+      # Authoritative annotation rows are emitted first (stable seq order).
+      for (i = 1; i <= NA; i++) {
+        if (annlvl[i] == "failure") emit("error", "", "[annotation] " annmsg[i])
+        else if (annlvl[i] == "warning") emit("warn", "", "[annotation] " annmsg[i])
+      }
+      pending = 0
+    }
+    {
+      ts = ""; rest = $0
+      if (match(rest, /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9](\.[0-9]+)?Z?/)) {
+        ts = substr(rest, 1, RLENGTH)
+        rest = substr(rest, RLENGTH + 1)
+        sub(/^[ \t]+/, "", rest)
+      }
+      # structured PACKAGE_GATE_RESULT (checked first; BLOCKED never becomes
+      # an error row — it reports the first upstream failure instead)
+      if (rest ~ /^PACKAGE_GATE_RESULT[ \t]+/) {
+        body = rest; sub(/^PACKAGE_GATE_RESULT[ \t]+/, "", body)
+        tok = body; sub(/[ \t].*$/, "", tok)
+        det = body; sub(/^[ \t]*[^ \t]+[ \t]*/, "", det)
+        if (tok == "OK") {
+          print "OK\t" >> pkgfile
+        } else if (tok ~ /^BLOCKED_BY_UPSTREAM/) {
+          if (det == "") det = tok
+          print "BLOCKED\t" det >> pkgfile
+        } else {
+          print "FAILED\t" tok >> pkgfile
+          emit("error", ts, rest)
+        }
+        next
+      }
+      # runner annotation tokens
+      kind = ""; tokstr = ""
+      if (index(rest, "::error::") > 0) { kind = "error"; tokstr = "::error::" }
+      else if (index(rest, "::warning::") > 0) { kind = "warning"; tokstr = "::warning::" }
+      else if (index(rest, "##[error]") > 0) { kind = "error"; tokstr = "##[error]" }
+      else if (index(rest, "##[warning]") > 0) { kind = "warning"; tokstr = "##[warning]" }
+      if (kind != "") {
+        p = index(rest, tokstr)
+        after = substr(rest, p + length(tokstr))
+        msg = after
+        q = index(after, "::")
+        if (q > 0 && index(substr(after, 1, q - 1), "=") > 0) msg = substr(after, q + 2)
+        sub(/[ \t]+$/, "", msg)
+        if (has_ann) {
+          # Annotation channel is authoritative: a log token that matches a
+          # fetched annotation is consumed (the annotation row already
+          # represents it); one that matches NOTHING is echoed source.
+          matched = 0
+          k = normmsg(msg)
+          if (kind == "error" && (k in annerr)) matched = 1
+          else if (kind == "warning" && (k in annwarn)) matched = 1
+          if (!matched && length(k) >= 8) {
+            for (w in annerr) if (index(k, w) > 0) matched = 1
+            if (!matched) for (w in annwarn) if (index(k, w) > 0) matched = 1
+          }
+          if (matched) next
+          # fall through: an unmatched token can still be a rule-(d) line
+        } else {
+          if (is_echo_source($0)) next
+          # Strip the token by INDEX (sub() would treat the token as a
+          # regex: "##[error]" contains a character class).
+          clean = rest
+          p2 = index(clean, tokstr)
+          if (p2 > 0) clean = substr(clean, 1, p2 - 1) substr(clean, p2 + length(tokstr))
+          lvl = (kind == "warning") ? "warn" : kind
+          emit(lvl, ts, clean)
+          next
+        }
+      }
+      # test-runner failure markers (+ concise detail lookahead)
+      if (match(rest, /--- FAIL: ?/)) {
+        nm = substr(rest, RSTART + RLENGTH)
+        sub(/[ \t]+$/, "", nm)
+        emit("tfail", ts, "TEST_FAILURE: " nm)
+        pending = 2
+        next
+      }
+      if (pending > 0) {
+        if (rest ~ /^[ \t]+[^ \t]/) {
+          d = rest; sub(/^[ \t]+/, "", d)
+          emit("tfail", ts, d)
+          pending--
+          next
+        }
+        pending = 0
+      }
+      # compiler / static-analysis lines (file.ext:line[:col]: message)
+      if (match(rest, /^[A-Za-z0-9_./\\+-]+\.[A-Za-z][A-Za-z0-9]*:[0-9]+:[0-9]+:/) || match(rest, /^[A-Za-z0-9_./\\+-]+\.[A-Za-z][A-Za-z0-9]*:[0-9]+:/)) {
+        msg = substr(rest, RLENGTH + 1)
+        if (tolower(msg) ~ /^[ \t]*warning/) emit("warn", ts, rest)
+        else emit("error", ts, rest)
+        next
+      }
+      # PowerShell / tool error prefixes
+      if (rest ~ /^Write-Error: / || rest ~ /^ERROR: / || rest ~ /^Exception calling/) { emit("error", ts, rest); next }
+      # gate-script exit marker (nonzero only; "EXIT_CODE: 0 PASS" is success noise)
+      if (match(rest, /^EXIT_CODE: [1-9][0-9]* FAIL/)) { emit("error", ts, rest); next }
+      # everything else (OK/PASS/informational/successful output) is excluded
+    }'
 }
 
-classify_job_log_annotations() {  # $1 = job name; $2 = captured log file
-  local jname="$1" sec="$2" hit content
-  while IFS= read -r hit; do
-    [ -z "$hit" ] && continue
-    content="${hit#*:}"   # strip grep's line-number prefix
-    case "$content" in
-      *"::error::"*|*"##[error]"*|*"EXIT_CODE: "[1-9]*" FAIL"*)
-        if is_echoed_annotation_source "$content"; then
-          ECHOED_SOURCE=$((ECHOED_SOURCE+1))
-          continue
-        fi
-        ANN_ERRORS=$((ANN_ERRORS+1))
-        printf 'job %s: %s\n' "$jname" "${hit:0:240}" >> "$ERRIDX";;
-      *"::warning::"*|*"##[warning]"*)
-        if is_echoed_annotation_source "$content"; then
-          ECHOED_SOURCE=$((ECHOED_SOURCE+1))
-          continue
-        fi
-        ANN_WARNINGS=$((ANN_WARNINGS+1))
-        printf 'job %s: %s\n' "$jname" "${hit:0:240}" >> "$WARNIDX";;
-    esac
-  done < <(grep -nE '::error::|##\[(error|warning)\]|::warning::|EXIT_CODE: [1-9][0-9]* FAIL' "$sec" 2>/dev/null | cut -c1-260 || true)
-}
-
-# Job sections are emitted in jobs-API order, one per job, exactly once.
-declare -a JOB_SECTIONS=()
-
+# --- 5. per-job walk (jobs-API order) -------------------------------------
+JIDX=0
 if [ -s "$WORK/jobs.ndjson" ]; then
   while IFS= read -r job; do
+    [ -z "$job" ] && continue
+    JIDX=$((JIDX+1))
     jid="$(printf '%s' "$job" | jq -r '.id')"
     jname="$(printf '%s' "$job" | jq -r '.name')"
     jstatus="$(printf '%s' "$job" | jq -r '.status')"
     jconc="$(printf '%s' "$job" | jq -r '.conclusion // "null"')"
+    crid="$(printf '%s' "$job" | jq -r '.check_run_id // ""')"
+    printf '%d\t%s\n' "$JIDX" "$jname" >> "$JNAMES"
 
-    # AUTHORITATIVE facts (P1-D): failed terminal jobs and failed steps
-    # come from the metadata, never from log text.
+    # AUTHORITATIVE facts: failed/cancelled jobs and failed steps come from
+    # the metadata, never from log text.
     if [ "$jconc" = "failure" ]; then
       FAILED_JOBS=$((FAILED_JOBS+1))
-      FAILED_JOB_LIST="${FAILED_JOB_LIST}${jname}\n"
+      printf 'job \047%s\047 (id %s): conclusion=failure\n' "$jname" "$jid" >> "$FAILEDJOBS"
+      if [ -z "$FIRST_FAIL_NAME" ]; then
+        FIRST_FAIL_NAME="$jname"; FIRST_FAIL_ID="$jid"; FIRST_FAIL_JIDX="$JIDX"
+      fi
     fi
-    sfail="$(printf '%s' "$job" | timeout 10 jq -r '[(.steps // [])[] | select(.conclusion == "failure")] | length' 2>/dev/null || echo 0)"
-    STEP_FAILURES=$((STEP_FAILURES + sfail))
+    if [ "$jconc" = "cancelled" ]; then
+      CANCELLED=$((CANCELLED+1))
+      printf 'job \047%s\047 (id %s): conclusion=cancelled\n' "$jname" "$jid" >> "$FAILEDJOBS"
+    fi
+    if [ "$jconc" = "failure" ] || [ "$jconc" = "cancelled" ]; then
+      while IFS= read -r srow; do
+        [ -z "$srow" ] && continue
+        snum="${srow%%"$tabchar"*}"; sname="${srow#*"$tabchar"}"
+        printf 'job \047%s\047 (id %s): failed step %s \047%s\047 (conclusion failure)\n' \
+          "$jname" "$jid" "$snum" "$sname" >> "$FAILEDJOBS"
+      done < <(printf '%s' "$job" | timeout 10 jq -r '[(.steps // [] | to_entries[]) | select(.value.conclusion == "failure")] | .[] | ([.key + 1, .value.name] | @tsv)' 2>>"$DIAG")
+    fi
 
     if [ "$jconc" = "skipped" ]; then
       NEVER_STARTED=$((NEVER_STARTED+1))
-      printf '%s\n' "$jname" >> "$NEVER_LIST"
-      JOB_SECTIONS+=("$jname|$jstatus|$jconc|$jid|SKIPPED")
-      diag "job '$jname' (id $jid): skipped by the workflow — NEVER_STARTED, no log expected"
+      diag "job '$jname' (id $jid): skipped by the workflow — SKIPPED, no log expected"
+      printf '%s' "$job" | jq -c --arg l "SKIPPED" '{name: .name, status: .status, conclusion: (if .conclusion == null then null else .conclusion end), id: (.id | tostring), log_source: $l}' >> "$WORK/jobs-diag.ndjson" 2>>"$DIAG"
       continue
     fi
 
     if [ "$jconc" = "null" ] || [ "$jstatus" != "completed" ]; then
       if is_self_job "$jname"; then
         SELF_IN_PROGRESS=$((SELF_IN_PROGRESS+1))
-        JOB_SECTIONS+=("$jname|$jstatus|$jconc|$jid|SELF")
-        diag "job '$jname' (id $jid): the collector's OWN job — SELF (expected in progress while the collector runs); its step log is embedded above as the COLLECTOR SELF-LOG"
+        diag "job '$jname' (id $jid): the collector's OWN job — SELF (expected in progress while the collector runs)"
+        printf '%s' "$job" | jq -c --arg l "SELF" '{name: .name, status: .status, conclusion: (if .conclusion == null then null else .conclusion end), id: (.id | tostring), log_source: $l}' >> "$WORK/jobs-diag.ndjson" 2>>"$DIAG"
       else
         IN_PROGRESS=$((IN_PROGRESS+1))
-        JOB_SECTIONS+=("$jname|$jstatus|$jconc|$jid|IN_PROGRESS")
         diag "job '$jname' (id $jid): status=$jstatus conclusion=$jconc — IN_PROGRESS, no terminal log yet"
+        printf '%s' "$job" | jq -c --arg l "IN_PROGRESS" '{name: .name, status: .status, conclusion: (if .conclusion == null then null else .conclusion end), id: (.id | tostring), log_source: $l}' >> "$WORK/jobs-diag.ndjson" 2>>"$DIAG"
       fi
       continue
     fi
@@ -428,26 +706,34 @@ if [ -s "$WORK/jobs.ndjson" ]; then
     res="$(capture_job_log "$jid" "$sec")"
     if [ -n "$res" ]; then
       MISSING=$((MISSING+1))
-      printf '%s\n' "$jname" >> "$MISSING_LIST"
-      JOB_SECTIONS+=("$jname|$jstatus|$jconc|$jid|MISSING:$res")
+      printf 'job \047%s\047 (id %s): conclusion=%s, retrieval status=%s, coverage=INCOMPLETE\n' \
+        "$jname" "$jid" "$jconc" "${res#MISSING:}" >> "$MISSINGROWS"
       diag "job '$jname' (id $jid): MISSING LOG SOURCE — $res"
+      printf '%s' "$job" | jq -c --arg l "$res" '{name: .name, status: .status, conclusion: (if .conclusion == null then null else .conclusion end), id: (.id | tostring), log_source: $l}' >> "$WORK/jobs-diag.ndjson" 2>>"$DIAG"
       continue
     fi
     CAPTURED=$((CAPTURED+1))
     diag "job '$jname' (id $jid): log captured ($(wc -c < "$sec") bytes)"
-    {
-      # NOTE: the JOB header is added exactly once, in the report
-      # assembly loop below — the section file carries only the marker
-      # and the log body.
-      echo "--- job log (GET /repos/$REPO/actions/jobs/$jid/logs) ---"
-      cat "$sec"
-      echo ""
-      # v1.11.1 (P1-D): annotation extraction with runner-echoed source
-      # exclusion — see classify_job_log_annotations above.
-      classify_job_log_annotations "$jname" "$sec"
-    } > "${sec}.section"
-    mv "${sec}.section" "$sec"
-    JOB_SECTIONS+=("$jname|$jstatus|$jconc|$jid|CAPTURED")
+
+    # annotation channel (authoritative) when the jobs payload has a
+    # check_run id; unavailable channel falls back to the echo heuristic
+    has_ann=0; annfile=""
+    if [ -n "$crid" ]; then
+      annfile="$WORK/ann-$jid.ndjson"
+      has_ann="$(fetch_annotations "$crid" "$annfile")"
+      diag "job '$jname' (id $jid): check-run annotations fetched=$has_ann (check_run $crid)"
+    fi
+    c1="$WORK/clean-$jid.1"; c2="$WORK/clean-$jid.2"
+    strip_ansi_stream "$sec" > "$c1"
+    redact_stream "$c1" > "$c2"
+    pkgfile="$WORK/pkg-$jid.txt"
+    classify_job_log "$JIDX" "$has_ann" "$annfile" "$pkgfile" < "$c2"
+
+    case "$(normalize_job_name "$jname")" in
+      *package*) printf '%d\t%s\n' "$JIDX" "$jid" >> "$PKGJOBS";;
+    esac
+
+    printf '%s' "$job" | jq -c --arg l "CAPTURED" '{name: .name, status: .status, conclusion: (if .conclusion == null then null else .conclusion end), id: (.id | tostring), log_source: $l}' >> "$WORK/jobs-diag.ndjson" 2>>"$DIAG"
   done < "$WORK/jobs.ndjson"
 fi
 
@@ -462,129 +748,163 @@ if [ "$TOTAL_JOBS" -gt 0 ] \
 fi
 diag "accounting: captured=$CAPTURED missing=$MISSING skipped=$NEVER_STARTED in_progress=$IN_PROGRESS self=$SELF_IN_PROGRESS total=$TOTAL_JOBS (sum=$((CAPTURED+MISSING+NEVER_STARTED+IN_PROGRESS+SELF_IN_PROGRESS)))"
 
-# --- assemble the raw report ---------------------------------------------
+# --- packaging state -------------------------------------------------------
+# BLOCKED_BY_UPSTREAM* -> package blocked, FIRST upstream failure reported.
+# A missing-package error is reported ONLY when packaging actually ran
+# (a terminal package job was captured) and produced no gate result.
+pkg_blocked=0; pkg_failed=0; pkg_ok=0; PKG_DETAIL=""
+for pf in "$WORK"/pkg-*.txt; do
+  [ -e "$pf" ] || continue
+  while IFS= read -r pl; do
+    [ -z "$pl" ] && continue
+    st="${pl%%"$tabchar"*}"; dt="${pl#*"$tabchar"}"
+    case "$st" in
+      BLOCKED) pkg_blocked=1; if [ -n "$dt" ] && [ -z "$PKG_DETAIL" ]; then PKG_DETAIL="$dt"; fi;;
+      FAILED) pkg_failed=1;;
+      OK) pkg_ok=1;;
+    esac
+  done < "$pf"
+done
+PKG="NOT_DETECTED"
+if [ "$pkg_blocked" = 1 ]; then
+  PKG="BLOCKED"
+  diag "package: BLOCKED by upstream failure (${PKG_DETAIL:-no detail})"
+elif [ "$pkg_failed" = 1 ]; then
+  PKG="FAILED"
+  diag "package: FAILED (non-OK PACKAGE_GATE_RESULT)"
+elif [ "$pkg_ok" = 1 ]; then
+  PKG="OK"
+  diag "package: OK"
+elif [ -s "$PKGJOBS" ]; then
+  PKG="MISSING"
+  pj="$(sed -n '1p' "$PKGJOBS")"
+  pjidx="${pj%%"$tabchar"*}"
+  printf '%s\t0000\t999999\tpackaging ran but produced no PACKAGE_GATE_RESULT (package output missing)\n' "$pjidx" >> "$ERRIDX"
+  diag "package: MISSING (packaging ran but produced no PACKAGE_GATE_RESULT)"
+fi
+
+# --- deterministic ordering: job order, then timestamp, then seq -----------
+sort_idx() {  # $1 in, $2 out
+  LC_ALL=C sort -t "$tabchar" -k1,1n -k2,2 -k3,3n -s "$1" > "$2"
+}
+render_idx() {  # $1 sorted index, $2 names file -> stdout
+  LC_ALL=C awk -v names="$2" '
+    BEGIN { while ((getline l < names) > 0) { p = index(l, "\t"); nm[substr(l, 1, p - 1) + 0] = substr(l, p + 1) } }
+    {
+      l = $0
+      p1 = index(l, "\t"); a = substr(l, 1, p1 - 1); r = substr(l, p1 + 1)
+      p2 = index(r, "\t"); r = substr(r, p2 + 1)
+      p3 = index(r, "\t"); txt = substr(r, p3 + 1)
+      if (a + 0 == 0) print txt
+      else print "job \047" nm[a + 0] "\047: " txt
+    }' "$1"
+}
+sort_idx "$ERRIDX" "$WORK/err.sorted"
+sort_idx "$WARNIDX" "$WORK/warn.sorted"
+sort_idx "$TFAILIDX" "$WORK/tfail.sorted"
+N_ERRORS="$(wc -l < "$WORK/err.sorted")"
+N_WARNINGS="$(wc -l < "$WORK/warn.sorted")"
+N_TFAIL="$(wc -l < "$WORK/tfail.sorted")"
+
+FIRST_FAIL_ERR=""
+if [ -n "$FIRST_FAIL_JIDX" ] && [ -s "$WORK/err.sorted" ]; then
+  FIRST_FAIL_ERR="$(LC_ALL=C awk -v target="$FIRST_FAIL_JIDX" '
+    {
+      p1 = index($0, "\t"); a = substr($0, 1, p1 - 1)
+      if (a + 0 == target + 0) {
+        r = substr($0, p1 + 1); p2 = index(r, "\t"); r = substr(r, p2 + 1)
+        p3 = index(r, "\t"); print substr(r, p3 + 1); exit
+      }
+    }' "$WORK/err.sorted")"
+fi
+
+# --- 6. assemble the errors-and-warnings report ---------------------------
+COVERAGE_STATE="COMPLETE"
+if [ "$HARD_ERROR" -ne 0 ] || [ "$MISSING" -gt 0 ] || [ "$IN_PROGRESS" -gt 0 ]; then
+  COVERAGE_STATE="INCOMPLETE"
+fi
+now_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
 {
-  echo "SHEYTAN-LA consolidated run log — run $RUN_ID attempt $ATTEMPT"
-  [ -n "$RUN_NAME" ] && echo "workflow: $RUN_NAME"
-  echo "workflow (job input): $WORKFLOW"
+  echo "SHEYTAN-LA errors-and-warnings run report"
+  echo ""
+  echo "RUN SUMMARY"
+  echo "run: $RUN_ID attempt: $ATTEMPT"
+  [ -n "$RUN_NAME" ] && echo "run name: $RUN_NAME"
+  echo "workflow: $WORKFLOW"
   echo "repository: $REPO"
   echo "commit: $COMMIT"
   echo "ref: $REF"
   echo "trigger: $TRIGGER"
-  echo "report generated (UTC): $now_utc"
+  echo "jobs (jobs API): $TOTAL_JOBS"
+  echo "logs captured: $CAPTURED"
+  echo "jobs failed (metadata): $FAILED_JOBS"
+  echo "jobs cancelled (metadata): $CANCELLED"
+  echo "jobs skipped (never started): $NEVER_STARTED"
+  echo "jobs in progress (non-self, coverage gap): $IN_PROGRESS"
+  echo "jobs in progress (collector self): $SELF_IN_PROGRESS"
+  echo "missing log sources: $MISSING"
+  echo "errors: $N_ERRORS"
+  echo "warnings: $N_WARNINGS"
+  echo "test failures: $N_TFAIL"
+  echo "package: $PKG"
   echo ""
-  echo "=== RUN SUMMARY ==="
-  echo "expected jobs (jobs API): $TOTAL_JOBS"
-  echo "jobs with captured logs: $CAPTURED"
-  echo "jobs with MISSING LOG SOURCE: $MISSING"
-  echo "jobs NEVER_STARTED (skipped): $NEVER_STARTED"
-  echo "jobs IN_PROGRESS (no terminal state): $IN_PROGRESS"
-  echo "jobs IN_PROGRESS (collector self, expected): $SELF_IN_PROGRESS"
-  echo "collector self-log sections: 1"
-  echo ""
-  echo "=== AUTHORITATIVE FAILURE SUMMARY (job/step metadata from the paginated jobs API) ==="
-  echo "failed terminal jobs (metadata): $FAILED_JOBS"
-  if [ "$FAILED_JOBS" -gt 0 ]; then
-    printf '%b' "$FAILED_JOB_LIST" | sed 's/^/  failed job: /'
+  if [ "$FAILED_JOBS" -gt 0 ] || [ "$CANCELLED" -gt 0 ]; then
+    echo "FAILED JOBS"
+    cat "$FAILEDJOBS"
+    echo ""
   fi
-  echo "failed steps (metadata): $STEP_FAILURES"
-  echo ""
-  echo "=== LOG ANNOTATIONS (emitted by executed commands; runner-echoed source lines excluded) ==="
-  echo "error annotations: $ANN_ERRORS"
-  echo "warning annotations: $ANN_WARNINGS"
-  echo "runner-echoed command-source literals excluded: $ECHOED_SOURCE"
-  echo "collector hard errors: $HARD_ERROR"
-  echo ""
-  echo "=== ERROR INDEX ==="
-  cat "$ERRIDX"
-  echo ""
-  echo "=== WARNING INDEX ==="
-  cat "$WARNIDX"
-  echo ""
-  if [ "$NEVER_STARTED" -gt 0 ]; then
-    echo "=== NEVER_STARTED ==="
-    while IFS= read -r j; do
-      echo "job '$j' was SKIPPED by the workflow — it never ran; no log exists and none is expected. This is not a failed command."
-    done < "$NEVER_LIST"
+  if [ "$N_ERRORS" -gt 0 ]; then
+    echo "ERRORS"
+    render_idx "$WORK/err.sorted" "$JNAMES"
+    echo ""
+  fi
+  if [ "$N_WARNINGS" -gt 0 ]; then
+    echo "WARNINGS"
+    render_idx "$WORK/warn.sorted" "$JNAMES"
     echo ""
   fi
   if [ "$MISSING" -gt 0 ]; then
-    echo "=== MISSING LOG SOURCE ==="
-    while IFS= read -r j; do
-      echo "job '$j' reached a terminal state but its job-specific log endpoint did not yield a log — coverage is INCOMPLETE for this run."
-    done < "$MISSING_LIST"
+    echo "MISSING LOG SOURCES"
+    cat "$MISSINGROWS"
     echo ""
   fi
-  if [ "$IN_PROGRESS" -gt 0 ]; then
-    echo "=== IN_PROGRESS (no terminal state) ==="
-    echo "these NON-self jobs had not reached a terminal state when the collector read the jobs API — the consolidate-logs job needs every upstream job, so this is a coverage gap; the collector does not wait or poll."
+  if [ "$N_TFAIL" -gt 0 ]; then
+    echo "TEST FAILURES"
+    render_idx "$WORK/tfail.sorted" "$JNAMES"
     echo ""
   fi
-  if [ "$SELF_IN_PROGRESS" -gt 0 ]; then
-    echo "=== SELF (collector's own job, expected in progress) ==="
-    echo "this is the collector's own job: it is still running while this report is written, so it can have no terminal state and no GitHub-hosted step log yet. Its progress is embedded above as the COLLECTOR SELF-LOG. This is expected on every run and is NOT a coverage gap."
+  if [ "$FAILED_JOBS" -gt 0 ] || [ "$HARD_ERROR" -gt 0 ] || [ "$PKG" = "BLOCKED" ]; then
+    echo "ROOT CAUSE"
+    if [ -n "$FIRST_FAIL_NAME" ]; then
+      echo "first upstream failure: job '$FIRST_FAIL_NAME' (id $FIRST_FAIL_ID, conclusion failure)"
+      [ -n "$FIRST_FAIL_ERR" ] && echo "first error: job '$FIRST_FAIL_NAME': $FIRST_FAIL_ERR"
+    fi
+    if [ "$PKG" = "BLOCKED" ]; then
+      echo "package: BLOCKED by upstream failure (${PKG_DETAIL:-no detail})"
+    fi
+    [ "$HARD_ERROR" -gt 0 ] && echo "collector hard errors: $HARD_ERROR (see ERRORS and COVERAGE)"
     echo ""
   fi
-  echo "=== COLLECTOR SELF-LOG ==="
-  echo "collector: scripts/ci/consolidate-run-log.sh (job-specific logs contract)"
-  echo "source: paginated jobs metadata + GET /repos/*/actions/jobs/{job_id}/logs per terminal job"
-  echo "note: this collector job's own GitHub-hosted step log cannot be retrieved while the run is in progress; the collector's own progress follows from its local diagnostics file."
-  echo "note: the run-attempt logs archive endpoint is intentionally NEVER called from inside a running workflow (it may 404 until the run completes)."
-  echo "token handling: bearer token sent only to the API host; signed job-log URLs fetched without credentials; https-only redirects; signed URLs never written into this report."
-  cat "$DIAG"
-  echo ""
-  echo "=== FULL LOGS (jobs-API order) ==="
-  echo ""
+  echo "COVERAGE"
+  echo "accounting: captured=$CAPTURED missing=$MISSING skipped=$NEVER_STARTED in_progress=$IN_PROGRESS self=$SELF_IN_PROGRESS total=$TOTAL_JOBS (sum=$((CAPTURED+MISSING+NEVER_STARTED+IN_PROGRESS+SELF_IN_PROGRESS)))"
+  echo "coverage: $COVERAGE_STATE"
+  [ "$SELF_IN_PROGRESS" -gt 0 ] && echo "collector self job: IN_PROGRESS_DURING_COLLECTION (expected, not a coverage gap)"
 } > "$RAW"
 
-for spec in "${JOB_SECTIONS[@]:-}"; do
-  [ -z "$spec" ] && continue
-  jname="${spec%%|*}"; rest="${spec#*|}"
-  jstatus="${rest%%|*}"; rest="${rest#*|}"
-  jconc="${rest%%|*}"; rest="${rest#*|}"
-  jid="${rest%%|*}"; state="${rest#*|}"
-  {
-    echo "===== JOB $jname (status: $jstatus, conclusion: $jconc, id: $jid) ====="
-    case "$state" in
-      CAPTURED)
-        [ -f "$WORK/job-$jid.log" ] && cat "$WORK/job-$jid.log";;
-      SKIPPED)
-        echo "(job was skipped — no log exists)";;
-      SELF)
-        echo "(the collector's own job — still in progress while this report is written; its progress is the COLLECTOR SELF-LOG above, and its GitHub-hosted step log becomes available only after the run completes)";;
-      IN_PROGRESS)
-        echo "(non-self job had no terminal state when the collector read the jobs API — coverage gap; no log collected)";;
-      MISSING*)
-        echo "(no logs recovered from the job-specific log endpoint — MISSING LOG SOURCE)";;
-    esac
-    echo ""
-  } >> "$RAW"
-done
+# Final normalization pass: strip ANSI, redact, then ASCII-normalize,
+# normalize test markers and run transform_separator_runs — the artifact
+# can never contain "===", "---" or non-ASCII bytes.
+strip_ansi_stream "$RAW" > "$WORK/final.1"
+redact_stream "$WORK/final.1" > "$WORK/final.2"
+clean_stream "$WORK/final.2" > "$OUT" || hard_fail "failed to write the normalized report to $OUT"
+[ -s "$OUT" ] || hard_fail "text report is empty"
 
-# --- redact + write the final artifact -----------------------------------
-redact_stream "$RAW" > "$OUT"
-
-# --- machine-readable run diagnostics index (run 43630164424 repair) ------
+# --- machine-readable run diagnostics index -------------------------------
 # One JSON object per run, from the SAME accounting data as the text report
-# (single source of truth): run identity, coverage totals, and every job
-# with its jobs-API status/conclusion/id and the collector's log-source
-# category (CAPTURED / SKIPPED / MISSING:* / IN_PROGRESS / SELF). Jobs-API
-# metadata only — no secrets, no signed URLs, so no redaction is needed.
+# (single source of truth). Jobs-API metadata only — no secrets, no signed
+# URLs, so no redaction is needed.
 if [ -n "$JSON_OUT" ]; then
-  : > "$WORK/jobs-diag.ndjson"
-  for spec in "${JOB_SECTIONS[@]:-}"; do
-    [ -z "$spec" ] && continue
-    jname="${spec%%|*}"; rest="${spec#*|}"
-    jstatus="${rest%%|*}"; rest="${rest#*|}"
-    jconc="${rest%%|*}"; rest="${rest#*|}"
-    jid="${rest%%|*}"; state="${rest#*|}"
-    jq -cn --arg n "$jname" --arg s "$jstatus" --arg c "$jconc" \
-      --arg i "$jid" --arg l "$state" \
-      '{name: $n, status: $s, conclusion: (if $c == "null" then null else $c end), id: $i, log_source: $l}' \
-      >> "$WORK/jobs-diag.ndjson"
-  done
-  # --slurpfile inlines the per-job NDJSON rows as the jobs array (an
-  # empty file yields []; every row was jq-escaped at write time).
   jq -n \
     --arg schema "sheytan-la/run-diagnostics/1" \
     --arg repo "$REPO" --arg run "$RUN_ID" --arg attempt "$ATTEMPT" \
@@ -608,5 +928,5 @@ if [ "$HARD_ERROR" -ne 0 ] || [ "$MISSING" -gt 0 ] || [ "$IN_PROGRESS" -gt 0 ]; 
   exit 1
 fi
 diag "verdict: OK (captured=$CAPTURED, never_started=$NEVER_STARTED, self=$SELF_IN_PROGRESS)"
-echo "consolidate-run-log: complete report ($CAPTURED jobs captured, $SELF_IN_PROGRESS self) → $OUT"
+echo "consolidate-run-log: complete report ($CAPTURED jobs captured, $SELF_IN_PROGRESS self) -> $OUT"
 exit 0

@@ -12,6 +12,24 @@ One Go process owns the entire runtime (runs, tools, sessions, memory, approvals
 
 **SHEYTAN™ is a trademark of SHEYTAN and Parsaetak · © 2024–2026 SHEYTAN and Parsaetak. All rights reserved.**
 
+> **Product stage: ALPHA.** The numeric build identifier (1.11.1) is
+> internal metadata; the user-facing identity is SHEYTAN-LA ALPHA.
+>
+> **Honest five-platform status (run-44306343338 repair candidate,
+> 2026-11-18):** the headless core suite and the release/scope contract
+> suites are verified locally on linux/amd64 (Go 1.27.4); the CI
+> topology is a single orchestrator invoking exactly five reusable
+> platform lanes. Windows x64, Linux x64, macOS (arm64/x64), Android
+> arm64 and iOS simulator lanes build in CI but **hosted execution for
+> this candidate is NOT RUN** — no push has been authorized; platform
+> test packages are produced only by lanes whose gates actually pass on
+> hosted runners. Portable archives only; there are no installers. The
+> desktop shell is the Fyne UI (49 files); the Go-Gui primary-shell
+> migration is authorized work, not shipped functionality. Known
+> platform limitations (ad-hoc macOS signing, simulator-only iOS,
+> debug-signed Android, no emulator/device smoke on hosted runners)
+> are stated by the lanes themselves, never papered over.
+
 Licensed under a conservative mixed model — Apache-2.0 for explicitly designated open components, the **Proprietary License** for SHEYTAN-specific material. The complete licensing picture lives in `LICENSE.md`.
 
 ```text

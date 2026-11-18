@@ -119,15 +119,18 @@ func TestPackagingLanesEnforceSizeCeiling(t *testing.T) {
 		t.Fatalf("%s no longer pins the production default LIMIT=100000000 — the hard ceiling must stay exact (do not raise it to make a package pass)", sizeAuditScriptPath)
 	}
 
-	w := loadWorkflowForDAG(t, dagWorkflowRelPath)
+	// The lanes now live in their single authoritative reusable files
+	// (run 44306343338 §6.2 consolidation).
+	w := readTreeFile(t, windowsLaneRelPath)
+	linW := readTreeFile(t, linuxLaneRelPath)
 
 	// Linux lane: the shared script must audit the staging tree AND the
 	// finished archive's uncompressed members.
-	linuxStep := workflowStepBody(t, w, "Payload size gate (100 MB per file)")
+	linuxStep := workflowStepBody(t, linW, "Payload size gate (100 MB per file)")
 	for _, need := range []struct{ fragment, why string }{
 		{"bash scripts/ci/package-size-audit.sh", "the Linux lane must invoke the shared fail-closed size-audit script"},
 		{`--dir "dist/linux/app/${LINUX_PKG_ROOT}"`, "the staging tree must be audited BEFORE the archive is built"},
-		{`--zip "dist/${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip"`, "every archive member's UNCOMPRESSED size must be audited AFTER the archive is built"},
+		{`tar -tzvf "dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz"`, "every archive member's UNCOMPRESSED size must be audited AFTER the archive is built"},
 		{"tee ci-logs/linux-size-audit.log", "the audit transcript must reach the consolidated run-log artifact"},
 	} {
 		if !strings.Contains(linuxStep, need.fragment) {
