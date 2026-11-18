@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/aicontext"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
@@ -70,8 +71,8 @@ func AICtx(cfg *config.Config, args []string) int {
 	}
 
 	fmt.Printf(
-		"┌─ SHEYTAN™ v%s — AI context file\n",
-		config.AppVersion,
+		"┌─ SHEYTAN™ %s — AI context file\n",
+		brand.Stage,
 	)
 
 	fmt.Printf(

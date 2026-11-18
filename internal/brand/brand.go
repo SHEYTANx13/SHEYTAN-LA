@@ -17,6 +17,16 @@ const (
 	FullName = "SHEYTAN-Local-Agent"
 	// Trademark is the brand with the ™ mark, for display surfaces.
 	Trademark = "SHEYTAN™"
+	// Stage is THE single user-facing product identity label (master
+	// engineering work order §12.1): every app title, About dialog,
+	// startup banner, help screen and package display name renders this
+	// constant instead of a numeric version. internal/config.AppVersion
+	// remains the numeric BUILD IDENTIFIER consumed by CI/packaging
+	// plumbing and support diagnostics (cmd/printversion, BUILD-INFO) —
+	// it is never rendered as user-facing branding.
+	Stage = "ALPHA"
+	// DisplayVersion is the display spelling of the product identity.
+	DisplayVersion = Stage
 	// Licensor is the legal entity that owns the copyright and license.
 	Licensor = "Parsaetak"
 	// LicensorURL is the official licensor contact point.
@@ -91,9 +101,14 @@ func SignatureLine() string {
 }
 
 // SignatureBlock returns the full signature text carried in the About
-// dialog and the SIGNATURE file of every distribution archive.
-func SignatureBlock(version string) string {
-	return "SHEYTAN-Local-Agent v" + version + "\n" +
+// dialog and the SIGNATURE file of every distribution archive. The
+// identity line carries the ALPHA product stage (master work order
+// §12.1) — the numeric build identifier lives in BUILD-INFO and
+// cmd/printversion, never in user-facing branding. The buildID argument
+// is retained so regeneration stays deterministic; it is not rendered.
+func SignatureBlock(buildID string) string {
+	_ = buildID
+	return FullName + " " + Stage + "\n" +
 		"Signed by: " + SignedBy + "\n" +
 		"Role:      " + SignedByRole + "\n" +
 		"Product:   " + FullName + " (" + Trademark + ")\n" +

@@ -584,10 +584,12 @@ func stressReleaseSurface() error {
 	// naming truth here.
 	contract := releasecontract.For(config.AppVersion)
 
+	// Master work order §10 (installer retirement): the portable ZIPs are
+	// the ONLY supported packages; every retired installer spelling is a
+	// forbidden fragment below.
 	requiredWorkflowFragments := []string{
 		contract.WindowsZipWorkflowSlot,
 		contract.LinuxZipWorkflowSlot,
-		contract.WindowsInstallerSlot,
 		// The staging directories must derive from the canonical
 		// root variables (v1.2.1), not from repeated literals.
 		releasecontract.WindowsAppDirWorkflowSlot,
@@ -608,6 +610,26 @@ func stressReleaseSurface() error {
 			return fmt.Errorf(
 				"desktop workflow missing release-package contract %q",
 				fragment,
+			)
+		}
+	}
+
+	// Master work order §10 (installer retirement): the workflow must no
+	// longer produce, reference or validate ANY installer artifact. A
+	// reappearing installer path, NSIS script or makensis invocation is a
+	// contract violation, never a supported packaging lane.
+	for _, forbidden := range []string{
+		"-windows-x64-installer.exe",
+		"packaging/nsis",
+		"makensis",
+		"Install NSIS",
+		"Build the NSIS installer",
+		"NSIS install/uninstall smoke",
+	} {
+		if strings.Contains(w, forbidden) {
+			return fmt.Errorf(
+				"desktop workflow still references the retired installer surface %q — installer production is removed (master work order §10)",
+				forbidden,
 			)
 		}
 	}
@@ -650,7 +672,6 @@ func stressReleaseSurface() error {
 		releasecontract.LauncherScript,
 		"./cmd/sheytan-local-agent",
 		"packaging/SHEYTAN-LA.bat",
-		"packaging/nsis/installer.nsi",
 	} {
 		if !strings.Contains(w, fragment) {
 			return fmt.Errorf(
@@ -825,11 +846,12 @@ func checkWorkflowArtifactAgreement(
 		)
 	}
 
-	// The three contracted artifacts must appear somewhere in the
-	// workflow's dist/ output set (any version-slot spelling counts).
+	// The two contracted artifacts must appear somewhere in the
+	// workflow's dist/ output set (any version-slot spelling counts);
+	// the installer artifact is RETIRED (master work order §10) and its
+	// reappearing shape is a stale-remnant contract violation.
 	contracted := []string{
 		contract.WindowsZipWorkflowSlot,
-		contract.WindowsInstallerSlot,
 		contract.LinuxZipWorkflowSlot,
 	}
 
@@ -854,7 +876,8 @@ func checkWorkflowArtifactAgreement(
 
 	// No stale legacy naming may survive: any dist/ artifact still
 	// carrying the retired v1.1.x Windows identity means two competing
-	// contracts exist in the tree again.
+	// contracts exist in the tree again, and any retired installer
+	// artifact means the §10 installer retirement regressed.
 	for got := range found {
 		if strings.Contains(got, "SHEYTAN-Local-Agent-Windows-x64") {
 			return fmt.Errorf(
@@ -863,11 +886,17 @@ func checkWorkflowArtifactAgreement(
 				contract.WindowsZipWorkflowSlot,
 			)
 		}
+		if strings.Contains(got, "-installer.exe") {
+			return fmt.Errorf(
+				"stale installer artifact %q still produced by the workflow — installer production is retired (master work order §10)",
+				got,
+			)
+		}
 	}
 
 	// The staging directories must match the contracted app roots via
-	// the canonical root variables: the portable ZIPs and the NSIS
-	// installer both build from them (v1.2.1 — slot spellings, so a
+	// the canonical root variables: the portable ZIP builds from them
+	// (v1.2.1 — slot spellings, so a
 	// duplicated literal no longer satisfies this check).
 	for _, slot := range []string{
 		releasecontract.WindowsAppDirWorkflowSlot,

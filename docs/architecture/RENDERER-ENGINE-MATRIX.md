@@ -1,4 +1,4 @@
-# Renderer Engine Matrix — v1.11.1
+# Renderer Engine Matrix — ALPHA
 
 > The engine catalog as CODE: `internal/renderer/registry.go` is this
 > document's authority (the gallery renders it; the tests tripwire it).
@@ -11,9 +11,9 @@
 | Engine | Version / pin | Maturity | Isolation | Runtime state in this package | Theme mapping |
 |---|---|---|---|---|---|
 | **Fyne** (the production shell) | fyne.io/fyne/v2 v2.8.2 | **production** | in-process | **ready** — the running shell | **full** — every token role maps (`ui/fyne/theme.go`) |
-| **Go-Gui** | github.com/go-gui-org/go-gui v0.96.0 (immutable tag `6f2d4e1…`, checksum-verified) | preview | companion-window | not built — POC in `experiments/ui-engine-poc/go-gui` (10/10 headless tests; responsive matrix) | partial — designed (`docs/ui/DESIGN-SYSTEM.md`), wired only in the POC |
-| **GoGPU UI** | POC pin per `experiments/ui-engine-poc/gogpu/go.mod` (gogpu v0.54.1) | experimental | companion-window | not built — POC in `experiments/ui-engine-poc/gogpu` (2/2 tests; software-rendered spectrum) | partial — upstream documents 4 theme systems; SHEYTAN mapping designed, unwired |
-| **Wails Web Workspace** | github.com/wailsapp/wails/v3 **v3.0.0** (stable, 2026-10-26, proxy-verified) | experimental | companion-window | not built — POC in `experiments/ui-engine-poc/wails-webview` (bridge/security/feature suites green; the WebView window itself is `wails_runtime`-tagged) | partial — tokens serialize to CSS via `internal/theme`'s JSON form; designed, unwired |
+| **Go-Gui** | github.com/go-gui-org/go-gui v0.96.0 (immutable tag `6f2d4e1…`, checksum-verified; latest stable on the module proxy 2026-11-13) | preview | companion-window | not built — POC in `experiments/ui-engine-poc/go-gui` (10/10 headless tests; responsive matrix) | partial — designed (`docs/ui/DESIGN-SYSTEM.md`), wired only in the POC |
+| **GoGPU UI** | POC pin per `experiments/ui-engine-poc/gogpu/go.mod` (gogpu v0.54.1; latest stable on the module proxy 2026-11-08, gogpu/ui v0.1.55) | experimental | companion-window | not built — POC in `experiments/ui-engine-poc/gogpu` (2/2 tests; software-rendered spectrum) | partial — upstream documents 4 theme systems; SHEYTAN mapping designed, unwired |
+| **Wails Web Workspace** | github.com/wailsapp/wails/v3 **v3.1.0** (stable, 2026-11-01, proxy-verified 2026-11-17 — the newest non-prerelease stable tag per the master work order §4.4) | experimental | companion-window | not built — POC in `experiments/ui-engine-poc/wails-webview` (bridge/security/feature suites green; the WebView window itself is `wails_runtime`-tagged) | partial — tokens serialize to CSS via `internal/theme`'s JSON form; designed, unwired |
 
 ## 2. Platform verification status (never inflated)
 

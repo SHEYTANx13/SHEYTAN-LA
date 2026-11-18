@@ -67,6 +67,41 @@ type MemoryAvailable struct {
 	VRAMBytes         int64 `json:"vramBytes,omitempty"`
 }
 
+// Stable machine-readable refusal codes (master engineering work order
+// §3.2.5): every blocked action returns a STRUCTURED reason and next
+// action, and every distinct failure class has its own code so the UI can
+// route deterministically (setup card, guided model selection, resource
+// panel) instead of parsing prose. The prose Reasons stay authoritative
+// for humans; Code is authoritative for control flow.
+type Code string
+
+const (
+	// CodeModelNotSelected: no model is chosen at all — the guided
+	// first-run model-selection/download state, not a chat failure.
+	CodeModelNotSelected Code = "MODEL_NOT_SELECTED"
+	// CodeModelFileMissing: a model is selected but its file cannot be
+	// opened — distinct from an empty selection.
+	CodeModelFileMissing Code = "MODEL_FILE_MISSING"
+	// CodeBackendUnavailable: the selected backend's engine/binary is
+	// missing or failed to initialize.
+	CodeBackendUnavailable Code = "BACKEND_UNAVAILABLE"
+	// CodeUnsupportedBackend: the backend exists but cannot execute this
+	// model (architecture family, capability gate).
+	CodeUnsupportedBackend Code = "UNSUPPORTED_BACKEND"
+	// CodeContextExceedsModel: the requested context exceeds the model's
+	// own limit.
+	CodeContextExceedsModel Code = "CONTEXT_EXCEEDS_MODEL"
+	// CodeInsufficientResources: the estimated footprint exceeds the
+	// machine's total memory.
+	CodeInsufficientResources Code = "INSUFFICIENT_RESOURCES"
+	// CodeInsufficientResourcesNow: the footprint fits in TOTAL memory
+	// but not in what is available RIGHT NOW.
+	CodeInsufficientResourcesNow Code = "INSUFFICIENT_RESOURCES_NOW"
+	// CodeCapabilityMismatch: the run requires a capability the model
+	// lacks (vision/multimodal).
+	CodeCapabilityMismatch Code = "CAPABILITY_MISMATCH"
+)
+
 // Report is the ONE pre-run verdict. The same object serves the run-start
 // gate, the API, the UI and logs.
 type Report struct {
@@ -79,6 +114,13 @@ type Report struct {
 	// Reasons lists the user-facing evidence for the verdict, most
 	// specific first. Empty only for SeverityOK.
 	Reasons []string `json:"reasons,omitempty"`
+
+	// Code is the stable machine-readable refusal class (see the Code
+	// constants): distinct for empty model, missing model file,
+	// missing engine, unsupported backend/model, insufficient
+	// resources (total and current) and capability mismatch. Empty
+	// when Compatible.
+	Code Code `json:"code,omitempty"`
 
 	// Requirements/Available carry the numbers behind the verdict.
 	Requirements MemoryRequirements `json:"requirements"`
@@ -139,12 +181,20 @@ func Evaluate(in Input) Report {
 		report.Backend = in.Backend
 	}
 
-	fail := func(reason, action string) {
+	fail := func(code Code, reason, action string) {
 		report.Compatible = false
 		report.Severity = SeverityIncompatible
+		report.Code = code
 		report.Reasons = append(report.Reasons, reason)
 		report.RecommendedAction = action
 	}
+
+	// NOTE: model-file existence is NOT checked here — Evaluate is the
+	// PURE fit layer (no I/O, no re-probes). A selected model whose
+	// file cannot be resolved is refused by the Stack gate
+	// (internal/runtime PreflightReport through llm.ResolveModelPath)
+	// with the distinct CodeModelFileMissing code (master work order
+	// §3.2.5): the path-resolution authority lives in ONE place.
 
 	// ---- 1. Backend availability (hard gate) ----------------------------
 	if !in.BackendAvailable {
@@ -152,7 +202,8 @@ func Evaluate(in Input) Report {
 		if in.BackendUnavailableReason != "" {
 			reason += ": " + in.BackendUnavailableReason
 		}
-		fail(reason, "select an available backend (llama.cpp CPU, Vulkan where supported, or the Native Engine when enabled)")
+		fail(CodeBackendUnavailable, reason,
+			"select an available backend (llama.cpp CPU, Vulkan where supported, or the Native Engine when enabled)")
 		return finalize(report, in)
 	}
 
@@ -163,14 +214,16 @@ func Evaluate(in Input) Report {
 			if in.Caps.NativeReason != "" {
 				reason += ": " + in.Caps.NativeReason
 			}
-			fail(reason, "use a llama.cpp backend for this model")
+			fail(CodeUnsupportedBackend, reason,
+				"use a llama.cpp backend for this model")
 			return finalize(report, in)
 		}
 	} else if in.Caps != nil && in.Caps.Arch != "" {
 		if ok, why := llm.NativeArchitectureSupport(in.Caps.Arch); !ok {
 			// The llama.cpp graph family check: a model outside the
 			// executable family will fail at load time.
-			fail("llama.cpp cannot execute this model architecture: "+why,
+			fail(CodeUnsupportedBackend,
+				"llama.cpp cannot execute this model architecture: "+why,
 				"choose a model from a supported architecture family")
 			return finalize(report, in)
 		}
@@ -182,8 +235,9 @@ func Evaluate(in Input) Report {
 		requested = in.SessionContext
 	}
 	if in.Caps != nil && in.Caps.ContextLength > 0 && requested > in.Caps.ContextLength {
-		fail(fmt.Sprintf("requested context %d exceeds the model's own limit %d",
-			requested, in.Caps.ContextLength),
+		fail(CodeContextExceedsModel,
+			fmt.Sprintf("requested context %d exceeds the model's own limit %d",
+				requested, in.Caps.ContextLength),
 			fmt.Sprintf("reduce the context to %d or lower", in.Caps.ContextLength))
 		return finalize(report, in)
 	}
@@ -226,8 +280,9 @@ func Evaluate(in Input) Report {
 
 	switch assessment.Class {
 	case llm.ResourceUnsupported:
-		fail("estimated memory footprint "+humanBytes(assessment.EstimatedTotalBytes)+
-			" exceeds this machine's memory: "+assessment.Reason,
+		fail(CodeInsufficientResources,
+			"estimated memory footprint "+humanBytes(assessment.EstimatedTotalBytes)+
+				" exceeds this machine's memory: "+assessment.Reason,
 			"reduce the context size, use a smaller quantization, or choose a smaller model")
 		return finalize(report, in)
 
@@ -245,8 +300,9 @@ func Evaluate(in Input) Report {
 		needed := float64(assessment.EstimatedTotalBytes)
 		if needed > available {
 			// Mandatory requirement not satisfiable RIGHT NOW.
-			fail(fmt.Sprintf("estimated %s exceeds currently available memory %s — starting would push the machine into swap or OOM",
-				humanBytes(int64(needed)), humanBytes(int64(available))),
+			fail(CodeInsufficientResourcesNow,
+				fmt.Sprintf("estimated %s exceeds currently available memory %s — starting would push the machine into swap or OOM",
+					humanBytes(int64(needed)), humanBytes(int64(available))),
 				"free memory (close other workloads), reduce the context, or select a smaller model")
 			return finalize(report, in)
 		}
@@ -271,7 +327,8 @@ func Evaluate(in Input) Report {
 
 	// ---- 6. Capability requirements ---------------------------------------
 	if in.VisionRequired && in.Caps != nil && !in.Caps.Multimodal {
-		fail("the request requires vision support and this model has no multimodal projector",
+		fail(CodeCapabilityMismatch,
+			"the request requires vision support and this model has no multimodal projector",
 			"attach the request to a vision-capable model or remove the image input")
 		return finalize(report, in)
 	}

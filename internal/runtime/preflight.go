@@ -45,8 +45,38 @@ func (s *Stack) PreflightReport(requestedContext int) preflight.Report {
 			Backend:           "llama.cpp-cpu",
 			Compatible:        false,
 			Severity:          preflight.SeverityIncompatible,
+			Code:              preflight.CodeModelNotSelected,
 			Reasons:           []string{"no model is selected"},
 			RecommendedAction: "choose a model in the Model Selector first",
+		}
+	}
+
+	// Model-file existence: the ONE path-resolution authority
+	// (llm.ResolveModelPath — absolute path → exact → substring → fuzzy
+	// against the models dir). A selected model whose file cannot be
+	// resolved is a DIFFERENT failure class from an empty selection
+	// (master work order §3.2.5): broken path/missing download vs guided
+	// first-run setup. Evaluate stays the pure fit layer.
+	//
+	// NOTE: modelPath itself stays the RAW config identity below — the
+	// existing authorities (ResolveModelCapabilities, the engine spawn
+	// path) receive exactly what they received before this gate existed;
+	// the resolution here is the existence/resolve check only. Feeding
+	// the resolved path into the capability authority instead CHANGED
+	// verdicts (the gemma3n e2e fixture flipped from compatible to
+	// UNSUPPORTED_BACKEND because caps became readable from the resolved
+	// path while the bare name left them unknown) — that behavior change
+	// belongs to a deliberate architecture-gate decision, not to the
+	// §3.2.5 refusal-code work.
+	if _, resolveErr := llm.ResolveModelPath(cfg.ModelsDir, cfg.Model); resolveErr != nil {
+		return preflight.Report{
+			Model:             modelPath,
+			Backend:           "llama.cpp-cpu",
+			Compatible:        false,
+			Severity:          preflight.SeverityIncompatible,
+			Code:              preflight.CodeModelFileMissing,
+			Reasons:           []string{"the selected model file cannot be resolved: " + resolveErr.Error()},
+			RecommendedAction: "re-select the model file or download the model again (Models → Downloads)",
 		}
 	}
 

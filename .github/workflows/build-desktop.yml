@@ -40,7 +40,8 @@
 #                  SHEYTAN-LA.exe, the named-pipe CoreClient integration
 #                  gate (the REAL production client over localipc.Serve),
 #                  PE verification, the IPC-aware launch smoke, portable
-#                  ZIP + NSIS installer. Own checkout/setup.
+#                  ZIP (installers are retired — master work order §10).
+#                  Own checkout/setup.
 #   Linux x64      INDEPENDENT native Linux build of SHEYTAN-LA (executable
 #                  bit), ELF verification, compiled-version cross-check,
 #                  Xvfb launch smoke, portable ZIP. Own checkout/setup.
@@ -699,7 +700,8 @@ jobs:
 
   # ==========================================================================
   # Windows x64 — the native build of SHEYTAN-LA.exe (MSYS2 UCRT64 CGO for
-  # Fyne), PE verification, launch smoke, portable ZIP + NSIS installer.
+  # Fyne), PE verification, launch smoke, portable ZIP (the ONE supported
+  # package; installer production is retired — master work order §10).
   # ==========================================================================
   build-windows:
     name: Windows x64
@@ -963,14 +965,15 @@ jobs:
           go run ./scripts/gen-syso
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::gen-syso failed (exit $LASTEXITCODE) — the Windows resource pipeline (icon + version + DPI manifest) could not be generated"; throw "gen-syso failed" }
 
-      # v1.11.1 MINIMAL INSTALLED ROOT (operator request): the installed
+      # v1.11.1 MINIMAL INSTALLED ROOT (operator request): the portable
       # application directory carries ONLY the runtime-required items —
-      # the executable, the launcher, Uninstall.exe (installer-managed)
-      # and the canonical data/ tree. Every STATIC file (license, install
-      # README, build manifest, signature, brand icon) is consolidated
-      # under resources/docs and resources/brand — one obvious folder per
-      # class, one payload authority (the ZIP, the installer and the
-      # generated uninstall manifest all consume THIS staging tree).
+      # the executable, the launcher and the canonical data/ tree. Every
+      # STATIC file (license, install README, build manifest, signature,
+      # brand icon) is consolidated under resources/docs and
+      # resources/brand — one obvious folder per class, one payload
+      # authority (the portable ZIP — the ONE supported package since the
+      # installer retirement, master work order §10 — consumes THIS
+      # staging tree).
       # The historical root-level models/ and workspace/ placeholder
       # directories are RETIRED from the shipped payload: the canonical
       # data root is <AppRoot>\data (the runtime's one-time
@@ -1013,7 +1016,7 @@ jobs:
       # (<AppRoot>\data: app.log, crash reports) is written beside the
       # exe it actually launches — so the smoke launches from a full copy
       # under RUNNER_TEMP and the staging tree stays pristine for the ZIP
-      # and NSIS steps that follow.
+      # packaging step that follows.
       # Software GL for the GPU-less hosted runner (run #117 root
       # hypothesis: windows-latest reports only a Basic Display Adapter,
       # software GL 1.1 / WARP Direct3D-only, so GLFW cannot create a
@@ -1156,27 +1159,17 @@ jobs:
         run: |
           ./scripts/ci/ImportAudit.Tests.ps1
 
-      # v1.11.1 (run 42502043636 work order §3.3 item 6): the package gate
-      # decision contract is pinned by deterministic local fixtures BEFORE
-      # the real gate depends on it — all six package states (both missing,
-      # ZIP-only, installer-only, empty ZIP, empty installer, both valid)
-      # plus the exclusivity of the "package gate: reached" success line.
+      # v1.11.1 (run 42502043636 work order §3.3 item 6) + master work
+      # order §10: the package gate decision contract is pinned by
+      # deterministic local fixtures BEFORE the real gate depends on it —
+      # the portable-ZIP truth table (missing / empty / corrupt / bad
+      # root / missing entries / forbidden entries / installer remnant /
+      # dependency closure / upstream-blocked) plus the exclusivity of
+      # the "package gate: reached" success line.
       - name: Package gate fixture contract
         run: |
           ./scripts/ci/PackageGate.Tests.ps1
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::package gate fixture contract violated (exit $LASTEXITCODE) — the fail-closed gate truth table drifted"; throw "package gate fixture contract violated (exit $LASTEXITCODE)" }
-
-      # v1.11.1 (run 43883548198 repair): the NSIS version-gate decision
-      # contract is pinned by deterministic local fixtures BEFORE the real
-      # gate depends on it — the SAME Get-NsisVersionVerdict function the
-      # "Install NSIS" step runs, exercised with the accepted spellings
-      # (v3.13 / 3.13 / v3.13.0 / 3.13.0 / 3.13.1 / the Out-String newline)
-      # and the fail-closed matrix (3.12 / v3.12.9 / 3.130 / 3.14 / v4.0 /
-      # v3.13-preview / empty / whitespace-only / multiline / nonzero exit).
-      - name: NSIS version gate fixture contract
-        run: |
-          ./scripts/ci/NsisVersion.Tests.ps1
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::NSIS version gate fixture contract violated (exit $LASTEXITCODE) — the version parser semantics drifted"; throw "NSIS version gate fixture contract violated (exit $LASTEXITCODE)" }
 
       # Pre-launch dependency audit (run #119): 0xC0000135 is raised by
       # the Windows loader while resolving the STATIC import chain at
@@ -1617,8 +1610,8 @@ jobs:
 
       # v1.11.1 maintenance (run 43718750096 work order §7.3): the hard
       # 100,000,000-byte per-file payload ceiling, enforced on the
-      # STAGING TREE before the ZIP/installer are built (the NSIS payload
-      # and the portable ZIP both materialize from exactly this tree)
+      # STAGING TREE before the portable ZIP is built (the ZIP
+      # materializes from exactly this tree)
       # and again on the finished archive's UNCOMPRESSED members in the
       # verify step below. Optional oversized assets (model weights,
       # engine archives, backend runtime bundles) belong to the in-app
@@ -1745,360 +1738,23 @@ jobs:
             Write-Host "ZIP OK: all contracted entries present; purity assertions passed (no data/ residue, no opengl32.dll, no libgallium_wgl.dll, no root-level models/workspace placeholders)"
           } finally { $archive.Dispose() }
 
-      # NSIS installer: ONE Go executable payload — no Qt runtime, no
-      # second UI binary. payload-uninstall.nsh is generated from the
-      # staged tree (uninstall symmetry).
-      - name: Install NSIS
-        run: |
-          # v1.11.1 maintenance: NSIS pinned to the verified upstream
-          # stable release 3.13 (2026-09-27; Chocolatey package 3.13.0
-          # maps to it — verified on community.chocolatey.org and
-          # github.com/nsis-dev/nsis/releases/tag/v313). The actual
-          # makensis version is recorded in the log below and in
-          # ci-logs/win-nsis-version.log.
-          choco install nsis --version=3.13.0 -y --no-progress
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::NSIS 3.13.0 install failed (choco exit $LASTEXITCODE) — the installer job cannot build"; throw "NSIS install failed" }
-          $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
-          if (-not (Test-Path -LiteralPath $makensis)) { Write-Host "::error::makensis not found at $makensis after the NSIS install"; throw "makensis missing" }
-          # run 43883548198 repair: makensis 3.13 prints /VERSION as "v3.13"
-          # (leading v, no patch). The retired "^3\.13" prefix predicate
-          # rejected that VALID output and stopped this job — the package
-          # gate's "installer missing while portable ZIP exists" message
-          # downstream was the consequence, not a second packaging defect.
-          # The strict gate now lives in scripts/ci/NsisVersion.ps1 and is
-          # shared with its fixture test (NsisVersion.Tests.ps1): anchored
-          # ^v?3\.13(\.\d+)?$ on the trimmed output plus a zero process
-          # exit — 3.12 / v3.12.9 / 3.130 / 3.14 / v4.0 / v3.13-preview /
-          # empty / multiline garbage / nonzero exit all fail closed.
-          $nsisVersionRaw = (& $makensis "/VERSION" 2>&1 | Out-String)
-          $nsisExit = $LASTEXITCODE
-          Write-Host "makensis /VERSION (raw, exit $nsisExit): $($nsisVersionRaw.Trim())"
-          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
-          "makensis=$makensis exit=$nsisExit raw=$($nsisVersionRaw.Trim())" | Add-Content -Path ci-logs/win-nsis-version.log -Encoding utf8NoBOM
-          . ./scripts/ci/NsisVersion.ps1
-          $verdict = Get-NsisVersionVerdict -RawOutput $nsisVersionRaw -ExitCode $nsisExit
-          if (-not $verdict.Accepted) {
-            Write-Host ("::error::NSIS version gate FAILED: executable={0} exit={1} raw='{2}' reason={3} — want the pinned 3.13 line (an optional leading v or a missing patch is valid)" -f $makensis, $nsisExit, $verdict.Normalized, $verdict.Reason)
-            throw ("NSIS version mismatch: '{0}' ({1})" -f $verdict.Normalized, $verdict.Reason)
-          }
-          Write-Host ("NSIS version gate OK: executable={0} normalized='{1}' (the pinned 3.13 line)" -f $makensis, $verdict.Normalized)
-
-      - name: Generate payload-uninstall.nsh (uninstall symmetry)
-        run: |
-          $root = "dist/windows/app/${{ env.WIN_PKG_ROOT }}"
-          $lines = @('!define SHEYTAN_PAYLOAD_UNINSTALL', '!macro SHEYTAN_PAYLOAD_UNINSTALL_FILES')
-          # Uninstall symmetry is generated from the PRISTINE staging tree
-          # (the smoke runs from the RUNNER_TEMP copy). Assert it: data
-          # residue or either Mesa DLL here means the smoke leaked upstream.
-          $payloadFiles = @(Get-ChildItem -Recurse -File $root)
-          if ($payloadFiles.Count -eq 0) { Write-Host "::error::payload generator guard: staging root has no files at $root"; throw "staging root has no files: $root" }
-          foreach ($f in $payloadFiles) {
-            $rel = $f.FullName.Substring((Resolve-Path $root).Path.Length + 1)
-            if ($rel -like "data\*" -or $rel -eq "opengl32.dll" -or $rel -eq "libgallium_wgl.dll") {
-              Write-Host ("::error::payload generator guard: pristine-payload violation — staging tree contains '{0}'; the smoke must never write into dist/windows/app" -f $rel)
-              throw ("pristine-payload violation: staging tree contains '{0}'" -f $rel)
-            }
-          }
-          foreach ($f in $payloadFiles) {
-            $rel = $f.FullName.Substring((Resolve-Path $root).Path.Length + 1)
-            $lines += "  Delete `"`$INSTDIR\$rel`""
-          }
-          $dirs = Get-ChildItem -Recurse -Directory $root | Sort-Object { $_.FullName.Length } -Descending
-          foreach ($d in $dirs) {
-            $rel = $d.FullName.Substring((Resolve-Path $root).Path.Length + 1)
-            $lines += "  RMDir `"`$INSTDIR\$rel`""
-          }
-          # Run #124 root cause: the terminator emitted here was the
-          # non-NSIS endmacro token, so the generated macro opened and was
-          # never closed — makensis aborted on the include with
-          # "unterminated (no !macroend found in file)". NSIS closes macros
-          # with exactly '!macroend'.
-          $lines += '!macroend'
-          Set-Content -Path "packaging/nsis/payload-uninstall.nsh" -Value ($lines -join "`r`n")
-
-          # Run #124 post-write validation: that failure was fully
-          # deterministic at generation time, so validate the actual file
-          # HERE — before makensis reads it — with a titled ::error per
-          # failed invariant (one-look diagnosability, same class as every
-          # other custom Windows step).
-          $gen = "packaging/nsis/payload-uninstall.nsh"
-          if (-not (Test-Path -LiteralPath $gen) -or ((Get-Item -LiteralPath $gen).Length -eq 0)) {
-            Write-Host "::error::payload-uninstall validation: generated include missing or empty at $gen — the uninstall-symmetry macro cannot be included"
-            throw "payload-uninstall validation failed: missing or empty generated include: $gen"
-          }
-          $genLines = @(Get-Content -LiteralPath $gen | Where-Object { $_.Trim().Length -gt 0 })
-          if ($genLines.Count -lt 4) {
-            Write-Host "::error::payload-uninstall validation: only $($genLines.Count) non-empty directives in $gen — the guard-define + macro + Delete body + closing macroend structure is incomplete"
-            throw "payload-uninstall validation failed: incomplete generated include: $gen"
-          }
-          $first = $genLines[0].Trim()
-          $second = $genLines[1].Trim()
-          if ($first -ne '!define SHEYTAN_PAYLOAD_UNINSTALL' -or $second -ne '!macro SHEYTAN_PAYLOAD_UNINSTALL_FILES') {
-            Write-Host "::error::payload-uninstall validation: opening directives are '$first' / '$second' in $gen — expected the guard define '!define SHEYTAN_PAYLOAD_UNINSTALL' then the macro '!macro SHEYTAN_PAYLOAD_UNINSTALL_FILES'"
-            throw "payload-uninstall validation failed: unexpected opening directives in $gen"
-          }
-          $last = $genLines[-1].Trim()
-          if ($last -ne '!macroend') {
-            Write-Host "::error::payload-uninstall validation: final non-empty directive is '$last' in $gen — NSIS closes macros with exactly '!macroend'; any other terminator leaves the macro unterminated (run #124 failed hosted with 'unterminated (no !macroend found in file)')"
-            throw "payload-uninstall validation failed: macro not closed by the macroend directive in $gen"
-          }
-          $macroOpens = @($genLines | Where-Object { $_.Trim() -like '!macro *' }).Count
-          $macroCloses = @($genLines | Where-Object { $_.Trim() -eq '!macroend' }).Count
-          if ($macroOpens -ne 1 -or $macroCloses -ne 1) {
-            Write-Host "::error::payload-uninstall validation: macro directives unbalanced (open=$macroOpens close=$macroCloses) in $gen — exactly one !macro and one closing macroend are expected"
-            throw "payload-uninstall validation failed: unbalanced macro directives in $gen"
-          }
-          $deleteCount = @($genLines | Where-Object { $_.Trim() -like 'Delete *' }).Count
-          if ($deleteCount -lt 1) {
-            Write-Host "::error::payload-uninstall validation: no generated Delete commands in $gen — the uninstaller would remove nothing"
-            throw "payload-uninstall validation failed: no Delete commands in $gen"
-          }
-          Write-Host "payload-uninstall.nsh validated: guard define + macro open, $deleteCount Delete lines, exactly one closing macroend"
-          Write-Host "payload-uninstall.nsh generated"
-
-      - name: Build the NSIS installer
-        run: |
-          # Script: packaging/nsis/installer.nsi — makensis receives the
-          # ABSOLUTE resolved script path. Run #125 lesson (reproduced and
-          # fixed on real makensis 3.11): a relative script path makes NSIS's
-          # ${__FILEDIR__} predefine RELATIVE too, and the script-directory
-          # generated include in installer.nsi then misses (warning 7000) —
-          # so the script path gets the same absolute-path discipline the
-          # v1.2.0 path contract already applies to BUILDDIR/OUTFILE.
-          # -V4: the payload-uninstall marker is emitted with !echo, and
-          # makensis prints !echo output ONLY at verbosity 4 ("all output").
-          # At the default verbosity the marker NEVER reaches this tee'd
-          # log and the assertion below could never pass — the second
-          # stacked run #125 defect, found by the local 3.11 reproduction.
-          # Run #122 lesson: the red was NAMED but not RETRIEVABLE — the
-          # makensis transcript existed only in the auth-gated step log.
-          # Every makensis line is now teed into ci-logs/win-nsis-build.log
-          # (retrievable in the consolidated run-log artifact), and the
-          # payload-uninstall include marker is asserted in that teed log
-          # after the build, with a titled ::error on absence.
-          $nsi = "packaging/nsis/installer.nsi"
-          $nsiAbs = (Resolve-Path $nsi).Path
-          $stage = Join-Path (Resolve-Path "dist/windows/app/${{ env.WIN_PKG_ROOT }}") ""
-          New-Item -ItemType Directory -Force -Path "ci-logs" | Out-Null
-          $nsisLog = "ci-logs/win-nsis-build.log"
-          & "C:\Program Files (x86)\NSIS\makensis.exe" "-V4" "-DVERSION=${{ env.APP_VERSION }}" "-DEXE=SHEYTAN-LA.exe" "-DBUILDDIR=$stage" "-DOUTFILE=$(Resolve-Path dist)\${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe" "$nsiAbs" 2>&1 | Tee-Object -FilePath $nsisLog
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::makensis failed (exit $LASTEXITCODE) — packaging/nsis/installer.nsi build log above; full transcript teed to $nsisLog"; throw "makensis failed" }
-          # Transcript contract (run #125): the teed log must show the
-          # script was actually processed, the payload-uninstall marker
-          # was emitted, and the installer was written — three greps, one
-          # look, each with a titled ::error.
-          if (-not (Select-String -LiteralPath $nsisLog -Pattern 'Processing script file' -SimpleMatch)) { Write-Host "::error::NSIS transcript contract: 'Processing script file' NOT found in $nsisLog — makensis never opened the installer script"; throw "NSIS transcript contract: installer script never processed" }
-          # Marker contract (documented in installer.nsi itself): when the
-          # generated payload-uninstall list is included, the nsi emits
-          # "sheytan: payload uninstall list included" into the makensis
-          # output. Run #122 shipped without this being enforced. Absent
-          # marker → the uninstaller would silently skip the generated
-          # payload list (uninstall symmetry broken even on a green build).
-          $marker = Select-String -LiteralPath $nsisLog -Pattern 'sheytan: payload uninstall list included' -SimpleMatch
-          if (-not $marker) { Write-Host "::error::NSIS marker contract: 'sheytan: payload uninstall list included' NOT found in $nsisLog — payload-uninstall.nsh was not included; the uninstaller would not remove the staged payload"; throw "NSIS payload-uninstall marker missing from makensis log" }
-          if (-not (Select-String -LiteralPath $nsisLog -Pattern 'Output:' -SimpleMatch)) { Write-Host "::error::NSIS transcript contract: 'Output:' NOT found in $nsisLog — makensis reported success but never wrote the installer"; throw "NSIS transcript contract: installer output not written" }
-          Write-Host "NSIS marker contract: payload uninstall list included (verified in $nsisLog)"
-
-      - name: Verify the installer exists
-        run: |
-          $inst = "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe"
-          if (-not (Test-Path $inst)) { Write-Host "::error::installer guard: installer missing at $inst (makensis reported success)"; throw "installer missing: $inst" }
-          $size = (Get-Item $inst).Length
-          if ($size -lt 1MB) { Write-Host "::error::installer guard: installer suspiciously small: $size bytes at $inst"; throw "installer suspiciously small: $size bytes" }
-          # v1.11.1 (run 42502043636 work order §3.3 item 6): installer PE
-          # identity is VALIDATED, never inferred from the .exe suffix. NSIS
-          # 3.x installer stubs are 32-bit PEs even when the payload they
-          # install is x64-only, so the machine type is accepted as i386
-          # (0x014C) or x86-64 (0x8664); the PAYLOAD's x64 identity is
-          # enforced separately by "Verify the PE" on SHEYTAN-LA.exe, and
-          # the installer's NSIS identity by the marker contract + the real
-          # install/uninstall round-trip below.
-          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path $inst))
-          if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { Write-Host "::error::installer guard: $inst is not a PE binary (missing MZ header)"; throw "installer is not a PE binary (missing MZ)" }
-          $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
-          if ($bytes[$peOffset] -ne 0x50 -or $bytes[$peOffset + 1] -ne 0x45) { Write-Host "::error::installer guard: PE signature missing in $inst (peOffset=$peOffset)"; throw "installer PE signature missing" }
-          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
-          if ($machine -ne 0x014C -and $machine -ne 0x8664) { Write-Host ("::error::installer guard: PE machine = 0x{0:X4}, want i386 (0x014C, NSIS stub) or x86-64 (0x8664) in {1}" -f $machine, $inst); throw ("installer PE machine = 0x{0:X4}, want i386 or x86-64" -f $machine) }
-          Write-Host ("installer PE OK (machine = 0x{0:X4}; NSIS 3.x stubs are i386, payload x64 enforced on SHEYTAN-LA.exe)" -f $machine)
-          Write-Host "installer OK ($size bytes)"
-
-      # ----------------------------------------------------------------------
-      # REAL installer round-trip proof (run #125 mandate — the portable
-      # launch smoke never proved installation): silently install the
-      # ACTUAL compiled installer into a unique isolated path under
-      # RUNNER_TEMP, verify the installed payload + registration, seed
-      # user-data sentinels, silently uninstall, then prove BOTH payload
-      # removal AND data preservation. NSIS silent CLI (Chapter 3 docs):
-      # /S with a FINAL /D=<path> (last parameter, unquoted, no spaces);
-      # silent uninstall: Uninstall.exe /S with a FINAL _?=<path> (runs in
-      # place, does not self-delete, lets the caller wait for the exit
-      # code). https://nsis.sourceforge.io/Docs/Chapter3.html
-      # Every failure emits a titled ::error naming the stage and the
-      # transcript; the transcript reaches the consolidated run-log on red
-      # AND green (the run-attempt log collector runs with if: always()).
-      # Cleanup is strictly
-      # bounded to the unique GUID-named directory under RUNNER_TEMP.
-      # ----------------------------------------------------------------------
-      - name: "NSIS install/uninstall smoke (payload symmetry + data preservation)"
-        run: |
-          $ErrorActionPreference = "Stop"
-          $log = "ci-logs/win-nsis-install-uninstall-smoke.log"
-          New-Item -ItemType Directory -Force -Path "ci-logs" | Out-Null
-          Start-Transcript -Path $log -Force | Out-Null
-          $base = Join-Path $env:RUNNER_TEMP ("nsis-smoke-" + [guid]::NewGuid().ToString("N"))
-          $instDir = Join-Path $base "app"
-          $externalData = Join-Path $base "external-data"
-          $installer = (Resolve-Path "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe").Path
-          $stage = "dist/windows/app/${env:WIN_PKG_ROOT}"
-          $stageRoot = (Resolve-Path $stage).Path
-          function Fail([string]$Stage, [string]$Msg) {
-            Write-Host ("::error::NSIS install/uninstall smoke ({0}): {1} — full transcript teed to ci-logs/win-nsis-install-uninstall-smoke.log" -f $Stage, $Msg)
-            throw ("[{0}] {1}" -f $Stage, $Msg)
-          }
-          try {
-            Write-Host "smoke root: $base"
-            Write-Host "installer: $installer"
-            # Purity snapshot: the smoke must not touch the staging tree.
-            $stageFilesBefore = @(Get-ChildItem -Recurse -File $stageRoot | ForEach-Object { $_.FullName.Substring($stageRoot.Length + 1) } | Sort-Object)
-
-            # --- 1. silent install into the isolated path (/D last, unquoted, no spaces) ---
-            $proc = Start-Process -FilePath $installer -ArgumentList @("/S", "/D=$instDir") -PassThru
-            if (-not $proc.WaitForExit(180000)) { Fail "install" "installer did not exit within 180s" }
-            if ($proc.ExitCode -ne 0) { Fail "install" "installer exit code $($proc.ExitCode) (expected 0)" }
-
-            # --- 2. installed payload = the staged tree (+ Uninstall.exe) ---
-            # v1.11.1 minimal root: the executable + launcher stay at the
-            # root; every static file lives under resources\docs and
-            # resources\brand; Uninstall.exe is written by the installer.
-            $required = @(
-              "SHEYTAN-LA.exe",
-              "SHEYTAN-LA.bat",
-              "resources/docs/README.txt",
-              "resources/docs/BUILD-INFO.txt",
-              "resources/docs/LICENSE.md",
-              "resources/brand/sheytan.ico",
-              "Uninstall.exe"
-            )
-            if (Test-Path (Join-Path $stageRoot "resources/docs/SIGNATURE")) { $required += "resources/docs/SIGNATURE" }
-            foreach ($rel in $required) {
-              $p = Join-Path $instDir ($rel -replace '/', '\')
-              if (-not (Test-Path -LiteralPath $p)) { Fail "install-payload" "installed payload missing: $rel" }
-              if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { Fail "install-payload" "installed payload is not a file: $rel" }
-              if ((Get-Item -LiteralPath $p).Length -le 0) { Fail "install-payload" "installed payload file is empty: $rel" }
-              Write-Host "installed OK: $rel"
-            }
-            # v1.11.1 minimal-root proof: the installer must NOT create the
-            # retired root-level placeholder directories (they are no
-            # longer shipped payload; user-created legacy roots are still
-            # preserved on uninstall — proven by the sentinels below).
-            foreach ($retired in @("models", "workspace")) {
-              if (Test-Path -LiteralPath (Join-Path $instDir $retired)) { Fail "install-payload" "retired root-level placeholder directory was created by the installer: $retired" }
-            }
-            Write-Host "minimal installed root OK: no root-level models/workspace placeholders"
-
-            # --- 3. registration: ARP entry (either registry view), AUMID, Start Menu + desktop shortcuts ---
-            $arpViews = @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\SHEYTAN-LA", "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\SHEYTAN-LA")
-            $arp = @($arpViews | Where-Object { Test-Path $_ })
-            if ($arp.Count -eq 0) { Fail "install-registration" "Add/Remove Programs entry not found in any registry view: $($arpViews -join ' | ')" }
-            foreach ($k in $arp) {
-              $v = Get-ItemProperty -Path $k
-              if (-not $v.UninstallString) { Fail "install-registration" "ARP entry lacks UninstallString: $k" }
-              if (-not $v.DisplayName) { Fail "install-registration" "ARP entry lacks DisplayName: $k" }
-              Write-Host "ARP OK: $k -> $($v.DisplayName)"
-            }
-            $aumid = "HKCU:\Software\Classes\AppUserModelId\SHEYTANx13.SHEYTAN-LA"
-            if (-not (Test-Path $aumid)) { Fail "install-registration" "AppUserModelID key missing: $aumid" }
-            $smDir = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\SHEYTAN-LA"
-            if (-not (Test-Path (Join-Path $smDir "SHEYTAN Local Agent.lnk"))) { Fail "install-shortcuts" "Start Menu shortcut missing under $smDir" }
-            $deskLnk = Join-Path $env:PUBLIC "Desktop\SHEYTAN Local Agent.lnk"
-            if (-not (Test-Path $deskLnk)) { Fail "install-shortcuts" "desktop shortcut missing at $deskLnk (silent install keeps the default CHECKED option)" }
-            Write-Host "registration + shortcuts OK"
-
-            # --- 4. seed user-data sentinels (runtime data + USER-CREATED
-            # legacy roots + external root + legacy README.md) ---
-            # v1.11.1: the top-level models\ and workspace\ entries are
-            # USER-CREATED legacy roots now (the installer no longer ships
-            # them) — they exercise exactly the preservation contract the
-            # uninstaller must keep: never in the payload manifest, never
-            # recursively deleted, plain RMDir leaves non-empty dirs alone.
-            $sentinels = [ordered]@{
-              "data\user-preservation-sentinel.txt"      = "sheytan uninstall-smoke sentinel: canonical data root"
-              "data\models\user-model-sentinel.gguf"     = "sheytan uninstall-smoke sentinel: runtime model placeholder (plain text, not a model)"
-              "data\sessions\user-session-sentinel.txt"  = "sheytan uninstall-smoke sentinel: sessions"
-              "data\logs\user-log-sentinel.txt"          = "sheytan uninstall-smoke sentinel: logs"
-              "data\workspace\user-workspace-sentinel.txt" = "sheytan uninstall-smoke sentinel: install-local workspace"
-              "models\user-model-sentinel.gguf"          = "sheytan uninstall-smoke sentinel: user-created legacy top-level models dir (pre-v1.11.1 install)"
-              "workspace\user-workspace-sentinel.txt"    = "sheytan uninstall-smoke sentinel: user-created legacy top-level workspace dir (pre-v1.11.1 install)"
-            }
-            foreach ($rel in $sentinels.Keys) {
-              $p = Join-Path $instDir ($rel -replace '/', '\')
-              New-Item -ItemType Directory -Force -Path (Split-Path -Parent $p) | Out-Null
-              Set-Content -LiteralPath $p -Value $sentinels[$rel] -Encoding utf8NoBOM
-            }
-            New-Item -ItemType Directory -Force -Path $externalData | Out-Null
-            $extSentinel = Join-Path $externalData "user-external-sentinel.txt"
-            Set-Content -LiteralPath $extSentinel -Value "sheytan uninstall-smoke sentinel: external user-chosen data dir" -Encoding utf8NoBOM
-            $legacyReadme = Join-Path $instDir "README.md"
-            Set-Content -LiteralPath $legacyReadme -Value "legacy install README from an older version; the uninstaller's hardcoded fallback delete must remove it" -Encoding utf8NoBOM
-            $hashes = @{}
-            foreach ($p in @($sentinels.Keys | ForEach-Object { Join-Path $instDir ($_ -replace '/', '\') }) + @($extSentinel)) {
-              $hashes[$p] = (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash
-            }
-            Write-Host "sentinels seeded: $($hashes.Count) hashed (install-local + external)"
-
-            # --- 5. silent uninstall (/S, _?= last unquoted — in place, waits, does not self-delete) ---
-            $up = Start-Process -FilePath (Join-Path $instDir "Uninstall.exe") -ArgumentList @("/S", "_?=$instDir") -PassThru
-            if (-not $up.WaitForExit(120000)) { Fail "uninstall" "uninstaller did not exit within 120s" }
-            if ($up.ExitCode -ne 0) { Fail "uninstall" "uninstaller exit code $($up.ExitCode) (expected 0)" }
-
-            # --- 6. payload removed EXACTLY (documented _?= exception: Uninstall.exe stays) ---
-            foreach ($rel in ($required | Where-Object { $_ -ne "Uninstall.exe" })) {
-              $p = Join-Path $instDir ($rel -replace '/', '\')
-              if (Test-Path -LiteralPath $p) { Fail "uninstall-payload" "payload file survived uninstall: $rel" }
-              Write-Host "removed OK: $rel"
-            }
-            # The resources tree itself must be gone (bottom-up RMDir in
-            # the generated manifest removes docs/ and brand/ then resources).
-            if (Test-Path -LiteralPath (Join-Path $instDir "resources")) { Fail "uninstall-payload" "resources directory survived uninstall — the generated manifest must remove the static-resource tree" }
-            if (Test-Path -LiteralPath $legacyReadme) { Fail "uninstall-payload" "legacy README.md survived uninstall — the hardcoded fallback delete regressed" }
-            if (-not (Test-Path -LiteralPath (Join-Path $instDir "Uninstall.exe"))) { Fail "uninstall-payload" "Uninstall.exe vanished — with _?= NSIS documents that it stays in place; if this fires the uninstaller contract drifted" }
-            foreach ($k in $arpViews) { if (Test-Path $k) { Fail "uninstall-registration" "ARP entry survived uninstall: $k" } }
-            if (Test-Path $aumid) { Fail "uninstall-registration" "AppUserModelID key survived uninstall: $aumid" }
-            if (Test-Path (Join-Path $smDir "SHEYTAN Local Agent.lnk")) { Fail "uninstall-shortcuts" "Start Menu shortcut survived uninstall" }
-            if (Test-Path $deskLnk) { Fail "uninstall-shortcuts" "desktop shortcut survived uninstall" }
-            Write-Host "payload removal + registration/shortcut removal OK"
-
-            # --- 7. data preservation: every sentinel intact, byte-identical ---
-            foreach ($p in $hashes.Keys) {
-              if (-not (Test-Path -LiteralPath $p)) { Fail "data-preservation" "user sentinel MISSING after uninstall: $p" }
-              if ((Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash -ne $hashes[$p]) { Fail "data-preservation" "user sentinel content CHANGED after uninstall: $p" }
-              Write-Host "preserved OK: $p"
-            }
-            Write-Host "data preservation OK: non-empty user directories were left in place by the non-recursive RMDir contract (expected residue: $instDir, data\*, models\*, workspace\* containing sentinels)"
-
-            # --- 8. staging tree untouched (the smoke never writes into dist/windows/app) ---
-            $stageFilesAfter = @(Get-ChildItem -Recurse -File $stageRoot | ForEach-Object { $_.FullName.Substring($stageRoot.Length + 1) } | Sort-Object)
-            if ((Compare-Object -ReferenceObject $stageFilesBefore -DifferenceObject $stageFilesAfter).Count -ne 0) { Fail "staging-purity" "staging tree changed during the smoke run" }
-            Write-Host ("staging purity OK ({0} staged files unchanged)" -f $stageFilesAfter.Count)
-            Write-Host "NSIS install/uninstall smoke: PASS (payload symmetry + data preservation)"
-          } finally {
-            try { Stop-Transcript | Out-Null } catch {}
-            if (Test-Path $base) { Remove-Item -Recurse -Force $base -ErrorAction SilentlyContinue }
-          }
-
       # Package gate: the root failure is reported HERE (not by a vague
       # "no files found" upload error that buries the cause).
-      # v1.11.1 (run 42502043636 work order §3.3 item 6): the gate is now
+      # v1.11.1 (run 42502043636 work order §3.3 item 6): the gate is
       # FAIL-CLOSED and independent — scripts/ci/PackageGate.ps1 requires
-      # BOTH distribution files to exist as regular, non-empty files and
-      # names the exact incomplete state otherwise (both missing / ZIP-only
-      # / installer-only / either empty). The retired inline predicate
-      # ("ZIP missing AND installer exists") printed "package gate: reached"
-      # with BOTH packages absent — the captured consolidated-log line 3313
-      # defect — so the success line now appears ONLY after every assertion
-      # succeeds. The truth table is pinned by PackageGate.Tests.ps1 (six
-      # states, run hosted by the "Package gate fixture contract" step) and
-      # by the releasecontract workflow-contract tests.
+      # the portable ZIP (the ONE supported package since the installer
+      # retirement, master work order §10) to exist as a regular,
+      # non-empty, structurally valid file and names the exact incomplete
+      # state otherwise. It also rejects stale installer remnants in the
+      # distribution directory (INSTALLER_REMNANT), so a retired
+      # installer artifact can never ship under a portable label. The
+      # retired inline predicate ("ZIP missing AND installer exists")
+      # printed "package gate: reached" with BOTH packages absent — the
+      # captured consolidated-log line 3313 defect — so the success line
+      # now appears ONLY after every assertion succeeds. The truth table
+      # is pinned by PackageGate.Tests.ps1 (run hosted by the "Package
+      # gate fixture contract" step) and by the releasecontract
+      # workflow-contract tests.
       - name: Package gate (root-cause reporter)
         if: always()
         run: |
@@ -2109,7 +1765,7 @@ jobs:
           # error, never a second confusing missing-package annotation. A
           # completed packaging path that lacks its output still fails hard
           # through the unchanged package truth table.
-          & ./scripts/ci/PackageGate.ps1 -Zip "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip" -Installer "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe" -UpstreamFailureMarker "ci-logs/win-upstream-failure.txt" 2>&1 | Tee-Object -FilePath "ci-logs/win-package-gate.log"
+          & ./scripts/ci/PackageGate.ps1 -Zip "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip" -DistDir "dist" -UpstreamFailureMarker "ci-logs/win-upstream-failure.txt" 2>&1 | Tee-Object -FilePath "ci-logs/win-package-gate.log"
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::package gate: Windows package contract violated (gate exit $LASTEXITCODE; named incomplete state in ci-logs/win-package-gate.log)"; throw "Windows package gate failed (exit $LASTEXITCODE)" }
 
       # F6 (run 43008361835): the per-job machine-readable diagnostics
@@ -2127,16 +1783,16 @@ jobs:
         env:
           DIAGNOSTICS_CACHE_HIT: ${{ steps.setup-go.outputs.cache-hit }}
 
-      # v1.11.1 §7.4: the bundle uploads only on job success — never on
-      # always() — and only when BOTH verified distribution files exist
-      # (error on missing): no partial or placeholder package bundles.
+      # v1.11.1 §7.4 + master work order §10: the bundle uploads only on
+      # job success — never on always() — and only when the verified
+      # portable ZIP exists (error on missing; installers are retired):
+      # no partial or placeholder package bundles.
       - name: Upload Windows package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: windows-x64-package
           path: |
             dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip
-            dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer.exe
           retention-days: 14
           if-no-files-found: error
           overwrite: true
@@ -2686,7 +2342,6 @@ jobs:
           set -euo pipefail
           for want in \
             "${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64.zip" \
-            "${WIN_PKG_ROOT}-v${APP_VERSION}-windows-x64-installer.exe" \
             "${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip"; do
             test -f "dist/$want" || { echo "::error::release artifact missing: $want"; exit 1; }
           done
@@ -2705,7 +2360,6 @@ jobs:
           ver="${APP_VERSION}"
           base="${{ github.server_url }}/${{ github.repository }}/releases/download/v${ver}"
           win_zip="${WIN_PKG_ROOT}-v${ver}-windows-x64.zip"
-          win_inst="${WIN_PKG_ROOT}-v${ver}-windows-x64-installer.exe"
           lin_zip="${LINUX_PKG_ROOT}-v${ver}-linux-x64.zip"
           win_sha="$(sha256sum "dist/${win_zip}" | cut -d' ' -f1)"
           win_size="$(stat -c%s "dist/${win_zip}")"
@@ -2726,13 +2380,12 @@ jobs:
               }}' > dist/release-manifest.json
           {
             printf '%s  %s\n' "$(sha256sum "dist/${lin_zip}" | cut -d' ' -f1)" "${lin_zip}"
-            printf '%s  %s\n' "$(sha256sum "dist/${win_inst}" | cut -d' ' -f1)" "${win_inst}"
             printf '%s  %s\n' "$(sha256sum "dist/${win_zip}" | cut -d' ' -f1)" "${win_zip}"
             printf '%s  %s\n' "$(sha256sum "dist/release-manifest.json" | cut -d' ' -f1)" "release-manifest.json"
           } | LC_ALL=C sort -k2 > dist/SHA256SUMS.txt
           jq -e '.version == $ver and (.platforms["windows-x64"].sha256 | length == 64) and (.platforms["linux-x64"].sha256 | length == 64)' --arg ver "$ver" dist/release-manifest.json > /dev/null \
             || { echo "::error::generated release-manifest.json failed its contract self-check"; exit 1; }
-          test "$(wc -l < dist/SHA256SUMS.txt)" -eq 4 || { echo "::error::SHA256SUMS.txt must list exactly 4 files"; exit 1; }
+          test "$(wc -l < dist/SHA256SUMS.txt)" -eq 3 || { echo "::error::SHA256SUMS.txt must list exactly 4 files"; exit 1; }
           echo "--- SHA256SUMS.txt ---"; cat dist/SHA256SUMS.txt
 
       - name: Publish the release
@@ -2745,7 +2398,6 @@ jobs:
         with:
           files: |
             dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip
-            dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer.exe
             dist/${{ env.LINUX_PKG_ROOT }}-v${{ env.APP_VERSION }}-linux-x64.zip
             dist/release-manifest.json
             dist/SHA256SUMS.txt

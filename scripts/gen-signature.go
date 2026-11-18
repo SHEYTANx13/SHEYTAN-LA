@@ -31,5 +31,5 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Printf("SIGNATURE regenerated (signed by %s, v%s)\n", brand.SignedBy, version)
+	fmt.Printf("SIGNATURE regenerated (signed by %s, build %s)\n", brand.SignedBy, version)
 }

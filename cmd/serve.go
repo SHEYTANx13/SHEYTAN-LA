@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/api"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc"
 )
@@ -76,7 +77,7 @@ func Serve(cfg *config.Config, args []string) int {
 		url = fmt.Sprintf("http://localhost:%d/", cfg.Port)
 	}
 
-	fmt.Printf("%s v%s\n", config.AppName, config.AppVersion)
+	fmt.Printf("%s — %s\n", config.AppName, brand.Stage)
 	fmt.Printf("  server: %s\n", url)
 	fmt.Printf("  models: %s\n", cfg.ModelsDir)
 	fmt.Printf("  sessions: %s\n", cfg.SessionsDir)

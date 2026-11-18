@@ -180,7 +180,7 @@ func RunWithDefaultFn(defaultFn func() int) int {
 	// app.log persists across versions/boots, so historical startup
 	// entries (e.g. v0.8.0) previously mixed indistinguishably with the
 	// current run. Everything above a banner is verifiably historical.
-	logging.Default().SessionBanner(brand.FullName, config.AppVersion)
+	logging.Default().SessionBanner(brand.FullName, brand.Stage)
 
 	// v1.11.1 (observability repair): ONE explicit startup record naming
 	// the RESOLVED log directory and the active sink names, emitted after
@@ -205,9 +205,9 @@ func RunWithDefaultFn(defaultFn func() int) int {
 
 	logging.Default().Info(
 		"boot",
-		"%s v%s starting (%s/%s, provider=%s)",
+		"%s %s starting (%s/%s, provider=%s)",
 		brand.FullName,
-		config.AppVersion,
+		brand.Stage,
 		runtime.GOOS,
 		runtime.GOARCH,
 		cfg.ProviderKind(),
@@ -338,10 +338,11 @@ func earlyVersionDispatch(args []string) (int, bool) {
 	}
 }
 
-// printVersionInfo is the ONE version printer — branding, output shape
-// and exit code identical to the pre-v1.11.1 dispatch branch.
+// printVersionInfo is the ONE version printer — the user-facing product
+// identity is the ALPHA stage (master work order §12.1); the numeric
+// build identifier stays in CI plumbing (cmd/printversion, BUILD-INFO).
 func printVersionInfo() {
-	fmt.Printf("%s v%s\n", config.AppName, config.AppVersion)
+	fmt.Printf("%s — %s\n", config.AppName, brand.Stage)
 	fmt.Printf("  %s\n", brand.Notice())
 	fmt.Printf("  go: %s\n", goVersion())
 	fmt.Printf("  os: %s/%s\n", osName(), osArch())
@@ -355,7 +356,7 @@ func configPath() string {
 
 func printHelp() {
 	fmt.Println(
-		brand.Trademark + " " + config.AppName + " v" + config.AppVersion,
+		brand.Trademark + " " + config.AppName + " — " + brand.Stage,
 	)
 	fmt.Println(brand.Notice())
 	fmt.Println()

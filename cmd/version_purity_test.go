@@ -63,9 +63,12 @@ func TestVersionDispatchIsReadOnly(t *testing.T) {
 			}
 
 			text := out.String()
-			wantFirst := config.AppName + " v" + config.AppVersion + "\n"
+			wantFirst := config.AppName + " — " + brand.Stage + "\n"
 			if !strings.HasPrefix(text, wantFirst) {
-				t.Fatalf("version output = %q, want prefix %q (output shape is a release contract)", text, wantFirst)
+				t.Fatalf("version output = %q, want prefix %q (output shape is a release contract; user-facing identity is brand.Stage, master work order §12.1)", text, wantFirst)
+			}
+			if strings.Contains(text, config.AppVersion) {
+				t.Errorf("version output leaked the numeric build identifier %q as branding — user-facing identity must be brand.Stage only", config.AppVersion)
 			}
 			if !strings.Contains(text, brand.Notice()) {
 				t.Errorf("version output lost the legal notice line: %q", text)
@@ -132,10 +135,13 @@ func TestVersionOutputShapePinnedAcrossSpellings(t *testing.T) {
 		t.Fatalf("version spellings diverge: %q / %q / %q", v, dash, long)
 	}
 
-	want := config.AppName + " v" + config.AppVersion + "\n" +
+	want := config.AppName + " — " + brand.Stage + "\n" +
 		"  " + brand.Notice() + "\n"
 	if !strings.HasPrefix(v, want) {
 		t.Fatalf("version block = %q, want prefix %q", v, want)
+	}
+	if strings.Contains(v, config.AppVersion) {
+		t.Errorf("version block leaked the numeric build identifier as branding — user-facing identity is brand.Stage (master work order §12.1)")
 	}
 }
 

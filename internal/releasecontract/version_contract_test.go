@@ -7,21 +7,24 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
 // TestReleaseVersionSingleSource pins the ONE release-identity authority
-// (v1.11.0 one-Go-UI migration): internal/config.AppVersion. The former
-// Node authority (package.json + scripts/release-version.mjs) is retired;
-// these surfaces must agree with the Go value:
+// (v1.11.0 one-Go-UI migration): internal/config.AppVersion as the numeric
+// BUILD IDENTIFIER (CI/packaging plumbing), plus the ALPHA user-facing
+// product identity (master work order §12.1). The former Node authority
+// (package.json + scripts/release-version.mjs) is retired; these surfaces
+// must agree:
 //
-//   - internal/config.AppVersion           (THE authority)
-//   - build/config.yml  productVersion     (retained as
-//     packaging metadata the workflow greps)
-//   - SIGNATURE first line                 (release identity)
+//   - internal/config.AppVersion           (THE numeric build identifier)
+//   - build/config.yml  productVersion     (packaging metadata the
+//     workflow greps) + productStage (ALPHA display identity)
+//   - SIGNATURE first line                 (ALPHA release identity)
 //
-// A version bump edits AppVersion and SIGNATURE; this test fails the
-// build if any surface drifts.
+// A build-identifier bump edits AppVersion and regenerates SIGNATURE;
+// this test fails the build if any surface drifts.
 func TestReleaseVersionSingleSource(t *testing.T) {
 	root := findRepoRoot(t)
 
@@ -34,13 +37,15 @@ func TestReleaseVersionSingleSource(t *testing.T) {
 		t.Errorf("build/config.yml productVersion must equal AppVersion %q", config.AppVersion)
 	}
 
-	// SIGNATURE line 1: "SHEYTAN-Local-Agent v<version>"
+	// SIGNATURE line 1: ALPHA product identity (master work order §12.1);
+	// the numeric build identifier stays in build/config.yml productVersion
+	// and cmd/printversion (CI plumbing), never in user-facing branding.
 	sig, err := os.ReadFile(filepath.Join(root, "SIGNATURE"))
 	if err != nil {
 		t.Fatalf("read SIGNATURE: %v", err)
 	}
 	first := strings.SplitN(string(sig), "\n", 2)[0]
-	want := "SHEYTAN-Local-Agent v" + config.AppVersion
+	want := brand.FullName + " " + brand.Stage
 	if strings.TrimSpace(first) != want {
 		t.Errorf("SIGNATURE identity = %q, want %q", strings.TrimSpace(first), want)
 	}

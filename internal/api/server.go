@@ -26,6 +26,7 @@ import (
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/aisystem"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/artifacts"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/attachments"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/chunking"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/continuum"
@@ -1040,9 +1041,10 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	st, _, _ := s.installer.EnsureRun(false)
 
 	writeJSON(w, map[string]any{
-		"appName":    config.AppName,
-		"appVersion": config.AppVersion,
-		"state":      st,
+		"appName":      config.AppName,
+		"appVersion":   config.AppVersion,
+		"productStage": brand.Stage,
+		"state":        st,
 	})
 }
 

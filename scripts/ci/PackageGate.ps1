@@ -1,21 +1,20 @@
 <#
 .SYNOPSIS
-  Fail-closed Windows package gate (v1.11.1) — stable machine-readable
-  outcome contract (run 42928792246 work order §3.2).
+  Fail-closed Windows package gate (ALPHA portable-only) — stable
+  machine-readable outcome contract.
+
+  MASTER WORK ORDER §10 (installer retirement): the NSIS installer and
+  every other installer format are retired from the supported build
+  workflow. The gate validates the PORTABLE ZIP ONLY — there is no
+  -Installer parameter anymore, and an installer remnant in the
+  distribution directory is itself a violation (INSTALLER_REMNANT),
+  so a stale installer artifact can never ship under a portable label.
 
 .DESCRIPTION
-  Independently requires BOTH distribution files — the portable ZIP and
-  the NSIS installer — to be present, non-empty and structurally valid
-  before the job may report "package gate: reached".
+  Independently requires the portable ZIP to be present, non-empty and
+  structurally valid before the job may report "package gate: reached".
 
-  Run 42928792246 root cause (REPRODUCED locally on PowerShell 7.4): the
-  v1 fixture harness captured the gate with `2>&1` only, while the gate
-  emitted every diagnostic through `Write-Host` (information stream 6).
-  `2>&1` merges stream 2 into 1 — it NEVER merges the information
-  stream — so the harness's captured output was empty, the exit codes
-  were correct, and all seven diagnostic-output assertions failed while
-  the raw `::error::` lines leaked to the console and became live
-  workflow annotations. The stable contract below therefore does NOT
+  The stable contract (carried over from run 42928792246) does NOT
   depend on any free-form text, stream routing, terminal formatting,
   locale or host behavior:
 
@@ -28,8 +27,9 @@
        state — before any human-readable line.
 
     2. A structured JSON result file (optional -ResultFile parameter)
-       with the affected paths, byte counts, entry inventories, installer
-       PE machine type, dependency verdict and SHA-256 digests.
+       with the affected paths, byte counts, entry inventories,
+       installer-remnant inventory, dependency verdict and SHA-256
+       digest.
 
     3. Human-readable `::error::` diagnostics via Write-Host (real CI
        annotations on hosted runs) that name the affected path — the
@@ -37,19 +37,18 @@
 
   Truth table (token -> exit code; 0 ONLY for OK):
 
-    BOTH_MISSING               2   neither package present
-    ZIP_MISSING                2   ZIP absent, installer present
-    INSTALLER_MISSING          2   installer absent, ZIP present
+    ZIP_MISSING                2   the portable ZIP is absent
     ZIP_EMPTY                  2   ZIP present, 0 bytes
-    INSTALLER_EMPTY            2   installer present, 0 bytes
     ZIP_CORRUPT                2   ZIP non-empty but not a readable archive
     ZIP_BAD_ROOT               2   archive does not hold exactly one
                                    top-level directory named -ExpectedRoot
     ZIP_MISSING_ENTRIES        2   contracted required entries absent
     ZIP_FORBIDDEN_ENTRIES      2   data/Mesa/Qt/placeholder residue present
-    INSTALLER_NOT_PE           2   installer lacks the MZ/PE signature
-    INSTALLER_BAD_ARCH         2   installer PE machine type is neither
-                                   i386 (NSIS 3.x stub) nor x86-64
+    INSTALLER_REMNANT          2   -DistDir contains a retired installer
+                                   artifact (*-installer.exe / setup.exe /
+                                   *-setup.exe) — master work order §10.2:
+                                   no stale installer artifact under a
+                                   portable label
     DEPENDENCY_CLOSURE_FAILURE 2   -DependencyReport absent/unreadable/
                                    unrecognized, or its audit verdict is
                                    MISSING/ERROR (closure never assumed)
@@ -59,8 +58,7 @@
                                    and the package-producing steps never
                                    ran — the report names the FIRST
                                    failing gate instead of inventing a
-                                   second root error (run 43601915826
-                                   work order §3.5). Still fail-closed.
+                                   second root error. Still fail-closed.
     INVALID_ARGUMENTS          1   required arguments missing/invalid
                                    (deterministic: explicit validation,
                                    never the interactive prompt machinery)
@@ -69,7 +67,7 @@
 
   The success line "package gate: reached (...)" is emitted ONLY in the
   OK state, AFTER every assertion succeeds, and carries the ACTUAL
-  on-disk byte counts and SHA-256 digests (never fixture constants).
+  on-disk byte count and SHA-256 digest (never fixture constants).
 
   Exit codes: 0 = OK; 1 = invalid arguments; 2 = package contract
   violated (named state); 3 = gate could not evaluate. Every failure
@@ -79,7 +77,7 @@
 [CmdletBinding()]
 param(
     [string]$Zip,
-    [string]$Installer,
+    [string]$DistDir,
     [string]$ResultFile,
     [string[]]$RequiredEntries,
     [string]$ExpectedRoot = "SHEYTAN-LA",
@@ -103,22 +101,25 @@ if (-not $RequiredEntries -or $RequiredEntries.Count -eq 0) {
     )
 }
 
+# Retired installer artifact shapes (master work order §10): any of these
+# in the distribution directory is a stale installer remnant and fails
+# the gate — installers are no longer part of the supported build.
+$script:InstallerRemnantPatterns = @("*-installer.exe", "*-setup.exe", "setup.exe")
+
 $script:Result = [ordered]@{
     token             = "EVALUATION_ERROR"
     exitCode          = 3
     zipPath           = $Zip
-    installerPath     = $Installer
+    distDir           = $DistDir
     zipBytes          = $null
-    installerBytes    = $null
     zipEntryCount     = $null
     missingEntries    = @()
     forbiddenEntries  = @()
-    installerMachine  = $null
+    installerRemnants = @()
     dependencyReport  = $DependencyReport
     dependencyVerdict = $null
     upstreamFailure   = $null
     zipSha256         = $null
-    installerSha256   = $null
     expectedRoot      = $ExpectedRoot
     timestampUtc      = [System.DateTime]::UtcNow.ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
 }
@@ -164,8 +165,8 @@ try {
     # 0. Invalid arguments (deterministic, never the interactive prompt
     #    machinery that a Mandatory-parameter binding failure engages).
     # ------------------------------------------------------------------
-    if (-not $Zip -or -not $Installer) {
-        Fail-State -Token "INVALID_ARGUMENTS" -Code 1 -Message ("invalid arguments: both -Zip and -Installer are required (got zip='{0}', installer='{1}')" -f $Zip, $Installer)
+    if (-not $Zip) {
+        Fail-State -Token "INVALID_ARGUMENTS" -Code 1 -Message ("invalid arguments: -Zip is required (got zip='{0}')" -f $Zip)
     }
     if (-not $ExpectedRoot) {
         Fail-State -Token "INVALID_ARGUMENTS" -Code 1 -Message "invalid arguments: -ExpectedRoot must not be empty"
@@ -179,11 +180,11 @@ try {
     # ------------------------------------------------------------------
     # 0b. Blocked-by-upstream reporting (run 43601915826 §3.5): when an
     #     upstream verification gate failed, the package-producing steps
-    #     were skipped and BOTH packages are legitimately absent — that
-    #     is ONE root cause, not a second package defect. The marker file
+    #     were skipped and the package is legitimately absent — that is
+    #     ONE root cause, not a second package defect. The marker file
     #     (written by the FIRST failing gate) names it; the gate stays
     #     fail-closed (exit 2) but reports the true upstream failure
-    #     instead of BOTH_MISSING. A missing marker changes nothing: a
+    #     instead of ZIP_MISSING. A missing marker changes nothing: a
     #     completed packaging path that fails to emit its output still
     #     fails hard with the package truth table.
     # ------------------------------------------------------------------
@@ -193,39 +194,45 @@ try {
             try { $gate = ([System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $UpstreamFailureMarker).Path)).Trim() } catch { }
             if (-not $gate) { $gate = "<empty marker>" }
             $script:Result.upstreamFailure = $gate
-            Fail-State -Token "BLOCKED_BY_UPSTREAM_TEST_FAILURE" -Code 2 -Message ("packaging was BLOCKED BY UPSTREAM TEST FAILURE — the first failing gate is '{0}' (marker '{1}'); the packages were never produced by that failed run, so there is no second package defect to report" -f $gate, $UpstreamFailureMarker)
+            Fail-State -Token "BLOCKED_BY_UPSTREAM_TEST_FAILURE" -Code 2 -Message ("packaging was BLOCKED BY UPSTREAM TEST FAILURE — the first failing gate is '{0}' (marker '{1}'); the package was never produced by that failed run, so there is no second package defect to report" -f $gate, $UpstreamFailureMarker)
         }
     }
 
     # ------------------------------------------------------------------
-    # 1-3. Existence: both files must exist as REGULAR files (a directory
-    # or a non-leaf reparse target is not a distribution package).
+    # 1. Existence: the ZIP must be a REGULAR file (a directory or a
+    #    non-leaf reparse target is not a distribution package).
     # ------------------------------------------------------------------
     $zipOk = $false
-    $instOk = $false
     try {
         $zipOk = [bool](Test-Path -LiteralPath $Zip -PathType Leaf)
     } catch {
         Fail-State -Token "ZIP_MISSING" -Code 2 -Message ("portable ZIP path is not evaluable '{0}': {1}" -f $Zip, $_.Exception.Message)
     }
-    try {
-        $instOk = [bool](Test-Path -LiteralPath $Installer -PathType Leaf)
-    } catch {
-        Fail-State -Token "INSTALLER_MISSING" -Code 2 -Message ("installer path is not evaluable '{0}': {1}" -f $Installer, $_.Exception.Message)
-    }
-
-    if (-not $zipOk -and -not $instOk) {
-        Fail-State -Token "BOTH_MISSING" -Code 2 -Message ("neither distribution package exists — portable ZIP missing at '{0}' AND installer missing at '{1}'; the upstream build/package steps did not run or failed" -f $Zip, $Installer)
-    }
     if (-not $zipOk) {
-        Fail-State -Token "ZIP_MISSING" -Code 2 -Message ("portable ZIP missing at '{0}' while the installer exists at '{1}' — packaging drifted" -f $Zip, $Installer)
-    }
-    if (-not $instOk) {
-        Fail-State -Token "INSTALLER_MISSING" -Code 2 -Message ("installer missing at '{0}' while the portable ZIP exists at '{1}' — packaging drifted" -f $Installer, $Zip)
+        Fail-State -Token "ZIP_MISSING" -Code 2 -Message ("portable ZIP missing at '{0}' — the upstream build/package steps did not run or failed" -f $Zip)
     }
 
     # ------------------------------------------------------------------
-    # 4-5. Non-empty: both files must carry actual bytes.
+    # 1b. Installer remnants (master work order §10.2): the distribution
+    #     directory must not contain any retired installer artifact.
+    # ------------------------------------------------------------------
+    if ($DistDir) {
+        $remnants = @()
+        if (Test-Path -LiteralPath $DistDir -PathType Container) {
+            foreach ($pattern in $script:InstallerRemnantPatterns) {
+                $hits = @(Get-ChildItem -LiteralPath $DistDir -Filter $pattern -File -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+                $remnants += $hits
+            }
+            $remnants = @($remnants | Sort-Object -Unique)
+        }
+        $script:Result.installerRemnants = $remnants
+        if ($remnants.Count -gt 0) {
+            Fail-State -Token "INSTALLER_REMNANT" -Code 2 -Message ("distribution directory '{0}' contains {1} retired installer artifact(s) ({2}) — installer production is retired (master work order §10); remove the stale artifact instead of uploading it" -f $DistDir, (Format-Invariant $remnants.Count), ($remnants -join ', '))
+        }
+    }
+
+    # ------------------------------------------------------------------
+    # 2. Non-empty: the ZIP must carry actual bytes.
     # ------------------------------------------------------------------
     try {
         $zipLen = (Get-Item -LiteralPath $Zip -Force).Length
@@ -236,18 +243,9 @@ try {
     if ($zipLen -le 0) {
         Fail-State -Token "ZIP_EMPTY" -Code 2 -Message ("portable ZIP exists but is EMPTY (0 bytes): '{0}'" -f $Zip)
     }
-    try {
-        $instLen = (Get-Item -LiteralPath $Installer -Force).Length
-    } catch {
-        Fail-State -Token "INSTALLER_EMPTY" -Code 2 -Message ("installer is not readable '{0}': {1}" -f $Installer, $_.Exception.Message)
-    }
-    $script:Result.installerBytes = $instLen
-    if ($instLen -le 0) {
-        Fail-State -Token "INSTALLER_EMPTY" -Code 2 -Message ("installer exists but is EMPTY (0 bytes): '{0}'" -f $Installer)
-    }
 
     # ------------------------------------------------------------------
-    # 6. ZIP integrity: the archive must actually open (a non-empty
+    # 3. ZIP integrity: the archive must actually open (a non-empty
     #    non-ZIP file or a truncated central directory fails here).
     # ------------------------------------------------------------------
     Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
@@ -262,7 +260,7 @@ try {
         $entryNames = @($archive.Entries | ForEach-Object { $_.FullName })
         $script:Result.zipEntryCount = $entryNames.Count
 
-        # 7. Root layout: exactly ONE top-level directory, named -ExpectedRoot.
+        # 4. Root layout: exactly ONE top-level directory, named -ExpectedRoot.
         $topSegments = @($entryNames |
             ForEach-Object { ($_ -split '/')[0] } |
             Where-Object { $_ -and $_.Trim() -ne "" } |
@@ -273,7 +271,7 @@ try {
             Fail-State -Token "ZIP_BAD_ROOT" -Code 2 -Message ("portable ZIP must contain exactly one top-level directory named '{0}' (found: {1}) — extract/validate the package layout" -f $ExpectedRoot, ($(if ($topSegments.Count -eq 0) { "<none>" } else { $topSegments -join ', ' })))
         }
 
-        # 8. Required entries (exact path, case-insensitive, ordinal-safe).
+        # 5. Required entries (exact path, case-insensitive, ordinal-safe).
         $missing = @()
         foreach ($rel in $RequiredEntries) {
             $wanted = "$ExpectedRoot/$rel"
@@ -285,7 +283,7 @@ try {
             Fail-State -Token "ZIP_MISSING_ENTRIES" -Code 2 -Message ("portable ZIP is missing {0} required payload entr(y/ies): {1}" -f (Format-Invariant $missing.Count), ($missing -join ', '))
         }
 
-        # 9. Forbidden entries: data residue, Mesa software-GL DLLs, Qt
+        # 6. Forbidden entries: data residue, Mesa software-GL DLLs, Qt
         #    runtime DLLs and retired root-level placeholders (mirrors the
         #    "Verify Windows ZIP" purity contract — the gate re-checks it
         #    on the package file itself).
@@ -311,42 +309,7 @@ try {
     }
 
     # ------------------------------------------------------------------
-    # 10. Installer PE identity: MZ + PE signature + machine type. NSIS
-    #     3.x installer stubs are i386 PEs even when the payload is
-    #     x64-only, so i386 (0x014C) or x86-64 (0x8664) are accepted; any
-    #     other machine type is a wrong-architecture package. The PAYLOAD
-    #     x64 identity is enforced on SHEYTAN-LA.exe by the build job.
-    # ------------------------------------------------------------------
-    try {
-        $stream = [System.IO.File]::OpenRead((Resolve-Path -LiteralPath $Installer).Path)
-        try {
-            $head = New-Object byte[] 4096
-            $read = $stream.Read($head, 0, $head.Length)
-            $headLen = $read
-        } finally {
-            $stream.Dispose()
-        }
-    } catch {
-        Fail-State -Token "INSTALLER_NOT_PE" -Code 2 -Message ("installer is not readable as a PE ('{0}'): {1}" -f $Installer, $_.Exception.Message)
-    }
-    if ($headLen -lt 2 -or $head[0] -ne 0x4D -or $head[1] -ne 0x5A) {
-        Fail-State -Token "INSTALLER_NOT_PE" -Code 2 -Message ("installer is not a PE binary (missing MZ header): '{0}'" -f $Installer)
-    }
-    if ($headLen -lt 0x40) {
-        Fail-State -Token "INSTALLER_NOT_PE" -Code 2 -Message ("installer is too small to carry a PE header: '{0}'" -f $Installer)
-    }
-    $peOffset = [BitConverter]::ToInt32($head, 0x3C)
-    if ($peOffset -le 0 -or ($peOffset + 6) -gt $headLen -or $head[$peOffset] -ne 0x50 -or $head[$peOffset + 1] -ne 0x45) {
-        Fail-State -Token "INSTALLER_NOT_PE" -Code 2 -Message ("installer PE signature missing or out of range (peOffset={0}): '{1}'" -f (Format-Invariant $peOffset), $Installer)
-    }
-    $machine = [BitConverter]::ToUInt16($head, $peOffset + 4)
-    $script:Result.installerMachine = ("0x{0:X4}" -f $machine)
-    if ($machine -ne 0x014C -and $machine -ne 0x8664) {
-        Fail-State -Token "INSTALLER_BAD_ARCH" -Code 2 -Message ("installer PE machine = 0x{0:X4}, want i386 (0x014C, NSIS stub) or x86-64 (0x8664): '{1}'" -f $machine, $Installer)
-    }
-
-    # ------------------------------------------------------------------
-    # 11. Dependency closure (optional but fail-closed when requested):
+    # 7. Dependency closure (optional but fail-closed when requested):
     #     the pre-launch audit's structured verdict lines are the contract.
     #     An absent/unreadable/unrecognized report means the closure is
     #     UNVERIFIED — and unverified is never a pass.
@@ -372,23 +335,21 @@ try {
     }
 
     # ------------------------------------------------------------------
-    # 12. Digests (actual on-disk bytes, invariant hex).
+    # 8. Digest (actual on-disk bytes, invariant hex).
     # ------------------------------------------------------------------
     $zipHash = (Get-FileHash -LiteralPath $Zip -Algorithm SHA256).Hash.ToLowerInvariant()
-    $instHash = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant()
     $script:Result.zipSha256 = $zipHash
-    $script:Result.installerSha256 = $instHash
 
     # ------------------------------------------------------------------
-    # 13. OK — the ONLY state that may print the success line, after
-    #     every assertion succeeded, with the ACTUAL byte counts and
-    #     digests.
+    # 9. OK — the ONLY state that may print the success line, after
+    #    every assertion succeeded, with the ACTUAL byte count and
+    #    digest.
     # ------------------------------------------------------------------
     $script:Result.token = "OK"
     $script:Result.exitCode = 0
     Write-Output "PACKAGE_GATE_RESULT OK"
     Write-ResultFile
-    Write-Host ("package gate: reached (portable ZIP {0} bytes, installer {1} bytes — both distribution packages present and non-empty; sha256 zip={2} installer={3})" -f (Format-Invariant $zipLen), (Format-Invariant $instLen), $zipHash, $instHash)
+    Write-Host ("package gate: reached (portable ZIP {0} bytes — the ONE supported package; installers are retired per master work order §10; sha256 zip={1})" -f (Format-Invariant $zipLen), $zipHash)
     exit 0
 } catch {
     # The gate could not evaluate — never a silent pass, never exit 0.

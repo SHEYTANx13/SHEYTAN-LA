@@ -25,6 +25,15 @@ func TestPreflightRejectionStartsZeroModelProcesses(t *testing.T) {
 	if report.Compatible || report.Severity != preflight.SeverityIncompatible {
 		t.Fatalf("no-model-selected must be incompatible: %+v", report)
 	}
+	// Master work order §3.2.5: the empty-model state is a FIRST-CLASS
+	// distinct machine-readable code (guided model-setup routing in the
+	// UI), never an undifferentiated post-submit error.
+	if report.Code != preflight.CodeModelNotSelected {
+		t.Fatalf("no-model-selected Code = %q, want %q", report.Code, preflight.CodeModelNotSelected)
+	}
+	if len(report.Reasons) == 0 || report.RecommendedAction == "" {
+		t.Fatalf("no-model-selected must carry a structured reason and next action: %+v", report)
+	}
 
 	// The server's gate contract: refuse on incompatible — EnsureLLMContext
 	// (the only path that can start a model process) is NEVER reached.
@@ -44,6 +53,29 @@ func TestPreflightRejectionStartsZeroModelProcesses(t *testing.T) {
 	}
 	if launches(launchLog) != 0 {
 		t.Fatalf("engine process started despite refusal: %s", launchLog)
+	}
+}
+
+// TestPreflightReportsMissingModelFile pins the second distinct refusal
+// class (master work order §3.2.5): a SELECTED model whose file cannot be
+// resolved is MODEL_FILE_MISSING — a broken path/missing download, not the
+// guided empty-selection state and not an undifferentiated load error.
+func TestPreflightReportsMissingModelFile(t *testing.T) {
+	stack := gateStack(t, 0) // real models dir, but NO model file written
+	cfg := stack.Src.Load()
+	cfg.Model = "absent-model.gguf"
+	stack.Src.Store(cfg)
+	t.Cleanup(stack.Close)
+
+	report := stack.PreflightReport(0)
+	if report.Compatible || report.Severity != preflight.SeverityIncompatible {
+		t.Fatalf("an unresolvable selected model must be incompatible: %+v", report)
+	}
+	if report.Code != preflight.CodeModelFileMissing {
+		t.Fatalf("Code = %q, want %q (distinct from %q)", report.Code, preflight.CodeModelFileMissing, preflight.CodeModelNotSelected)
+	}
+	if len(report.Reasons) == 0 || report.RecommendedAction == "" {
+		t.Fatalf("the refusal must carry a structured reason and next action: %+v", report)
 	}
 }
 

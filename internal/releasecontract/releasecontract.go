@@ -70,17 +70,16 @@ type Contract struct {
 	Version string
 
 	// Portable ZIPs — ONE pattern for every platform: ROOT-vVER-<os>-<arch>.
+	// These are the ONLY supported packages: installer production is
+	// retired (master work order §10) and a reappearing installer
+	// artifact is a contract violation, not a supported lane.
 	WindowsZip string // SHEYTAN-LA-v1.3.1-windows-x64.zip
 	LinuxZip   string // SHEYTAN-LA-v1.2.1-linux-x64.zip
-
-	// Windows NSIS installer.
-	WindowsInstaller string // SHEYTAN-LA-v1.3.1-windows-x64-installer.exe
 
 	// Workflow placeholders: the exact spellings used inside
 	// build-desktop.yml, with the version slot left to the workflow env
 	// and the package root slot left to the canonical root variables.
 	WindowsZipWorkflowSlot string // ${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip
-	WindowsInstallerSlot   string // ${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe
 	LinuxZipWorkflowSlot   string // ${LINUX_PKG_ROOT}-v${APP_VERSION}-linux-x64.zip
 }
 
@@ -92,12 +91,10 @@ func For(version string) Contract {
 	return Contract{
 		Version: v,
 
-		WindowsZip:       fmt.Sprintf("%s-v%s-windows-x64.zip", WindowsAppRoot, v),
-		LinuxZip:         fmt.Sprintf("%s-v%s-linux-x64.zip", LinuxAppRoot, v),
-		WindowsInstaller: fmt.Sprintf("%s-v%s-windows-x64-installer.exe", WindowsAppRoot, v),
+		WindowsZip: fmt.Sprintf("%s-v%s-windows-x64.zip", WindowsAppRoot, v),
+		LinuxZip:   fmt.Sprintf("%s-v%s-linux-x64.zip", LinuxAppRoot, v),
 
 		WindowsZipWorkflowSlot: WinRootPwsh + "-v${env:APP_VERSION}-windows-x64.zip",
-		WindowsInstallerSlot:   WinRootPwsh + "-v${env:APP_VERSION}-windows-x64-installer.exe",
 		LinuxZipWorkflowSlot:   LinuxRootBash + "-v${APP_VERSION}-linux-x64.zip",
 	}
 }

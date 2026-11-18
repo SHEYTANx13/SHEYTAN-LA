@@ -570,8 +570,9 @@ func validateUsesVersionComments(workflowText string, parsedExternal int) error 
 //     job (run 43630164424 repair: machine-readable diagnostics index,
 //     archive: false, path == the artifact name);
 //   - exactly one windows-x64-package and one linux-x64-package upload,
-//     each validated against its exact payload shapes (portable ZIP,
-//     NSIS installer under dist/) — package uploads are NEVER counted
+//     each validated against its exact payload shape (the portable ZIP
+//     under dist/ — installer production is retired, master work order
+//     §10) — package uploads are NEVER counted
 //     as log uploads because names match exactly;
 //   - NO other upload-artifact step may exist: the whole upload surface
 //     is exactly the four contracted artifacts.
@@ -644,13 +645,20 @@ func ValidateUploadArtifactContract(workflowText string) error {
 				))
 			}
 
-			for _, frag := range []string{"-windows-x64.zip", "-windows-x64-installer.exe"} {
-				if !strings.Contains(u.Path, frag) {
-					errs = append(errs, fmt.Sprintf(
-						"job %q: the Windows package upload payload must include the %q artifact, got %q",
-						u.Job, frag, u.Path,
-					))
-				}
+			// Master work order §10: the upload must carry the
+			// portable ZIP and must NOT list the retired installer
+			// artifact anymore.
+			if !strings.Contains(u.Path, "-windows-x64.zip") {
+				errs = append(errs, fmt.Sprintf(
+					"job %q: the Windows package upload payload must include the %q artifact, got %q",
+					u.Job, "-windows-x64.zip", u.Path,
+				))
+			}
+			if strings.Contains(u.Path, "-windows-x64-installer.exe") {
+				errs = append(errs, fmt.Sprintf(
+					"job %q: the Windows package upload still lists the retired installer artifact — installer production is removed (master work order §10), got %q",
+					u.Job, u.Path,
+				))
 			}
 
 		case LinuxPackageArtifactName:

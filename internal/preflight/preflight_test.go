@@ -16,7 +16,11 @@ import (
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
 )
 
-func baseInput() Input {
+func baseInput(t *testing.T) Input {
+	t.Helper()
+	// NOTE: Evaluate is the PURE fit layer (no I/O) — the model-file
+	// existence gate lives in the Stack gate (internal/runtime), so a
+	// non-existent path here is fine for fit-layer fixtures.
 	return Input{
 		ModelPath:        "/models/test-model.gguf",
 		Backend:          "llama.cpp-cpu",
@@ -31,7 +35,7 @@ func baseInput() Input {
 }
 
 func TestIncompatibleBackendRefusedBeforeEngineSpawn(t *testing.T) {
-	in := baseInput()
+	in := baseInput(t)
 	in.Backend = "native"
 	in.BackendAvailable = false
 	in.BackendUnavailableReason = "native engine disabled"
@@ -52,7 +56,7 @@ func TestIncompatibleBackendRefusedBeforeEngineSpawn(t *testing.T) {
 }
 
 func TestUnsupportedArchitectureRefused(t *testing.T) {
-	in := baseInput()
+	in := baseInput(t)
 	in.Caps = &llm.ModelCapabilities{Arch: "deepseek3"} // outside the llama graph family
 	in.Backend = "llama.cpp-cpu"
 
@@ -63,7 +67,7 @@ func TestUnsupportedArchitectureRefused(t *testing.T) {
 }
 
 func TestNativeIncompatibleModelRefusedOnNativeOnly(t *testing.T) {
-	in := baseInput()
+	in := baseInput(t)
 	in.Backend = "native"
 	in.Caps = &llm.ModelCapabilities{
 		Arch:          "llama",
@@ -85,7 +89,7 @@ func TestNativeIncompatibleModelRefusedOnNativeOnly(t *testing.T) {
 }
 
 func TestInsufficientResourcesRefused(t *testing.T) {
-	in := baseInput()
+	in := baseInput(t)
 	// 40 GB estimated footprint vs 24 GB available RAM: predictable OOM.
 	in.Caps = &llm.ModelCapabilities{SizeBytes: 38 << 30, ContextLength: 32768}
 	in.RequestedContext = 32768
@@ -100,7 +104,7 @@ func TestInsufficientResourcesRefused(t *testing.T) {
 }
 
 func TestCurrentPressureCriticalRefuses(t *testing.T) {
-	in := baseInput()
+	in := baseInput(t)
 	// Small model, but available RAM right now is nearly exhausted.
 	in.Caps = &llm.ModelCapabilities{SizeBytes: 6 << 30}
 	in.Sys.AvailableRAMBytes = 400 << 20 // < 10% of a 4 GB requirement + overhead
@@ -121,7 +125,7 @@ func TestCurrentPressureCriticalRefuses(t *testing.T) {
 }
 
 func TestWarningsAreNotMisclassifiedAsIncompatible(t *testing.T) {
-	in := baseInput()
+	in := baseInput(t)
 	// Tight-but-feasible: 50% margin → warning/high_pressure, NOT refusal.
 	in.Caps = &llm.ModelCapabilities{SizeBytes: 10 << 30}
 	in.Sys.AvailableRAMBytes = 20 << 30
@@ -140,7 +144,7 @@ func TestWarningsAreNotMisclassifiedAsIncompatible(t *testing.T) {
 }
 
 func TestEngineClampIsWarningNotRefusal(t *testing.T) {
-	in := baseInput()
+	in := baseInput(t)
 	in.EngineContextLimit = 4096
 
 	report := Evaluate(in)
@@ -156,7 +160,7 @@ func TestEngineClampIsWarningNotRefusal(t *testing.T) {
 }
 
 func TestUnknownDataStaysUnknown(t *testing.T) {
-	in := baseInput()
+	in := baseInput(t)
 	in.Caps = nil                // no readable capabilities
 	in.Card = nil                // no GGUF facts
 	in.Sys.AvailableRAMBytes = 0 // deep probe not ready
@@ -180,7 +184,7 @@ func TestUnknownDataStaysUnknown(t *testing.T) {
 }
 
 func TestVisionRequirementRefused(t *testing.T) {
-	in := baseInput()
+	in := baseInput(t)
 	in.VisionRequired = true
 	in.Caps = &llm.ModelCapabilities{Multimodal: false}
 
@@ -191,7 +195,7 @@ func TestVisionRequirementRefused(t *testing.T) {
 }
 
 func TestSafetyMarginReported(t *testing.T) {
-	in := baseInput()
+	in := baseInput(t)
 	in.Caps = &llm.ModelCapabilities{SizeBytes: 4 << 30}
 
 	report := Evaluate(in)

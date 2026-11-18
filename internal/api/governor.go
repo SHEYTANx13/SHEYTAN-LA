@@ -17,6 +17,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/sysinfo"
 )
@@ -29,8 +30,9 @@ func (s *Server) handleGovernor(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out := map[string]any{
-		"appName":    config.AppName,
-		"appVersion": config.AppVersion,
+		"appName":      config.AppName,
+		"appVersion":   config.AppVersion,
+		"productStage": brand.Stage,
 	}
 
 	// --- the Governor's own policy block (always live) -----------------

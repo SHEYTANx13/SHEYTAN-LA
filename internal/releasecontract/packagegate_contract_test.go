@@ -7,18 +7,22 @@ import (
 )
 
 // Package-gate and Windows-package-pipeline contract tests (v1.11.1, run
-// 42502043636 work order §3.3 items 6 and 9).
+// 42502043636 work order §3.3 items 6 and 9) + master work order §10
+// (installer retirement).
 //
 // The reviewed run captured the Windows lane printing "package gate:
 // reached" with BOTH distribution packages absent (consolidated-log line
 // 3313): the retired inline guard only rejected "ZIP missing AND installer
-// exists". The gate is now the fail-closed scripts/ci/PackageGate.ps1, its
-// six-state truth table is pinned hosted by PackageGate.Tests.ps1 (run by
-// the "Package gate fixture contract" step), and the tests below pin the
-// WORKFLOW side: the gate must call the script with both contracted paths,
-// the producer steps must precede the validation/upload steps, and the
-// upload must be success-gated with if-no-files-found: error and carry BOTH
-// package paths — so an upload can never run with an incomplete package set.
+// exists". The gate is the fail-closed scripts/ci/PackageGate.ps1, its
+// portable-ZIP truth table is pinned hosted by PackageGate.Tests.ps1 (run
+// by the "Package gate fixture contract" step), and the tests below pin
+// the WORKFLOW side: the gate must call the script with the contracted
+// portable-ZIP path and the installer-remnant guard, the producer steps
+// must precede the validation/upload steps, and the upload must be
+// success-gated with if-no-files-found: error and carry the portable ZIP —
+// so an upload can never run with an incomplete package set. Installer
+// production is RETIRED: no installer step, artifact or validation may
+// reappear in the workflow.
 
 // workflowStepBody returns the text of the named "- name:" step up to the
 // next step boundary (a line opening with six spaces + "- name:") or the
@@ -53,10 +57,12 @@ func workflowStepIndex(workflow, step string) int {
 }
 
 // TestWindowsPackageGateIsFailClosed pins the gate replacement: the workflow
-// step must invoke the fail-closed gate script with BOTH contracted package
-// paths, must keep the always() root-cause-reporter placement, and must
-// fail the job on any non-zero gate exit. The flawed inline predicate
-// ( Test-Path $zip) -and (Test-Path $inst) must never return.
+// step must invoke the fail-closed gate script with the contracted portable
+// ZIP path and the distribution-directory guard, must keep the always()
+// root-cause-reporter placement, and must fail the job on any non-zero gate
+// exit. The flawed inline predicate ( Test-Path $zip) -and (Test-Path $inst)
+// must never return, and the retired -Installer parameter must never come
+// back (master work order §10).
 func TestWindowsPackageGateIsFailClosed(t *testing.T) {
 	workflow := readTreeFile(t, workflowRelPath)
 
@@ -67,7 +73,7 @@ func TestWindowsPackageGateIsFailClosed(t *testing.T) {
 	}{
 		{"scripts/ci/PackageGate.ps1", "the gate must be the fail-closed script, not an inline predicate"},
 		{`-Zip "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64.zip"`, "the gate must independently verify the contracted portable ZIP path"},
-		{`-Installer "dist/${env:WIN_PKG_ROOT}-v${env:APP_VERSION}-windows-x64-installer.exe"`, "the gate must independently verify the contracted installer path"},
+		{`-DistDir "dist"`, "the gate must guard the distribution directory against stale installer remnants"},
 		{"$LASTEXITCODE -ne 0", "a non-zero gate exit must fail the job"},
 		{"ci-logs/win-package-gate.log", "the gate transcript must land in the consolidated run-log artifact"},
 	} {
@@ -77,6 +83,9 @@ func TestWindowsPackageGateIsFailClosed(t *testing.T) {
 	}
 	if strings.Contains(body, `-and (Test-Path $inst)`) {
 		t.Errorf("package gate step still contains the flawed 'ZIP missing AND installer exists' predicate that printed 'reached' with both packages absent")
+	}
+	if strings.Contains(body, `-Installer `) {
+		t.Errorf("package gate step still passes the retired -Installer parameter — installer production is removed (master work order §10)")
 	}
 	if !strings.Contains(body, "if: always()") {
 		t.Errorf("package gate step must keep if: always() so a red upstream build still yields the named root cause")
@@ -111,10 +120,6 @@ func TestWindowsPackageProducerOrdering(t *testing.T) {
 		"Verify the PE (x86-64, windowsgui)",
 		"Create Windows ZIP",
 		"Verify Windows ZIP",
-		"Install NSIS",
-		"Build the NSIS installer",
-		"Verify the installer exists",
-		"NSIS install/uninstall smoke (payload symmetry + data preservation)",
 		"Package gate (root-cause reporter)",
 		"Upload Windows package",
 	}
@@ -133,7 +138,8 @@ func TestWindowsPackageProducerOrdering(t *testing.T) {
 
 // TestWindowsPackageUploadIsSuccessGatedAndComplete pins the upload
 // contract: success-gated (never always()), if-no-files-found: error, and
-// BOTH distribution files listed — a partial package set can never upload.
+// the portable ZIP listed — a partial package set can never upload, and a
+// retired installer artifact can never ride along (master work order §10).
 func TestWindowsPackageUploadIsSuccessGatedAndComplete(t *testing.T) {
 	workflow := readTreeFile(t, workflowRelPath)
 
@@ -143,12 +149,14 @@ func TestWindowsPackageUploadIsSuccessGatedAndComplete(t *testing.T) {
 	}
 	for _, need := range []string{
 		`dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64.zip`,
-		`dist/${{ env.WIN_PKG_ROOT }}-v${{ env.APP_VERSION }}-windows-x64-installer.exe`,
 		"if-no-files-found: error",
 	} {
 		if !strings.Contains(body, need) {
 			t.Errorf("Windows package upload is missing the required slot %q", need)
 		}
+	}
+	if strings.Contains(body, "installer") {
+		t.Errorf("Windows package upload still lists a retired installer artifact — installer production is removed (master work order §10)")
 	}
 }
 
@@ -172,23 +180,25 @@ func TestWindowsZipPurityBansQtRuntime(t *testing.T) {
 	}
 }
 
-// TestWindowsInstallerPEIdentityValidated pins the installer PE validation
-// (work order §3.3 item 6): the installer's PE identity is checked, never
-// inferred from the .exe suffix. NSIS 3.x stubs are i386 PEs even when the
-// payload is x64-only, so both i386 and x86-64 machine types are accepted.
-func TestWindowsInstallerPEIdentityValidated(t *testing.T) {
+// TestWindowsInstallerSurfaceIsRetired pins the master work order §10
+// installer retirement at the workflow level: no installer build, smoke,
+// version-gate or upload surface may reappear in build-desktop.yml. The
+// portable ZIP is the ONE supported Windows package.
+func TestWindowsInstallerSurfaceIsRetired(t *testing.T) {
 	workflow := readTreeFile(t, workflowRelPath)
 
-	body := workflowStepBody(t, workflow, "Verify the installer exists")
-	for _, need := range []string{
-		"0x4D",   // MZ
-		"0x50",   // PE signature
-		"0x014C", // i386 machine type (NSIS 3.x stub)
-		"0x8664", // x86-64 machine type
-		"installer is not a PE binary (missing MZ)",
+	for _, gone := range []string{
+		"Install NSIS",
+		"Build the NSIS installer",
+		"Verify the installer exists",
+		"NSIS install/uninstall smoke",
+		"NSIS version gate fixture contract",
+		"makensis",
+		"packaging/nsis",
+		"-windows-x64-installer.exe",
 	} {
-		if !strings.Contains(body, need) {
-			t.Errorf("Verify the installer exists lost the PE identity check fragment %q", need)
+		if strings.Contains(workflow, gone) {
+			t.Errorf("build-desktop.yml still references the retired installer surface %q — installer production is removed (master work order §10)", gone)
 		}
 	}
 }

@@ -171,10 +171,8 @@ var fileOverride = map[string]string{
 	"docs/UPDATE.md":                             "Update policy and the manual dependency inventory",
 	"docs/ui-contract.md":                        "The UI design contract: tokens, states, surfaces (run #123)",
 	"docs/3dstudio.md":                           "3D Studio (read-only topology viewer) documentation",
-	"scripts/ci/PackageGate.ps1":                 "The fail-closed Windows package gate: ZIP + installer integrity, PE identity, dependency closure",
-	"scripts/ci/PackageGate.Tests.ps1":           "Deterministic fixture suite for the package gate truth table (real zips, real PE bytes)",
-	"scripts/ci/NsisVersion.ps1":                 "The shared NSIS 3.13.0 version-gate semantics (run-43883548198 repair: accepts the v3.13 spelling)",
-	"scripts/ci/NsisVersion.Tests.ps1":           "Fixture suite for the NSIS version gate: accept/reject matrices + verdict shape",
+	"scripts/ci/PackageGate.ps1":                 "The fail-closed Windows package gate: portable-ZIP integrity, installer-remnant guard, dependency closure (installers retired, master work order §10)",
+	"scripts/ci/PackageGate.Tests.ps1":           "Deterministic fixture suite for the package gate truth table (real zips, installer-remnant fixtures)",
 	"scripts/ci/ImportAudit.ps1":                 "The Windows static-import closure audit (pre-launch 0xC0000135 prevention)",
 	"scripts/ci/ImportAudit.Tests.ps1":           "Fixture suite for the import-audit decision contract",
 	"scripts/ci/Capture-Step.ps1":                "Step log capture helper",
@@ -188,7 +186,6 @@ var fileOverride = map[string]string{
 	"scripts/gen-syso/main.go":                   "Windows version-resource (syso) generator",
 	"scripts/stress-main/main.go":                "Stress-suite standalone entry",
 	"scripts/gen-filecatalog/main.go":            "The complete tracked-file catalog generator (this tool — §8.2)",
-	"packaging/nsis/installer.nsi":               "The NSIS installer script (one Go executable payload; uninstall symmetry)",
 	"packaging/SHEYTAN-LA.bat":                   "The Windows portable launcher",
 	"build/config.yml":                           "Build configuration",
 	"build/sheytan.ico":                          "The product icon (Windows build resource)",
@@ -252,8 +249,6 @@ func classify(path string) entry {
 		e.Type, e.Language = "data", "JSON"
 	case ".png", ".jpg", ".ico":
 		e.Type, e.Language = "asset", "image"
-	case ".nsi", ".nsh":
-		e.Type, e.Language = "installer", "NSIS"
 	case ".bat":
 		e.Type, e.Language = "launcher", "batch"
 	case ".cpp", ".cc", ".c", ".h", ".hpp":

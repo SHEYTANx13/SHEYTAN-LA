@@ -137,8 +137,9 @@ func main() {
 	}
 
 	// 6) 1.1.6 §12: also emit a standalone multi-resolution .ico for
-	// packaged shortcut/application metadata (the NSIS installer,
-	// Windows Explorer property sheets). Same brand mark, same ladder.
+	// packaged shortcut/application metadata (Windows Explorer property
+	// sheets; the installer formats are retired — master work order §10).
+	// Same brand mark, same ladder.
 	if err := writeICO("build/sheytan.ico", img); err != nil {
 		fatal("write ico: %v", err)
 	}

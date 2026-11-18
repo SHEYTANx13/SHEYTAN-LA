@@ -16,10 +16,16 @@ Licensed under a conservative mixed model — Apache-2.0 for explicitly designat
 
 ```text
 Application:      SHEYTAN-LA (SHEYTAN Local Agent)
+Product stage:    ALPHA
 Executable:       SHEYTAN-LA.exe
 AppUserModelID:   SHEYTANx13.SHEYTAN-LA
 Branch:           main
 ```
+
+**ALPHA is the product stage label.** The application is in active
+development; ALPHA is the only user-facing product identity until the
+product is fully functional. Distribution is portable-only — the
+portable ZIP is the one supported package; no installer is produced.
 
 ---
 

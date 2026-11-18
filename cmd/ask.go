@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/agent"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/chunking"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm"
@@ -245,8 +246,8 @@ func Ask(cfg *config.Config, args []string) int {
 	_ = store.Save(sess)
 
 	fmt.Printf(
-		"┌─ SHEYTAN™ v%s — ask (provider=%s, model=%s)\n",
-		config.AppVersion,
+		"┌─ SHEYTAN™ %s — ask (provider=%s, model=%s)\n",
+		brand.Stage,
 		cfg.ProviderKind(),
 		cfg.EffectiveModel(),
 	)

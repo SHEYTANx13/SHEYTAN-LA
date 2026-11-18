@@ -243,7 +243,6 @@ const fixtureUploadWorkflow = `jobs:
           name: windows-x64-package
           path: |
             dist/SHEYTAN-LA-v1.11.1-windows-x64.zip
-            dist/SHEYTAN-LA-v1.11.1-windows-x64-installer.exe
           retention-days: 14
           if-no-files-found: error
           overwrite: true
@@ -295,7 +294,6 @@ const fixtureWithDuplicateLogUpload = `jobs:
           name: windows-x64-package
           path: |
             dist/SHEYTAN-LA-v1.11.1-windows-x64.zip
-            dist/SHEYTAN-LA-v1.11.1-windows-x64-installer.exe
           overwrite: true
   consolidate-logs:
     name: Consolidate logs

@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime"
 
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/installer"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/sysinfo"
@@ -41,7 +42,7 @@ func Install(cfg *config.Config) int {
 // Sysinfo prints a detailed host probe.
 func Sysinfo(cfg *config.Config) int {
 	info := sysinfo.Probe()
-	fmt.Printf("%s v%s — system info\n\n", config.AppName, config.AppVersion)
+	fmt.Printf("%s — %s — system info\n\n", config.AppName, brand.Stage)
 	fmt.Printf("OS:        %s/%s\n", info.OS, info.Arch)
 	fmt.Printf("Hostname:  %s\n", info.Hostname)
 	fmt.Printf("CPU:       %s (%d cores / %d threads)\n",
@@ -82,7 +83,7 @@ func Sysinfo(cfg *config.Config) int {
 // Doctor runs a full health check.
 func Doctor(cfg *config.Config) int {
 	info := sysinfo.Probe()
-	fmt.Printf("%s v%s doctor — health check\n\n", config.AppName, config.AppVersion)
+	fmt.Printf("%s — %s doctor — health check\n\n", config.AppName, brand.Stage)
 	pass, fail := 0, 0
 	check := func(name string, ok bool, msg string) {
 		mark := "✓"
@@ -119,7 +120,7 @@ func Doctor(cfg *config.Config) int {
 
 // Setup runs the first-run CLI wizard.
 func Setup(cfg *config.Config) int {
-	fmt.Printf("%s v%s — setup wizard\n\n", config.AppName, config.AppVersion)
+	fmt.Printf("%s — %s — setup wizard\n\n", config.AppName, brand.Stage)
 	if err := cfg.EnsureDirs(); err != nil {
 		fmt.Fprintln(os.Stderr, "mkdir:", err)
 		return 1
@@ -140,7 +141,7 @@ func Setup(cfg *config.Config) int {
 
 // Stress runs the stress test suite.
 func Stress(cfg *config.Config) int {
-	fmt.Printf("%s v%s stress test — chaos suite\n\n",
-		config.AppName, config.AppVersion)
+	fmt.Printf("%s — %s stress test — chaos suite\n\n",
+		config.AppName, brand.Stage)
 	return runStressSuite(cfg)
 }

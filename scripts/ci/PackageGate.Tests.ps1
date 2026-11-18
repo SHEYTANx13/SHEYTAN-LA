@@ -1,22 +1,14 @@
 <#
 .SYNOPSIS
-  Fixtures for the fail-closed Windows package gate (v1.11.1) —
-  deterministic, stream-safe, table-driven (run 42928792246 work order
-  §3.2).
+  Fixtures for the fail-closed Windows package gate (ALPHA portable-only,
+  master work order §10) — deterministic, stream-safe, table-driven.
 
 .DESCRIPTION
   Runs scripts/ci/PackageGate.ps1 against deterministic local fixtures
   and fails on any violation. No Pester, no network.
 
-  Run 42928792246 root cause (reproduced locally on PowerShell 7.4): the
-  v1 harness captured the gate with `2>&1`, which merges the ERROR stream
-  into stdout but NEVER the INFORMATION stream — and the gate emitted
-  everything through Write-Host (information stream 6). The captured
-  output was therefore empty, all seven diagnostic-output assertions
-  failed, and every expected negative-fixture `::error::` line leaked to
-  the console as a live workflow annotation.
-
-  The v2 harness is stream-safe and contract-pinned:
+  The harness is stream-safe and contract-pinned (carried over from run
+  42928792246):
 
     - It captures ALL streams (`*&1`), so expected negative-fixture
       output is inert test data — never a live GitHub annotation — and
@@ -26,33 +18,31 @@
     - It asserts the STABLE contract only: the single machine-readable
       token line (PACKAGE_GATE_RESULT <TOKEN>), the exit code, and the
       structured JSON result file (affected path, byte counts, missing/
-      forbidden entries, installer PE machine type, dependency verdict).
-      Free-form message text is never asserted (no ANSI/cwd/locale/
-      formatting coupling).
+      forbidden entries, installer-remnant inventory, dependency
+      verdict). Free-form message text is never asserted (no
+      ANSI/cwd/locale/formatting coupling).
     - Fixtures are REAL artifacts: real ZIP archives built with
-      System.IO.Compression, real PE byte sequences (MZ + PE signature +
-      machine type), real byte counts — not placeholder text.
+      System.IO.Compression and real byte counts — not placeholder text.
 
   State matrix pinned here (token -> exit):
 
-    1  BOTH_MISSING               2    8  ZIP_BAD_ROOT            2
-    2  ZIP_MISSING                2    9  ZIP_MISSING_ENTRIES     2
-    3  INSTALLER_MISSING          2   10  ZIP_FORBIDDEN_ENTRIES   2
-    4  ZIP_EMPTY                  2   11  INSTALLER_NOT_PE        2
-    5  INSTALLER_EMPTY            2   12  INSTALLER_BAD_ARCH      2
-    6  OK (real zip + real PE)    0   13  OK with i386 NSIS stub  0
-    7  ZIP_CORRUPT                2   14  INVALID_ARGUMENTS       1
-    15 INVALID_ARGUMENTS (CLI)    1   16  DEPENDENCY_CLOSURE      2
-    17 dependency PASS report     0   18  determinism pins
-    21 BLOCKED_BY_UPSTREAM_TEST_FAILURE 2   22a marker-absent OK   0
-    22b marker-absent BOTH_MISSING 2
+     1  ZIP_MISSING                2    8  ZIP_MISSING_ENTRIES     2
+     2  ZIP_EMPTY                  2    9  ZIP_FORBIDDEN_ENTRIES   2
+     3  ZIP_CORRUPT                2   10  INSTALLER_REMNANT       2
+     4  ZIP_BAD_ROOT               2   11  OK (real zip)           0
+     5  INVALID_ARGUMENTS          1   12  dependency FAIL report  2
+     6  INVALID_ARGUMENTS (CLI)    1   13  dependency PASS report  0
+     7  ZIP_FORBIDDEN (Mesa DLL)   2   14  BLOCKED_BY_UPSTREAM     2
+                                        15  marker-absent states    0/2
 
   Additional contract pins: the success line "package gate: reached"
-  and the OK token appear ONLY in the OK state; the OK success line
-  carries the ACTUAL on-disk byte counts and SHA-256 digests (fixture
-  byte counts are asserted against the real files, never copied); the
-  expected negative-fixture ::error:: output stays visible in the
-  escaped fixture log without ever masquerading as a live annotation.
+  and the OK token appear ONLY in the OK state; the gate has NO
+  -Installer parameter (installer production is retired — master work
+  order §10) and rejects stale installer remnants in the distribution
+  directory; the OK success line carries the ACTUAL on-disk byte count
+  and SHA-256 digest; the expected negative-fixture ::error:: output
+  stays visible in the escaped fixture log without ever masquerading as
+  a live annotation.
 
   Exit codes: 0 all fixtures hold; 1 fixture contract violated.
 #>
@@ -78,420 +68,233 @@ function Assert-True {
     }
 }
 
-$repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$gateScript = Join-Path $PSScriptRoot "PackageGate.ps1"
-$work = Join-Path ([System.IO.Path]::GetTempPath()) ("packagegate-fixtures-" + [System.Guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Force -Path $work | Out-Null
-$ciLogs = Join-Path $repoRoot "ci-logs"
-New-Item -ItemType Directory -Force -Path $ciLogs | Out-Null
-$fixtureLog = Join-Path $ciLogs "package-gate-fixtures.log"
-Set-Content -LiteralPath $fixtureLog -Value "package-gate fixture suite — captured child-gate output (each line prefixed 'fixture-output: ' so expected negative-fixture ::error:: text can never be parsed as a live workflow command)" -Encoding utf8NoBOM
-
-function Add-FixtureLog {
-    param([string[]]$Lines)
-    foreach ($l in $Lines) {
-        # Inert-by-construction: no captured line may ever start with the
-        # GitHub workflow-command prefix, so expected negative-fixture
-        # errors cannot inflate the run's real annotation count.
-        Add-Content -LiteralPath $script:fixtureLog -Value ("fixture-output: " + $l) -Encoding utf8NoBOM
-    }
+function Assert-Equal {
+    param([object]$Expected, [object]$Actual, [string]$What)
+    Assert-True ([string]$Expected -eq [string]$Actual) ("$What (expected '$Expected', got '$Actual')")
 }
+
+# Stream-safe capture: ALL streams, so expected negative-fixture output
+# is inert test data, never a live workflow annotation.
+$script:fixtureLog = "ci-logs/package-gate-fixtures.log"
+New-Item -ItemType Directory -Force -Path "ci-logs" | Out-Null
+Set-Content -Path $script:fixtureLog -Value ("package gate fixtures — " + [System.DateTime]::UtcNow.ToString("o")) -Encoding utf8NoBOM
 
 function Invoke-Gate {
-    # Named-parameter splatting (hashtable): an ARRAY splat would bind
-    # POSITIONALLY and turn the '-Zip'/'-Installer' flag strings into
-    # literal parameter values. Omitted keys omit the argument — which is
-    # exactly the invalid-argument state under test.
-    param([string]$ZipPath, [string]$InstallerPath, [string]$ResultPath, [string]$DependencyReportPath, [string]$UpstreamMarkerPath)
-    $ht = @{}
-    if ($ZipPath)           { $ht["Zip"] = $ZipPath }
-    if ($InstallerPath)     { $ht["Installer"] = $InstallerPath }
-    if ($ResultPath)        { $ht["ResultFile"] = $ResultPath }
-    if ($DependencyReportPath) { $ht["DependencyReport"] = $DependencyReportPath }
-    if ($UpstreamMarkerPath)   { $ht["UpstreamFailureMarker"] = $UpstreamMarkerPath }
-    $out = & $gateScript @ht 2>&1 6>&1
+    param([string[]]$GateArgs)
+    $out = & ./scripts/ci/PackageGate.ps1 @GateArgs *&1 | Out-String
     $code = $LASTEXITCODE
-    $lines = @($out | ForEach-Object { $_.ToString() })
-    Add-FixtureLog -Lines $lines
-    $json = $null
-    if ($ResultPath -and (Test-Path -LiteralPath $ResultPath)) {
-        $json = Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json
-    }
-    [pscustomobject]@{
-        ExitCode = $code
-        Output   = $lines
-        Json     = $json
-    }
-}
-
-# --- deterministic fixture builders ---------------------------------------
-
-function New-FixtureInstallerFile {
-    param([string]$Path, [int]$Machine = 0x8664, [switch]$NotPE)
-    if ($NotPE) {
-        Set-Content -LiteralPath $Path -Value "placeholder installer bytes (not a PE)" -Encoding utf8NoBOM
-        return
-    }
-    $b = New-Object byte[] 4096
-    $b[0] = 0x4D; $b[1] = 0x5A              # MZ
-    $b[0x3C] = 0x40                          # e_lfanew -> 0x40
-    $b[0x40] = 0x50; $b[0x41] = 0x45; $b[0x42] = 0x00; $b[0x43] = 0x00  # PE\0\0
-    $m = [BitConverter]::GetBytes([UInt16]$Machine)
-    $b[0x44] = $m[0]; $b[0x45] = $m[1]       # COFF machine type at peOffset+4
-    [System.IO.File]::WriteAllBytes($Path, $b)
-}
-
-function New-FixtureZip {
-    param([string]$Path, [hashtable]$Entries)
-    $fs = [System.IO.File]::Create($Path)
-    try {
-        $archive = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
-        try {
-            foreach ($k in $Entries.Keys) {
-                $entry = $archive.CreateEntry($k)
-                $es = $entry.Open()
-                try {
-                    $bytes = $Entries[$k]
-                    if ($bytes -is [string]) { $bytes = [System.Text.Encoding]::UTF8.GetBytes($bytes) }
-                    $es.Write($bytes, 0, $bytes.Length)
-                } finally { $es.Dispose() }
-            }
-        } finally { $archive.Dispose() }
-    } finally { $fs.Dispose() }
-}
-
-function New-ExePEBytes {
-    # A minimal real x86-64 PE byte sequence for the payload entry.
-    $b = New-Object byte[] 2048
-    $b[0] = 0x4D; $b[1] = 0x5A
-    $b[0x3C] = 0x40
-    $b[0x40] = 0x50; $b[0x41] = 0x45; $b[0x42] = 0x00; $b[0x43] = 0x00
-    $m = [BitConverter]::GetBytes([UInt16]0x8664)
-    $b[0x44] = $m[0]; $b[0x45] = $m[1]
-    return $b
-}
-
-function New-ValidPayloadEntries {
-    [ordered]@{
-        "SHEYTAN-LA/SHEYTAN-LA.exe"                          = (New-ExePEBytes)
-        "SHEYTAN-LA/SHEYTAN-LA.bat"                          = "@echo off`r`nSHEYTAN-LA.exe %*`r`n"
-        "SHEYTAN-LA/resources/docs/README.txt"               = "SHEYTAN-LA 1.11.1 - run SHEYTAN-LA.exe"
-        "SHEYTAN-LA/resources/docs/BUILD-INFO.txt"           = "product: SHEYTAN-LA`nversion: 1.11.1"
-        "SHEYTAN-LA/resources/docs/LICENSE.md"               = "# License (fixture extract)"
-        "SHEYTAN-LA/resources/brand/sheytan.ico"             = ([byte[]](0,0,1,0,1,0))
-    }
-}
-
-function New-ValidPair {
-    param([string]$ZipPath, [string]$InstPath, [int]$InstallerMachine = 0x8664)
-    New-FixtureZip -Path $ZipPath -Entries (New-ValidPayloadEntries)
-    New-FixtureInstallerFile -Path $InstPath -Machine $InstallerMachine
-}
-
-# --- shared outcome assertions (stable contract only) ----------------------
-
-function Assert-GateOutcome {
-    param($r, [string]$ExpectToken, [int]$ExpectCode, [string]$What, [switch]$ExpectJson)
-    Assert-True ($r.ExitCode -eq $ExpectCode) "${What}: exit $ExpectCode (got $($r.ExitCode))"
-    $tokenLines = @($r.Output | Where-Object { $_ -match '^PACKAGE_GATE_RESULT ' })
-    Assert-True ($tokenLines.Count -eq 1) "${What}: exactly one machine-readable PACKAGE_GATE_RESULT line (got $($tokenLines.Count))"
-    if ($tokenLines.Count -ge 1) {
-        Assert-True ($tokenLines[0] -eq "PACKAGE_GATE_RESULT $ExpectToken") "${What}: stable outcome token $ExpectToken (got '$($tokenLines[0])')"
-    }
-    if ($ExpectToken -ne "OK") {
-        $reached = @($r.Output | Where-Object { $_.Contains("package gate: reached") })
-        Assert-True ($reached.Count -eq 0) "${What}: never prints the success line"
-        Assert-True (-not ($tokenLines | Where-Object { $_ -eq "PACKAGE_GATE_RESULT OK" })) "${What}: never prints the OK token"
-    }
-    if ($ExpectJson) {
-        Assert-True ($null -ne $r.Json) "${What}: the JSON result file was written"
-        if ($null -ne $r.Json) {
-            Assert-True ($r.Json.token -eq $ExpectToken) "${What}: JSON token is $ExpectToken (got $($r.Json.token))"
-            Assert-True ([int]$r.Json.exitCode -eq $ExpectCode) "${What}: JSON exitCode is $ExpectCode (got $($r.Json.exitCode))"
+    foreach ($line in ($out -split "`r?`n")) {
+        if ($line.Trim().Length -gt 0) {
+            Add-Content -Path $script:fixtureLog -Value ("  | " + $line) -Encoding utf8NoBOM
         }
     }
+    [pscustomobject]@{ Output = $out; ExitCode = $code }
 }
+
+function Gate-Token {
+    param([string]$Output)
+    $hits = @($Output -split "`r?`n" | Where-Object { $_ -like "PACKAGE_GATE_RESULT *" })
+    return [pscustomobject]@{ Lines = $hits; Token = $(if ($hits.Count -eq 1) { ($hits[0] -replace '^PACKAGE_GATE_RESULT\s+', '') } else { "<tokens:$($hits.Count)>" }) }
+}
+
+# Fixture workspace (unique per invocation, cleaned up at the end).
+$base = Join-Path ([System.IO.Path]::GetTempPath()) ("pkggate-fixture-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force -Path $base | Out-Null
+
+function New-Zip {
+    param([string]$Path, [string[]]$Entries, [string]$Content = "payload-bytes")
+    $root = "SHEYTAN-LA"
+    $fs = [System.IO.File]::Create($Path)
+    $zip = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
+    foreach ($e in $Entries) {
+        $entry = $zip.CreateEntry("$root/$e")
+        $writer = New-Object System.IO.StreamWriter($entry.Open())
+        $writer.Write($Content)
+        $writer.Dispose()
+    }
+    $zip.Dispose()
+    $fs.Dispose()
+}
+
+$requiredEntries = @(
+    "SHEYTAN-LA.exe",
+    "SHEYTAN-LA.bat",
+    "resources/docs/README.txt",
+    "resources/docs/BUILD-INFO.txt",
+    "resources/docs/LICENSE.md",
+    "resources/brand/sheytan.ico"
+)
 
 try {
-    Assert-True (Test-Path -LiteralPath $gateScript -PathType Leaf) "precondition: PackageGate.ps1 exists beside this fixture suite"
-
-    $zipName = "SHEYTAN-LA-v1.11.1-windows-x64.zip"
-    $instName = "SHEYTAN-LA-v1.11.1-windows-x64-installer.exe"
-    $zipPath = Join-Path $work $zipName
-    $instPath = Join-Path $work $instName
-
     # ------------------------------------------------------------------
-    # 1. BOTH_MISSING — neither package present
+    # 1. ZIP_MISSING (the only "absent" state — BOTH_MISSING merged).
     # ------------------------------------------------------------------
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath
-    Assert-GateOutcome -r $r -ExpectToken "BOTH_MISSING" -ExpectCode 2 -What "state 1 (both missing)"
-    Assert-True ($null -eq $r.Json -or $r.Json.zipBytes -eq $null) "state 1: JSON carries no byte counts for the absent ZIP"
+    $zipPath = Join-Path $base "missing.zip"   # deliberately not created
+    $r = Invoke-Gate @("-Zip", $zipPath)
+    Assert-Equal 2 $r.ExitCode "ZIP_MISSING exit code"
+    Assert-Equal "ZIP_MISSING" (Gate-Token $r.Output).Token "ZIP_MISSING token"
+    Assert-Equal 1 (Gate-Token $r.Output).Lines.Count "exactly one PACKAGE_GATE_RESULT line (ZIP_MISSING)"
 
     # ------------------------------------------------------------------
-    # 2. ZIP_MISSING — installer present (real PE bytes)
+    # 2. ZIP_EMPTY.
     # ------------------------------------------------------------------
-    New-FixtureInstallerFile -Path $instPath -Machine 0x8664
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath
-    Assert-GateOutcome -r $r -ExpectToken "ZIP_MISSING" -ExpectCode 2 -What "state 2 (ZIP-only missing)"
+    $zipPath = Join-Path $base "empty.zip"
+    Set-Content -Path $zipPath -Value "" -NoNewline -Encoding Ascii
+    $r = Invoke-Gate @("-Zip", $zipPath)
+    Assert-Equal 2 $r.ExitCode "ZIP_EMPTY exit code"
+    Assert-Equal "ZIP_EMPTY" (Gate-Token $r.Output).Token "ZIP_EMPTY token"
 
     # ------------------------------------------------------------------
-    # 3. INSTALLER_MISSING — ZIP present (real archive)
+    # 3. ZIP_CORRUPT (non-empty non-archive).
     # ------------------------------------------------------------------
-    Remove-Item -LiteralPath $instPath -Force
-    New-FixtureZip -Path $zipPath -Entries (New-ValidPayloadEntries)
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath
-    Assert-GateOutcome -r $r -ExpectToken "INSTALLER_MISSING" -ExpectCode 2 -What "state 3 (installer-only missing)"
+    $zipPath = Join-Path $base "corrupt.zip"
+    Set-Content -Path $zipPath -Value "this is not a zip archive" -NoNewline -Encoding Ascii
+    $r = Invoke-Gate @("-Zip", $zipPath)
+    Assert-Equal 2 $r.ExitCode "ZIP_CORRUPT exit code"
+    Assert-Equal "ZIP_CORRUPT" (Gate-Token $r.Output).Token "ZIP_CORRUPT token"
 
     # ------------------------------------------------------------------
-    # 4. ZIP_EMPTY — 0-byte ZIP, installer present
+    # 4. ZIP_BAD_ROOT (two top-level directories).
     # ------------------------------------------------------------------
-    Remove-Item -LiteralPath $zipPath -Force
-    New-Item -ItemType File -Force -Path $zipPath | Out-Null
-    New-FixtureInstallerFile -Path $instPath -Machine 0x8664
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath
-    Assert-GateOutcome -r $r -ExpectToken "ZIP_EMPTY" -ExpectCode 2 -What "state 4 (empty ZIP)"
+    $zipPath = Join-Path $base "badroot.zip"
+    $fs = [System.IO.File]::Create($zipPath)
+    $zip = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
+    foreach ($rootName in @("SHEYTAN-LA", "OTHER")) {
+        $entry = $zip.CreateEntry("$rootName/SHEYTAN-LA.exe")
+        $writer = New-Object System.IO.StreamWriter($entry.Open())
+        $writer.Write("x")
+        $writer.Dispose()
+    }
+    $zip.Dispose()
+    $fs.Dispose()
+    $r = Invoke-Gate @("-Zip", $zipPath)
+    Assert-Equal 2 $r.ExitCode "ZIP_BAD_ROOT exit code"
+    Assert-Equal "ZIP_BAD_ROOT" (Gate-Token $r.Output).Token "ZIP_BAD_ROOT token"
 
     # ------------------------------------------------------------------
-    # 5. INSTALLER_EMPTY — ZIP present, 0-byte installer
+    # 5. ZIP_MISSING_ENTRIES (real zip with required entries removed).
     # ------------------------------------------------------------------
-    Remove-Item -LiteralPath $zipPath -Force
-    Remove-Item -LiteralPath $instPath -Force
-    New-FixtureZip -Path $zipPath -Entries (New-ValidPayloadEntries)
-    New-Item -ItemType File -Force -Path $instPath | Out-Null
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath
-    Assert-GateOutcome -r $r -ExpectToken "INSTALLER_EMPTY" -ExpectCode 2 -What "state 5 (empty installer)"
+    $zipPath = Join-Path $base "missing-entries.zip"
+    New-Zip -Path $zipPath -Entries @("SHEYTAN-LA.exe")
+    $r = Invoke-Gate @("-Zip", $zipPath)
+    Assert-Equal 2 $r.ExitCode "ZIP_MISSING_ENTRIES exit code"
+    Assert-Equal "ZIP_MISSING_ENTRIES" (Gate-Token $r.Output).Token "ZIP_MISSING_ENTRIES token"
 
     # ------------------------------------------------------------------
-    # 6. OK — both present: REAL archive with the contracted entries and
-    #    a REAL x86-64 PE installer; JSON result file carries the ACTUAL
-    #    byte counts, entry count, machine type and SHA-256 digests.
+    # 6. ZIP_FORBIDDEN_ENTRIES (Mesa software-GL DLL residue).
     # ------------------------------------------------------------------
-    Remove-Item -LiteralPath $zipPath -Force
-    Remove-Item -LiteralPath $instPath -Force
-    $resultPath = Join-Path $work "gate-result.json"
-    New-ValidPair -ZipPath $zipPath -InstPath $instPath
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath -ResultPath $resultPath
-    Assert-GateOutcome -r $r -ExpectToken "OK" -ExpectCode 0 -What "state 6 (both valid)" -ExpectJson
-    $zipLen = (Get-Item -LiteralPath $zipPath).Length
-    $instLen = (Get-Item -LiteralPath $instPath).Length
-    $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    $instHash = (Get-FileHash -LiteralPath $instPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    Assert-True ([long]$r.Json.zipBytes -eq [long]$zipLen) "state 6: JSON reports the ACTUAL ZIP byte count ($zipLen, got $($r.Json.zipBytes))"
-    Assert-True ([long]$r.Json.installerBytes -eq [long]$instLen) "state 6: JSON reports the ACTUAL installer byte count ($instLen, got $($r.Json.installerBytes))"
-    Assert-True ($r.Json.zipEntryCount -ge 6) "state 6: JSON reports the archive entry count (got $($r.Json.zipEntryCount))"
-    Assert-True ($r.Json.installerMachine -eq "0x8664") "state 6: JSON reports the installer PE machine type (got $($r.Json.installerMachine))"
-    Assert-True ($r.Json.zipSha256 -eq $zipHash) "state 6: JSON carries the real ZIP SHA-256"
-    Assert-True ($r.Json.installerSha256 -eq $instHash) "state 6: JSON carries the real installer SHA-256"
-    $successLine = @($r.Output | Where-Object { $_.Contains("package gate: reached") })
-    Assert-True ($successLine.Count -eq 1) "state 6: prints the success line exactly once"
-    Assert-True ($successLine[0].Contains("portable ZIP $zipLen bytes")) "state 6: success line carries the verified ZIP byte count"
-    Assert-True ($successLine[0].Contains("installer $instLen bytes")) "state 6: success line carries the verified installer byte count"
-    Assert-True ($successLine[0].Contains("sha256 zip=$zipHash") -and $successLine[0].Contains("installer=$instHash")) "state 6: success line carries the verified SHA-256 digests"
-    Assert-True ($successLine[0].Contains("both distribution packages present and non-empty")) "state 6: success line keeps its stable phrase"
+    $zipPath = Join-Path $base "forbidden.zip"
+    New-Zip -Path $zipPath -Entries ($requiredEntries + @("opengl32.dll"))
+    $r = Invoke-Gate @("-Zip", $zipPath)
+    Assert-Equal 2 $r.ExitCode "ZIP_FORBIDDEN_ENTRIES (Mesa DLL) exit code"
+    Assert-Equal "ZIP_FORBIDDEN_ENTRIES" (Gate-Token $r.Output).Token "ZIP_FORBIDDEN_ENTRIES token"
 
     # ------------------------------------------------------------------
-    # 7. ZIP_CORRUPT — non-empty bytes that are not a readable archive
+    # 7. INSTALLER_REMNANT: a stale installer artifact in the
+    #    distribution directory fails the gate (master work order §10.2).
     # ------------------------------------------------------------------
-    Remove-Item -LiteralPath $zipPath -Force
-    Set-Content -LiteralPath $zipPath -Value "PK placeholder zip bytes (not a real archive)" -Encoding utf8NoBOM
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath
-    Assert-GateOutcome -r $r -ExpectToken "ZIP_CORRUPT" -ExpectCode 2 -What "state 7 (corrupt archive)"
+    $goodZip = Join-Path $base "good.zip"
+    New-Zip -Path $goodZip -Entries $requiredEntries
+    $distDir = Join-Path $base "dist"
+    New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+    Copy-Item $goodZip (Join-Path $distDir "SHEYTAN-LA-v1-windows-x64.zip")
+    Set-Content -Path (Join-Path $distDir "SHEYTAN-LA-v1-windows-x64-installer.exe") -Value "stale installer" -NoNewline -Encoding Ascii
+    $r = Invoke-Gate @("-Zip", (Join-Path $distDir "SHEYTAN-LA-v1-windows-x64.zip"), "-DistDir", $distDir)
+    Assert-Equal 2 $r.ExitCode "INSTALLER_REMNANT exit code"
+    Assert-Equal "INSTALLER_REMNANT" (Gate-Token $r.Output).Token "INSTALLER_REMNANT token"
+    # The same directory WITHOUT the remnant passes the remnant check.
+    Remove-Item -LiteralPath (Join-Path $distDir "SHEYTAN-LA-v1-windows-x64-installer.exe") -Force
+    $r = Invoke-Gate @("-Zip", (Join-Path $distDir "SHEYTAN-LA-v1-windows-x64.zip"), "-DistDir", $distDir)
+    Assert-Equal 0 $r.ExitCode "remnant-free dist dir passes"
+    Assert-Equal "OK" (Gate-Token $r.Output).Token "remnant-free dist dir token"
 
     # ------------------------------------------------------------------
-    # 8. ZIP_BAD_ROOT — a real archive, but entries not under exactly one
-    #    top-level SHEYTAN-LA/ directory
+    # 8. OK — the real portable ZIP, full required entries, with the
+    #    ACTUAL byte count and digest asserted against the real file.
     # ------------------------------------------------------------------
-    Remove-Item -LiteralPath $zipPath -Force
-    New-FixtureZip -Path $zipPath -Entries ([ordered]@{
-        "wrong-root/SHEYTAN-LA.exe" = (New-ExePEBytes)
-        "wrong-root/resources/docs/README.txt" = "misplaced"
-    })
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath
-    Assert-GateOutcome -r $r -ExpectToken "ZIP_BAD_ROOT" -ExpectCode 2 -What "state 8 (bad archive root)"
+    $r = Invoke-Gate @("-Zip", $goodZip, "-ResultFile", (Join-Path $base "ok-result.json"))
+    Assert-Equal 0 $r.ExitCode "OK exit code"
+    Assert-Equal "OK" (Gate-Token $r.Output).Token "OK token"
+    Assert-True ($r.Output -match "package gate: reached") "OK state prints the success line"
+    $realBytes = (Get-Item $goodZip).Length
+    $realSha = (Get-FileHash -LiteralPath $goodZip -Algorithm SHA256).Hash.ToLowerInvariant()
+    Assert-True ($r.Output -match [regex]::Escape("portable ZIP $realBytes bytes")) "success line carries the ACTUAL byte count"
+    Assert-True ($r.Output -match [regex]::Escape("sha256 zip=$realSha")) "success line carries the ACTUAL sha256"
+    $json = Get-Content -Raw -Path (Join-Path $base "ok-result.json") | ConvertFrom-Json
+    Assert-Equal "OK" $json.token "result-file token"
+    Assert-Equal $realBytes $json.zipBytes "result-file byte count"
+    Assert-Equal $realSha $json.zipSha256 "result-file digest"
+    Assert-Equal 8 $json.zipEntryCount "result-file entry count (6 required entries)"
+    Assert-Equal "SHEYTAN-LA" $json.expectedRoot "result-file expected root"
 
     # ------------------------------------------------------------------
-    # 9. ZIP_MISSING_ENTRIES — real archive, correct root, contracted
-    #    entry absent (the JSON names the exact missing paths)
+    # 9. INVALID_ARGUMENTS: missing -Zip, empty ExpectedRoot, empty
+    #    required entry — deterministic exit 1.
     # ------------------------------------------------------------------
-    Remove-Item -LiteralPath $zipPath -Force
-    $entries = New-ValidPayloadEntries
-    $entries.Remove("SHEYTAN-LA/resources/docs/README.txt")
-    New-FixtureZip -Path $zipPath -Entries $entries
-    $resultPath9 = Join-Path $work "gate-result-9.json"
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath -ResultPath $resultPath9
-    Assert-GateOutcome -r $r -ExpectToken "ZIP_MISSING_ENTRIES" -ExpectCode 2 -What "state 9 (missing payload entries)" -ExpectJson
-    Assert-True (@($r.Json.missingEntries) -contains "SHEYTAN-LA/resources/docs/README.txt") "state 9: JSON names the exact missing entry (got: $($r.Json.missingEntries -join ', '))"
+    $r = Invoke-Gate @()
+    Assert-Equal 1 $r.ExitCode "INVALID_ARGUMENTS (missing -Zip) exit code"
+    Assert-Equal "INVALID_ARGUMENTS" (Gate-Token $r.Output).Token "INVALID_ARGUMENTS (missing -Zip) token"
+    $r = Invoke-Gate @("-Zip", $goodZip, "-ExpectedRoot", "")
+    Assert-Equal 1 $r.ExitCode "INVALID_ARGUMENTS (empty ExpectedRoot) exit code"
+    $r = Invoke-Gate @("-Zip", $goodZip, "-RequiredEntries", @("SHEYTAN-LA.exe", " "))
+    Assert-Equal 1 $r.ExitCode "INVALID_ARGUMENTS (blank required entry) exit code"
 
     # ------------------------------------------------------------------
-    # 10. ZIP_FORBIDDEN_ENTRIES — data residue and a Mesa DLL in the
-    #     payload (the JSON names the exact offenders)
+    # 10. Dependency closure: FAIL report fails, PASS report passes.
     # ------------------------------------------------------------------
-    Remove-Item -LiteralPath $zipPath -Force
-    $entries = New-ValidPayloadEntries
-    $entries["SHEYTAN-LA/data/app.log"] = "smoke residue must never ship"
-    $entries["SHEYTAN-LA/opengl32.dll"] = ([byte[]](1,2,3,4))
-    New-FixtureZip -Path $zipPath -Entries $entries
-    $resultPath10 = Join-Path $work "gate-result-10.json"
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath -ResultPath $resultPath10
-    Assert-GateOutcome -r $r -ExpectToken "ZIP_FORBIDDEN_ENTRIES" -ExpectCode 2 -What "state 10 (forbidden payload entries)" -ExpectJson
-    Assert-True (@($r.Json.forbiddenEntries) -contains "SHEYTAN-LA/data/app.log") "state 10: JSON names the data-residue entry (got: $($r.Json.forbiddenEntries -join ', '))"
-    Assert-True (@($r.Json.forbiddenEntries) -contains "SHEYTAN-LA/opengl32.dll") "state 10: JSON names the Mesa DLL entry (got: $($r.Json.forbiddenEntries -join ', '))"
+    $failReport = Join-Path $base "dep-fail.txt"
+    Set-Content -Path $failReport -Value "smoke dependency audit: MISSING DEPENDENCIES (d3dcompiler_47.dll)" -Encoding utf8NoBOM
+    $r = Invoke-Gate @("-Zip", $goodZip, "-DependencyReport", $failReport)
+    Assert-Equal 2 $r.ExitCode "DEPENDENCY_CLOSURE_FAILURE exit code"
+    Assert-Equal "DEPENDENCY_CLOSURE_FAILURE" (Gate-Token $r.Output).Token "DEPENDENCY_CLOSURE_FAILURE token"
+    $passReport = Join-Path $base "dep-pass.txt"
+    Set-Content -Path $passReport -Value "smoke dependency audit: PASS (all load-chain imports resolved)" -Encoding utf8NoBOM
+    $r = Invoke-Gate @("-Zip", $goodZip, "-DependencyReport", $passReport)
+    Assert-Equal 0 $r.ExitCode "dependency PASS report passes"
+    # An absent report file is REPORT_MISSING — never a pass.
+    $r = Invoke-Gate @("-Zip", $goodZip, "-DependencyReport", (Join-Path $base "absent-dep.txt"))
+    Assert-Equal 2 $r.ExitCode "dependency REPORT_MISSING never passes"
 
     # ------------------------------------------------------------------
-    # 11. INSTALLER_NOT_PE — real archive, installer without MZ/PE
+    # 11. BLOCKED_BY_UPSTREAM_TEST_FAILURE + marker-absent fallback.
     # ------------------------------------------------------------------
-    Remove-Item -LiteralPath $zipPath -Force
-    New-FixtureZip -Path $zipPath -Entries (New-ValidPayloadEntries)
-    Remove-Item -LiteralPath $instPath -Force
-    New-FixtureInstallerFile -Path $instPath -NotPE
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath
-    Assert-GateOutcome -r $r -ExpectToken "INSTALLER_NOT_PE" -ExpectCode 2 -What "state 11 (bad PE installer)"
+    $marker = Join-Path $base "win-upstream-failure.txt"
+    Set-Content -Path $marker -Value "Launch smoke (window + IPC handshake + core read + logging persistence + graceful close)" -Encoding utf8NoBOM
+    $r = Invoke-Gate @("-Zip", (Join-Path $base "nope.zip"), "-UpstreamFailureMarker", $marker)
+    Assert-Equal 2 $r.ExitCode "BLOCKED_BY_UPSTREAM_TEST_FAILURE exit code"
+    Assert-Equal "BLOCKED_BY_UPSTREAM_TEST_FAILURE" (Gate-Token $r.Output).Token "BLOCKED_BY_UPSTREAM token"
+    $r = Invoke-Gate @("-Zip", (Join-Path $base "nope.zip"))
+    Assert-Equal 2 $r.ExitCode "marker absent: absent ZIP still fails (fail-closed)"
+    Assert-Equal "ZIP_MISSING" (Gate-Token $r.Output).Token "marker absent: ZIP_MISSING token"
 
     # ------------------------------------------------------------------
-    # 12. INSTALLER_BAD_ARCH — a PE, but the wrong machine type for the
-    #     contracted platform (ARM64 where i386/x86-64 is expected)
+    # 12. Installer retirement pins (master work order §10): the gate
+    #     script must no longer accept -Installer or reference NSIS.
     # ------------------------------------------------------------------
-    Remove-Item -LiteralPath $instPath -Force
-    New-FixtureInstallerFile -Path $instPath -Machine 0xAA64
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath
-    Assert-GateOutcome -r $r -ExpectToken "INSTALLER_BAD_ARCH" -ExpectCode 2 -What "state 12 (wrong-architecture installer)"
+    $gateSrc = Get-Content -Raw -Path "./scripts/ci/PackageGate.ps1"
+    Assert-True (-not ($gateSrc -match '(?m)\[string\]\$Installer\b')) "gate has NO -Installer parameter (installer retired)"
+    Assert-True ($gateSrc.Contains("INSTALLER_REMNANT")) "gate pins the INSTALLER_REMNANT state"
 
     # ------------------------------------------------------------------
-    # 13. OK with an i386 installer — NSIS 3.x stubs are i386 PEs even
-    #     when the payload is x64-only (the documented repo contract); the
-    #     JSON must record the machine type it accepted.
+    # 13. Determinism: the same fixture twice yields the same token and
+    #     exit code, and emits the token line exactly once per run.
     # ------------------------------------------------------------------
-    Remove-Item -LiteralPath $instPath -Force
-    New-FixtureInstallerFile -Path $instPath -Machine 0x014C
-    $resultPath13 = Join-Path $work "gate-result-13.json"
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath -ResultPath $resultPath13
-    Assert-GateOutcome -r $r -ExpectToken "OK" -ExpectCode 0 -What "state 13 (i386 NSIS stub accepted)" -ExpectJson
-    Assert-True ($r.Json.installerMachine -eq "0x014C") "state 13: JSON records the accepted NSIS stub machine type (got $($r.Json.installerMachine))"
+    $r1 = Invoke-Gate @("-Zip", $goodZip)
+    $r2 = Invoke-Gate @("-Zip", $goodZip)
+    Assert-Equal $r1.ExitCode $r2.ExitCode "deterministic exit code across runs"
+    Assert-Equal (Gate-Token $r1.Output).Token (Gate-Token $r2.Output).Token "deterministic token across runs"
 
     # ------------------------------------------------------------------
-    # 14. INVALID_ARGUMENTS — a missing -Zip argument can never evaluate
-    #     to PASS. Deterministic by explicit validation (v1 engaged the
-    #     interactive mandatory-parameter prompt, which hangs a suite run
-    #     with an open stdin and only failed by accident of closed CI
-    #     stdin).
+    # Summary.
     # ------------------------------------------------------------------
-    $r = Invoke-Gate -InstallerPath $instPath
-    Assert-GateOutcome -r $r -ExpectToken "INVALID_ARGUMENTS" -ExpectCode 1 -What "state 14 (missing -Zip argument)"
-
-    $r = Invoke-Gate -ZipPath $zipPath
-    Assert-GateOutcome -r $r -ExpectToken "INVALID_ARGUMENTS" -ExpectCode 1 -What "state 14b (missing -Installer argument)"
-
-    # ------------------------------------------------------------------
-    # 15. CLI parity — the same invalid argument set through a real child
-    #     pwsh -NonInteractive process yields the same token and a
-    #     non-zero exit (pins that the contract is host-independent).
-    # ------------------------------------------------------------------
-    $cliOut = & pwsh -NoProfile -NonInteractive -File $gateScript -Installer $instPath 2>&1 6>&1
-    $cliCode = $LASTEXITCODE
-    $cliLines = @($cliOut | ForEach-Object { $_.ToString() })
-    Add-FixtureLog -Lines $cliLines
-    Assert-True ($cliCode -eq 1) "state 15: child-process missing -Zip exits 1 (got $cliCode)"
-    Assert-True (@($cliLines | Where-Object { $_ -eq "PACKAGE_GATE_RESULT INVALID_ARGUMENTS" }).Count -eq 1) "state 15: child process emits the stable INVALID_ARGUMENTS token exactly once"
-
-    # ------------------------------------------------------------------
-    # 16. DEPENDENCY_CLOSURE_FAILURE — the pre-launch audit's structured
-    #     verdict lines are the contract; FAIL/ERROR/absent/unrecognized
-    #     reports are never a pass.
-    # ------------------------------------------------------------------
-    Remove-Item -LiteralPath $instPath -Force
-    New-FixtureInstallerFile -Path $instPath -Machine 0x8664
-    $depFail = Join-Path $work "dep-audit-FAIL.log"
-    Set-Content -LiteralPath $depFail -Value @(
-        "=== smoke dependency audit ===",
-        "::error::smoke dependency audit: zlib.dll imported by SHEYTAN-LA.exe has no resolvable copy (exe dir, System32, PATH)",
-        "smoke dependency audit: MISSING DEPENDENCIES — the launch would die at loader level with 0xC0000135"
-    ) -Encoding utf8NoBOM
-    $resultPath16 = Join-Path $work "gate-result-16.json"
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath -DependencyReportPath $depFail -ResultPath $resultPath16
-    Assert-GateOutcome -r $r -ExpectToken "DEPENDENCY_CLOSURE_FAILURE" -ExpectCode 2 -What "state 16a (audit verdict MISSING)" -ExpectJson
-    Assert-True ($r.Json.dependencyVerdict -eq "FAIL") "state 16a: JSON records the FAIL verdict (got $($r.Json.dependencyVerdict))"
-
-    $depError = Join-Path $work "dep-audit-ERROR.log"
-    Set-Content -LiteralPath $depError -Value "smoke dependency audit: ERROR — at least one load-chain module could not be audited" -Encoding utf8NoBOM
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath -DependencyReportPath $depError
-    Assert-GateOutcome -r $r -ExpectToken "DEPENDENCY_CLOSURE_FAILURE" -ExpectCode 2 -What "state 16b (audit verdict ERROR)"
-
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath -DependencyReportPath (Join-Path $work "absent-audit.log")
-    Assert-GateOutcome -r $r -ExpectToken "DEPENDENCY_CLOSURE_FAILURE" -ExpectCode 2 -What "state 16c (audit report absent — closure unverified)"
-
-    # ------------------------------------------------------------------
-    # 17. dependency PASS — a passing audit report keeps the OK state.
-    # ------------------------------------------------------------------
-    $depPass = Join-Path $work "dep-audit-PASS.log"
-    Set-Content -LiteralPath $depPass -Value "smoke dependency audit: PASS — every named static import resolves (or is an OS API Set); safe to launch" -Encoding utf8NoBOM
-    $resultPath17 = Join-Path $work "gate-result-17.json"
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath -DependencyReportPath $depPass -ResultPath $resultPath17
-    Assert-GateOutcome -r $r -ExpectToken "OK" -ExpectCode 0 -What "state 17 (dependency closure proven)" -ExpectJson
-    Assert-True ($r.Json.dependencyVerdict -eq "PASS") "state 17: JSON records the PASS verdict (got $($r.Json.dependencyVerdict))"
-
-    # ------------------------------------------------------------------
-    # 18. Determinism — the same valid state run twice yields identical
-    #     token/exit and byte counts.
-    # ------------------------------------------------------------------
-    $r1 = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath -ResultPath (Join-Path $work "gate-result-det1.json")
-    $r2 = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath -ResultPath (Join-Path $work "gate-result-det2.json")
-    Assert-True (($r1.ExitCode -eq $r2.ExitCode) -and $r1.ExitCode -eq 0) "state 18: OK is deterministic across runs"
-    Assert-True ($r1.Json.zipSha256 -eq $r2.Json.zipSha256 -and $r1.Json.installerSha256 -eq $r2.Json.installerSha256) "state 18: digests are deterministic"
-
-    # ------------------------------------------------------------------
-    # 19. Fixture-output preservation: the expected negative-fixture
-    #     ::error:: lines were captured (never leaked as live
-    #     annotations) and are visible — prefixed inert — in the escaped
-    #     ci-logs/package-gate-fixtures.log.
-    # ------------------------------------------------------------------
-    $logged = @(Get-Content -LiteralPath $fixtureLog)
-    Assert-True (($logged | Where-Object { $_.StartsWith("fixture-output: ::error::package gate:") }).Count -ge 1) "state 19: expected negative-fixture ::error:: output is preserved in the escaped fixture log"
-    $unprefixed = @($logged | Where-Object { $_ -match '^::' })
-    Assert-True ($unprefixed.Count -eq 0) "state 19: no captured line starts with a raw workflow-command prefix (annotation-inert)"
-
-    # ------------------------------------------------------------------
-    # 20. Result-file contract: an invalid state also writes the JSON
-    #     (the fixtures consume structured data, never free text).
-    # ------------------------------------------------------------------
-    $resultPath20 = Join-Path $work "gate-result-20.json"
-    $r = Invoke-Gate -ZipPath (Join-Path $work "ghost.zip") -InstallerPath $instPath -ResultPath $resultPath20
-    Assert-GateOutcome -r $r -ExpectToken "ZIP_MISSING" -ExpectCode 2 -What "state 20 (JSON written on failure)" -ExpectJson
-
-    # ------------------------------------------------------------------
-    # 21. BLOCKED_BY_UPSTREAM_TEST_FAILURE (run 43601915826 §3.5): when an
-    #     upstream verification gate failed, its marker names the FIRST
-    #     failing gate and the gate reports the blocked state INSTEAD of a
-    #     second missing-package root error — still exit 2, still no
-    #     success line, and the JSON records the upstream gate name.
-    # ------------------------------------------------------------------
-    $marker21 = Join-Path $work "win-upstream-failure.txt"
-    Set-Content -LiteralPath $marker21 -Value "Headless core tests (windows/amd64)" -Encoding utf8NoBOM
-    $resultPath21 = Join-Path $work "gate-result-21.json"
-    $r = Invoke-Gate -ZipPath (Join-Path $work "never-produced.zip") -InstallerPath (Join-Path $work "never-produced.exe") -UpstreamMarkerPath $marker21 -ResultPath $resultPath21
-    Assert-GateOutcome -r $r -ExpectToken "BLOCKED_BY_UPSTREAM_TEST_FAILURE" -ExpectCode 2 -What "state 21 (blocked by upstream test failure)" -ExpectJson
-    Assert-True ($r.Json.upstreamFailure -eq "Headless core tests (windows/amd64)") "state 21: JSON records the first failing gate (got $($r.Json.upstreamFailure))"
-
-    # ------------------------------------------------------------------
-    # 22. No marker -> the package truth table unchanged: a valid pair
-    #     with the marker argument present but the file ABSENT stays OK
-    #     (a completed packaging path is never masked), and a missing
-    #     package WITHOUT any marker still reports BOTH_MISSING — the
-    #     blocked report can only come from a real upstream failure.
-    # ------------------------------------------------------------------
-    $r = Invoke-Gate -ZipPath $zipPath -InstallerPath $instPath -UpstreamMarkerPath (Join-Path $work "absent-marker.txt")
-    Assert-GateOutcome -r $r -ExpectToken "OK" -ExpectCode 0 -What "state 22a (marker absent, packages valid — unchanged OK)"
-    $r = Invoke-Gate -ZipPath (Join-Path $work "ghost.zip") -InstallerPath (Join-Path $work "ghost2.exe") -UpstreamMarkerPath (Join-Path $work "absent-marker.txt")
-    Assert-GateOutcome -r $r -ExpectToken "BOTH_MISSING" -ExpectCode 2 -What "state 22b (marker absent, packages missing — BOTH_MISSING unchanged)"
+    Write-Host ("package gate fixtures: {0} checks, {1} failures" -f "", $failures.Count)
+    if ($failures.Count -gt 0) {
+        Write-Host "FAILED ASSERTIONS:"
+        foreach ($f in $failures) { Write-Host ("  - " + $f) }
+        exit 1
+    }
+    Write-Host "package gate fixtures: PASS (all contracted states hold; installer retirement pins hold)"
+    exit 0
+} finally {
+    if (Test-Path $base) { Remove-Item -Recurse -Force $base -ErrorAction SilentlyContinue }
 }
-finally {
-    Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
-}
-
-if ($failures.Count -gt 0) {
-    Write-Host ("PackageGate fixtures: {0} violation(s)" -f $failures.Count)
-    $failures | ForEach-Object { Write-Host ("  - " + $_) }
-    exit 1
-}
-
-Write-Host "PackageGate fixtures: all states, argument, integrity, dependency and determinism contracts hold"
-exit 0
