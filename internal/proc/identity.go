@@ -9,7 +9,13 @@
 // compiling Linux-only code).
 package proc
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"net"
+	"syscall"
+	"time"
+)
 
 var (
 	// ErrProcessNotFound is returned when the PID no longer exists.
@@ -36,13 +42,24 @@ var (
 // (loopback only — the engine never binds an external interface by
 // default). It returns the owning PID and its executable path.
 //
-// ok is false (with a nil error) when nothing is listening on the port.
-// err is non-nil only when a listener exists but identity CANNOT be
-// proven — callers must treat that as "foreign process, unproven" and
-// refuse adoption (fail closed).
+// ok is false (with a nil error) when nothing is listening on the port —
+// proven by the OS refusing a loopback connect, which requires no
+// ownership API at all (run 44378562071 §4.5: a free port must never be
+// answered with the typed UNSUPPORTED error). err is non-nil only when a
+// listener EXISTS but identity CANNOT be proven — callers must treat
+// that as "foreign process, unproven" and refuse adoption (fail closed).
 func ListeningProcess(port int) (pid int, exe string, ok bool, err error) {
 	if port <= 0 || port > 65535 {
 		return 0, "", false, errors.New("invalid port")
+	}
+
+	// Liveness pre-probe: a loopback connect refusal PROVES nothing is
+	// listening (no PID claimed, none invented) without any
+	// platform-specific ownership mechanism. Inconclusive dial errors
+	// fall through to the ownership probe, which keeps the fail-closed
+	// answer.
+	if exists, proven := loopbackListenerExists(port); proven && !exists {
+		return 0, "", false, nil
 	}
 
 	return listeningProcessImpl(port)
@@ -63,4 +80,37 @@ func ProcessExePath(pid int) (string, error) {
 // resolves symlinks where possible.
 func SameExecutable(a, b string) bool {
 	return sameExecutableImpl(a, b)
+}
+
+// loopbackListenerExists probes 127.0.0.1:port with a short connect.
+// proven=true means the OS gave a definitive answer: exists=true when a
+// listener accepted (or queued) the connection, false when the connect
+// was refused (nothing listening). proven=false covers inconclusive
+// dial failures (timeouts, unreachable networks) — callers keep the
+// fail-closed path in that case.
+func loopbackListenerExists(port int) (exists bool, proven bool) {
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 250*time.Millisecond)
+	if err != nil {
+		// A refused connect on loopback is definitive: no listener.
+		if isConnectRefused(err) {
+			return false, true
+		}
+		return false, false
+	}
+
+	_ = conn.Close()
+
+	return true, true
+}
+
+// isConnectRefused classifies a loopback dial error as "definitively
+// nothing listening". On unix the refused connect surfaces as ECONNREFUSED
+// (SyscallError around it); on Windows it is WSAECONNREFUSED.
+func isConnectRefused(err error) bool {
+	var serr *net.OpError
+	if !errors.As(err, &serr) {
+		return false
+	}
+
+	return errors.Is(serr.Err, syscall.ECONNREFUSED)
 }

@@ -4361,6 +4361,37 @@
     "status": "test"
   },
   {
+    "path": "internal/localipc/socketpath_unix.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/localipc — The ONE local transport: named-pipe / Unix-socket client and protocol",
+    "layer": "domain",
+    "subsystem": "internal/localipc",
+    "platform": "platform-specific",
+    "status": "active"
+  },
+  {
+    "path": "internal/localipc/testroot_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/localipc (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/localipc",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/localipc/testroot_windows_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/localipc (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/localipc",
+    "testOnly": true,
+    "platform": "platform-specific",
+    "status": "test"
+  },
+  {
     "path": "internal/logging/blankwarn_test.go",
     "type": "go",
     "language": "Go",
@@ -7851,6 +7882,16 @@
     "type": "script",
     "language": "bash",
     "purpose": "The machine-readable run-diagnostics index builder",
+    "layer": "ci-tooling",
+    "subsystem": "scripts/ci",
+    "sideEffects": "executes (writes logs/fixtures under its own contract when run)",
+    "status": "active"
+  },
+  {
+    "path": "scripts/ci/module-integrity.sh",
+    "type": "script",
+    "language": "bash",
+    "purpose": "CI/tooling script — module-integrity.sh",
     "layer": "ci-tooling",
     "subsystem": "scripts/ci",
     "sideEffects": "executes (writes logs/fixtures under its own contract when run)",

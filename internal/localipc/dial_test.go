@@ -28,7 +28,10 @@ func TestDialContextAlreadyCanceled(t *testing.T) {
 
 	endpoint := `\\.\pipe\sheytan-dial-contract-unreachable`
 	if runtime.GOOS != "windows" {
-		endpoint = filepath.Join(t.TempDir(), "never-created.sock")
+		// Short root: the endpoint never needs to exist, but on darwin a
+		// long t.TempDir() path must not turn the canceled-context assertion
+		// into a (typed) sun_path capacity error (run 44378562071 §4.4).
+		endpoint = filepath.Join(newShortSocketRoot(t), "never-created.sock")
 	}
 
 	_, err := DialContext(ctx, endpoint)
@@ -114,7 +117,7 @@ func TestDialContextPreservesOSProbeSemantics(t *testing.T) {
 		t.Skip("probe is a unix-only concept; named pipes vanish with the last handle")
 	}
 
-	dir := t.TempDir()
+	dir := newShortSocketRoot(t)
 	path := filepath.Join(dir, "probe.sock")
 
 	ln, err := net.Listen("unix", path)

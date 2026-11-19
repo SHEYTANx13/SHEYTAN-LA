@@ -7,6 +7,23 @@ Every release ships with the same invariants: one authority per concern, evidenc
 
 ---
 
+## ALPHA — run-44378562071 repair — 2026-11-19, local candidate on `work/alpha-run443785-repair` (base `1342a10`), hosted verification NOT RUN
+
+The RED run-44378562071 (main HEAD `1342a10`, workflow `build-desktop`) root-caused and repaired from a verified clean preflight (HEAD == origin/main == the exact reference commit; parent `7c6678f`; clean tree; no tags). Candidate commits: `ca62e2f`, `af6dda5`, `004c767`, `d1f3051`, `db14c3f` (CI lanes), `fa3eba8` (mobile contract + catalog), plus the docs commit.
+
+Root causes fixed (each with a regression pin):
+
+- Module tidy drift (§4.1): the committed go.mod carried an UNUSED indirect `golang.org/x/mobile` pin; tidy correctly removes it, so the manifests were not toolchain-canonical. go.mod/go.sum committed tidy-canonical; new `scripts/ci/module-integrity.sh` proves `go mod verify` + `go mod tidy -diff` empty twice under `GOTOOLCHAIN=local`; gomobile/gobind are now installed by the Android/iOS lanes at the exact recorded version (never @latest) and the mobile contract test superseded.
+- Windows gofmt + package cascade (§4.3): `build-windows.yml` Setup Go referenced an undefined `env.GO_VERSION` — setup-go resolved an unpinned toolchain whose gofmt rules diverged from the pinned go1.27.4. The lane now uses the declared input; the gofmt step writes the machine-readable first-failure marker and toolchain evidence, so the package gate reports BLOCKED_BY_UPSTREAM_FAILURE naming gofmt (one root cause, no second missing-ZIP error); gofmt scope parity `cmd internal ui scripts` across all lanes.
+- Collector false positives (§4.7/§8.3): file:line: and PowerShell/tool-error classification is gated on the authoritative job conclusion — passing Core audit t.Log diagnostics (installer scan, oversized-asset size report: 5,959,200 < 100,000,000) no longer appear under ERRORS; failed/cancelled-job diagnostics are retained. Fixtures 21/22 added; suite 25/0.
+- Darwin AF_UNIX path length (§4.4): new `ValidateUnixSocketPath` (UTF-8 bytes + NUL against the 104-byte darwin / 108-byte linux sun_path limit, typed `ErrSocketPathTooLong` before any syscall) wired into the listener and dialer; tests moved to short 0700 owner-verified roots under `/tmp`; boundary and Unicode-byte fixtures run natively on every platform.
+- Process ownership / lease / adoption (§4.5): a loopback connect refusal now PROVES a free port (`ok=false, err=nil` on every platform — no UNSUPPORTED for empty ports); a live lease holder whose identity cannot be attributed is fail-closed REFUSED (never treated as stale and stolen); adoption of an unattributable listener records the foreign-process evidence class with the platform limit explicit and refuses fail-closed.
+- Engine temp-root residue (§4.6): the teardown boundary removes first and reports only entries that genuinely survive the bounded retry — the fixture's `models/` dir is intended content, not residue.
+
+Honest limits of this candidate: the Go-Gui primary-UI migration (§5) is NOT STARTED — `ui/fyne` remains the only production shell; the darwin libproc port-owner fd walk is NOT implemented (typed unsupported retained); the exact Android step 8 cause was NOT reproduced (job-log API unreachable unauthenticated; no SDK/NDK in the session environment); PowerShell fixture suites, all native platform lanes and hosted CI on the candidate are NOT RUN. Labeled PARTIALLY VERIFIED ALPHA, not TEST-READY.
+
+---
+
 ## ALPHA — run-44306343338 repair + single-authority CI consolidation (session 3) — 2026-11-18, local candidate on `work/alpha-run443063-repair` (base `7c6678f`), hosted verification pending
 
 The RED run-44306343338 (main HEAD `7c6678f`) root-caused and repaired

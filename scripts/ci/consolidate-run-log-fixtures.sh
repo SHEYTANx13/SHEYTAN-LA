@@ -592,3 +592,67 @@ fi
 
 printf 'fixtures: %d pass / %d fail\n' "$pass" "$fail"
 [ "$fail" = 0 ]
+
+# 21. run 44378562071 §4.7/§8.4: passing Core audit t.Log diagnostics are
+#     NOT errors. The recorded false-positive lines (installer scan, asset
+#     size report) live in a SUCCESSFUL job's log; the metadata is
+#     authoritative and no assertion failed (5959200 < 100000000).
+f="$work/case21"; mkdir -p "$f"
+ids=($(mk_jobs "$f" \
+  "Core audit (headless)|completed|success" \
+  "Consolidate logs|in_progress|null"
+))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+2026-11-18T10:04:00.0000000Z === RUN TestInstallerContract
+2026-11-18T10:04:00.1000000Z     installer_contract_test.go:188: no installer recipes in the tracked tree
+2026-11-18T10:04:00.2000000Z --- PASS: TestInstallerContract (0.00s)
+2026-11-18T10:04:01.0000000Z === RUN TestOversizedAssetPolicy
+2026-11-18T10:04:01.1000000Z     oversized_asset_policy_test.go:97: largest source file internal/ui/assets.go (5959200 bytes) stays below the 100000000-byte ceiling
+2026-11-18T10:04:01.2000000Z --- PASS: TestOversizedAssetPolicy (0.00s)
+2026-11-18T10:04:02.0000000Z PASS
+EOF
+CONSOLIDATE_SELF_JOB_NAME="Consolidate logs" run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-errors-warnings.txt"
+if [ $rc -eq 0 ] && assert_contract_shape "$out" "core-audit t.Log" \
+  && ! grep -q "installer_contract_test.go:188" "$out" \
+  && ! grep -q "oversized_asset_policy_test.go:97" "$out" \
+  && ! grep -q "^ERRORS" "$out" \
+  && grep -q "coverage: COMPLETE" "$out"; then
+  ok "run 44378562071 §4.7: passing Core audit installer/asset-size t.Log lines excluded from ERRORS (metadata authoritative)"
+else
+  bad "core-audit t.Log false positives (rc=$rc)"
+fi
+
+# 22. the conclusion gate must not over-suppress: the SAME file:line:
+#     shapes inside a FAILED job remain real ERRORS, and a cancelled job
+#     keeps its metadata row.
+f="$work/case22"; mkdir -p "$f"
+ids=($(mk_jobs "$f" \
+  "Core audit (headless)|completed|success" \
+  "macOS arm64 (native compile + core suite + .app bundle + launch smoke)|completed|failure" \
+  "iOS simulator arm64 (gomobile toolchain + simulator .app)|completed|cancelled"
+))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+2026-11-18T10:04:00.1000000Z     installer_contract_test.go:188: no installer recipes in the tracked tree
+2026-11-18T10:04:01.1000000Z     oversized_asset_policy_test.go:97: largest source file (5959200 bytes) below the 100000000-byte ceiling
+EOF
+mk_joblog "$f" "${ids[1]}" <<'EOF'
+2026-11-18T10:05:00.0000000Z --- FAIL: TestSocketPathBoundary (0.01s)
+2026-11-18T10:05:00.1000000Z     dial_unix_test.go:62: bind failed: address too long
+2026-11-18T10:05:01.0000000Z ##[error]core suite failed on darwin
+EOF
+mk_joblog "$f" "${ids[2]}" <<'EOF'
+2026-11-18T10:06:00.0000000Z Cancelling steps after the macOS matrix failure
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-errors-warnings.txt"
+if [ $rc -eq 0 ] && assert_contract_shape "$out" "conclusion gate precision" \
+  && grep -q "^ERRORS" "$out" \
+  && grep -q "dial_unix_test.go:62" "$out" \
+  && ! grep -q "installer_contract_test.go:188" "$out" \
+  && grep -q "conclusion=cancelled" "$out" \
+  && grep -q "TEST_FAILURE: TestSocketPathBoundary" "$out"; then
+  ok "run 44378562071 §8.3.5: failed-job file:line: diagnostics retained; successful-job t.Log excluded; cancelled job in metadata"
+else
+  bad "conclusion gate precision (rc=$rc)"
+fi

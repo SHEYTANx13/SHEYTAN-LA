@@ -81,6 +81,39 @@ func (s *LlamaServer) adoptExisting(cfg *config.Config) bool {
 	// The endpoint answers. Now PROVE the process behind it.
 	pid, exe, ok, perr := proc.ListeningProcess(cfg.LlamaPort)
 
+	if perr != nil {
+		// Run 44378562071 §4.5: identity CANNOT be proven on this
+		// platform (e.g. darwin without the libproc fd walk — the
+		// typed UNSUPPORTED answer). Fail CLOSED with the same
+		// foreign-process evidence class the provable-foreign path
+		// records: an unattributable listener is treated as a
+		// foreign process, never adopted, never killed. The
+		// diagnostic keeps the platform limit explicit so the
+		// macOS adoption gate stays visible.
+		s.mu.Lock()
+		s.recordFailureReportLocked(&EngineFailureReport{
+			Phase:     "adoption",
+			AttemptID: nextAttemptID(),
+			Context:   AttemptFirstLaunch,
+			OS:        goOS,
+			Arch:      goArch,
+			ClassSummary: fmt.Sprintf(
+				"port %d is held by a foreign process whose identity could not be proven on %s (%v) — adoption refused fail-closed; managed engine expected at %s",
+				cfg.LlamaPort, goOS, perr, expectedEngineBinPath(cfg),
+			),
+			At: time.Now().UTC(),
+		})
+		s.mu.Unlock()
+
+		logging.Default().Warn("engine",
+			"engine port %d is occupied but its owner's identity cannot be proven on %s (%v) — adoption refused fail-closed (treated as foreign process)",
+			cfg.LlamaPort, goOS, perr)
+
+		s.logf("adoption refused: listener on port %d could not be attributed (%v) — treated as foreign process, fail-closed", cfg.LlamaPort, perr)
+
+		return false
+	}
+
 	if !ok {
 		// Nothing attributable is listening (the health answer may have
 		// raced a dying process) — refuse.

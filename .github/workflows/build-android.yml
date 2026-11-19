@@ -71,13 +71,20 @@ jobs:
           set -euo pipefail
           go test ./internal/... -tags headless -count=1 -timeout 25m
 
-      - name: Install gomobile toolchain from the module graph (never @latest)
+      - name: Install gomobile toolchain at the exact pinned version (never @latest)
         run: |
           set -euo pipefail
-          mobileVersion="$(go list -m golang.org/x/mobile)"
-          echo "module-graph x/mobile: ${mobileVersion}"
-          go install "golang.org/x/mobile/cmd/gomobile@${mobileVersion#golang.org/x/mobile }"
-          go install "golang.org/x/mobile/cmd/gobind@${mobileVersion#golang.org/x/mobile }"
+          # Run 44378562071 §4.1.6/§4.2.4: the mobile toolchain pin lives
+          # HERE, not in go.mod. The product module imports no x/mobile
+          # runtime package, so go mod tidy (correctly) removes any unused
+          # indirect pin — the committed-drift failure. The CLI tools are
+          # installed at this exact recorded version instead; checksums for
+          # the pin live in the go.sum history of the run that last used it.
+          # Never @latest, never a moving branch.
+          mobilePin="v0.0.0-20261117202452-47699113848a"
+          echo "pinned x/mobile: ${mobilePin}"
+          go install "golang.org/x/mobile/cmd/gomobile@${mobilePin}"
+          go install "golang.org/x/mobile/cmd/gobind@${mobilePin}"
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
 
       - name: Locate or install the Android NDK (fail-closed, actionable)

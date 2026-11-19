@@ -63,7 +63,16 @@ jobs:
         id: setup-go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
-          go-version: ${{ env.GO_VERSION }}
+          # Run 44378562071 §4.1/§4.3 ROOT CAUSE: this lane referenced
+          # ${{ env.GO_VERSION }}, which is NOT defined in this workflow
+          # (only inputs.go_version is) — setup-go received an empty
+          # version and resolved an UNPINNED toolchain whose gofmt rules
+          # diverged from the repo-pinned go1.27.4, producing gofmt
+          # violations on a tree that is byte-for-byte gofmt-clean under
+          # the pinned formatter. Every lane now resolves the version from
+          # the declared input (default "1.27.4"; the go.mod toolchain
+          # directive is the one authority).
+          go-version: ${{ inputs.go_version }}
           cache: true
           # F1/F7 (run 43008361835): the cache key family is scoped to
           # OS + Go version + the dependency lock (go.sum) — declared
@@ -89,9 +98,26 @@ jobs:
           Get-Content ci-logs/win-go-cache-facts.log
       - name: gofmt (enforced)
         run: |
+          New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+          # Evidence first: the exact formatter binary version is part of
+          # the gate's contract — gofmt rules are version-sensitive and the
+          # version skew (undefined GO_VERSION) was run 44378562071's root
+          # cause here. $LASTEXITCODE is read immediately after the native
+          # `go` invocation (StepInvocationContract).
+          $gov = (go version) 2>&1
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::go version failed for gofmt evidence"; exit 1 }
+          "toolchain: $gov" | Set-Content -Path "ci-logs/win-gofmt.log" -Encoding utf8NoBOM
+          # SCOPE PARITY (run 44378562071 §4.3.3): the ONE canonical scope,
+          # identical to the orchestrator preflight's gofmt gate:
+          # cmd internal ui scripts.
           $unformatted = gofmt -l cmd internal ui scripts
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::gofmt invocation failed"; exit 1 }
           if ($unformatted) {
+            $unformatted | Add-Content -Path "ci-logs/win-gofmt.log" -Encoding utf8NoBOM
+            # FIRST-FAILURE MARKER (work order §4.3.4/§4.3.5): the package
+            # gate turns this marker into BLOCKED_BY_UPSTREAM_FAILURE naming
+            # gofmt — ONE root cause, never a second missing-ZIP error.
+            Set-Content -Path "ci-logs/win-upstream-failure.txt" -Value "gofmt (enforced)" -Encoding utf8NoBOM
             Write-Host "::error::gofmt violations — run gofmt -w on:`n$unformatted"
             exit 1
           }

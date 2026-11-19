@@ -73,14 +73,19 @@ jobs:
           export CGO_ENABLED=1
           go test ./internal/... -tags headless -count=1 -timeout 25m
 
-      - name: Install gomobile toolchain from the module graph (never @latest)
+      - name: Install gomobile toolchain at the exact pinned version (never @latest)
         run: |
           set -euo pipefail
           export CGO_ENABLED=1
-          mobileVersion="$(go list -m golang.org/x/mobile)"
-          echo "module-graph x/mobile: ${mobileVersion}"
-          go install "golang.org/x/mobile/cmd/gomobile@${mobileVersion#golang.org/x/mobile }"
-          go install "golang.org/x/mobile/cmd/gobind@${mobileVersion#golang.org/x/mobile }"
+          # Run 44378562071 §4.1.6/§4.2.4: the mobile toolchain pin lives
+          # HERE, not in go.mod — identical contract to the Android lane
+          # (the product module imports no x/mobile runtime package, so
+          # tidy removes any unused indirect pin). Exact version, never
+          # @latest, never a moving branch.
+          mobilePin="v0.0.0-20261117202452-47699113848a"
+          echo "pinned x/mobile: ${mobilePin}"
+          go install "golang.org/x/mobile/cmd/gomobile@${mobilePin}"
+          go install "golang.org/x/mobile/cmd/gobind@${mobilePin}"
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
 
       - name: Package the iOS SIMULATOR .app (no signing identity required)

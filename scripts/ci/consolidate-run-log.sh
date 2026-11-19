@@ -513,8 +513,8 @@ capture_job_log() {  # $1 = job id; on success writes $2 = log file; echoes "" o
 # per captured job. Entry rows are TAB-separated:
 #   job-index \t timestamp \t seq \t text
 # so each section can be sorted by workflow job order, then timestamp.
-classify_job_log() {  # $1 = job index; $2 = has_ann(0/1); $3 = annotations ndjson; $4 = package-state file; log on stdin
-  LC_ALL=C awk -v jidx="$1" -v has_ann="$2" -v annfile="$3" -v pkgfile="$4" \
+classify_job_log() {  # $1 = job index; $2 = has_ann(0/1); $3 = annotations ndjson; $4 = package-state file; $5 = job conclusion; log on stdin
+  LC_ALL=C awk -v jidx="$1" -v has_ann="$2" -v annfile="$3" -v pkgfile="$4" -v jconc="$5" \
     -v errfile="$ERRIDX" -v warnfile="$WARNIDX" -v tfailfile="$TFAILIDX" -v sq="'" '
     function normmsg(m) { gsub(/[ \t]+/, " ", m); sub(/^ /, "", m); sub(/ $/, "", m); return m }
     function emit(lvl, t, txt,   k) {
@@ -633,16 +633,27 @@ classify_job_log() {  # $1 = job index; $2 = has_ann(0/1); $3 = annotations ndjs
         pending = 0
       }
       # compiler / static-analysis lines (file.ext:line[:col]: message)
+      # Run 44378562071 §4.7/§8.3.5-8.3.6: a file:line: message is only a
+      # failure diagnostic when the JOB METADATA says the job failed (or
+      # was cancelled). A SUCCESSFUL job file:line: lines are ordinary
+      # passing-test t.Log diagnostics (the Core audit installer scan and
+      # the oversized-asset size report are the recorded false-positive
+      # cases) - they are excluded from ERRORS; warning-prefixed ones stay
+      # warnings (clause C). Metadata is authoritative, never log text.
       if (match(rest, /^[A-Za-z0-9_./\\+-]+\.[A-Za-z][A-Za-z0-9]*:[0-9]+:[0-9]+:/) || match(rest, /^[A-Za-z0-9_./\\+-]+\.[A-Za-z][A-Za-z0-9]*:[0-9]+:/)) {
         msg = substr(rest, RLENGTH + 1)
-        if (tolower(msg) ~ /^[ \t]*warning/) emit("warn", ts, rest)
-        else emit("error", ts, rest)
+        if (tolower(msg) ~ /^[ \t]*warning/) { emit("warn", ts, rest); next }
+        if (jconc != "failure" && jconc != "cancelled") next
+        emit("error", ts, rest)
         next
       }
-      # PowerShell / tool error prefixes
-      if (rest ~ /^Write-Error: / || rest ~ /^ERROR: / || rest ~ /^Exception calling/) { emit("error", ts, rest); next }
-      # gate-script exit marker (nonzero only; "EXIT_CODE: 0 PASS" is success noise)
-      if (match(rest, /^EXIT_CODE: [1-9][0-9]* FAIL/)) { emit("error", ts, rest); next }
+      # PowerShell / tool error prefixes — same conclusion gating: in a
+      # successful job these are ordinary diagnostics, never failures.
+      if (jconc == "failure" || jconc == "cancelled") {
+        if (rest ~ /^Write-Error: / || rest ~ /^ERROR: / || rest ~ /^Exception calling/) { emit("error", ts, rest); next }
+        # gate-script exit marker (nonzero only; "EXIT_CODE: 0 PASS" is success noise)
+        if (match(rest, /^EXIT_CODE: [1-9][0-9]* FAIL/)) { emit("error", ts, rest); next }
+      }
       # everything else (OK/PASS/informational/successful output) is excluded
     }'
 }
@@ -727,7 +738,7 @@ if [ -s "$WORK/jobs.ndjson" ]; then
     strip_ansi_stream "$sec" > "$c1"
     redact_stream "$c1" > "$c2"
     pkgfile="$WORK/pkg-$jid.txt"
-    classify_job_log "$JIDX" "$has_ann" "$annfile" "$pkgfile" < "$c2"
+    classify_job_log "$JIDX" "$has_ann" "$annfile" "$pkgfile" "$jconc" < "$c2"
 
     case "$(normalize_job_name "$jname")" in
       *package*) printf '%d\t%s\n' "$JIDX" "$jid" >> "$PKGJOBS";;

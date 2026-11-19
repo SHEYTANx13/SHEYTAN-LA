@@ -41,6 +41,13 @@ type peerIdentity struct {
 // enables the OS-specific peer-credential mechanism, so every accepted
 // connection carries the peer's identity.
 func listenEndpoint(endpoint string) (net.Listener, error) {
+	// Run 44378562071 §4.4: validate the complete path against the
+	// platform sun_path capacity BEFORE any syscall — a too-long path
+	// is a typed ErrSocketPathTooLong, never a raw EINVAL from bind.
+	if err := ValidateUnixSocketPath(endpoint); err != nil {
+		return nil, err
+	}
+
 	if removed, err := cleanStaleEndpoint(endpoint); err != nil {
 		return nil, err
 	} else if removed {

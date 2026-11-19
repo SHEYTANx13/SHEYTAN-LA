@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -59,7 +58,7 @@ func TestDialContextDeadlineExpiry(t *testing.T) {
 // OS error (typed, wrapped for diagnosis) — never a context error, never
 // a silent fallback transport.
 func TestDialContextMissingServer(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "no-server-here.sock")
+	path := shortSocketPath(t, "no-server-here.sock")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -80,7 +79,7 @@ func TestDialContextMissingServer(t *testing.T) {
 func cloggedSocket(t *testing.T) string {
 	t.Helper()
 
-	path := filepath.Join(t.TempDir(), "clogged.sock")
+	path := shortSocketPath(t, "clogged.sock")
 
 	fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM, 0)
 	if err != nil {

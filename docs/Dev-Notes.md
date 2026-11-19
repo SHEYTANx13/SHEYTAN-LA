@@ -119,3 +119,9 @@ local branch derived from an inspected candidate; no remote writes
 (push, PR, release, workflow dispatch) without explicit human
 authorization; never mark TEST-READY while a required gate is red or
 untested; a build is not a runtime test.
+
+---
+
+## Active work order status — run 44378562071 (2026-11-19)
+
+The one active work order remains **SHEYTAN-LA ALPHA — Run 44378562071 repair and Go-Gui five-platform delivery**. Status after the 2026-11-19 session on `work/alpha-run443785-repair`: the §4 build/test failure set (module tidy drift, Windows gofmt/toolchain pin, collector false positives, darwin socket path, lease/adoption fail-closed semantics, temp-root residue truthfulness) is repaired and locally verified; the §5 Go-Gui primary-UI migration is NOT STARTED and remains the gating item for TEST-READY ALPHA — Fyne stays the production shell. Full evidence: `docs/worklog.md` 2026-11-19 row, `docs/ai-notes.md` CURRENT HANDOFF, and the delivery `note.md`.

@@ -17,7 +17,7 @@ import (
 func dialSelfAndPeerIdentity(t *testing.T) peerIdentity {
 	t.Helper()
 
-	dir := t.TempDir()
+	dir := newShortSocketRoot(t)
 	endpoint := filepath.Join(dir, "cred.sock")
 
 	ln, err := listenEndpoint(endpoint)
@@ -71,7 +71,7 @@ func dialSelfAndPeerIdentity(t *testing.T) peerIdentity {
 // listener carries the local uid through the OS credential mechanism,
 // and the listener unlinks its socket file on Close (cleanup contract).
 func TestPeerIdentitySelfDial(t *testing.T) {
-	dir := t.TempDir()
+	dir := newShortSocketRoot(t)
 	endpoint := filepath.Join(dir, "cred.sock")
 
 	ln, err := listenEndpoint(endpoint)

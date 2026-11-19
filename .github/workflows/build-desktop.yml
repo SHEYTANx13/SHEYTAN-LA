@@ -200,7 +200,7 @@ jobs:
       - name: gofmt (enforced)
         run: |
           set -euo pipefail
-          echo "RUN gofmt -l cmd internal ui" >> ci-logs/gate-order.txt
+          echo "RUN gofmt -l cmd internal ui scripts" >> ci-logs/gate-order.txt
           # The gate's own evidence MUST outlive the step log: on red, the
           # violation list and the exact formatter version are teed into the
           # consolidated run-log artifact (run #118 root cause: the
@@ -210,7 +210,10 @@ jobs:
             echo "toolchain: $(go version)"
             echo "files:"
           } | tee ci-logs/preflight-gofmt.log
-          unformatted=$(gofmt -l cmd internal ui | tee -a ci-logs/preflight-gofmt.log)
+          # SCOPE PARITY (run 44378562071 §4.3.3): this is the ONE canonical
+          # scope, identical to every platform lane's gofmt gate:
+          # cmd internal ui scripts.
+          unformatted=$(gofmt -l cmd internal ui scripts | tee -a ci-logs/preflight-gofmt.log)
           if [ -n "$unformatted" ]; then
             echo "::error::gofmt violations — run gofmt -w on:"
             echo "$unformatted"
@@ -218,7 +221,7 @@ jobs:
             exit 1
           fi
           echo "gofmt OK" | tee -a ci-logs/preflight-gofmt.log
-          echo "gate OK: gofmt -l cmd internal ui" >> ci-logs/gate-order.txt
+          echo "gate OK: gofmt -l cmd internal ui scripts" >> ci-logs/gate-order.txt
 
       - name: go vet ./...
         run: |
@@ -227,29 +230,18 @@ jobs:
           go vet ./... 2>&1 | tee ci-logs/preflight-vet.log
           echo "gate OK: go vet ./..." >> ci-logs/gate-order.txt
 
-      # Work order §9 gate 5 (v1.11.1): Go dependency integrity — go mod
-      # verify, then prove tidy IDEMPOTENCE (a second tidy must leave no
-      # diff against the committed manifests). Drift means the committed
-      # go.mod/go.sum are not the toolchain-canonical state and Dependabot
-      # comparisons would run against a moving baseline.
+      # Work order §9 gate 5 (v1.11.1) + run 44378562071 §4.1.11: Go
+      # dependency integrity via the ONE reproducible script — go mod
+      # verify, then go mod tidy -diff EMPTY TWICE with GOTOOLCHAIN=local
+      # (the go.mod toolchain directive is the one authority) and the
+      # recorded environment. The script prints the real module root and
+      # the true diff on failure; it never mutates the manifests.
       - name: Go dependency integrity (mod verify + tidy idempotence)
         run: |
           set -euo pipefail
-          echo "RUN go mod verify + go mod tidy (idempotence)" >> ci-logs/gate-order.txt
-          cp go.mod ci-logs/go.mod.committed
-          cp go.sum ci-logs/go.sum.committed
-          go mod verify 2>&1 | tee ci-logs/dep-integrity.log
-          go mod tidy 2>&1 | tee -a ci-logs/dep-integrity.log
-          go mod tidy 2>&1 | tee -a ci-logs/dep-integrity.log
-          if ! diff -u ci-logs/go.mod.committed go.mod | tee ci-logs/dep-tidy-drift.log; then
-            echo "::error::go mod tidy is not idempotent — the committed go.mod differs from the tidied state (diff at ci-logs/dep-tidy-drift.log)"
-            exit 1
-          fi
-          if ! diff -u ci-logs/go.sum.committed go.sum | tee -a ci-logs/dep-tidy-drift.log; then
-            echo "::error::go.sum drift after go mod tidy — the committed go.sum is not toolchain-canonical (diff at ci-logs/dep-tidy-drift.log)"
-            exit 1
-          fi
-          echo "gate OK: go mod verify + go mod tidy idempotence" >> ci-logs/gate-order.txt
+          echo "RUN scripts/ci/module-integrity.sh (mod verify + tidy -diff x2)" >> ci-logs/gate-order.txt
+          bash scripts/ci/module-integrity.sh --log-dir ci-logs
+          echo "gate OK: module integrity" >> ci-logs/gate-order.txt
 
       # F6 (run 43008361835): the per-job machine-readable diagnostics
       # index — always built, printed to the step log (so it reaches the

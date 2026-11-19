@@ -589,35 +589,38 @@ func (r *portReservation) Release() {
 // error is swallowed, no assertion weakened, nothing is skipped.
 func ownEngineTempRoot(t *testing.T, root string) {
 	t.Cleanup(func() {
-		entries, err := os.ReadDir(root)
-		if err != nil {
-			return // root already removed — nothing to own
-		}
-
-		if len(entries) == 0 {
-			return // happy path: nothing was left behind, no wait, no rewrite
-		}
-
-		// Diagnostic (work order §3.A.3): name the residue so a future
-		// regression reports the leftover PATH, not just the root.
-		for _, e := range entries {
-			t.Logf("engine temp root residue at teardown: %s (dir=%v)", e.Name(), e.IsDir())
-		}
-
+		// Remove FIRST (work order §4.6, run 44378562071): the fixture's
+		// own models/ dir and boot artifacts are INTENDED content, not
+		// residue — reporting every pre-removal entry as residue
+		// mislabeled expected content on every engine test. Only a
+		// root that genuinely cannot be fully removed after the
+		// bounded delete-pending grace is walked and reported.
 		deadline := time.Now().Add(2 * time.Second)
 
 		for {
 			if err := os.RemoveAll(root); err == nil {
-				return
+				return // fully removed: nothing was left behind
 			}
 
 			if time.Now().After(deadline) {
-				// Honest residue: the framework's TempDir cleanup still
-				// runs and still fails the test with the exact path.
-				return
+				break
 			}
 
 			time.Sleep(50 * time.Millisecond)
+		}
+
+		// Honest residue: the removal retry exhausted its bounded
+		// grace. Name the entries that survive so the framework's
+		// TempDir cleanup still fails the test with the exact path —
+		// no error is swallowed, no assertion weakened, nothing is
+		// skipped.
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			return // root gone between retries and the walk
+		}
+
+		for _, e := range entries {
+			t.Logf("engine temp root residue at teardown (unremovable after bounded retry): %s (dir=%v)", e.Name(), e.IsDir())
 		}
 	})
 }

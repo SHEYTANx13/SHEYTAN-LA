@@ -188,10 +188,26 @@ func verifyHolder(rec Record) error {
 	}
 
 	// The PID answers — bind it to the recorded identity before trusting.
+	// Run 44378562071 §4.5: when the platform cannot attribute the exe
+	// (darwin typed UNSUPPORTED), an identity-unprovable LIVE holder is
+	// fail-closed REFUSAL — verifyHolder returns nil ("verified live
+	// owner") so acquisition is refused with ErrHeldByLiveOwner — never
+	// "stale, recoverable": the old classification let acquisition STEAL
+	// a live foreign holder's lease on darwin, which is exactly the
+	// "expected refusal not observed" hosted failure. Only a genuinely
+	// dead pid (or a recycled pid) is recoverable here.
 	if rec.Exe != "" {
 		exe, err := proc.ProcessExePath(rec.PID)
 		if err != nil {
-			return fmt.Errorf("holder pid %d identity unprovable: %w", rec.PID, err)
+			if errors.Is(err, proc.ErrProcessNotFound) {
+				return fmt.Errorf("holder pid %d is not alive", rec.PID)
+			}
+
+			// Live but unprovable: refuse acquisition (nil = verified
+			// live owner under this function's contract). The PID is
+			// alive; ownership evidence is simply unprovable on this
+			// platform — fail closed, never steal.
+			return nil
 		}
 
 		if !proc.SameExecutable(exe, rec.Exe) {

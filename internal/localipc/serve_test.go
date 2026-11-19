@@ -122,7 +122,7 @@ func TestStaleEndpointRemovedLiveEndpointKept(t *testing.T) {
 		t.Skip("named pipes have no stale file lifecycle")
 	}
 
-	dir := t.TempDir()
+	dir := newShortSocketRoot(t)
 	live := filepath.Join(dir, "live.sock")
 	dead := filepath.Join(dir, "dead.sock")
 
