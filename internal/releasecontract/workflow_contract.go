@@ -41,6 +41,13 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// PlatformBuildWorkflowPath is the ONE canonical platform-build workflow:
+// the CI consolidation merged the retired build-desktop.yml orchestrator
+// and its five reusable build-windows/linux/macos/android/ios.yml lanes
+// into this single file (plus codeql.yml, which stays untouched). Every
+// validator, contract test and the stress gate reads THIS path.
+const PlatformBuildWorkflowPath = ".github/workflows/build.yml"
+
 // ConsolidatedLogArtifactName is the ONE run-level plain-text
 // diagnostic artifact: errors/warnings-only per the run 44306343338
 // work order §7 (exact ASCII spelling as used by the workflow and the
@@ -55,47 +62,239 @@ const RunDiagnosticsArtifactName = "run-diagnostics.json"
 
 // The stable package artifact names (work order §6.3: the exact
 // platform/arch-qualified portable names; the generic -package names
-// are retired with the duplicate legacy lanes they belonged to).
+// are retired with the duplicate legacy lanes they belonged to). With
+// the CI consolidation these names live in the platform-build MATRIX
+// entries (one upload step named ${{ matrix.artifact }} resolves to
+// them per lane).
 const (
-	WindowsPackageArtifactName = "SHEYTAN-LA-ALPHA-windows-x64-portable"
-	LinuxPackageArtifactName   = "SHEYTAN-LA-ALPHA-linux-x64-portable"
+	WindowsPackageArtifactName    = "SHEYTAN-LA-ALPHA-windows-x64-portable"
+	LinuxPackageArtifactName      = "SHEYTAN-LA-ALPHA-linux-x64-portable"
+	MacOSArm64PackageArtifactName = "SHEYTAN-LA-ALPHA-macos-arm64-portable"
+	MacOSX64PackageArtifactName   = "SHEYTAN-LA-ALPHA-macos-x64-portable"
+	AndroidArtifactName           = "SHEYTAN-LA-ALPHA-android-arm64-debug"
+	IOSArtifactName               = "SHEYTAN-LA-ALPHA-ios-simulator-arm64"
 )
 
-// The macOS/Android/iOS reusable-lane artifact names (work order §6.3).
-// The macOS matrix spells arch through an expression, so the contract
-// matches the surrounding literal skeleton.
+// BuildEvidenceArtifactSkeleton is the contracted build-evidence
+// artifact name: one per matrix target per run attempt (the attempt
+// number is CONTRACTED here - it keeps parallel rerun attempts from
+// colliding; the stable-name/no-attempt rule continues to govern the
+// consolidated log, the diagnostics index and the package artifacts).
+const BuildEvidenceArtifactSkeleton = "build-evidence-${{ matrix.target }}-${{ github.run_attempt }}"
+
+// The matrix upload step's name spelling: with the single platform-build
+// job the package upload is ONE step whose with.name is the matrix
+// expression (resolved per leg to the six contracted names above).
+const MatrixPackageArtifactSlot = "${{ matrix.artifact }}"
+
+// RetiredLaneWorkflowFiles are the retired reusable-lane + orchestrator
+// files: the consolidation deleted them and .github/workflows must
+// contain EXACTLY build.yml + codeql.yml among the platform-build
+// workflows. A reappearance recreates the multi-file topology.
+var RetiredLaneWorkflowFiles = []string{
+	"build-desktop.yml",
+	"build-windows.yml",
+	"build-linux.yml",
+	"build-macos.yml",
+	"build-android.yml",
+	"build-ios.yml",
+}
+
+// PlatformMatrixTarget is one contracted matrix.include entry.
+type PlatformMatrixTarget struct {
+	Target   string
+	OS       string
+	Artifact string
+	Kind     string
+}
+
+// PlatformMatrixTargets is the EXACT six-entry matrix the platform-build
+// job must carry: unique targets, unique (target, os, artifact) triples,
+// the two macOS architectures on DISTINCT runner images, and the
+// windows/linux runners pinned per the v1.11.1 runner policy.
+var PlatformMatrixTargets = []PlatformMatrixTarget{
+	{"windows-x64", "windows-2025", WindowsPackageArtifactName, "zip"},
+	{"linux-x64", "ubuntu-26.04", LinuxPackageArtifactName, "targz"},
+	{"macos-arm64", "macos-15", MacOSArm64PackageArtifactName, "appzip"},
+	{"macos-x64", "macos-15-intel", MacOSX64PackageArtifactName, "appzip"},
+	{"android-arm64", "ubuntu-26.04", AndroidArtifactName, "apk"},
+	{"ios-simulator-arm64", "macos-15", IOSArtifactName, "simzip"},
+}
+
+// PlatformBuildJobKey / CollectorJobKey are the YAML job keys of the
+// consolidated topology (the retired preflight/audit/ui/platform-* keys
+// are gone with the multi-file orchestrator).
 const (
-	MacOSPackageArtifactSkeleton = "SHEYTAN-LA-ALPHA-macos-${{ matrix.arch }}-portable"
-	AndroidArtifactName          = "SHEYTAN-LA-ALPHA-android-arm64-debug-apk"
-	IOSArtifactName              = "SHEYTAN-LA-ALPHA-ios-simulator-arm64"
+	PlatformBuildJobKey = "platform-build"
+	CollectorJobKey     = "collect-errors"
+	FinalVerdictJobKey  = "final-verdict"
+	ReleaseJobKey       = "release"
 )
+
+// ValidatePlatformMatrixStructure enforces the consolidated matrix
+// contract structurally (parsed with yaml.v3, never grepped):
+//
+//   - the platform-build job exists and is the ONLY matrix job; its
+//     needs must be empty or absent (no platform-to-platform needs
+//     chain: every matrix instance is an independent gate);
+//   - strategy.fail-fast is present and EXPLICITLY false;
+//   - strategy.matrix.include contains EXACTLY the six contracted
+//     targets, each once, with unique (target, os, artifact) triples
+//     (the two macOS architectures must stay on DISTINCT images);
+//   - the workflow's concurrency block never carries
+//     cancel-in-progress: true (evidence is never cancelled);
+//   - the job set is exactly the four contracted jobs (a stray job with
+//     a needs chain into the matrix would recreate a platform DAG).
+func ValidatePlatformMatrixStructure(workflowText string) error {
+	doc, err := parseWorkflow(workflowText)
+	if err != nil {
+		return err
+	}
+
+	var errs []string
+
+	job, ok := doc.Jobs[PlatformBuildJobKey]
+	if !ok {
+		return fmt.Errorf("no %q job — the consolidated platform-build workflow is missing its matrix job", PlatformBuildJobKey)
+	}
+
+	if len(job.Needs) != 0 {
+		errs = append(errs, fmt.Sprintf(
+			"job %q must have EMPTY or absent needs — every matrix instance is an independent gate; a needs chain recreates the platform-to-platform DAG the consolidation removed (run 43630164424 lesson)",
+			PlatformBuildJobKey,
+		))
+	}
+
+	if job.Strategy == nil || job.Strategy.Matrix == nil || len(job.Strategy.Matrix.Include) == 0 {
+		return fmt.Errorf("job %q carries no strategy.matrix.include — exactly one matrix with the six contracted targets is required", PlatformBuildJobKey)
+	}
+
+	if job.Strategy.FailFast == nil {
+		errs = append(errs, "strategy.fail-fast is absent — it must be EXPLICITLY false (a red lane never cancels its siblings; evidence is never destroyed)")
+	} else if *job.Strategy.FailFast {
+		errs = append(errs, "strategy.fail-fast is true — the consolidation contract requires the EXPLICIT false spelling")
+	}
+
+	include := job.Strategy.Matrix.Include
+	if len(include) != len(PlatformMatrixTargets) {
+		errs = append(errs, fmt.Sprintf(
+			"matrix.include has %d entries, want EXACTLY %d (the six contracted platform targets)",
+			len(include), len(PlatformMatrixTargets),
+		))
+	}
+
+	seenTarget := map[string]int{}
+	seenTriple := map[string]int{}
+	for _, e := range include {
+		if prev, dup := seenTarget[e.Target]; dup {
+			errs = append(errs, fmt.Sprintf("matrix target %q is defined %d times — each of the six targets must appear EXACTLY once", e.Target, prev+1))
+		}
+		seenTarget[e.Target]++
+
+		triple := e.Target + "\x00" + e.OS + "\x00" + e.Artifact
+		if prev, dup := seenTriple[triple]; dup {
+			errs = append(errs, fmt.Sprintf("duplicate (target, os, artifact) mapping for %q: (os=%q, artifact=%q) already defined %d time(s) — no duplicate platform mapping may exist", e.Target, e.OS, e.Artifact, prev+1))
+		}
+		seenTriple[triple]++
+	}
+
+	for _, want := range PlatformMatrixTargets {
+		found := false
+		for _, e := range include {
+			if e.Target == want.Target {
+				found = true
+				if e.OS != want.OS {
+					errs = append(errs, fmt.Sprintf(
+						"matrix target %q runs on %q, want %q (the pinned runner image; macOS Intel and Apple Silicon must stay DISTINCT)",
+						want.Target, e.OS, want.OS,
+					))
+				}
+				if e.Artifact != want.Artifact {
+					errs = append(errs, fmt.Sprintf(
+						"matrix target %q uploads artifact %q, want %q (work order §6.3 exact platform/arch-qualified portable name)",
+						want.Target, e.Artifact, want.Artifact,
+					))
+				}
+				if e.Kind != want.Kind {
+					errs = append(errs, fmt.Sprintf(
+						"matrix target %q declares kind %q, want %q", want.Target, e.Kind, want.Kind,
+					))
+				}
+				break
+			}
+		}
+		if !found {
+			errs = append(errs, fmt.Sprintf("matrix target %q is missing — the six-target platform matrix is incomplete", want.Target))
+		}
+	}
+
+	for _, e := range include {
+		if e.OS == RetiredLinuxRunner {
+			errs = append(errs, fmt.Sprintf("matrix target %q uses the retired %q runner image", e.Target, RetiredLinuxRunner))
+		}
+	}
+
+	// The workflow job set is EXACTLY the four contracted jobs.
+	wantJobs := map[string]bool{
+		PlatformBuildJobKey: true,
+		CollectorJobKey:     true,
+		FinalVerdictJobKey:  true,
+		ReleaseJobKey:       true,
+	}
+	for key := range doc.Jobs {
+		if !wantJobs[key] {
+			errs = append(errs, fmt.Sprintf(
+				"unexpected job %q — the consolidated topology is exactly platform-build, collect-errors, final-verdict and release; an extra job with a needs chain into the matrix would recreate a platform DAG",
+				key,
+			))
+		}
+	}
+
+	// No cancel-in-progress: true anywhere (comment lines excluded).
+	for i, line := range strings.Split(workflowText, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.Contains(trimmed, "cancel-in-progress:") && strings.Contains(trimmed, "true") {
+			errs = append(errs, fmt.Sprintf(
+				"line %d carries cancel-in-progress: true — evidence collection is never cancelled (work order §6.2)",
+				i+1,
+			))
+		}
+	}
+
+	return joinErrors(errs)
+}
 
 // The Linux build lane runner identity (v1.11.1, run 42127523923, work
-// order §4): the desktop workflow's Linux x64 lane is pinned to the
-// Ubuntu 26.04 x64 runner image, and the workflow VERIFIES that image at
-// runtime with an explicit /etc/os-release + dpkg architecture guard.
-// ubuntu-24.04 is the RETIRED image — the stress gate's stale literal
+// order section 4; carried into the CI consolidation): the linux-x64
+// MATRIX TARGET of the platform-build job is pinned to the Ubuntu 26.04
+// x64 runner image, and the workflow VERIFIES that image at runtime
+// with an explicit /etc/os-release + dpkg architecture guard.
+// ubuntu-24.04 is the RETIRED image - the stress gate's stale literal
 // kept demanding it after the correct workflow migration (the same
 // gate-must-follow-the-contract-forward defect class as the run-#40
 // Go-version pin and the run-38569081029 retired GTK dependency).
 const (
-	LinuxJobName       = "Linux x64 (single authoritative lane)"
+	LinuxTargetName    = "linux-x64"
 	LinuxRunnerLabel   = "ubuntu-26.04"
 	RetiredLinuxRunner = "ubuntu-24.04"
 )
 
 // ValidateLinuxRunnerContract enforces the Linux build lane runner
-// contract against the PARSED workflow — the actual runs-on fields and
-// the actual OS identity guard script, never a string literal:
+// contract against the PARSED workflow - the actual matrix runner image
+// and the actual OS identity guard script, never a string literal:
 //
-//   - the "Linux x64" job's runs-on must be EXACTLY [ubuntu-26.04] —
-//     singular and pinned; the retired ubuntu-24.04 label, any other
-//     label, or an extra label (a non-x64 composite) all fail;
-//   - the retired ubuntu-24.04 image must not survive on ANY job of the
-//     desktop workflow (a second lane silently regressing back is the
-//     same contract break);
-//   - the Linux x64 job must carry the runtime OS identity guard — a run
-//     script asserting VERSION_ID=26.04 and the dpkg amd64 architecture —
+//   - the platform-build job exists and its matrix carries the linux-x64
+//     target with runs-on image EXACTLY ubuntu-26.04 - singular and
+//     pinned; the retired ubuntu-24.04 label, any other label, or a
+//     non-x64 arm image all fail;
+//   - the retired ubuntu-24.04 image must not survive on ANY matrix
+//     target or ANY job of the workflow (a second lane silently
+//     regressing back is the same contract break);
+//   - the workflow must carry the runtime OS identity guard - a run
+//     script asserting VERSION_ID=26.04 and the dpkg amd64 architecture -
 //     so a YAML-only relabel without the runtime verification fails.
 //
 // The check is symmetric with the shared upload-artifact validators: the
@@ -107,58 +306,55 @@ func ValidateLinuxRunnerContract(workflowText string) error {
 		return err
 	}
 
-	jobKeys := make([]string, 0, len(doc.Jobs))
-
-	for key := range doc.Jobs {
-		jobKeys = append(jobKeys, key)
+	job, ok := doc.Jobs[PlatformBuildJobKey]
+	if !ok {
+		return fmt.Errorf(
+			"workflow has no %q job - the Linux build lane runner identity cannot be validated",
+			PlatformBuildJobKey,
+		)
 	}
 
-	sort.Strings(jobKeys)
+	if job.Strategy == nil || job.Strategy.Matrix == nil {
+		return fmt.Errorf("the %q job carries no matrix - the linux-x64 target's runner image cannot be validated", PlatformBuildJobKey)
+	}
 
-	var linuxJob workflowJob
+	linuxEntry, found := matrixEntryByTarget(job.Strategy.Matrix.Include, LinuxTargetName)
+	if !found {
+		return fmt.Errorf("matrix target %q is missing - the Linux build lane runner identity cannot be validated", LinuxTargetName)
+	}
 
-	found := false
+	if linuxEntry.OS != LinuxRunnerLabel {
+		return fmt.Errorf(
+			"Linux build lane runner contract violated: matrix target %q runs on %q, want exactly %s - %s is the retired image and the lane is pinned to the %s x64 runner",
+			LinuxTargetName, linuxEntry.OS, LinuxRunnerLabel, RetiredLinuxRunner, LinuxRunnerLabel,
+		)
+	}
 
-	for _, key := range jobKeys {
-		if doc.Jobs[key].Name == LinuxJobName {
-			linuxJob = doc.Jobs[key]
-			found = true
-
-			break
+	// The retired image must not survive on ANY matrix target or ANY
+	// job-level runs-on of the workflow.
+	for _, e := range job.Strategy.Matrix.Include {
+		if e.OS == RetiredLinuxRunner {
+			return fmt.Errorf(
+				"retired runner image %q found on matrix target %q - the workflow is pinned to %s; the 24.04 image must not return on any lane",
+				RetiredLinuxRunner, e.Target, LinuxRunnerLabel,
+			)
 		}
 	}
-
-	if !found {
-		return fmt.Errorf(
-			"workflow has no %q job — the Linux build lane runner identity cannot be validated",
-			LinuxJobName,
-		)
-	}
-
-	if len(linuxJob.RunsOn) != 1 || linuxJob.RunsOn[0] != LinuxRunnerLabel {
-		return fmt.Errorf(
-			"Linux build lane runner contract violated: job %q runs-on is %v, want exactly [%s] — %s is the retired image and the lane is pinned to the %s x64 runner",
-			LinuxJobName, []string(linuxJob.RunsOn), LinuxRunnerLabel, RetiredLinuxRunner, LinuxRunnerLabel,
-		)
-	}
-
-	for _, key := range jobKeys {
-		job := doc.Jobs[key]
-
-		for _, label := range job.RunsOn {
+	for key, j := range doc.Jobs {
+		for _, label := range j.RunsOn {
 			if label == RetiredLinuxRunner {
 				return fmt.Errorf(
-					"retired runner image %q found on job %q — the desktop workflow is pinned to %s; the 24.04 image must not return on any lane",
+					"retired runner image %q found on job %q - the workflow is pinned to %s; the 24.04 image must not return on any lane",
 					RetiredLinuxRunner, key, LinuxRunnerLabel,
 				)
 			}
 		}
 	}
 
-	// The runtime assertions the 26.04 guard must contain — the exact
-	// spellings the workflow's "Runner OS identity" step verifies:
-	// the /etc/os-release VERSION_ID comparison and the dpkg
-	// architecture check. A YAML-only relabel without these runtime
+	// The runtime assertions the 26.04 guard must contain - the exact
+	// spellings the workflow's "Runner OS identity (Ubuntu 26.04 gate)"
+	// step verifies: the /etc/os-release VERSION_ID comparison and the
+	// dpkg architecture check. A YAML-only relabel without these runtime
 	// assertions fails the contract.
 	guardMarkers := []string{
 		`"${VERSION_ID}" != "26.04"`,
@@ -167,7 +363,7 @@ func ValidateLinuxRunnerContract(workflowText string) error {
 
 	var runScripts []string
 
-	for _, step := range linuxJob.Steps {
+	for _, step := range job.Steps {
 		if step.Run != "" {
 			runScripts = append(runScripts, step.Run)
 		}
@@ -178,13 +374,23 @@ func ValidateLinuxRunnerContract(workflowText string) error {
 	for _, marker := range guardMarkers {
 		if !strings.Contains(joined, marker) {
 			return fmt.Errorf(
-				"Linux x64 OS identity guard is incomplete: no Linux x64 run script asserts %q — the %s pin must be VERIFIED at runtime (ID=ubuntu, VERSION_ID=26.04, dpkg arch=amd64), not just declared in YAML",
+				"Linux x64 OS identity guard is incomplete: no platform-build run script asserts %q - the %s pin must be VERIFIED at runtime (ID=ubuntu, VERSION_ID=26.04, dpkg arch=amd64), not just declared in YAML",
 				marker, LinuxRunnerLabel,
 			)
 		}
 	}
 
 	return nil
+}
+
+// matrixEntryByTarget finds the matrix.include entry for one target.
+func matrixEntryByTarget(include []matrixEntry, target string) (matrixEntry, bool) {
+	for _, e := range include {
+		if e.Target == target {
+			return e, true
+		}
+	}
+	return matrixEntry{}, false
 }
 
 // v1.11.1 policy reversal (CodeQL run 43883548572, alerts #185 and #186,
@@ -229,12 +435,13 @@ type workflowStep struct {
 // condition ("!cancelled()" keeps a job running after failed
 // dependencies).
 type workflowJob struct {
-	Name   string         `yaml:"name"`
-	Uses   string         `yaml:"uses"`
-	RunsOn runnerLabels   `yaml:"runs-on"`
-	Needs  needsList      `yaml:"needs"`
-	If     string         `yaml:"if"`
-	Steps  []workflowStep `yaml:"steps"`
+	Name     string         `yaml:"name"`
+	Uses     string         `yaml:"uses"`
+	RunsOn   runnerLabels   `yaml:"runs-on"`
+	Needs    needsList      `yaml:"needs"`
+	If       string         `yaml:"if"`
+	Strategy *jobStrategy   `yaml:"strategy"`
+	Steps    []workflowStep `yaml:"steps"`
 }
 
 // needsList decodes a GitHub Actions needs field, which YAML may spell
@@ -264,6 +471,25 @@ func (n *needsList) UnmarshalYAML(node *yaml.Node) error {
 	default:
 		return fmt.Errorf("needs: unsupported YAML node kind %v", node.Kind)
 	}
+}
+
+// matrixEntry decodes one strategy.matrix.include entry of the
+// platform-build job.
+type matrixEntry struct {
+	Target   string `yaml:"target"`
+	OS       string `yaml:"os"`
+	Artifact string `yaml:"artifact"`
+	Kind     string `yaml:"kind"`
+}
+
+// jobStrategy decodes the strategy block the matrix contract reasons
+// about. FailFast is a pointer so "absent" and "explicitly false" stay
+// distinguishable — the contract requires the EXPLICIT false spelling.
+type jobStrategy struct {
+	FailFast *bool `yaml:"fail-fast"`
+	Matrix   *struct {
+		Include []matrixEntry `yaml:"include"`
+	} `yaml:"matrix"`
 }
 
 // runnerLabels decodes a GitHub Actions runs-on field, which YAML may
@@ -572,23 +798,23 @@ func validateUsesVersionComments(workflowText string, parsedExternal int) error 
 	return nil
 }
 
-// ValidateUploadArtifactContract enforces the v1.11.1 upload surface
-// (single-log-artifact contract + the two package uploads + the run
-// diagnostics index), scoped per step and per owning job:
+// ValidateUploadArtifactContract enforces the consolidated upload
+// surface of the ONE platform-build workflow, scoped per step and per
+// owning job (parsed, never grepped):
 //
-//   - EXACTLY ONE upload named SHEYTAN-LA-all-logs.txt — the ONE
-//     consolidated log artifact — uploading the file itself
-//     (archive: false, path == the artifact name);
+//   - EXACTLY ONE upload named SHEYTAN-LA-errors-warnings.txt - the ONE
+//     consolidated log artifact - uploading the file itself
+//     (archive: false, path == the artifact name) from the collector job;
 //   - exactly ONE run-diagnostics.json upload from the SAME collector
-//     job (run 43630164424 repair: machine-readable diagnostics index,
-//     archive: false, path == the artifact name);
-//   - exactly one windows-x64-package and one linux-x64-package upload,
-//     each validated against its exact payload shape (the portable ZIP
-//     under dist/ — installer production is retired, master work order
-//     §10) — package uploads are NEVER counted
-//     as log uploads because names match exactly;
+//     job (archive: false, path == the artifact name);
+//   - exactly ONE matrix package upload step named ${{ matrix.artifact }}
+//     from the platform-build job, resolving per leg to the six
+//     contracted portable names, if: always(), if-no-files-found: error;
+//   - exactly ONE build-evidence upload with the contracted
+//     build-evidence-${{ matrix.target }}-${{ github.run_attempt }} name
+//     (path ci-logs/, if-no-files-found: warn);
 //   - NO other upload-artifact step may exist: the whole upload surface
-//     is exactly the four contracted artifacts.
+//     is exactly the four contracted shapes.
 func ValidateUploadArtifactContract(workflowText string) error {
 	uploads, err := ArtifactSteps(workflowText, "actions/upload-artifact")
 	if err != nil {
@@ -597,13 +823,13 @@ func ValidateUploadArtifactContract(workflowText string) error {
 
 	if len(uploads) == 0 {
 		return errors.New(
-			"no actions/upload-artifact steps found — the extraction is broken or the workflow has no uploads",
+			"no actions/upload-artifact steps found - the extraction is broken or the workflow has no uploads",
 		)
 	}
 
 	var errs []string
 
-	logUploads, diagUploads := 0, 0
+	logUploads, diagUploads, matrixUploads, evidenceUploads := 0, 0, 0, 0
 
 	for _, u := range uploads {
 		switch u.Name {
@@ -624,6 +850,13 @@ func ValidateUploadArtifactContract(workflowText string) error {
 				))
 			}
 
+			if u.Job != CollectorJobKey {
+				errs = append(errs, fmt.Sprintf(
+					"job %q: the consolidated diagnostic upload belongs to the %s collector job (same collector, same evidence lifetime)",
+					u.Job, CollectorJobKey,
+				))
+			}
+
 		case RunDiagnosticsArtifactName:
 			diagUploads++
 
@@ -641,18 +874,67 @@ func ValidateUploadArtifactContract(workflowText string) error {
 				))
 			}
 
-			if u.Job != "consolidate-logs" {
+			if u.Job != CollectorJobKey {
 				errs = append(errs, fmt.Sprintf(
-					"job %q: the run diagnostics upload belongs to the consolidate-logs collector job (same collector, same evidence lifetime)",
+					"job %q: the run diagnostics upload belongs to the %s collector job (same collector, same evidence lifetime)",
+					u.Job, CollectorJobKey,
+				))
+			}
+
+		case MatrixPackageArtifactSlot:
+			matrixUploads++
+
+			if u.Job != PlatformBuildJobKey {
+				errs = append(errs, fmt.Sprintf(
+					"job %q: the ${{ matrix.artifact }} package upload belongs to the platform-build matrix job",
 					u.Job,
+				))
+			}
+
+			if cond, ok := u.With["if-no-files-found"]; !ok || withStringValue(u.With, "if-no-files-found") == "" || cond != "error" {
+				errs = append(errs, fmt.Sprintf(
+					"job %q step %q: the matrix package upload must carry if-no-files-found: error (a silently absent package is a contract breach)",
+					u.Job, u.Step,
+				))
+			}
+
+			if !strings.Contains(u.Path, "dist/") {
+				errs = append(errs, fmt.Sprintf(
+					"job %q step %q: the matrix package upload must stage the dist/ portable package, got %q",
+					u.Job, u.Step, u.Path,
+				))
+			}
+
+		case BuildEvidenceArtifactSkeleton:
+			evidenceUploads++
+
+			if u.Job != PlatformBuildJobKey {
+				errs = append(errs, fmt.Sprintf(
+					"job %q: the build-evidence upload belongs to the platform-build matrix job",
+					u.Job,
+				))
+			}
+
+			if cond := withStringValue(u.With, "if-no-files-found"); cond != "warn" {
+				errs = append(errs, fmt.Sprintf(
+					"job %q step %q: the build-evidence upload must carry if-no-files-found: warn (diagnostics may legitimately be sparse on a green lane), got %q",
+					u.Job, u.Step, cond,
+				))
+			}
+
+			if !strings.Contains(u.Path, "ci-logs") {
+				errs = append(errs, fmt.Sprintf(
+					"job %q step %q: the build-evidence upload must stage ci-logs/, got %q",
+					u.Job, u.Step, u.Path,
 				))
 			}
 
 		default:
 			errs = append(errs, fmt.Sprintf(
-				"job %q step %q: unexpected upload-artifact name %q — the orchestrator's contracted upload surface is exactly the consolidated diagnostic %q and the machine-readable index %q; platform packages upload from their OWN reusable lanes",
+				"job %q step %q: unexpected upload-artifact name %q - the consolidated workflow's contracted upload surface is exactly the consolidated diagnostic %q, the machine-readable index %q, the matrix package upload %q and the build-evidence upload %q",
 				u.Job, u.Step, u.Name,
 				ConsolidatedLogArtifactName, RunDiagnosticsArtifactName,
+				MatrixPackageArtifactSlot, BuildEvidenceArtifactSkeleton,
 			))
 		}
 	}
@@ -671,6 +953,20 @@ func ValidateUploadArtifactContract(workflowText string) error {
 		))
 	}
 
+	if matrixUploads != 1 {
+		errs = append(errs, fmt.Sprintf(
+			"exactly ONE matrix package upload step is contracted (%q), found %d",
+			MatrixPackageArtifactSlot, matrixUploads,
+		))
+	}
+
+	if evidenceUploads != 1 {
+		errs = append(errs, fmt.Sprintf(
+			"exactly ONE build-evidence upload step is contracted (%q), found %d",
+			BuildEvidenceArtifactSkeleton, evidenceUploads,
+		))
+	}
+
 	if len(errs) > 0 {
 		return fmt.Errorf(
 			"upload-artifact contract violated:\n  %s",
@@ -681,54 +977,42 @@ func ValidateUploadArtifactContract(workflowText string) error {
 	return nil
 }
 
-// ValidatePlatformPackageUploadContract enforces the §6.3 package
-// upload surface of the two desktop reusable lanes (work order §6.2:
-// the package artifacts live with the single authoritative build path,
-// not in the orchestrator): exactly ONE upload per lane, carrying the
-// exact portable name and staging from dist/.
-func ValidatePlatformPackageUploadContract(windowsText, linuxText string) error {
+// ValidatePlatformPackageUploadContract enforces the section 6.3 package
+// surface of the SIX matrix targets against the ONE workflow: the matrix
+// must resolve the ${{ matrix.artifact }} upload to exactly the
+// contracted portable names (windows/linux/macOSx2/android/ios), each
+// target defined once, and the windows/linux payload kinds must match
+// the release contract (portable zip / tar.gz - installer production is
+// retired, master work order section 10).
+func ValidatePlatformPackageUploadContract(workflowText string) error {
 	var errs []string
 
-	type lane struct {
-		name     string
-		text     string
-		artifact string
-		pathNeed string
-	}
-	lanes := []lane{
-		{"windows", windowsText, WindowsPackageArtifactName, "-portable.zip"},
-		{"linux", linuxText, LinuxPackageArtifactName, "-portable.tar.gz"},
-	}
-
-	for _, l := range lanes {
-		uploads, err := ArtifactSteps(l.text, "actions/upload-artifact")
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s lane: %v", l.name, err))
+	// The six matrix targets must be structurally present and each must
+	// upload its CONTRACTED portable artifact name (no duplicate or
+	// retired naming).
+	include := platformMatrixIncludeOf(workflowText)
+	for _, want := range PlatformMatrixTargets {
+		entry, ok := matrixEntryByTarget(include, want.Target)
+		if !ok {
+			errs = append(errs, fmt.Sprintf("matrix target %q missing from the platform matrix", want.Target))
 			continue
 		}
-		hits := 0
-		for _, u := range uploads {
-			if u.Name != l.artifact {
-				errs = append(errs, fmt.Sprintf(
-					"%s lane job %q step %q: unexpected upload name %q, want %q (work order §6.3 exact platform/arch-qualified portable name)",
-					l.name, u.Job, u.Step, u.Name, l.artifact,
-				))
-				continue
-			}
-			hits++
-			if !strings.Contains(u.Path, "dist/") || !strings.Contains(u.Path, l.pathNeed) {
-				errs = append(errs, fmt.Sprintf(
-					"%s lane job %q: the %q upload must stage the dist/ portable artifact (%s), got %q",
-					l.name, u.Job, l.artifact, l.pathNeed, u.Path,
-				))
-			}
-		}
-		if hits != 1 {
+		if entry.Artifact != want.Artifact {
 			errs = append(errs, fmt.Sprintf(
-				"%s lane: exactly ONE %q upload is contracted, found %d",
-				l.name, l.artifact, hits,
+				"matrix target %q uploads artifact %q, want %q (work order section 6.3 exact platform/arch-qualified portable name)",
+				want.Target, entry.Artifact, want.Artifact,
 			))
 		}
+	}
+
+	// The windows/linux portable payload names must appear in the
+	// workflow text with the exact release-contract spellings (the
+	// PackageGate invocation and the release verify step consume them).
+	if !strings.Contains(workflowText, `dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip`) {
+		errs = append(errs, "the workflow never references dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip - the portable ZIP is the ONE supported Windows package (master work order section 10)")
+	}
+	if !strings.Contains(workflowText, `dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz`) {
+		errs = append(errs, "the workflow never references dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz - the portable tar.gz is the ONE supported Linux package (master work order section 10)")
 	}
 
 	if len(errs) > 0 {
@@ -741,46 +1025,46 @@ func ValidatePlatformPackageUploadContract(windowsText, linuxText string) error 
 	return nil
 }
 
-// ValidateMobileArtifactUploadContract enforces the §6.3 upload surface
-// of the three remaining reusable lanes: macOS arm64/x64 portable zips
-// (spelled through the matrix expression), the Android debug APK and
-// the SIMULATOR-ONLY iOS zip.
-func ValidateMobileArtifactUploadContract(macosText, androidText, iosText string) error {
+// ValidateMobileArtifactUploadContract enforces the section 6.3 upload
+// surface of the three mobile lanes against the ONE workflow's matrix:
+// the macOS arm64/x64 portable zips resolve to DISTINCT artifacts on
+// DISTINCT runner images, the Android debug package and the
+// SIMULATOR-ONLY iOS zip are each defined exactly once, and the retired
+// name fragments never reappear.
+func ValidateMobileArtifactUploadContract(workflowText string) error {
 	var errs []string
 
-	type lane struct {
-		name     string
-		text     string
-		contains string
-		banned   []string
-	}
-	lanes := []lane{
-		{"macos", macosText, MacOSPackageArtifactSkeleton, []string{"-app"}},
-		{"android", androidText, AndroidArtifactName, []string{}},
-		{"ios", iosText, IOSArtifactName, []string{"simulator-app"}},
+	macArm, macArmOK := matrixEntryByTarget(platformMatrixIncludeOf(workflowText), "macos-arm64")
+	macX64, macX64OK := matrixEntryByTarget(platformMatrixIncludeOf(workflowText), "macos-x64")
+	android, androidOK := matrixEntryByTarget(platformMatrixIncludeOf(workflowText), "android-arm64")
+	ios, iosOK := matrixEntryByTarget(platformMatrixIncludeOf(workflowText), "ios-simulator-arm64")
+
+	if !macArmOK || !macX64OK {
+		errs = append(errs, "the macOS matrix targets (macos-arm64, macos-x64) must both be present")
+	} else {
+		if macArm.Artifact != MacOSArm64PackageArtifactName {
+			errs = append(errs, fmt.Sprintf("macos-arm64 artifact %q, want %q", macArm.Artifact, MacOSArm64PackageArtifactName))
+		}
+		if macX64.Artifact != MacOSX64PackageArtifactName {
+			errs = append(errs, fmt.Sprintf("macos-x64 artifact %q, want %q", macX64.Artifact, MacOSX64PackageArtifactName))
+		}
+		if macArm.OS == macX64.OS {
+			errs = append(errs, fmt.Sprintf("macos-arm64 and macos-x64 share the runner image %q - Intel and Apple Silicon must stay DISTINCT", macArm.OS))
+		}
 	}
 
-	for _, l := range lanes {
-		uploads, err := ArtifactSteps(l.text, "actions/upload-artifact")
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s lane: %v", l.name, err))
-			continue
-		}
-		if len(uploads) != 1 {
-			errs = append(errs, fmt.Sprintf(
-				"%s lane: exactly ONE upload is contracted, found %d", l.name, len(uploads)))
-			continue
-		}
-		u := uploads[0]
-		if !strings.Contains(u.Name, l.contains) {
-			errs = append(errs, fmt.Sprintf(
-				"%s lane: upload name %q must carry the §6.3 skeleton %q", l.name, u.Name, l.contains))
-		}
-		for _, b := range l.banned {
-			if strings.Contains(u.Name, b) {
-				errs = append(errs, fmt.Sprintf(
-					"%s lane: retired artifact name fragment %q must not reappear", l.name, b))
-			}
+	if !androidOK {
+		errs = append(errs, "the android-arm64 matrix target must be present")
+	} else if android.Artifact != AndroidArtifactName {
+		errs = append(errs, fmt.Sprintf("android-arm64 artifact %q, want %q (the retired -debug-apk suffix must not reappear)", android.Artifact, AndroidArtifactName))
+	}
+
+	if !iosOK {
+		errs = append(errs, "the ios-simulator-arm64 matrix target must be present")
+	} else if ios.Artifact != IOSArtifactName {
+		errs = append(errs, fmt.Sprintf("ios-simulator-arm64 artifact %q, want %q", ios.Artifact, IOSArtifactName))
+		if strings.Contains(ios.Artifact, "ipa") {
+			errs = append(errs, "the iOS artifact must stay SIMULATOR-ONLY - a device IPA is never produced without signing")
 		}
 	}
 
@@ -792,4 +1076,18 @@ func ValidateMobileArtifactUploadContract(macosText, androidText, iosText string
 	}
 
 	return nil
+}
+
+// platformMatrixIncludeOf decodes the platform-build job's matrix.include
+// from the workflow text (empty when the job or matrix is absent).
+func platformMatrixIncludeOf(workflowText string) []matrixEntry {
+	doc, err := parseWorkflow(workflowText)
+	if err != nil {
+		return nil
+	}
+	job, ok := doc.Jobs[PlatformBuildJobKey]
+	if !ok || job.Strategy == nil || job.Strategy.Matrix == nil {
+		return nil
+	}
+	return job.Strategy.Matrix.Include
 }

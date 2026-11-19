@@ -113,7 +113,10 @@ migration): no Qt runtime and no Node/React stack ships or is linked.
 | Component | License | Where it lives |
 |---|---|---|
 | llama.cpp (downloaded engine) | MIT | fetched at runtime into the managed bin directory — never committed |
-| Fyne (fyne.io/fyne/v2) | BSD-3-Clause | the ONE product UI toolkit (linked into every desktop build) |
+| Fyne (fyne.io/fyne/v2) | BSD-3-Clause | the wired production desktop UI toolkit this ALPHA (the Go-Gui migration candidate ships alongside; see docs/architecture/GO_GUI_MIGRATION.md) |
+| Go-Gui (github.com/go-gui-org/go-gui) | MIT | the migration-candidate UI toolkit (v0.97.0), linked into the Go-Gui shell build and the mobile entrypoint |
+| GoGPU (github.com/gogpu/gogpu) | MIT | the GPU rendering/compute stack (v0.54.1) behind internal/render; verified on the software path with checksum readback |
+| Wails v3 (github.com/wailsapp/wails/v3) | MIT | the Web Workspace capability (v3.1.0) behind internal/webworkspace, build-tagged desktop adapter |
 | Three.js 0.187.0 (vendored, embedded) | MIT | internal/studio/assets/ — embedded into the binary for the optional 3D Studio viewer; the verbatim notice also ships as a Go source constant (internal/studio/license.go) |
 | gorilla/websocket | BSD-style | build-time Go dependency |
 | chromedp + cdproto | MIT | build-time Go dependency |

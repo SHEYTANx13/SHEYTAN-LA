@@ -1,33 +1,39 @@
 // Package releasecontract — workflow_dag_contract.go
 //
-// v1.11.1 (run 43630164424 repair, work order §9.6): deterministic
-// contract tests for the two CI workflows' FAILURE RESILIENCE, parsed
-// from the real YAML — never a copied example.
+// v1.12 CI consolidation (the run-43630164424 + run-44306343338 lessons
+// carried into the ONE platform-build workflow): deterministic contract
+// tests for the CONSOLIDATED workflow's FAILURE RESILIENCE, parsed from
+// the real YAML — never a copied example.
 //
-// The run-43630164424 root cause was orchestration, not code: preflight
-// was a hard `needs:` prerequisite of the four independent validation
-// gates, so a single `go vet` failure skipped Core audit, Fyne UI,
-// Windows x64 and Linux x64 — a red run with zero gate evidence. The
-// validators below make that DAG shape impossible to reintroduce
-// silently:
+// The retired topology had a preflight job whose single `go vet` failure
+// skipped four independent validation gates (run 43630164424: a red run
+// with zero evidence), and five reusable platform lane files wired by
+// needs (run 44306343338). The consolidated topology makes those shapes
+// impossible by construction:
 //
-//   - ValidateIndependentGatesDAG: preflight must not gate the four
-//     validation jobs; each gate owns its checkout/toolchain steps.
-//   - ValidateFinalVerdictJob: a strict final verdict exists, needs every
-//     required gate plus the collector, runs on !cancelled(), and its
-//     verdict step inspects every required gate's result.
-//   - ValidateFailureTolerantCollector: the collector job and both its
-//     uploads run on !cancelled() (red runs keep evidence); no required
-//     gate hides behind continue-on-error.
+//   - ValidateIndependentGatesDAG: the platform-build job owns the six
+//     matrix targets and has NO needs (every matrix instance is an
+//     independent gate); no workflow_call lane invocations remain; the
+//     retired lane files are gone.
+//   - ValidatePlatformMatrixStructure: exactly one matrix.include with
+//     exactly the six targets, unique (target, os, artifact) triples,
+//     fail-fast EXPLICITLY false, no cancel-in-progress: true.
+//   - ValidateFinalVerdictJob: a strict final verdict exists, needs
+//     platform-build + collect-errors, runs on !cancelled(), and its
+//     verdict step inspects every required gate's result — a collector
+//     success can never override a platform failure.
+//   - ValidateFailureTolerantCollector: the collector job needs exactly
+//     [platform-build], runs on always(), and both its uploads run on
+//     !cancelled() (red runs keep evidence).
 //   - ValidateCodeQLWorkflowResilience: CodeQL triggers independently of
-//     build-desktop, keeps Go + actions scanning with the
+//     the platform build, keeps Go + actions scanning with the
 //     security-and-quality suite, analyzes after a failed manual build
 //     whenever init succeeded, uploads SARIF with upload: always, and
 //     carries a failure-tolerant diagnostics collector.
 //   - SimulateGateMatrix: a small model of GitHub Actions scheduling
-//     semantics (needs + if: !cancelled()) so the fixture tests can
-//     PROVE the graph behavior: a red preflight leaves the four gates
-//     running while the final verdict stays red.
+//     semantics (needs + failure-tolerant if) so the fixture tests can
+//     PROVE the graph behavior: a red matrix keeps the collector running
+//     while the final verdict stays red.
 package releasecontract
 
 import (
@@ -38,41 +44,14 @@ import (
 
 // RequiredGateJobs are the YAML job keys whose conclusion the final
 // verdict accepts as the workflow's verdict: any non-success conclusion
-// is a red run.
+// is a red run. platform-build is the SIX-lane matrix (fail-fast: false
+// keeps every lane running to its terminal state); collect-errors is the
+// failure-tolerant evidence collector whose coverage-gap failure keeps
+// the run red. A collector report-generation SUCCESS can never override
+// a platform failure: both gates are checked in the same required loop.
 var RequiredGateJobs = []string{
-	"preflight",
-	"audit",
-	"ui",
-	"platform-windows",
-	"platform-linux",
-	"platform-macos",
-	"platform-android",
-	"platform-ios",
-}
-
-// IndependentGateJobs are the validation jobs that must NOT depend on
-// preflight: each owns its checkout/setup and starts on the same commit
-// regardless of the preflight outcome.
-var IndependentGateJobs = []string{
-	"audit",
-	"ui",
-	"platform-windows",
-	"platform-linux",
-	"platform-macos",
-	"platform-android",
-	"platform-ios",
-}
-
-// laneWorkflowUses maps each platform gate to the reusable workflow file
-// it must invoke EXACTLY ONCE (run 44306343338 work order §6.2: one
-// authoritative build path per platform, five reusable files, no
-// duplicate legacy lanes).
-var laneWorkflowUses = map[string]string{
-	"platform-windows": "./.github/workflows/build-windows.yml",
-	"platform-linux":   "./.github/workflows/build-linux.yml",
-	"platform-macos":   "./.github/workflows/build-macos.yml",
-	"platform-android": "./.github/workflows/build-android.yml",
-	"platform-ios":     "./.github/workflows/build-ios.yml",
+	PlatformBuildJobKey,
+	CollectorJobKey,
 }
 
 // retiredLaneJobKeys are the legacy in-orchestrator platform lanes the
@@ -80,10 +59,13 @@ var laneWorkflowUses = map[string]string{
 // platform-build topology the work order forbids (§3.1/§6.2).
 var retiredLaneJobKeys = []string{"build-windows", "build-linux"}
 
-// ValidateIndependentGatesDAG enforces the run-43630164424 repair: the
-// four validation gates are parallel, self-contained jobs — preflight is
-// NOT their prerequisite. Each gate must exist and own a checkout step;
-// the collector keeps needing every gate so it still runs after each one.
+// ValidateIndependentGatesDAG enforces the consolidated DAG contract:
+// the platform-build job has EMPTY or absent needs (every matrix
+// instance is an independent gate with its own checkout/toolchain — the
+// run-43630164424 lesson, made structural), the topology is exactly the
+// four contracted jobs, no workflow_call lane invocation survives (the
+// matrix replaced the five reusable files), the retired legacy lane job
+// keys never reappear, and cancel-in-progress: true never returns.
 func ValidateIndependentGatesDAG(workflowText string) error {
 	doc, err := parseWorkflow(workflowText)
 	if err != nil {
@@ -92,44 +74,24 @@ func ValidateIndependentGatesDAG(workflowText string) error {
 
 	var errs []string
 
-	for _, key := range append([]string{"preflight"}, IndependentGateJobs...) {
-		job, ok := doc.Jobs[key]
-		if !ok {
-			errs = append(errs, fmt.Sprintf("required job %q is missing from the workflow", key))
-			continue
-		}
-		if key != "preflight" {
-			for _, dep := range job.Needs {
-				if dep == "preflight" {
-					errs = append(errs, fmt.Sprintf(
-						"job %q still needs %q — a red preflight would skip this independent gate again (run 43630164424 root cause); remove the dependency, the final verdict owns strictness",
-						key, dep,
-					))
-				}
-			}
-		}
-		// Self-contained: step-owned gates check out their own tree;
-		// reusable-lane gates invoke their ONE authoritative file.
-		if want, ok := laneWorkflowUses[key]; ok {
-			if job.Uses != want {
-				errs = append(errs, fmt.Sprintf(
-					"job %q must invoke %q via workflow_call exactly once (the single authoritative build path per platform), got %q",
-					key, want, job.Uses,
-				))
-			}
-			continue
-		}
-		hasCheckout := false
-		for _, step := range job.Steps {
-			if strings.HasPrefix(step.Uses, "actions/checkout") {
-				hasCheckout = true
-				break
-			}
-		}
-		if !hasCheckout {
+	job, ok := doc.Jobs[PlatformBuildJobKey]
+	if !ok {
+		errs = append(errs, fmt.Sprintf("required job %q is missing from the workflow", PlatformBuildJobKey))
+	} else if len(job.Needs) != 0 {
+		errs = append(errs, fmt.Sprintf(
+			"job %q carries needs %v — every matrix instance is an independent gate; a needs chain makes one gate skip another's evidence again (run 43630164424 root cause)",
+			PlatformBuildJobKey, []string(job.Needs),
+		))
+	}
+
+	// The retired reusable-lane topology must not come back: no job may
+	// invoke a platform workflow via workflow_call (the matrix is the ONE
+	// authoritative build path now).
+	for key, j := range doc.Jobs {
+		if j.Uses != "" {
 			errs = append(errs, fmt.Sprintf(
-				"job %q has no actions/checkout step — an independent gate must own its checkout (own prerequisites, same github.sha)",
-				key,
+				"job %q invokes %q via workflow_call — the consolidation replaced the reusable-lane invocations with the six-target matrix; a reusable lane file cannot come back",
+				key, j.Uses,
 			))
 		}
 	}
@@ -143,28 +105,36 @@ func ValidateIndependentGatesDAG(workflowText string) error {
 		}
 	}
 
+	// The matrix contract carries the rest (fail-fast false, six targets,
+	// cancel-in-progress ban).
+	if err := ValidatePlatformMatrixStructure(workflowText); err != nil {
+		errs = append(errs, err.Error())
+	}
+
 	return joinErrors(errs)
 }
 
 // ValidateFinalVerdictJob enforces the strict overall verdict: the job
-// exists, needs every required gate plus the collector, runs on
-// !cancelled() so it still reports after red gates, and its verdict step
-// actually inspects each required gate's result — a blind success step
-// cannot pass for a verdict.
+// exists, needs both required gates (platform-build + collect-errors),
+// runs on !cancelled() so it still reports after red gates, and its
+// verdict step actually inspects each required gate's result — a blind
+// success step cannot pass for a verdict, and a collector success can
+// never override a platform failure (both gates sit in the same required
+// loop).
 func ValidateFinalVerdictJob(workflowText string) error {
 	doc, err := parseWorkflow(workflowText)
 	if err != nil {
 		return err
 	}
 
-	job, ok := doc.Jobs["final-verdict"]
+	job, ok := doc.Jobs[FinalVerdictJobKey]
 	if !ok {
 		return fmt.Errorf("no final-verdict job — the workflow needs an explicit strict overall verdict (run 43630164424 repair)")
 	}
 
 	var errs []string
 
-	for _, dep := range append(append([]string{}, RequiredGateJobs...), "consolidate-logs") {
+	for _, dep := range RequiredGateJobs {
 		found := false
 		for _, d := range job.Needs {
 			if d == dep {
@@ -173,7 +143,7 @@ func ValidateFinalVerdictJob(workflowText string) error {
 			}
 		}
 		if !found {
-			errs = append(errs, fmt.Sprintf("final-verdict must need %q (every required gate plus the evidence collector)", dep))
+			errs = append(errs, fmt.Sprintf("final-verdict must need %q (every required gate, collector included)", dep))
 		}
 	}
 
@@ -210,45 +180,41 @@ func ValidateFinalVerdictJob(workflowText string) error {
 }
 
 // ValidateFailureTolerantCollector enforces the collector contract: the
-// consolidate-logs job needs every required gate, runs on !cancelled(),
-// and both run-level uploads (plain-text report + machine-readable
-// diagnostics index) carry the same failure-tolerant condition.
+// collect-errors job needs EXACTLY [platform-build] (the ONE build gate
+// the collector reports on) and runs on always() so it publishes evidence
+// after ANY platform outcome; both run-level uploads (plain-text report +
+// machine-readable diagnostics index) carry the failure-tolerant
+// !cancelled() condition.
 func ValidateFailureTolerantCollector(workflowText string) error {
 	doc, err := parseWorkflow(workflowText)
 	if err != nil {
 		return err
 	}
 
-	job, ok := doc.Jobs["consolidate-logs"]
+	job, ok := doc.Jobs[CollectorJobKey]
 	if !ok {
-		return fmt.Errorf("no consolidate-logs job — red runs lose their consolidated evidence")
+		return fmt.Errorf("no %s job — red runs lose their consolidated evidence", CollectorJobKey)
 	}
 
 	var errs []string
 
-	for _, gate := range RequiredGateJobs {
-		found := false
-		for _, d := range job.Needs {
-			if d == gate {
-				found = true
-				break
-			}
-		}
-		if !found {
-			errs = append(errs, fmt.Sprintf("consolidate-logs must need %q (every required gate) so it runs after each one", gate))
-		}
+	if len(job.Needs) != 1 || job.Needs[0] != PlatformBuildJobKey {
+		errs = append(errs, fmt.Sprintf(
+			"%s must need EXACTLY [%s] (the ONE required build gate the collector reports on), got %v",
+			CollectorJobKey, PlatformBuildJobKey, []string(job.Needs),
+		))
 	}
 
-	if !strings.Contains(job.If, "!cancelled()") {
-		errs = append(errs, "consolidate-logs must run with if: !cancelled() — red runs keep their consolidated log and diagnostics index")
+	if !strings.Contains(job.If, "always()") {
+		errs = append(errs, "collect-errors must run with if: always() — red runs keep their consolidated log and diagnostics index")
 	}
 
 	// Both collector uploads must be failure-tolerant (a step without its
-	// own condition defaults to success() even inside a !cancelled() job).
+	// own condition defaults to success() even inside an always() job).
 	for _, want := range []string{ConsolidatedLogArtifactName, RunDiagnosticsArtifactName} {
-		step, ok := findUploadStep(doc, "consolidate-logs", want)
+		step, ok := findUploadStep(doc, CollectorJobKey, want)
 		if !ok {
-			errs = append(errs, fmt.Sprintf("consolidate-logs has no upload step named %q", want))
+			errs = append(errs, fmt.Sprintf("collect-errors has no upload step named %q", want))
 			continue
 		}
 		if !strings.Contains(step.If, "!cancelled()") {
@@ -262,7 +228,8 @@ func ValidateFailureTolerantCollector(workflowText string) error {
 // ValidateCodeQLWorkflowResilience enforces the CodeQL contract
 // (§9.3–§9.5) on the parsed workflow:
 //   - independent triggers: push (main), pull_request (main), a weekly
-//     schedule and workflow_dispatch; NO dependency on build-desktop,
+//     schedule and workflow_dispatch; NO dependency on the platform-build
+//     workflow (build.yml — the retired build-desktop orchestrator),
 //     preflight, packaging or any application-build job;
 //   - the query suite stays security-and-quality and the languages keep
 //     Go + actions scanning (no scope reduction);
@@ -272,7 +239,8 @@ func ValidateFailureTolerantCollector(workflowText string) error {
 //     when a later manual build step fails;
 //   - a collect-codeql-logs job runs after the analyze/export jobs on
 //     !cancelled() with least-privilege permissions and failure-tolerant
-//     uploads, reusing the same collector script as build-desktop.
+//     uploads, reusing the same collector script as the platform-build
+//     workflow.
 func ValidateCodeQLWorkflowResilience(workflowText string) error {
 	doc, err := parseWorkflow(workflowText)
 	if err != nil {
@@ -286,10 +254,10 @@ func ValidateCodeQLWorkflowResilience(workflowText string) error {
 	} else {
 		triggers := TriggerKeys(doc.On)
 		if !triggers["push"] {
-			errs = append(errs, "CodeQL workflow must trigger on push (independent of build-desktop)")
+			errs = append(errs, "CodeQL workflow must trigger on push (independent of the platform-build workflow)")
 		}
 		if !triggers["pull_request"] {
-			errs = append(errs, "CodeQL workflow must trigger on pull_request (independent of build-desktop)")
+			errs = append(errs, "CodeQL workflow must trigger on pull_request (independent of the platform-build workflow)")
 		}
 		if !triggers["schedule"] {
 			errs = append(errs, "CodeQL workflow must keep a scheduled analysis (weekly cron picks up newly released queries)")
@@ -299,15 +267,17 @@ func ValidateCodeQLWorkflowResilience(workflowText string) error {
 		}
 	}
 
-	// Independence: no CodeQL job may depend on a build-desktop job.
-	buildDesktopJobs := map[string]bool{
-		"preflight": true, "audit": true, "ui": true,
-		"build-windows": true, "build-linux": true,
-		"consolidate-logs": true, "final-verdict": true, "release": true,
+	// Independence: no CodeQL job may depend on a platform-build job
+	// (the consolidated build.yml job set).
+	platformBuildJobs := map[string]bool{
+		PlatformBuildJobKey: true,
+		CollectorJobKey:     true,
+		FinalVerdictJobKey:  true,
+		ReleaseJobKey:       true,
 	}
 	for key, job := range doc.Jobs {
 		for _, dep := range job.Needs {
-			if buildDesktopJobs[dep] {
+			if platformBuildJobs[dep] {
 				errs = append(errs, fmt.Sprintf("CodeQL job %q needs %q — CodeQL must be an independent security gate for the same commit, never a child of the application build", key, dep))
 			}
 		}
@@ -474,7 +444,7 @@ func SimulateGateMatrix(workflowText string, fixture map[string]string) (map[str
 				continue
 			}
 			progress = true
-			if blocked && !strings.Contains(job.If, "!cancelled()") {
+			if blocked && !jobRunsAfterFailure(job.If) {
 				out[key] = "skipped"
 				continue
 			}
@@ -502,6 +472,15 @@ func SimulateGateMatrix(workflowText string, fixture map[string]string) (map[str
 	}
 
 	return out, nil
+}
+
+// jobRunsAfterFailure reports whether a job-level if condition runs the
+// job after a failed dependency: both the `!cancelled()` spelling (the
+// final-verdict class) and the `always()` spelling (the collect-errors
+// collector class) are failure-tolerant; the implicit success() default
+// is not.
+func jobRunsAfterFailure(jobIf string) bool {
+	return strings.Contains(jobIf, "!cancelled()") || strings.Contains(jobIf, "always()")
 }
 
 // findUploadStep locates the upload-artifact step with the given
@@ -560,60 +539,4 @@ func joinErrors(errs []string) error {
 		return nil
 	}
 	return fmt.Errorf("workflow DAG contract violated (%d):\n  %s", len(errs), strings.Join(errs, "\n  "))
-}
-
-// ValidateFiveReusableLanesInvokedOnce enforces the §6.2 topology end to
-// end: the orchestrator invokes each of the five reusable platform
-// workflows EXACTLY ONCE, no job outside the five platform-* lanes
-// invokes a platform workflow, and every reusable file subscribes to
-// workflow_call ONLY (the orchestrator owns push/PR triggers; a platform
-// file with its own push trigger would silently rebuild a platform
-// outside the orchestrated DAG).
-func ValidateFiveReusableLanesInvokedOnce(orchestratorText string, laneTexts map[string]string) error {
-	doc, err := parseWorkflow(orchestratorText)
-	if err != nil {
-		return err
-	}
-
-	var errs []string
-
-	counts := map[string]int{}
-	for jobKey, job := range doc.Jobs {
-		if job.Uses == "" {
-			continue
-		}
-		counts[job.Uses]++
-		if _, isLane := laneWorkflowUses[jobKey]; !isLane {
-			errs = append(errs, fmt.Sprintf(
-				"job %q invokes %q — the orchestrator must not invoke platform workflows outside the five contracted platform-* lanes",
-				jobKey, job.Uses,
-			))
-		}
-	}
-
-	for _, want := range laneWorkflowUses {
-		if n := counts[want]; n != 1 {
-			errs = append(errs, fmt.Sprintf(
-				"%q must be invoked EXACTLY ONCE by the orchestrator (work order §6.2), found %d invocations",
-				want, n,
-			))
-		}
-	}
-
-	for laneFile, text := range laneTexts {
-		laneDoc, err := parseWorkflow(text)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", laneFile, err))
-			continue
-		}
-		triggers := TriggerKeys(laneDoc.On)
-		if len(triggers) != 1 || !triggers["workflow_call"] {
-			errs = append(errs, fmt.Sprintf(
-				"%s must subscribe to workflow_call ONLY (the orchestrator owns push/PR triggers), got %v",
-				laneFile, triggers,
-			))
-		}
-	}
-
-	return joinErrors(errs)
 }

@@ -58,9 +58,11 @@ func TestMobileToolchainPin(t *testing.T) {
 	}
 
 	// 2. Both mobile lanes install the CLI tools at the EXACT recorded
-	// pin (never @latest, never module-graph re-resolution).
-	for _, lane := range []string{"build-android.yml", "build-ios.yml"} {
-		text, err := os.ReadFile(filepath.Join(root, ".github", "workflows", lane))
+	// pin (never @latest, never module-graph re-resolution). The CI
+	// consolidation moved the lanes to the scripts/build/ dispatch
+	// scripts.
+	for _, lane := range []string{androidLaneRelPath, iosLaneRelPath} {
+		text, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(lane)))
 		if err != nil {
 			t.Fatalf("read %s: %v", lane, err)
 		}

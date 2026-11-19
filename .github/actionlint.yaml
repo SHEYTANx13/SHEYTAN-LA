@@ -1,0 +1,16 @@
+# actionlint configuration (repo-wide).
+#
+# ROOT CAUSE this file exists: the pinned runner labels ubuntu-26.04
+# (v1.11.1, run 41933333132: the VERIFIED 26.04 x64 image with its
+# runtime os-release/dpkg guard) and macos-15-intel (the CI
+# consolidation's Intel lane, distinct from the Apple-silicon macos-15
+# label) are real hosted-runner images, but actionlint binaries whose
+# runner-label database predates them report [runner-label] findings on
+# a CORRECT workflow. This config registers both labels as known so
+# `actionlint .github/workflows/build.yml` is a clean gate; the runtime
+# identity guards in the workflow itself remain the authoritative
+# verification (never this list).
+self-hosted-runner:
+  labels:
+    - "ubuntu-26.04"
+    - "macos-15-intel"

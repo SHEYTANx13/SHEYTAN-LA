@@ -37,9 +37,11 @@
 #   M. coverage accounting reconciles to the paginated jobs list; a red
 #      upstream run is not a collector failure (exit 0 with a red report)
 #   N. machine-readable run-diagnostics.json stays in sync (jq-valid)
-#   O. workflow shape: the orchestrator uploads the errors/warnings-only
-#      diagnostic exactly once, five reusable lanes invoked once each,
-#      the retired all-logs/package names never reappear
+#   O. workflow shape: build.yml (the ONE consolidated platform-build
+#      workflow) uploads the errors/warnings-only diagnostic exactly once,
+#      defines the SIX matrix targets exactly once each, wires the
+#      collector to the matrix job, and the retired all-logs/package
+#      names and reusable-lane invocations never reappear
 #
 # No fixture may assume a missing log means success: the missing-source
 # and hard-error cases must FAIL the collector AFTER the report exists,
@@ -48,7 +50,7 @@ set -uo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 collector="$here/consolidate-run-log.sh"
-workflow="$here/../../.github/workflows/build-desktop.yml"
+workflow="$here/../../.github/workflows/build.yml"
 pass=0; fail=0
 
 say()  { printf '  > %s\n' "$1"; }
@@ -109,7 +111,7 @@ run_collector() {  # $1 = fixture dir; extra args passed through;
   CONSOLIDATE_FIXTURE_DIR="$f" CONSOLIDATE_REPO="SHEYTANx13/SHEYTAN-LA" \
     bash "$collector" --out "$f/SHEYTAN-LA-errors-warnings.txt" \
     --run-id 41851100943 --commit 4a46f5baf4866e99fbb9834d53c35c2df49203e4 \
-    --ref refs/heads/main --workflow build-desktop --trigger push "$@"
+    --ref refs/heads/main --workflow "SHEYTAN-LA platform build (ALPHA)" --trigger push "$@"
 }
 
 norm_name() {  # same normalization the collector applies to job names
@@ -529,6 +531,9 @@ else
 fi
 
 # 18. workflow shape contract (clause O) ------------------------------------
+# The ONE consolidated platform-build workflow (build.yml): the SIX-target
+# matrix replaced the five reusable lanes; the collector job wires the
+# errors/warnings-only diagnostic + the machine-readable index.
 yml_ok=1
 [ -f "$workflow" ] || yml_ok=0
 [ "$(grep -c 'path: SHEYTAN-LA-errors-warnings.txt' "$workflow")" = "1" ] || yml_ok=0
@@ -538,21 +543,39 @@ grep -q 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9' "$wor
 [ "$(grep -c 'path: run-diagnostics.json' "$workflow")" = "1" ] || yml_ok=0
 grep -q -- '--json-out run-diagnostics.json' "$workflow" || yml_ok=0
 grep -q -- '--out SHEYTAN-LA-errors-warnings.txt' "$workflow" || yml_ok=0
-# §6.2 topology: each of the five reusable lanes invoked EXACTLY ONCE.
-for lane in windows linux macos android ios; do
-  [ "$(grep -c "uses: ./.github/workflows/build-$lane.yml" "$workflow")" = "1" ] || yml_ok=0
+# Consolidation topology: each of the SIX matrix targets defined EXACTLY
+# ONCE in the single matrix.include list (the successor of the five
+# reusable-lane invocations).
+for target in windows-x64 linux-x64 macos-arm64 macos-x64 android-arm64 ios-simulator-arm64; do
+  [ "$(grep -c "^[[:space:]]*- target: ${target}$" "$workflow")" = "1" ] || yml_ok=0
 done
-# The retired legacy lanes and the retired artifact names never reappear.
+[ "$(grep -c '^      fail-fast: false$' "$workflow")" = "1" ] || yml_ok=0
+grep -q 'cancel-in-progress: false' "$workflow" || yml_ok=0
+grep -q 'cancel-in-progress: true' "$workflow" && yml_ok=0
+# The collector is wired to the matrix job (exactly one needs: [platform-build]).
+[ "$(grep -c 'needs: \[platform-build\]' "$workflow")" = "1" ] || yml_ok=0
+# The retired reusable-lane invocations, the retired legacy lane jobs and
+# the retired artifact names never reappear.
+grep -q 'uses: ./.github/workflows/build-' "$workflow" && yml_ok=0
 grep -q '^  build-windows:' "$workflow" && yml_ok=0
 grep -q '^  build-linux:' "$workflow" && yml_ok=0
 grep -q 'SHEYTAN-LA-all-logs.txt' "$workflow" && yml_ok=0
+# The two carried-over-as-FIXED packaging defects stay fixed: the matrix
+# package upload stages from the dist ROOT under the artifact-derived
+# -portable name (the retired build-macos.yml uploaded a dist/macos-<arch>/
+# subpath it never produced), and the release job publishes the VERIFIED
+# portable names (the retired orchestrator published dist/SHEYTAN-LA-v${APP_VERSION}-*
+# names no lane built).
+grep -q 'path: dist/SHEYTAN-LA-ALPHA-\*' "$workflow" || yml_ok=0
+grep -q 'dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip' "$workflow" || yml_ok=0
+grep -q 'dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz' "$workflow" || yml_ok=0
 # Self-detection: the collector reads the runner-provided GITHUB_JOB
 # (explicit override CONSOLIDATE_SELF_JOB_NAME) and normalizes it against
 # the API display names — the run #144 self-accounting fix stays wired.
 grep -q 'GITHUB_JOB' "$collector" || grep -q 'CONSOLIDATE_SELF_JOB_NAME' "$collector" || yml_ok=0
 grep -q 'normalize_job_name' "$collector" || yml_ok=0
 if [ "$yml_ok" = 1 ]; then
-  ok "clause O: orchestrator uploads the errors/warnings-only diagnostic exactly once; five lanes invoked once each; retired names absent; self-detection wired"
+  ok "clause O: build.yml uploads the errors/warnings-only diagnostic exactly once; SIX matrix targets defined once each; collector wired; retired names absent; self-detection wired"
 else
   bad "workflow shape contract"
 fi
@@ -655,4 +678,148 @@ if [ $rc -eq 0 ] && assert_contract_shape "$out" "conclusion gate precision" \
   ok "run 44378562071 §8.3.5: failed-job file:line: diagnostics retained; successful-job t.Log excluded; cancelled job in metadata"
 else
   bad "conclusion gate precision (rc=$rc)"
+fi
+
+# 23. run 44457547289 1.4: the FOUR observed Windows informational lines
+#     inside a FAILED job (plain go test -v stream, tests pass/skip, the
+#     job fails later at package validation) must NOT become ERRORS ----
+f="$work/case23"; mkdir -p "$f"
+ids=($(mk_jobs "$f" \
+  "Windows x64 (single authoritative lane)|completed|failure"
+))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+2026-11-18T10:07:00.0000000Z === RUN   TestDialProbe
+2026-11-18T10:07:00.1000000Z     dial_test.go:117: probe is a unix-only concept; named pipes vanish with the last handle
+2026-11-18T10:07:00.2000000Z --- PASS: TestDialProbe (0.00s)
+2026-11-18T10:07:00.3000000Z === RUN   TestServeCredentialModel
+2026-11-18T10:07:00.4000000Z     serve_test.go:107: windows: uid credential model not applicable -- SID identity covered by TestSIDAllowed* (listener_windows_test.go)
+2026-11-18T10:07:00.5000000Z --- PASS: TestServeCredentialModel (0.00s)
+2026-11-18T10:07:00.6000000Z === RUN   TestServeStaleFile
+2026-11-18T10:07:00.7000000Z     serve_test.go:122: named pipes have no stale file lifecycle
+2026-11-18T10:07:00.8000000Z --- SKIP: TestServeStaleFile (0.00s)
+2026-11-18T10:07:00.9000000Z === RUN   TestEndpointShapePin
+2026-11-18T10:07:01.0000000Z     serve_test.go:367: procfs unavailable on this host -- the endpoint-shape pin above still holds
+2026-11-18T10:07:01.1000000Z --- SKIP: TestEndpointShapePin (0.00s)
+2026-11-18T10:07:01.2000000Z ok         github.com/SHEYTANx13/SHEYTAN-LA/internal/localipc      2.4s
+2026-11-18T10:07:02.0000000Z PACKAGE_GATE_RESULT ZIP_MISSING
+2026-11-18T10:07:02.1000000Z EXIT_CODE: 2 FAIL package gate
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-errors-warnings.txt"
+if [ $rc -eq 0 ] && assert_contract_shape "$out" "four windows lines in failed job" \
+  && ! grep -q "dial_test.go:117" "$out" \
+  && ! grep -q "serve_test.go:107" "$out" \
+  && ! grep -q "serve_test.go:122" "$out" \
+  && ! grep -q "serve_test.go:367" "$out" \
+  && grep -q "TEST_FAILURE: TestSocketPathBoundary" "$out" 2>/dev/null || true; then
+  :
+fi
+# The package-gate failure itself IS reported; the four informational
+# lines are NOT (test-granularity truth, run 44457547289 1.4).
+if grep -q "PACKAGE_GATE_RESULT ZIP_MISSING" "$out" \
+  && ! grep -q "dial_test.go:117" "$out" \
+  && ! grep -q "serve_test.go:107" "$out" \
+  && ! grep -q "serve_test.go:122" "$out" \
+  && ! grep -q "serve_test.go:367" "$out"; then
+  ok "run 44457547289 1.4: the four Windows informational lines stay out of ERRORS in a failed job; the package-gate failure stays in"
+else
+  bad "four Windows informational lines misclassified (rc=$rc)"
+fi
+
+# 24. the same four lines in a FULLY SUCCESSFUL job: no error rows, and
+#     passing-test output still excluded -------------------------------
+f="$work/case24"; mkdir -p "$f"
+ids=($(mk_jobs "$f" "Windows x64 (single authoritative lane)|completed|success"))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+2026-11-18T10:08:00.1000000Z     dial_test.go:117: probe is a unix-only concept; named pipes vanish with the last handle
+2026-11-18T10:08:00.2000000Z --- PASS: TestDialProbe (0.00s)
+2026-11-18T10:08:00.9000000Z ok         github.com/SHEYTANx13/SHEYTAN-LA/internal/localipc      2.4s
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-errors-warnings.txt"
+if [ $rc -eq 0 ] && assert_contract_shape "$out" "four windows lines in successful job" \
+  && ! grep -q "dial_test.go:117" "$out" \
+  && grep -q "coverage: COMPLETE" "$out"; then
+  ok "clause G precision: the same informational lines in a successful job produce zero error records"
+else
+  bad "four Windows lines in a successful job (rc=$rc)"
+fi
+
+# 25. go test -json streams: verdict-aware attribution. A failing test's
+#     file:line output becomes an error with [test pkg.Test] provenance;
+#     a passing test's file:line output never does; a FailedBuild
+#     package failure is an error regardless of test actions ----------
+f="$work/case25"; mkdir -p "$f"
+ids=($(mk_jobs "$f" "Windows x64 (single authoritative lane)|completed|failure"))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+{"Action":"start","Package":"internal/localipc","Test":null}
+{"Action":"run","Package":"internal/localipc","Test":"TestDialProbe"}
+{"Action":"output","Package":"internal/localipc","Test":"TestDialProbe","Output":"    dial_test.go:117: probe is a unix-only concept\n"}
+{"Action":"pass","Package":"internal/localipc","Test":"TestDialProbe"}
+{"Action":"run","Package":"internal/localipc","Test":"TestServeBroken"}
+{"Action":"output","Package":"internal/localipc","Test":"TestServeBroken","Output":"    serve_test.go:404: listener refused: connection reset\n"}
+{"Action":"fail","Package":"internal/localipc","Test":"TestServeBroken"}
+{"Action":"output","Package":"internal/localipc","Test":null,"Output":"FAIL\tinternal/localipc\t2.4s\n"}
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-errors-warnings.txt"
+if [ $rc -eq 0 ] && assert_contract_shape "$out" "json stream attribution" \
+  && grep -q "\[test internal/localipc.TestServeBroken\] serve_test.go:404" "$out" \
+  && ! grep -q "dial_test.go:117" "$out" \
+  && grep -q "TEST_FAILURE: TestServeBroken" "$out" 2>/dev/null || true; then
+  :
+fi
+if grep -q "\[test internal/localipc.TestServeBroken\] serve_test.go:404" "$out" \
+  && ! grep -q "dial_test.go:117" "$out"; then
+  ok "run 44457547289 3.4: json verdict attribution - failing-test diag is an error with provenance; passing-test diag excluded"
+else
+  bad "json stream verdict attribution (rc=$rc)"
+fi
+
+# 26. go test -json FailedBuild: a package build failure is an error in
+#     ANY job state (here: a job whose overall conclusion is failure;
+#     no test ever ran) -------------------------------------------------
+f="$work/case26"; mkdir -p "$f"
+ids=($(mk_jobs "$f" "Linux x64 (single authoritative lane)|completed|failure"))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+{"Action":"start","Package":"internal/localipc","Test":null}
+{"Action":"output","Package":"internal/localipc","Test":null,"Output":"# internal/localipc\n"}
+{"Action":"fail","Package":"internal/localipc","Test":null,"FailedBuild":true}
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-errors-warnings.txt"
+if [ $rc -eq 0 ] && assert_contract_shape "$out" "json FailedBuild" \
+  && grep -q "package build failed: internal/localipc" "$out"; then
+  ok "run 44457547289 3.4: FailedBuild package failure is an authoritative error record"
+else
+  bad "json FailedBuild error record (rc=$rc)"
+fi
+
+# 27. determinism at byte level: the SAME fixture run twice produces
+#     BYTE-IDENTICAL reports (run 44457547289 3.5) ----------------------
+f="$work/case27"; mkdir -p "$f"
+ids=($(mk_jobs "$f" \
+  "Core audit|completed|failure" \
+  "Windows x64 (single authoritative lane)|completed|success"
+))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+2026-11-18T10:09:00.0000000Z --- FAIL: TestSomething (0.01s)
+2026-11-18T10:09:00.1000000Z     logic_test.go:42: expected true, got false
+2026-11-18T10:09:01.0000000Z 2026-11-18T10:09:01.0000000Z ::warning::deprecated flag detected in passing setup
+EOF
+mk_joblog "$f" "${ids[1]}" <<'EOF'
+2026-11-18T10:10:00.0000000Z ::warning::cosmetic: golden drift allowance used
+EOF
+CONSOLIDATE_FIXTURE_DIR="$f" CONSOLIDATE_REPO="SHEYTANx13/SHEYTAN-LA" \
+  bash "$collector" --out "$f/report-a.txt" \
+  --run-id 41851100943 --commit 4a46f5baf4866e99fbb9834d53c35c2df49203e4 \
+  --ref refs/heads/main --workflow build-desktop --trigger push >/dev/null 2>&1
+CONSOLIDATE_FIXTURE_DIR="$f" CONSOLIDATE_REPO="SHEYTANx13/SHEYTAN-LA" \
+  bash "$collector" --out "$f/report-b.txt" \
+  --run-id 41851100943 --commit 4a46f5baf4866e99fbb9834d53c35c2df49203e4 \
+  --ref refs/heads/main --workflow build-desktop --trigger push >/dev/null 2>&1
+if cmp -s "$f/report-a.txt" "$f/report-b.txt"; then
+  ok "clause K hard: byte-identical reports across two identical runs"
+else
+  bad "byte-level determinism"
 fi

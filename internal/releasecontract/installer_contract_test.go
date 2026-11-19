@@ -19,16 +19,21 @@ import (
 )
 
 // workflowRelPath is the canonical CI workflow path the release contract
-// tests read from the tracked tree.
-const workflowRelPath = ".github/workflows/build-desktop.yml"
+// tests read from the tracked tree. The CI consolidation merged the
+// retired build-desktop.yml orchestrator + five reusable lanes into ONE
+// platform-build workflow.
+const workflowRelPath = PlatformBuildWorkflowPath
 
-// The five reusable platform lanes (run 44306343338 §6.2 topology).
+// The five per-lane build scripts — the §10 successors of the retired
+// reusable lane files (the platform-build matrix job dispatches them
+// per phase). Kept as constants so the lane-content pins read the same
+// named seams.
 const (
-	windowsLaneRelPath = ".github/workflows/build-windows.yml"
-	linuxLaneRelPath   = ".github/workflows/build-linux.yml"
-	macosLaneRelPath   = ".github/workflows/build-macos.yml"
-	androidLaneRelPath = ".github/workflows/build-android.yml"
-	iosLaneRelPath     = ".github/workflows/build-ios.yml"
+	windowsLaneRelPath = "scripts/build/windows.ps1"
+	linuxLaneRelPath   = "scripts/build/linux.sh"
+	macosLaneRelPath   = "scripts/build/macos.sh"
+	androidLaneRelPath = "scripts/build/android.sh"
+	iosLaneRelPath     = "scripts/build/ios.sh"
 )
 
 // readTreeFile reads one tracked file relative to the repository root —

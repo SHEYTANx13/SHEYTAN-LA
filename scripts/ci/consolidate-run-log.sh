@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # consolidate-run-log.sh — build the ONE consolidated ERRORS-AND-WARNINGS
-# plain-text run report for the build-desktop workflow, collected from
+# plain-text run report for the platform-build workflow
+# (.github/workflows/build.yml — the retired build-desktop.yml
+# orchestrator's successor), collected from
 # COMPLETED JOB-SPECIFIC LOGS via the GitHub jobs API (work order for run
 # #41851100943 §3.2/§8, errors-and-warnings output contract v2):
 #
@@ -508,13 +510,167 @@ capture_job_log() {  # $1 = job id; on success writes $2 = log file; echoes "" o
   return 0
 }
 
+# --- 3b. go test -json stateful pre-classifier (run 44457547289 3.4) -----
+# A job-level conclusion can NEVER decide whether a file:line diagnostic
+# is an error: a job that fails at package validation still contains
+# passing and skipped tests whose t.Log/t.Skip output is informational.
+# This stage parses the go test -json event stream (one JSON object per
+# line) with a STATEFUL awk machine: every file:line diagnostic line is
+# attributed to its owning (package, test) and classified by that test's
+# FINAL action - pass/skip output never becomes an error, failing-test
+# output becomes an error record carrying [test pkg.Test] provenance,
+# and a package-level build failure (FailedBuild) is an error regardless
+# of any test action. Output files (exact-line keyed):
+#   gotest-pass-<jid>.txt  file:line lines from passing/skipped tests
+#   gotest-fail-<jid>.txt  "pkg\ttest\tline" rows from failing tests
+parse_go_test_json() {  # $1 = job index; $2 = cleaned log file; $3 = job id
+  local jidx="$1" log="$2" jid="$3"
+  local norm="$WORK/gotest-norm-$jid.tsv"
+  # Normalize the event stream to TAB records via jq (already a required
+  # dependency of the jobs-metadata stage):
+  #   VERD <action> <package> <test> <failedBuild>
+  #   OUT  <package> <test> <line>
+  timeout 120 jq -r '
+    if ((.Action? // "") == "output") then
+      . as $e | ($e.Output // "") | split("\n") | .[] | select(length > 0) |
+      ["OUT", ($e.Package // ""), ($e.Test // ""), .] | @tsv
+    elif ((.Action? // "") == "pass") or ((.Action? // "") == "fail") or ((.Action? // "") == "skip") then
+      ["VERD", ((.Action // "")), ((.Package // "")), ((.Test // "")), ((.FailedBuild // false) | tostring)] | @tsv
+    else empty end
+  ' "$log" > "$norm" 2>>"$DIAG" || true
+
+  local passf="$WORK/gotest-pass-$jid.txt"
+  local failf="$WORK/gotest-fail-$jid.txt"
+  : > "$passf"; : > "$failf"
+
+  # Machine 1 - go test -json events ($norm): every diagnostic is
+  # attributed to its owning (package, test) and EMITTED DIRECTLY by
+  # that test's final action, because a JSON event stream never carries
+  # the bare diagnostic text that the plain-text classifier could match.
+  #   - pass/skip test output: never an error (run 44457547289 1.4);
+  #   - fail test output: an error row with [test pkg.Test] provenance;
+  #   - FailedBuild: an authoritative package-build error in any state.
+  # Sequence numbers use a 100000 base so they cannot collide with the
+  # plain-text classifier's per-job counter in the shared index.
+  LC_ALL=C awk -F'\t' -v jidx="$1" -v errfile="$ERRIDX" '
+    function isfileline(s) {
+      return s ~ /^[A-Za-z0-9_./\\+-]+\.[A-Za-z][A-Za-z0-9]*:[0-9]+(:[0-9]+)?:/
+    }
+    function emit(txt,   k) {
+      if (length(txt) > 240) txt = substr(txt, 1, 240)
+      k = 100000 + (++SEQ)
+      print jidx "\t0000\t" k "\t" txt >> errfile
+    }
+    $1 == "VERD" {
+      k = $3 SUBSEP $4
+      act[k] = $2
+      if (k in buf) {
+        if ($2 == "fail") {
+          for (i = 1; i <= buf[k]; i++) emit("[test " $3 "." $4 "] " dline[k, i])
+        }
+        delete buf[k]
+      }
+      if ($2 == "fail" && $5 == "true" && $4 == "") {
+        emit("package build failed: " $3)
+      }
+      next
+    }
+    $1 == "OUT" {
+      line = $0
+      sub(/^[^\t]*\t[^\t]*\t[^\t]*\t/, "", line)
+      # Trim BEFORE the shape test: go test output carries a 4-space
+      # indent that must not defeat the anchored file:line regex.
+      t = line; gsub(/^[ \t]+/, "", t); gsub(/[ \t]+$/, "", t)
+      if ($3 != "" && isfileline(t)) {
+        k = $2 SUBSEP $3
+        dline[k, ++buf[k]] = t
+      }
+      next
+    }
+    END {
+      nf = 0
+      for (k in buf) nf += buf[k]
+      if (nf > 0) printf "go test -json pre-classifier: %d buffered diagnostic line(s) had no final test verdict (truncated stream; not classified)\n", nf >> "'"$DIAG"'"
+    }
+  ' "$norm" 2>>"$DIAG" || true
+
+  # Machine 2 - plain go test -v markers in the RAW log: bare file:line
+  # diagnostics between "=== RUN/CONT X" and the "--- VERDICT: X" line
+  # are attributed to X the same way (verdict recorded BEFORE the flush
+  # so the pass/skip window is honored). Attributed lines are handed to
+  # the classifier through the exact-line indexes; unattributed bare
+  # lines keep the conclusion-gated plain-text rules.
+  LC_ALL=C awk -v passf="$passf" -v failf="$failf" '
+    function isfileline(s) {
+      return s ~ /^[A-Za-z0-9_./\\+-]+\.[A-Za-z][A-Za-z0-9]*:[0-9]+(:[0-9]+)?:/
+    }
+    function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+    # CI logs prefix every line with an ISO timestamp; the marker and
+    # diagnostic rules must see THROUGH it (run 44457547289 3.4).
+    function strip_ts(s) {
+      if (match(s, /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9](\.[0-9]+)?Z?[ \t]+/)) {
+        return substr(s, RLENGTH + 1)
+      }
+      return s
+    }
+    function flush(   i, k, act) {
+      if (cur == "") return
+      k = cur
+      act = (k in verdict) ? verdict[k] : ""
+      if (!(k in diag)) { cur = ""; return }
+      if (act == "pass" || act == "skip") {
+        for (i = 1; i <= diag[k]; i++) print diag[k, i] >> passf
+      } else if (act == "fail") {
+        for (i = 1; i <= diag[k]; i++) print curpkg "\t" cur "\t" diag[k, i] >> failf
+      }
+      delete diag[k]
+      cur = ""
+    }
+    {
+      body = strip_ts($0)
+    }
+    body ~ /^(=== RUN|=== CONT)[ \t]/ {
+      flush()
+      n = split(body, parts, /[ \t]+/)
+      cur = parts[3]
+      for (i = 4; i <= n; i++) cur = cur " " parts[i]
+      next
+    }
+    body ~ /^--- (PASS|SKIP|FAIL):/ {
+      n = split(body, parts, /[ \t]+/)
+      vname = parts[3]
+      v = parts[2]
+      sub(/:$/, "", v)
+      v = tolower(v)
+      verdict[vname] = v
+      flush()
+      next
+    }
+    body ~ /^(ok|FAIL|PASS)[ \t]/ {
+      flush()
+      next
+    }
+    body ~ /^\{"Action":/ { next }  # raw JSON event lines: structure, not evidence
+    {
+      trimmed = trim(body)
+      if (isfileline(trimmed) && cur != "") {
+        # Store the TRIMMED text: the classifier sees the same
+        # timestamp-stripped, whitespace-trimmed rest.
+        diag[cur, ++diag[cur]] = trimmed
+      }
+      next
+    }
+    END { flush() }
+  ' "$log" 2>>"$DIAG" || true
+}
+
 # --- 4. classification ----------------------------------------------------
 # classify_job_log — rule (d) diagnostics + annotation-channel matching,
 # per captured job. Entry rows are TAB-separated:
 #   job-index \t timestamp \t seq \t text
 # so each section can be sorted by workflow job order, then timestamp.
-classify_job_log() {  # $1 = job index; $2 = has_ann(0/1); $3 = annotations ndjson; $4 = package-state file; $5 = job conclusion; log on stdin
-  LC_ALL=C awk -v jidx="$1" -v has_ann="$2" -v annfile="$3" -v pkgfile="$4" -v jconc="$5" \
+classify_job_log() {  # $1 = job index; $2 = has_ann(0/1); $3 = annotations ndjson; $4 = package-state file; $5 = job conclusion; $6 = passing-test diagnostics file; $7 = failing-test diagnostics file; log on stdin
+  LC_ALL=C awk -v jidx="$1" -v has_ann="$2" -v annfile="$3" -v pkgfile="$4" -v jconc="$5" -v passfile="$6" -v failfile="$7" \
     -v errfile="$ERRIDX" -v warnfile="$WARNIDX" -v tfailfile="$TFAILIDX" -v sq="'" '
     function normmsg(m) { gsub(/[ \t]+/, " ", m); sub(/^ /, "", m); sub(/ $/, "", m); return m }
     function emit(lvl, t, txt,   k) {
@@ -551,6 +707,34 @@ classify_job_log() {  # $1 = job index; $2 = has_ann(0/1); $3 = annotations ndjs
         else if (annlvl[i] == "warning") emit("warn", "", "[annotation] " annmsg[i])
       }
       pending = 0
+      # go test -json verdict-aware diagnostics (run 44457547289 3.4):
+      # exact-line indexes built by parse_go_test_json. Passing/skipped
+      # test output is never an error; failing-test output carries
+      # [test pkg.Test] provenance; package build failures are
+      # authoritative errors in ANY job state.
+      if (passfile != "") {
+        while ((getline pl < passfile) > 0) passdiag[pl] = 1
+        close(passfile)
+      }
+      if (failfile != "") {
+        while ((getline fl < failfile) > 0) {
+          if (fl == "") continue
+          p1 = index(fl, "\t")
+          p2 = p1 > 0 ? index(substr(fl, p1 + 1), "\t") + p1 : 0
+          if (p2 <= p1) continue
+          fpkg = substr(fl, 1, p1 - 1)
+          ftest = substr(fl, p1 + 1, p2 - p1 - 1)
+          fline = substr(fl, p2 + 1)
+          if (fpkg == "__pkgfail__") { emit("error", "", fline); continue }
+          faildiag[fline] = 1
+          failpkg[fline] = fpkg
+          failtest[fline] = ftest
+        }
+        close(failfile)
+      }
+    }
+    function isfileline(s) {
+      return s ~ /^[A-Za-z0-9_./\\+-]+\.[A-Za-z][A-Za-z0-9]*:[0-9]+(:[0-9]+)?:/
     }
     {
       ts = ""; rest = $0
@@ -559,6 +743,10 @@ classify_job_log() {  # $1 = job index; $2 = has_ann(0/1); $3 = annotations ndjs
         rest = substr(rest, RLENGTH + 1)
         sub(/^[ \t]+/, "", rest)
       }
+      # go test -json event lines are STRUCTURE, not evidence text (run
+      # 44457547289 3.4): the stateful pre-classifier already attributed
+      # their diagnostics - a raw event object is never an error row.
+      if (rest ~ /^\{"Action":/) next
       # structured PACKAGE_GATE_RESULT (checked first; BLOCKED never becomes
       # an error row — it reports the first upstream failure instead)
       if (rest ~ /^PACKAGE_GATE_RESULT[ \t]+/) {
@@ -640,9 +828,21 @@ classify_job_log() {  # $1 = job index; $2 = has_ann(0/1); $3 = annotations ndjs
       # the oversized-asset size report are the recorded false-positive
       # cases) - they are excluded from ERRORS; warning-prefixed ones stay
       # warnings (clause C). Metadata is authoritative, never log text.
-      if (match(rest, /^[A-Za-z0-9_./\\+-]+\.[A-Za-z][A-Za-z0-9]*:[0-9]+:[0-9]+:/) || match(rest, /^[A-Za-z0-9_./\\+-]+\.[A-Za-z][A-Za-z0-9]*:[0-9]+:/)) {
+      if (isfileline(rest)) {
         msg = substr(rest, RLENGTH + 1)
         if (tolower(msg) ~ /^[ \t]*warning/) { emit("warn", ts, rest); next }
+        # Test-granularity truth beats job-level conclusions (run
+        # 44457547289 3.4): output attributed to a passing or skipped
+        # test is ordinary diagnostic text even in a FAILED job (the
+        # Windows package-fixture case: four informational lines in a
+        # job that later failed at package validation); output
+        # attributed to a FAILING test is an error carrying
+        # [test pkg.Test] provenance, in ANY job state.
+        if (rest in passdiag) next
+        if (rest in faildiag) {
+          emit("error", ts, "[test " failpkg[rest] "." failtest[rest] "] " rest)
+          next
+        }
         if (jconc != "failure" && jconc != "cancelled") next
         emit("error", ts, rest)
         next
@@ -651,6 +851,10 @@ classify_job_log() {  # $1 = job index; $2 = has_ann(0/1); $3 = annotations ndjs
       # successful job these are ordinary diagnostics, never failures.
       if (jconc == "failure" || jconc == "cancelled") {
         if (rest ~ /^Write-Error: / || rest ~ /^ERROR: / || rest ~ /^Exception calling/) { emit("error", ts, rest); next }
+        # PowerShell test-harness failure line (PackageGate.Tests.ps1 /
+        # ImportAudit.Tests.ps1 emit "FAIL: <assert>"): failing-test
+        # evidence at test granularity.
+        if (rest ~ /^FAIL: /) { emit("error", ts, rest); next }
         # gate-script exit marker (nonzero only; "EXIT_CODE: 0 PASS" is success noise)
         if (match(rest, /^EXIT_CODE: [1-9][0-9]* FAIL/)) { emit("error", ts, rest); next }
       }
@@ -738,7 +942,8 @@ if [ -s "$WORK/jobs.ndjson" ]; then
     strip_ansi_stream "$sec" > "$c1"
     redact_stream "$c1" > "$c2"
     pkgfile="$WORK/pkg-$jid.txt"
-    classify_job_log "$JIDX" "$has_ann" "$annfile" "$pkgfile" "$jconc" < "$c2"
+    parse_go_test_json "$JIDX" "$c2" "$jid"
+    classify_job_log "$JIDX" "$has_ann" "$annfile" "$pkgfile" "$jconc" "$WORK/gotest-pass-$jid.txt" "$WORK/gotest-fail-$jid.txt" < "$c2"
 
     case "$(normalize_job_name "$jname")" in
       *package*) printf '%d\t%s\n' "$JIDX" "$jid" >> "$PKGJOBS";;

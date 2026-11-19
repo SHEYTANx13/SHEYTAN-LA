@@ -27,6 +27,20 @@ func dialContext(ctx context.Context, endpoint string) (net.Conn, error) {
 		return nil, err
 	}
 
+	// dialTransport is the narrow injectable seam (run 44457547289
+	// §1.3.b): tests may replace it to force a deterministic
+	// genuinely-pending connect state — kernel backlog saturation is NOT
+	// portable across Linux and darwin, so the mid-wait deadline contract
+	// must be provable without betting on one kernel's AF_UNIX queue
+	// behavior. Production always uses the real net.Dialer; the seam is
+	// replaced only inside tests (see dial_unix_test.go).
+	return dialTransport(ctx, endpoint)
+}
+
+// dialTransport is the seam variable. Its default is the production
+// transport: a zero-value net.Dialer (no retries, no timeouts of its own
+// — the caller's context is the only deadline authority).
+var dialTransport = func(ctx context.Context, endpoint string) (net.Conn, error) {
 	var d net.Dialer
 	return d.DialContext(ctx, "unix", endpoint)
 }

@@ -1,7 +1,6 @@
 package proc
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -40,19 +39,27 @@ func TestListeningProcessFindsSelfOwnedListener(t *testing.T) {
 			t.Fatalf("the executable path must resolve for our own process")
 		}
 	case "darwin":
-		// Typed platform limitation (run 44306343338 repair §4.7): the
-		// darwin ownership probe is fail-closed UNSUPPORTED in this
-		// build (no libproc fd walk linked). The typed result is
-		// asserted explicitly — never a silent skip and never a
-		// fabricated owner.
-		if !errors.Is(err, ErrPortOwnerUnsupported) {
-			t.Fatalf("darwin must return the typed ErrPortOwnerUnsupported, got %v", err)
+		// Run 44457547289 §1.3.a: darwin now performs the REAL libproc
+		// ownership walk (PROC_ALL_PIDS -> PROC_PIDLISTFDS ->
+		// PROC_PIDFDSOCKETINFO -> PROC_PIDPATHINFO), so a live self-owned
+		// listener must be attributable exactly like Linux — same
+		// identity contract, native mechanism. A typed unsupported
+		// result here would mean the fd walk is broken, never a
+		// legitimate skip.
+		if err != nil {
+			t.Fatalf("darwin port-owner walk must attribute our own listener, got error: %v", err)
 		}
-		if ok {
-			t.Fatalf("darwin must not claim ownership evidence while unsupported")
+
+		if !ok {
+			t.Fatalf("a live listener must be attributable on darwin")
 		}
-		if pid != 0 || exe != "" {
-			t.Fatalf("darwin must not fabricate pid/exe, got (%d, %q)", pid, exe)
+
+		if pid != os.Getpid() {
+			t.Fatalf("the listener belongs to pid %d, want %d", pid, os.Getpid())
+		}
+
+		if exe == "" {
+			t.Fatalf("the executable path must resolve for our own process")
 		}
 	default:
 		t.Skipf("no per-OS expectation for %s", runtime.GOOS)

@@ -240,12 +240,14 @@ func stressReleaseSurface() error {
 		}
 	}
 
-	// 3. Current desktop CI release contract.
+	// 3. Current desktop CI release contract. The CI consolidation merged
+	// the retired build-desktop.yml orchestrator + five reusable lanes
+	// into the ONE platform-build workflow.
 	workflowsDir := filepath.Join(".github", "workflows")
 
 	workflowCandidates := []string{
-		filepath.Join(workflowsDir, "build-desktop.yml"),
-		filepath.Join(workflowsDir, "build-desktop.yaml"),
+		filepath.Join(workflowsDir, "build.yml"),
+		filepath.Join(workflowsDir, "build.yaml"),
 	}
 
 	var workflowPath string
@@ -257,19 +259,8 @@ func stressReleaseSurface() error {
 	}
 
 	if workflowPath == "" {
-		matches, globErr := filepath.Glob(filepath.Join(workflowsDir, "build-*.*ml"))
-		if globErr != nil {
-			return fmt.Errorf("discover desktop workflow: %v", globErr)
-		}
-
-		if len(matches) == 1 {
-			workflowPath = matches[0]
-		}
-	}
-
-	if workflowPath == "" {
 		return fmt.Errorf(
-			"desktop workflow missing: expected .github/workflows/build-desktop.yml",
+			"platform build workflow missing: expected .github/workflows/build.yml",
 		)
 	}
 
@@ -280,28 +271,28 @@ func stressReleaseSurface() error {
 
 	w := string(wf)
 
-	// Run 44306343338 §6.2 consolidation: the platform build lanes live in
-	// the five reusable workflow files; the orchestrator invokes each one
-	// exactly once. Platform-specific release-surface anchors below are
-	// validated against the LANE files, and the action-pin presence check
-	// sees the combined workflow set.
+	// CI consolidation: the platform build lanes live in the five
+	// per-phase scripts under scripts/build/, dispatched by the
+	// platform-build matrix job of build.yml. Platform-specific
+	// release-surface anchors below are validated against the LANE
+	// scripts, and the combined-text checks see the workflow + all five
+	// lane scripts.
 	lanePaths := []string{
-		filepath.Join(workflowsDir, "build-windows.yml"),
-		filepath.Join(workflowsDir, "build-linux.yml"),
-		filepath.Join(workflowsDir, "build-macos.yml"),
-		filepath.Join(workflowsDir, "build-android.yml"),
-		filepath.Join(workflowsDir, "build-ios.yml"),
+		filepath.Join("scripts", "build", "windows.ps1"),
+		filepath.Join("scripts", "build", "linux.sh"),
+		filepath.Join("scripts", "build", "macos.sh"),
+		filepath.Join("scripts", "build", "android.sh"),
+		filepath.Join("scripts", "build", "ios.sh"),
 	}
 	laneTexts := make([]string, 0, len(lanePaths))
 	for _, lp := range lanePaths {
 		laneBytes, laneErr := os.ReadFile(lp)
 		if laneErr != nil {
-			return fmt.Errorf("read reusable lane %q: %v (the §6.2 five-lane topology requires all five files)", lp, laneErr)
+			return fmt.Errorf("read lane script %q: %v (the consolidated topology requires all five lane scripts)", lp, laneErr)
 		}
 		laneTexts = append(laneTexts, string(laneBytes))
 	}
 	winLane := laneTexts[0]
-	linLane := laneTexts[1]
 	allWorkflows := w + strings.Join(laneTexts, "\n")
 
 	// 3a. The workflow must pin Go instead of floating on "stable".
@@ -352,34 +343,31 @@ func stressReleaseSurface() error {
 		)
 	}
 
-	// 3b. Both target platforms must remain part of the desktop release,
-	// in their single authoritative reusable lanes (§6.2).
-	if !strings.Contains(winLane, "name: Windows x64 (single authoritative lane)") {
-		return fmt.Errorf("the authoritative Windows x64 build lane is missing from build-windows.yml")
+	// 3b. All SIX target platforms must remain part of the release, in
+	// the ONE platform-build matrix (the CI consolidation: exactly six
+	// targets, unique (target, os, artifact) triples, fail-fast
+	// EXPLICITLY false, windows-2025/ubuntu-26.04 pinned, macOS Intel and
+	// Apple Silicon distinct, and the job's needs empty — every matrix
+	// instance is an independent gate).
+	if err := releasecontract.ValidatePlatformMatrixStructure(w); err != nil {
+		return fmt.Errorf("platform matrix contract: %w", err)
 	}
 
-	if !strings.Contains(linLane, "name: Linux x64 (single authoritative lane)") {
-		return fmt.Errorf("the authoritative Linux x64 build lane is missing from build-linux.yml")
-	}
-
-	// v1.11.1 maintenance: the EXPLICIT supported label (windows-2025)
-	// replaces the moving windows-latest alias (verified against the
-	// actions/runner-images label list on 2026-11-14).
-	if !strings.Contains(winLane, "runs-on: windows-2025") {
-		return fmt.Errorf("the Windows build lane must pin the explicit windows-2025 runner label (the moving windows-latest alias was replaced by policy)")
+	if !strings.Contains(w, "runs-on: ${{ matrix.os }}") {
+		return fmt.Errorf("the platform-build job must run on the matrix runner image (runs-on: ${{ matrix.os }})")
 	}
 
 	// v1.11.1 (run 42127523923, work order §4): the Linux x64 runner
 	// contract is validated by the SHARED parser-based validator — the
 	// same function the release-contract tests run — against the PARSED
-	// runs-on field of the "Linux x64" job, the retired 24.04 image, and
-	// the runtime OS identity guard. The stale ubuntu-24.04 literal here
-	// was the release_surface red: the workflow correctly migrated to the
-	// pinned ubuntu-26.04 x64 runner with an explicit
+	// matrix image of the linux-x64 target, the retired 24.04 image, and
+	// the runtime OS identity guard. The stale ubuntu-24.04 literal once
+	// caused the release_surface red: the workflow correctly migrated to
+	// the pinned ubuntu-26.04 x64 runner with an explicit
 	// ID=ubuntu/VERSION_ID=26.04/amd64 guard, while this gate kept
 	// demanding the retired image (the gate-must-follow-the-current-
 	// contract defect class of run-#40 and run-38569081029).
-	if err := releasecontract.ValidateLinuxRunnerContract(linLane); err != nil {
+	if err := releasecontract.ValidateLinuxRunnerContract(w); err != nil {
 		return fmt.Errorf("Linux build runner contract: %w", err)
 	}
 

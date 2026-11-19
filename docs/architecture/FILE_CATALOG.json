@@ -18,6 +18,15 @@
     "status": "active"
   },
   {
+    "path": ".github/actionlint.yaml",
+    "type": "config",
+    "language": "YAML",
+    "purpose": "The actionlint runner-label registry (ubuntu-26.04, macos-15-intel): keeps `actionlint .github/workflows/build.yml` a clean gate on binaries whose label database predates the pinned images",
+    "layer": "ci",
+    "subsystem": ".github",
+    "status": "active"
+  },
+  {
     "path": ".github/dependabot.yml",
     "type": "config",
     "language": "YAML",
@@ -27,55 +36,10 @@
     "status": "active"
   },
   {
-    "path": ".github/workflows/build-android.yml",
+    "path": ".github/workflows/build.yml",
     "type": "config",
     "language": "YAML",
-    "purpose": "Repository file — build-android.yml",
-    "layer": "ci",
-    "subsystem": ".github/workflows",
-    "status": "active"
-  },
-  {
-    "path": ".github/workflows/build-desktop.yml",
-    "type": "config",
-    "language": "YAML",
-    "purpose": "The desktop build/release workflow: Linux/Windows lanes, gates, packages, the collector and the release job",
-    "layer": "ci",
-    "subsystem": ".github/workflows",
-    "status": "active"
-  },
-  {
-    "path": ".github/workflows/build-ios.yml",
-    "type": "config",
-    "language": "YAML",
-    "purpose": "Repository file — build-ios.yml",
-    "layer": "ci",
-    "subsystem": ".github/workflows",
-    "status": "active"
-  },
-  {
-    "path": ".github/workflows/build-linux.yml",
-    "type": "config",
-    "language": "YAML",
-    "purpose": "Repository file — build-linux.yml",
-    "layer": "ci",
-    "subsystem": ".github/workflows",
-    "status": "active"
-  },
-  {
-    "path": ".github/workflows/build-macos.yml",
-    "type": "config",
-    "language": "YAML",
-    "purpose": "Repository file — build-macos.yml",
-    "layer": "ci",
-    "subsystem": ".github/workflows",
-    "status": "active"
-  },
-  {
-    "path": ".github/workflows/build-windows.yml",
-    "type": "config",
-    "language": "YAML",
-    "purpose": "Repository file — build-windows.yml",
+    "purpose": "The ONE platform-build workflow: the six-target matrix (windows/linux/macos x2/android/ios), per-lane gates, packages, the collector, the final verdict and the tag-only release job",
     "layer": "ci",
     "subsystem": ".github/workflows",
     "status": "active"
@@ -301,6 +265,33 @@
     "status": "active"
   },
   {
+    "path": "cmd/sheytan-mobile/main.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "CLI source — main.go",
+    "layer": "cli",
+    "subsystem": "cmd",
+    "status": "active"
+  },
+  {
+    "path": "cmd/sheytan-mobile/mobile_android.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "CLI source — mobile_android.go",
+    "layer": "cli",
+    "subsystem": "cmd",
+    "status": "active"
+  },
+  {
+    "path": "cmd/sheytan-mobile/mobile_android_nocgo.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "CLI source — mobile_android_nocgo.go",
+    "layer": "cli",
+    "subsystem": "cmd",
+    "status": "active"
+  },
+  {
     "path": "cmd/shtn-perf/helpers.go",
     "type": "go",
     "language": "Go",
@@ -496,6 +487,15 @@
     "type": "doc",
     "language": "Markdown",
     "purpose": "Documentation — GO-GUI-GOGPU-INTEROP",
+    "layer": "docs",
+    "subsystem": "docs",
+    "status": "active"
+  },
+  {
+    "path": "docs/architecture/GO_GUI_MIGRATION.md",
+    "type": "doc",
+    "language": "Markdown",
+    "purpose": "Documentation — GO_GUI_MIGRATION",
     "layer": "docs",
     "subsystem": "docs",
     "status": "active"
@@ -5012,6 +5012,24 @@
     "status": "test"
   },
   {
+    "path": "internal/platform/providers.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/platform — Platform detection and quirks",
+    "layer": "domain",
+    "subsystem": "internal/platform",
+    "status": "active"
+  },
+  {
+    "path": "internal/platform/providers_gogui.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/platform — Platform detection and quirks",
+    "layer": "domain",
+    "subsystem": "internal/platform",
+    "status": "active"
+  },
+  {
     "path": "internal/preflight/live.go",
     "type": "go",
     "language": "Go",
@@ -5170,6 +5188,16 @@
     "layer": "domain",
     "subsystem": "internal/proc",
     "status": "active"
+  },
+  {
+    "path": "internal/proc/identity_darwin_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/proc (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/proc",
+    "testOnly": true,
+    "status": "test"
   },
   {
     "path": "internal/proc/identity_linux.go",
@@ -5390,6 +5418,16 @@
     "status": "test"
   },
   {
+    "path": "internal/releasecontract/build_matrix_contract_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/releasecontract (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/releasecontract",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
     "path": "internal/releasecontract/file_catalog_contract_test.go",
     "type": "go",
     "language": "Go",
@@ -5499,6 +5537,16 @@
     "status": "test"
   },
   {
+    "path": "internal/releasecontract/spelling_contract_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/releasecontract (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/releasecontract",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
     "path": "internal/releasecontract/version_contract_test.go",
     "type": "go",
     "language": "Go",
@@ -5557,6 +5605,61 @@
     "status": "test"
   },
   {
+    "path": "internal/render/gogpu_path.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/render (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/render",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/render/jobs.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/render (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/render",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/render/jobs_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/render (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/render",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/render/refcpu.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/render (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/render",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/render/service.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/render (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/render",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/renderboot/renderboot.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/renderboot (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/renderboot",
+    "status": "needs review"
+  },
+  {
     "path": "internal/renderer/registry.go",
     "type": "go",
     "language": "Go",
@@ -5574,6 +5677,15 @@
     "subsystem": "internal/renderer",
     "testOnly": true,
     "status": "test"
+  },
+  {
+    "path": "internal/renderstate/renderstate.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/renderstate (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/renderstate",
+    "status": "needs review"
   },
   {
     "path": "internal/repoindex/deps.go",
@@ -7176,6 +7288,61 @@
     "status": "test"
   },
   {
+    "path": "internal/webworkspace/provider.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/webworkspace (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webworkspace",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webworkspace/provider_default_tagged.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/webworkspace (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webworkspace",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webworkspace/unsupported_default.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/webworkspace (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webworkspace",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webworkspace/wails_adapter.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/webworkspace (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webworkspace",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webworkspace/workspace.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/webworkspace (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webworkspace",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webworkspace/workspace_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/webworkspace (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/webworkspace",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
     "path": "internal/workspace/doc.go",
     "type": "go",
     "language": "Go",
@@ -7783,6 +7950,56 @@
     "layer": "packaging",
     "subsystem": "packaging",
     "runtimeAsset": true,
+    "sideEffects": "executes (writes logs/fixtures under its own contract when run)",
+    "status": "active"
+  },
+  {
+    "path": "scripts/build/android.sh",
+    "type": "script",
+    "language": "bash",
+    "purpose": "The Android lane of the platform-build matrix: pinned gomobile/gobind, fail-closed NDK, debug-signed APK/AAB packaging and structural verification",
+    "layer": "ci-tooling",
+    "subsystem": "scripts",
+    "sideEffects": "executes (writes logs/fixtures under its own contract when run)",
+    "status": "active"
+  },
+  {
+    "path": "scripts/build/ios.sh",
+    "type": "script",
+    "language": "bash",
+    "purpose": "The iOS lane of the platform-build matrix: pinned gomobile/gobind and the SIMULATOR-ONLY .app zip (never an IPA)",
+    "layer": "ci-tooling",
+    "subsystem": "scripts",
+    "sideEffects": "executes (writes logs/fixtures under its own contract when run)",
+    "status": "active"
+  },
+  {
+    "path": "scripts/build/linux.sh",
+    "type": "script",
+    "language": "bash",
+    "purpose": "The Linux lane of the platform-build matrix: per-phase gates (gofmt, vet, headless suite, race, stress, Fyne UI, ELF checks, portable tar.gz packaging)",
+    "layer": "ci-tooling",
+    "subsystem": "scripts",
+    "sideEffects": "executes (writes logs/fixtures under its own contract when run)",
+    "status": "active"
+  },
+  {
+    "path": "scripts/build/macos.sh",
+    "type": "script",
+    "language": "bash",
+    "purpose": "The macOS lanes of the platform-build matrix: per-phase gates and the portable ad-hoc-signed .app zip (arm64 + Intel)",
+    "layer": "ci-tooling",
+    "subsystem": "scripts",
+    "sideEffects": "executes (writes logs/fixtures under its own contract when run)",
+    "status": "active"
+  },
+  {
+    "path": "scripts/build/windows.ps1",
+    "type": "script",
+    "language": "PowerShell",
+    "purpose": "The Windows lane of the platform-build matrix: per-phase gates (gofmt, vet, headless suite, PE checks, ZIP packaging, PackageGate) with upstream-failure markers",
+    "layer": "ci-tooling",
+    "subsystem": "scripts",
     "sideEffects": "executes (writes logs/fixtures under its own contract when run)",
     "status": "active"
   },
@@ -8491,5 +8708,317 @@
     "subsystem": "ui/fyne",
     "testOnly": true,
     "status": "test"
+  },
+  {
+    "path": "ui/gogui/app.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — app.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/assets/logo-512.png",
+    "type": "asset",
+    "language": "image",
+    "purpose": "Repository file — logo-512.png",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "runtimeAsset": true,
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/client.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — client.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/doc.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — doc.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/dock.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — dock.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/dock_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for ui/gogui (deterministic, table-driven where applicable)",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "ui/gogui/fakecore_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for ui/gogui (deterministic, table-driven where applicable)",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "ui/gogui/logic.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — logic.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/multipart.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — multipart.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/render_bridge.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — render_bridge.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/settings_schema.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — settings_schema.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/shell.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — shell.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/shell_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for ui/gogui (deterministic, table-driven where applicable)",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "ui/gogui/state.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — state.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/theme.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — theme.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/theme_service.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — theme_service.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/theme_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for ui/gogui (deterministic, table-driven where applicable)",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "ui/gogui/uido.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — uido.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/view_agent.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — view_agent.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/view_approvals.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — view_approvals.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/view_chat.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — view_chat.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/view_chat_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for ui/gogui (deterministic, table-driven where applicable)",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "ui/gogui/view_downloads.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — view_downloads.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/view_engines.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — view_engines.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/view_lab.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — view_lab.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/view_models.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — view_models.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/view_onboarding.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — view_onboarding.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/view_panels.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — view_panels.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/view_settings.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — view_settings.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/view_studio.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — view_studio.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/view_system.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — view_system.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/view_workspace.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — view_workspace.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/widgets.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — widgets.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
+  },
+  {
+    "path": "ui/gogui/workspace_hub.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Repository file — workspace_hub.go",
+    "layer": "presentation",
+    "subsystem": "ui/fyne",
+    "status": "active"
   }
 ]

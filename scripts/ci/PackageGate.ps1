@@ -52,6 +52,12 @@
     DEPENDENCY_CLOSURE_FAILURE 2   -DependencyReport absent/unreadable/
                                    unrecognized, or its audit verdict is
                                    MISSING/ERROR (closure never assumed)
+    STALE_PACKAGE              2   -StalenessReference names a file the
+                                   package must not predate: the ZIP was
+                                   written BEFORE that reference — a stale
+                                   package from a previous run masquerading
+                                   as this run's output (run 44457547289
+                                   §1.1 regression coverage)
     BLOCKED_BY_UPSTREAM_TEST_FAILURE
                                2   the -UpstreamFailureMarker file exists:
                                    an upstream verification gate FAILED
@@ -82,7 +88,9 @@ param(
     [string[]]$RequiredEntries,
     [string]$ExpectedRoot = "SHEYTAN-LA",
     [string]$DependencyReport,
-    [string]$UpstreamFailureMarker
+    [string]$UpstreamFailureMarker,
+    [string]$ManifestFile,
+    [string]$StalenessReference
 )
 
 $ErrorActionPreference = "Stop"
@@ -171,6 +179,49 @@ try {
     if (-not $ExpectedRoot) {
         Fail-State -Token "INVALID_ARGUMENTS" -Code 1 -Message "invalid arguments: -ExpectedRoot must not be empty"
     }
+
+    # ------------------------------------------------------------------
+    # 0a. Manifest contract (run 44457547289 §1.1): -ManifestFile names a
+    #     JSON document carrying the required-entry list (and optionally
+    #     the expected root). A MALFORMED manifest is an explicit invalid
+    #     argument — never silently ignored, never partially honored.
+    # ------------------------------------------------------------------
+    if ($ManifestFile) {
+        if (-not (Test-Path -LiteralPath $ManifestFile -PathType Leaf)) {
+            Fail-State -Token "INVALID_ARGUMENTS" -Code 1 -Message ("invalid arguments: -ManifestFile '{0}' does not exist" -f $ManifestFile)
+        }
+
+        $manifest = $null
+        try {
+            $manifest = Get-Content -Raw -LiteralPath $ManifestFile | ConvertFrom-Json
+        } catch {
+            Fail-State -Token "INVALID_ARGUMENTS" -Code 1 -Message ("invalid arguments: -ManifestFile '{0}' is not valid JSON: {1}" -f $ManifestFile, $_.Exception.Message)
+        }
+
+        $manifestEntries = $null
+        try { $manifestEntries = @($manifest.requiredEntries) } catch { $manifestEntries = $null }
+
+        if (-not $manifestEntries -or $manifestEntries.Count -eq 0) {
+            Fail-State -Token "INVALID_ARGUMENTS" -Code 1 -Message ("invalid arguments: -ManifestFile '{0}' carries no requiredEntries array" -f $ManifestFile)
+        }
+
+        foreach ($entry in $manifestEntries) {
+            if ([string]::IsNullOrWhiteSpace([string]$entry)) {
+                Fail-State -Token "INVALID_ARGUMENTS" -Code 1 -Message ("invalid arguments: -ManifestFile '{0}' requiredEntries must not contain empty values" -f $ManifestFile)
+            }
+        }
+
+        $RequiredEntries = @($manifestEntries | ForEach-Object { [string]$_ })
+
+        $manifestRoot = $null
+        try { $manifestRoot = [string]$manifest.expectedRoot } catch { $manifestRoot = $null }
+
+        if ($manifestRoot) {
+            $ExpectedRoot = $manifestRoot
+            $script:Result.expectedRoot = $ExpectedRoot
+        }
+    }
+
     foreach ($entry in $RequiredEntries) {
         if ([string]::IsNullOrWhiteSpace($entry)) {
             Fail-State -Token "INVALID_ARGUMENTS" -Code 1 -Message "invalid arguments: -RequiredEntries must not contain empty values"
@@ -210,6 +261,25 @@ try {
     }
     if (-not $zipOk) {
         Fail-State -Token "ZIP_MISSING" -Code 2 -Message ("portable ZIP missing at '{0}' — the upstream build/package steps did not run or failed" -f $Zip)
+    }
+
+    # ------------------------------------------------------------------
+    # 1a. Stale-package contract (run 44457547289 §1.1): when a
+    #     staleness reference is supplied, the package must NOT predate
+    #     it — a package written before the reference file is residue
+    #     from a previous run masquerading as this run's output.
+    # ------------------------------------------------------------------
+    if ($StalenessReference) {
+        if (-not (Test-Path -LiteralPath $StalenessReference -PathType Leaf)) {
+            Fail-State -Token "INVALID_ARGUMENTS" -Code 1 -Message ("invalid arguments: -StalenessReference '{0}' does not exist" -f $StalenessReference)
+        }
+
+        $zipWritten = (Get-Item -LiteralPath $Zip -Force).LastWriteTimeUtc
+        $refWritten = (Get-Item -LiteralPath $StalenessReference -Force).LastWriteTimeUtc
+
+        if ($zipWritten -lt $refWritten) {
+            Fail-State -Token "STALE_PACKAGE" -Code 2 -Message ("portable ZIP '{0}' predates the staleness reference '{1}' (zip written {2:o}, reference {3:o}) — a stale package from a previous run is not this run's output" -f $Zip, $StalenessReference, $zipWritten, $refWritten)
+        }
     }
 
     # ------------------------------------------------------------------

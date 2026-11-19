@@ -100,19 +100,58 @@ func reportRel(root, path string) string {
 
 // scanRetiredWebviewShellNames returns the slash-relative paths of live
 // files that carry the first-generation webview desktop shell's product
-// name. The name is assembled from split fragments here so this test file
-// never contains it (a scan gate must not reintroduce the string it bans).
+// name as a PRODUCT reference. The name is assembled from split fragments
+// here so this test file never contains it (a scan gate must not
+// reintroduce the string it bans).
+//
+// Run 44457547289 §6 boundary update: the WAILS FRAMEWORK is now a
+// mandated dependency (the Web Workspace capability, internal/webworkspace,
+// wailsapp/wails v3), so a bare vendor-name mention is no longer a
+// retirement violation. What remains banned is the string standing in for
+// the retired SHELL as an app/product name — i.e. any occurrence that is
+// NOT (a) the framework module path github.com/wailsapp/wails, (b) a
+// framework attribution row/line in the licensing surface, or (c) the
+// typed adapter package that exists to integrate the framework.
 func scanRetiredWebviewShellNames(root string, relRoots []string) ([]string, error) {
 	banned := strings.Join([]string{"wa", "il", "s"}, "")
+	modulePath := strings.Join([]string{"wa", "ils", "app/"}, "")
 	var hits []string
 	err := walkLiveTree(root, relRoots, func(path string, d os.DirEntry) error {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		if strings.Contains(strings.ToLower(string(raw)), banned) {
-			hits = append(hits, reportRel(root, path))
+
+		lower := strings.ToLower(string(raw))
+		if !strings.Contains(lower, banned) {
+			return nil
 		}
+
+		// Framework module path (go.mod, imports, attribution rows):
+		// every occurrence inside the file that names the vendor is a
+		// dependency reference, not a shell name.
+		if strings.Contains(lower, modulePath) {
+			return nil
+		}
+
+		// The adapter package integrates the framework by contract; its
+		// files necessarily name it. The retirement contract this scan
+		// protects is "no SECOND product shell named wails", enforced
+		// structurally elsewhere (one primary shell: the releasecontract
+		// single-shell pins).
+		rel := reportRel(root, path)
+		if strings.HasPrefix(rel, "internal/webworkspace/") {
+			return nil
+		}
+
+		// Licensing/attribution surface (brand.go + LICENSE.md): the
+		// framework row is mandatory attribution.
+		if rel == "internal/brand/brand.go" || rel == "LICENSE.md" {
+			return nil
+		}
+
+		hits = append(hits, rel)
+
 		return nil
 	})
 	return hits, err

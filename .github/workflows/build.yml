@@ -1,0 +1,1284 @@
+# ============================================================================
+# SHEYTAN-LA - build.yml (CI consolidation: the ONE platform-build workflow)
+# ============================================================================
+# The ONE CI pipeline for the ONE Go + Fyne application. The six platform
+# build lanes (the retired build-desktop.yml orchestrator and the five
+# reusable build-windows/linux/macos/android/ios.yml files) are consolidated
+# into ONE workflow with ONE six-target matrix. .github/workflows/codeql.yml
+# is the only other workflow and remains untouched.
+#
+# Topology:
+#
+#   platform-build    the SINGLE build job: fail-fast: false and a matrix
+#                     include list of EXACTLY SIX targets (windows-x64,
+#                     linux-x64, macos-arm64, macos-x64, android-arm64,
+#                     ios-simulator-arm64). No needs: - every matrix
+#                     instance is an INDEPENDENT gate with its own
+#                     checkout/toolchain, dispatched per-phase to the thin
+#                     lane scripts under scripts/build/.
+#   collect-errors    ONE failure-tolerant collector job (needs exactly
+#                     [platform-build], if: always()): the errors/warnings-
+#                     only plain-text diagnostic + the machine-readable
+#                     run-diagnostics.json, fail-closed on coverage gaps.
+#   final-verdict     the STRICT overall verdict: every required gate
+#                     (platform-build, collect-errors) must be success; a
+#                     collector success can never override a platform
+#                     failure.
+#   release           tags only: publishes the contracted portable
+#                     artifacts (the FIXED verified names).
+#
+# Two carried-over-as-FIXED defects (consolidation work order):
+#   1. build-macos.yml line 209 uploaded dist/macos-<arch>/
+#      SHEYTAN-LA-ALPHA-macos-<arch>.zip while the produced file carried
+#      the -portable suffix - the macOS zip is now written to the
+#      dist/ ROOT under the artifact-derived name
+#      dist/SHEYTAN-LA-ALPHA-macos-<arch>-portable.zip (one constant).
+#   2. the retired release job published dist/SHEYTAN-LA-v${APP_VERSION}-*
+#      names that were never produced - the release job now publishes the
+#      VERIFIED names dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip and
+#      dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz.
+#
+# Honesty contract: a green run is build/test/smoke evidence on hosted
+# runners - NEVER a claim of physical-PC or mobile runtime verification.
+# The Android/iOS artifacts are debug-signed/simulator-only test
+# packages; their qualification is stated on the artifacts themselves.
+# ============================================================================
+name: SHEYTAN-LA platform build (ALPHA)
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Work order section 6.2: never cancel evidence collection - a superseded
+  # ref may queue behind an in-progress run instead of destroying its
+  # evidence. EXPLICITLY false.
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # v1.11.1 maintenance: the EXACT stable Go patch (go1.27.4; the go.mod
+  # toolchain directive is the one version authority for every lane).
+  GO_VERSION: "1.27.4"
+  # ONE canonical package root per platform: every staging directory, ZIP
+  # name, artifact name and release-metadata reference derives from these.
+  WIN_PKG_ROOT: "SHEYTAN-LA"
+  LINUX_PKG_ROOT: "SHEYTAN-LA"
+  # The version authority cross-check target (internal/config.AppVersion).
+  APP_VERSION: "1.11.1"
+  # Bounded steps: the largest gates carry explicit timeouts (minutes).
+  GO_TEST_TIMEOUT: "25m"
+
+jobs:
+  # ==========================================================================
+  # platform-build - ONE job, SIX independent matrix targets. fail-fast is
+  # explicitly FALSE: a red lane never cancels its siblings (evidence is
+  # never destroyed); the strict acceptance lives in final-verdict.
+  # ==========================================================================
+  platform-build:
+    name: Platform build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      # EXPLICITLY false: no matrix instance may cancel another - every
+      # target runs to its terminal state and keeps its evidence.
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            os: windows-2025
+            artifact: SHEYTAN-LA-ALPHA-windows-x64-portable
+            kind: zip
+          - target: linux-x64
+            os: ubuntu-26.04
+            artifact: SHEYTAN-LA-ALPHA-linux-x64-portable
+            kind: targz
+          - target: macos-arm64
+            os: macos-15
+            artifact: SHEYTAN-LA-ALPHA-macos-arm64-portable
+            kind: appzip
+          - target: macos-x64
+            os: macos-15-intel
+            artifact: SHEYTAN-LA-ALPHA-macos-x64-portable
+            kind: appzip
+          - target: android-arm64
+            os: ubuntu-26.04
+            artifact: SHEYTAN-LA-ALPHA-android-arm64-debug
+            kind: apk
+          - target: ios-simulator-arm64
+            os: macos-15
+            artifact: SHEYTAN-LA-ALPHA-ios-simulator-arm64
+            kind: simzip
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Go
+        id: setup-go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          # F1/F7 (run 43008361835): the cache key family is scoped to
+          # OS + Go version + the dependency lock (go.sum) - declared
+          # explicitly so dependency changes invalidate every lane's
+          # cache together and a hit/miss is reproducible.
+          cache-dependency-path: go.sum
+
+      # ------------------------------------------------------------------
+      # Runner identity guards (runtime-verified runner labels).
+      # ------------------------------------------------------------------
+      - name: Runner OS identity (Ubuntu 26.04 gate)
+        if: matrix.target == 'linux-x64'
+        run: |
+          set -euo pipefail
+          uname -a
+          cat /etc/os-release
+          echo "dpkg arch: $(dpkg --print-architecture)"
+          echo "ImageOS=${ImageOS:-unknown} ImageVersion=${ImageVersion:-unknown}"
+          # v1.11.1 (run 41933333132, work order section 7): the 26.04
+          # migration is VERIFIED, not a YAML-only change - the exact OS
+          # release and architecture are asserted so later runner drift
+          # fails loudly here instead of surprising the build.
+          . /etc/os-release
+          if [ "${ID}" != "ubuntu" ] || [ "${VERSION_ID}" != "26.04" ]; then
+            echo "::error::runner identity: expected ubuntu-26.04, got ${ID}-${VERSION_ID} - the Linux lane is pinned to 26.04"
+            exit 1
+          fi
+          if [ "$(dpkg --print-architecture)" != "amd64" ]; then
+            echo "::error::runner identity: expected amd64 architecture, got $(dpkg --print-architecture)"
+            exit 1
+          fi
+
+      - name: Runner OS identity (Android lane)
+        if: matrix.target == 'android-arm64'
+        run: |
+          set -euo pipefail
+          uname -a
+          echo "ANDROID_HOME=${ANDROID_HOME:-unset} ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-unset}"
+          ls "$ANDROID_HOME/ndk" 2>/dev/null || echo "no preinstalled NDK"
+
+      - name: Runner identity (macOS / iOS lane)
+        if: startsWith(matrix.target, 'macos-') || matrix.target == 'ios-simulator-arm64'
+        run: |
+          set -euo pipefail
+          sw_vers
+          uname -m
+          xcodebuild -version | head -2
+          if [ "${{ matrix.target }}" = "ios-simulator-arm64" ]; then
+            xcrun simctl list runtimes | head -8 || true
+          fi
+
+      - name: Runner OS identity (Windows)
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          Write-Host "ImageOS=${env:ImageOS} ImageVersion=${env:ImageVersion}"
+          (Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, OSArchitecture) | Format-List | Out-String | Write-Host
+
+      # ==================================================================
+      # WINDOWS LANE (target windows-x64) - the retired build-windows.yml
+      # gates, dispatched per-phase to scripts/build/windows.ps1. Every
+      # verification-gate step writes the upstream-failure marker
+      # ci-logs/windows-x64-upstream-failure.txt on failure.
+      # ==================================================================
+      - name: gofmt (enforced)
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build/windows.ps1 -Phase gofmt
+            if ($LASTEXITCODE -ne 0) { throw "gofmt phase failed (exit $LASTEXITCODE)" }
+          } catch {
+            Write-Host "::error::gofmt (enforced) failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'gofmt (enforced)'
+            throw
+          }
+
+      - name: go vet ./...
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build/windows.ps1 -Phase vet
+            if ($LASTEXITCODE -ne 0) { throw "vet phase failed (exit $LASTEXITCODE)" }
+          } catch {
+            Write-Host "::error::go vet ./... failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'go vet ./...'
+            throw
+          }
+
+      - name: Headless core tests (windows/amd64)
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build/windows.ps1 -Phase headless-tests
+            if ($LASTEXITCODE -ne 0) { throw "headless-tests phase failed (exit $LASTEXITCODE)" }
+          } catch {
+            Write-Host "::error::headless core tests failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Headless core tests (windows/amd64)'
+            throw
+          }
+
+      - name: Release-contract suite (windows/amd64)
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build/windows.ps1 -Phase release-contract
+            if ($LASTEXITCODE -ne 0) { throw "release-contract phase failed (exit $LASTEXITCODE)" }
+          } catch {
+            Write-Host "::error::release-contract suite failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Release-contract suite (windows/amd64)'
+            throw
+          }
+
+      - name: Resolve APP_VERSION from the Go authority
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build/windows.ps1 -Phase version
+            if ($LASTEXITCODE -ne 0) { throw "version phase failed (exit $LASTEXITCODE)" }
+          } catch {
+            Write-Host "::error::version resolution failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Resolve APP_VERSION from the Go authority'
+            throw
+          }
+
+      - name: Restore pinned Mesa archive (cache, keyed by sha256)
+        if: matrix.target == 'windows-x64'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/mesa3d-26.2.5-release-msvc.7z
+          key: mesa3d-26.2.5-release-msvc-sha256-997123ef4ce8896204ab912d5b54f19372c487ff9835bcefafa2fca23b8953c2
+
+      - name: Acquire pinned Mesa archive (cache-or-download, verify checksum)
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build/windows.ps1 -Phase mesa-acquire
+            if ($LASTEXITCODE -ne 0) { throw "mesa-acquire phase failed (exit $LASTEXITCODE)" }
+          } catch {
+            Write-Host "::error::pinned Mesa acquisition failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Acquire pinned Mesa archive (cache-or-download, verify checksum)'
+            throw
+          }
+
+      - name: Setup MSYS2 (UCRT64 GCC for Fyne CGO)
+        if: matrix.target == 'windows-x64'
+        # v1.11.1 (CodeQL run 43883548572, alert #185): immutable 40-hex
+        # commit pin for the verified upstream v2 tag - the repo-wide
+        # action-reference policy. UCRT64 is the supported CRT (MINGW64
+        # is deprecated per msys2's October 2026 announcement).
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-cairo
+            mingw-w64-ucrt-x86_64-pango
+            mingw-w64-ucrt-x86_64-gtk3
+            git
+          release: true
+
+      - name: Put UCRT64 on PATH and verify the CGO toolchain
+        if: matrix.target == 'windows-x64'
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          export PATH="/ucrt64/bin:$PATH"
+          gcc --version | head -1
+          echo "CGO toolchain ready (UCRT64)"
+
+      - name: Windows named-pipe CoreClient integration (production client over localipc.Serve)
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build/windows.ps1 -Phase ipc-integration
+            if ($LASTEXITCODE -ne 0) { throw "ipc-integration phase failed (exit $LASTEXITCODE)" }
+          } catch {
+            Write-Host "::error::Windows named-pipe CoreClient integration failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Windows named-pipe CoreClient integration (production client over localipc.Serve)'
+            throw
+          }
+
+      - name: "Windows resource pipeline (gen-syso: icon + version + DPI manifest)"
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build/windows.ps1 -Phase gen-syso
+            if ($LASTEXITCODE -ne 0) { throw "gen-syso phase failed (exit $LASTEXITCODE)" }
+          } catch {
+            Write-Host "::error::gen-syso failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Windows resource pipeline (gen-syso: icon + version + DPI manifest)'
+            throw
+          }
+
+      - name: Stage the portable application tree
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build/windows.ps1 -Phase stage
+            if ($LASTEXITCODE -ne 0) { throw "stage phase failed (exit $LASTEXITCODE)" }
+          } catch {
+            Write-Host "::error::staging the portable application tree failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Stage the portable application tree'
+            throw
+          }
+
+      - name: Build SHEYTAN-LA.exe (windowsgui subsystem)
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build/windows.ps1 -Phase build
+            if ($LASTEXITCODE -ne 0) { throw "build phase failed (exit $LASTEXITCODE)" }
+          } catch {
+            Write-Host "::error::SHEYTAN-LA.exe build failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Build SHEYTAN-LA.exe (windowsgui subsystem)'
+            throw
+          }
+
+      - name: Verify the PE (x86-64, windowsgui)
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build/windows.ps1 -Phase verify-pe
+            if ($LASTEXITCODE -ne 0) { throw "verify-pe phase failed (exit $LASTEXITCODE)" }
+          } catch {
+            Write-Host "::error::PE verification failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Verify the PE (x86-64, windowsgui)'
+            throw
+          }
+
+      - name: Stage smoke copy (purity + two-DLL placement)
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build/windows.ps1 -Phase stage-smoke
+            if ($LASTEXITCODE -ne 0) { throw "stage-smoke phase failed (exit $LASTEXITCODE)" }
+          } catch {
+            Write-Host "::error::smoke staging failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Stage smoke copy (purity + two-DLL placement)'
+            throw
+          }
+
+      # v1.11.1 (run 41933333132, P1-C): the audit decision contract is
+      # pinned by deterministic local fixtures BEFORE the real smoke
+      # depends on it - complete closure = PASS, missing module = FAIL(2),
+      # malformed/non-PE/parse/runtime = ERROR(3, never PASS).
+      - name: Dependency audit fixture contract
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          & ./scripts/ci/ImportAudit.Tests.ps1
+          if (-not $?) { Write-Host "::error::ImportAudit fixture contract violated - the audit decision contract drifted"; throw "ImportAudit PowerShell fixtures failed" }
+
+      # Work order section 4.2 (run 44306343338): a PowerShell script
+      # invocation is judged through $?, and the terminating error
+      # propagates as a throw - $LASTEXITCODE is NEVER read after the
+      # script invocation (unset under strict mode, stale otherwise).
+      - name: Package gate fixture contract
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          & ./scripts/ci/PackageGate.Tests.ps1
+          $fixtureSucceeded = $?
+          if (-not $fixtureSucceeded) { Write-Host "::error::package gate fixture contract violated - the fail-closed gate truth table drifted"; throw "PackageGate PowerShell fixtures failed" }
+
+      # Work order section 4.2.4 regression fixture: the strict-mode
+      # step-invocation contract is pinned by its own fixture. pwsh is
+      # invoked as a NATIVE child process, so reading the native exit
+      # code right after it is the legitimate native contract.
+      - name: PowerShell step-invocation contract fixture (strict mode)
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/ci/StepInvocationContract.Tests.ps1
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::step-invocation contract fixture failed (exit $LASTEXITCODE) - the PowerShell error contract drifted"; throw "step-invocation contract fixture failed" }
+
+      - name: Pre-launch dependency audit (static imports, release gate)
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build/windows.ps1 -Phase dep-audit
+            if ($LASTEXITCODE -ne 0) { throw "dep-audit phase failed (exit $LASTEXITCODE)" }
+          } catch {
+            Write-Host "::error::pre-launch dependency audit failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Pre-launch dependency audit (static imports, release gate)'
+            throw
+          }
+
+      - name: "Launch smoke (window + IPC handshake + core read + logging persistence + graceful close)"
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build/windows.ps1 -Phase launch-smoke
+            if ($LASTEXITCODE -ne 0) { throw "launch-smoke phase failed (exit $LASTEXITCODE)" }
+          } catch {
+            Write-Host "::error::Windows launch smoke failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Launch smoke (window + IPC handshake + core read + logging persistence + graceful close)'
+            throw
+          }
+
+      - name: Collect smoke diagnostics into ci-logs (best-effort)
+        if: always() && matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build/windows.ps1 -Phase collect-smoke-diagnostics
+
+      - name: Write BUILD-INFO.txt and package metadata
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build/windows.ps1 -Phase build-info
+            if ($LASTEXITCODE -ne 0) { throw "build-info phase failed (exit $LASTEXITCODE)" }
+          } catch {
+            Write-Host "::error::BUILD-INFO writes failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Write BUILD-INFO.txt and package metadata'
+            throw
+          }
+
+      # v1.11.1 maintenance (run 43718750096 work order section 7.3): the
+      # hard 100,000,000-byte per-file payload ceiling, enforced on the
+      # STAGING TREE before the portable ZIP is built.
+      - name: Staged payload size gate (100 MB per file)
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            $sizeLimit = 100000000
+            $root = "dist/windows/app/${env:WIN_PKG_ROOT}"
+            New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
+            $files = @(Get-ChildItem -Recurse -File $root)
+            $violations = @($files | Where-Object { $_.Length -gt $sizeLimit })
+            foreach ($v in $violations) {
+              Write-Host ("::error::size-audit violation: {0} is {1} bytes (limit {2} bytes, UNCOMPRESSED) - classify required-runtime-component vs optional-downloadable and fix the packaging; never truncate or silently drop" -f $v.FullName, $v.Length, $sizeLimit)
+            }
+            $total = ($files | Measure-Object -Property Length -Sum).Sum
+            $largest = $files | Sort-Object Length -Descending | Select-Object -First 1
+            ("staged: {0} files, {1} bytes total, largest {2} ({3} bytes), limit {4}" -f $files.Count, $total, $largest.FullName, $largest.Length, $sizeLimit) |
+              Add-Content -Path ci-logs/win-size-audit.log -Encoding utf8NoBOM
+            if ($violations.Count -gt 0) {
+              throw ("package size gate: {0} staged file(s) exceed the {1}-byte ceiling" -f $violations.Count, $sizeLimit)
+            }
+            Write-Host "size-audit staged OK: $($files.Count) files, $total bytes total, largest $($largest.FullName) ($($largest.Length) bytes), limit $sizeLimit"
+          } catch {
+            Write-Host "::error::staged payload size gate failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Staged payload size gate (100 MB per file)'
+            throw
+          }
+
+      - name: Create Windows ZIP
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            Compress-Archive -Path "dist/windows/app/${env:WIN_PKG_ROOT}" -DestinationPath "dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip" -Force -ErrorAction Stop
+            Write-Host "ZIP created"
+          } catch {
+            Write-Host ("::error::Create Windows ZIP failed: source dist/windows/app/${env:WIN_PKG_ROOT}, destination dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip - {0}" -f $_.Exception.Message)
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Create Windows ZIP'
+            throw
+          }
+
+      - name: Verify Windows ZIP
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          try {
+            $zip = "dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip"
+            if (-not (Test-Path $zip)) { throw "Verify Windows ZIP guard: ZIP missing at $zip" }
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $archive = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip))
+            try {
+              $required = @(
+                "${env:WIN_PKG_ROOT}/SHEYTAN-LA.exe",
+                "${env:WIN_PKG_ROOT}/SHEYTAN-LA.bat",
+                "${env:WIN_PKG_ROOT}/resources/docs/README.txt",
+                "${env:WIN_PKG_ROOT}/resources/docs/BUILD-INFO.txt",
+                "${env:WIN_PKG_ROOT}/resources/docs/LICENSE.md",
+                "${env:WIN_PKG_ROOT}/resources/brand/sheytan.ico"
+              )
+              $names = $archive.Entries.FullName
+              foreach ($entry in $required) {
+                if ($names -notcontains $entry) { throw "Verify Windows ZIP guard: contracted ZIP entry missing: $entry (entries present: $($names.Count))" }
+              }
+              # ZIP purity assertions (runs #118/#119/#120 + v1.11.1
+              # minimal root): forbidden entries FAIL the build too.
+              #   1. nothing under the app's portable data root;
+              #   2./3. never the smoke-provisioned Mesa DLLs (opengl32.dll
+              #      + its megadriver companion libgallium_wgl.dll);
+              #   4. never the RETIRED root-level models/ or workspace/
+              #      placeholder directories;
+              #   5. no Qt runtime DLL - the application is ONE Go/Fyne UI
+              #      (Qt/QML retirement contract, work order section 3.3).
+              $forbiddenData = "${env:WIN_PKG_ROOT}/data/"
+              $forbiddenDlls = @("${env:WIN_PKG_ROOT}/opengl32.dll", "${env:WIN_PKG_ROOT}/libgallium_wgl.dll")
+              $forbiddenRoots = @("${env:WIN_PKG_ROOT}/models/", "${env:WIN_PKG_ROOT}/workspace/")
+              foreach ($name in $names) {
+                if ($name.StartsWith($forbiddenData, [System.StringComparison]::OrdinalIgnoreCase)) {
+                  throw ("ZIP purity violation: data-root residue entry '{0}' - the smoke must run from the RUNNER_TEMP copy, never the staging tree" -f $name)
+                }
+                foreach ($forbiddenDll in $forbiddenDlls) {
+                  if ($name.Equals($forbiddenDll, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    throw ("ZIP purity violation: '{0}' present - the Mesa software-GL DLLs are smoke-only and must never ship" -f $name)
+                  }
+                }
+                foreach ($forbiddenRoot in $forbiddenRoots) {
+                  if ($name.StartsWith($forbiddenRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    throw ("ZIP purity violation: retired root-level placeholder entry '{0}' - v1.11.1 minimal installed root" -f $name)
+                  }
+                }
+                $leaf = if ($name.Contains('/')) { $name.Substring($name.LastIndexOf('/') + 1) } else { $name }
+                if ($name.StartsWith("${env:WIN_PKG_ROOT}/", [System.StringComparison]::OrdinalIgnoreCase) -and
+                    ($leaf -like 'Qt5*.dll' -or $leaf -like 'Qt6*.dll' -or $leaf -like 'libQt*.dll')) {
+                  throw ("ZIP purity violation: Qt runtime DLL '{0}' present - the application is one Go/Fyne UI and must never carry a Qt runtime" -f $name)
+                }
+              }
+              # The hard per-file ceiling on the finished archive - every
+              # member's UNCOMPRESSED size must stay under 100,000,000
+              # bytes (compressed size is never a compliance argument).
+              $sizeLimit = 100000000
+              $largest = 0; $largestName = ""
+              foreach ($entry in $archive.Entries) {
+                if ($entry.Length -gt $largest) { $largest = $entry.Length; $largestName = $entry.FullName }
+                if ($entry.Length -gt $sizeLimit) {
+                  throw ("package size gate: member '{0}' exceeds the {1}-byte ceiling" -f $entry.FullName, $sizeLimit)
+                }
+              }
+              $totalUncompressed = ($archive.Entries | Measure-Object -Property Length -Sum).Sum
+              ("zip: {0} members, {1} bytes uncompressed, archive {2} bytes compressed, largest {3} ({4} bytes), limit {5}" -f $archive.Entries.Count, $totalUncompressed, (Get-Item $zip).Length, $largestName, $largest, $sizeLimit) |
+                Add-Content -Path ci-logs/win-size-audit.log -Encoding utf8NoBOM
+              Write-Host ("size-audit zip OK: {0} members, {1} bytes uncompressed, largest member {2} ({3} bytes), limit {4}" -f $archive.Entries.Count, $totalUncompressed, $largestName, $largest, $sizeLimit)
+              Write-Host "ZIP OK: all contracted entries present; purity assertions passed (no data/ residue, no opengl32.dll, no libgallium_wgl.dll, no root-level models/workspace placeholders)"
+            } finally { $archive.Dispose() }
+          } catch {
+            Write-Host "::error::Verify Windows ZIP failed on windows-x64: $($_.Exception.Message)"
+            Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Verify Windows ZIP'
+            throw
+          }
+
+      # Package gate: the root failure is reported HERE (not by a vague
+      # "no files found" upload error that buries the cause). The gate is
+      # FAIL-CLOSED and independent - scripts/ci/PackageGate.ps1 requires
+      # the portable ZIP to exist as a regular, non-empty, structurally
+      # valid file and names the exact incomplete state otherwise; it also
+      # rejects stale installer remnants in the distribution directory.
+      # The if:always() gate receives the upstream-failure marker written
+      # by the FIRST failed verification gate; when tests failed, the
+      # report is BLOCKED_BY_UPSTREAM_TEST_FAILURE naming that gate - one
+      # root error, never a second confusing missing-package annotation.
+      - name: Package gate (root-cause reporter)
+        if: always() && matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          & pwsh -NoProfile -NonInteractive -File ./scripts/ci/PackageGate.ps1 -Zip "dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip" -DistDir "dist" -UpstreamFailureMarker "ci-logs/windows-x64-upstream-failure.txt" 2>&1 | Tee-Object -FilePath "ci-logs/win-package-gate.log"
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::package gate: Windows package contract violated (gate exit $LASTEXITCODE; named incomplete state in ci-logs/win-package-gate.log)"; throw "Windows package gate failed (exit $LASTEXITCODE)" }
+
+      # ==================================================================
+      # LINUX LANE (target linux-x64) - the retired build-linux.yml gates
+      # PLUS the retired audit-job essentials (race, stress + release
+      # surface, collector fixtures, diagnostics self-test, catalog
+      # freshness), dispatched per-phase to scripts/build/linux.sh.
+      # ==================================================================
+      - name: gofmt (enforced)
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh gofmt; then echo "::error::gofmt gate failed"; echo "gofmt (enforced)" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      - name: Headless core suite (linux/amd64)
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh headless-tests; then echo "::error::headless core suite failed"; echo "Headless core suite (linux/amd64)" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      - name: Release-contract suite (linux/amd64)
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh release-contract; then echo "::error::release-contract suite failed"; echo "Release-contract suite (linux/amd64)" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      - name: Race gate (critical concurrent packages)
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh race; then echo "::error::race gate failed"; echo "Race gate (critical concurrent packages)" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      - name: Stress + release-surface gate (headless)
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh stress; then echo "::error::stress release-surface gate failed"; echo "Stress + release-surface gate (headless)" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      - name: Consolidated-log collector fixtures
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh fixtures; then echo "::error::collector fixtures failed"; echo "Consolidated-log collector fixtures" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      - name: File-catalog freshness gate (regeneration is a no-op)
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh catalog-freshness; then echo "::error::file-catalog freshness gate failed"; echo "File-catalog freshness gate (regeneration is a no-op)" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      - name: Resolve APP_VERSION from the Go authority
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh version; then echo "::error::version resolution failed"; echo "Resolve APP_VERSION from the Go authority" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      - name: Install Fyne build prerequisites + smoke tooling
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh prereqs; then echo "::error::Fyne prerequisite install failed"; echo "Install Fyne build prerequisites + smoke tooling" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      - name: Fyne UI suite (linux/amd64, Xvfb-capable host)
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh ui-tests; then echo "::error::Fyne UI suite failed"; echo "Fyne UI suite (linux/amd64, Xvfb-capable host)" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      - name: Build the full desktop application (native linux/amd64)
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh build; then echo "::error::linux/amd64 desktop build failed"; echo "Build the full desktop application (native linux/amd64)" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      - name: Cross-check the compiled binary's build identity
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh build-info-probe; then echo "::error::compiled build identity cross-check failed"; echo "Cross-check the compiled binary's build identity" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      - name: Verify the ELF (x86-64, executable bit)
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh verify-elf; then echo "::error::ELF verification failed"; echo "Verify the ELF (x86-64, executable bit)" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      - name: "Launch smoke (Xvfb: boot, window, clean shutdown)"
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh smoke; then echo "::error::desktop launch smoke failed"; echo "Launch smoke (Xvfb: boot, window, clean shutdown)" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      - name: Write BUILD-INFO.txt and portable metadata
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh build-info; then echo "::error::BUILD-INFO writes failed"; echo "Write BUILD-INFO.txt and portable metadata" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      - name: Create the portable archive (no DEB/RPM)
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh archive; then echo "::error::portable archive creation failed"; echo "Create the portable archive (no DEB/RPM)" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      - name: Verify the portable archive (fail-closed)
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/linux.sh verify-archive; then echo "::error::portable archive verification failed"; echo "Verify the portable archive (fail-closed)" > ci-logs/linux-x64-upstream-failure.txt; exit 1; fi
+
+      # v1.11.1 maintenance (run 43718750096 work order section 7.3): the
+      # hard 100,000,000-byte per-file ceiling - the staged tree via the
+      # shared fail-closed scripts/ci/package-size-audit.sh AND every tar
+      # member's UNCOMPRESSED size (compressed size is never a compliance
+      # argument).
+      - name: Payload size gate (100 MB per file)
+        if: matrix.target == 'linux-x64'
+        run: |
+          set -uo pipefail
+          if ! bash scripts/ci/package-size-audit.sh \
+            --dir "dist/linux/app/${LINUX_PKG_ROOT}" \
+            | tee ci-logs/linux-size-audit.log; then
+            echo "::error::staged payload size audit failed"
+            echo "Payload size gate (100 MB per file)" > ci-logs/linux-x64-upstream-failure.txt
+            exit 1
+          fi
+          if ! tar -tzvf "dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz" \
+            | awk '$3 ~ /^[0-9]+$/ && ($3 + 0) > 100000000 { printf "::error::size-audit violation: %s is %s bytes (limit 100000000, UNCOMPRESSED)\n", $6, $3; bad = 1 } END { exit (bad ? 1 : 0) }'; then
+            echo "::error::archive member size audit failed"
+            echo "Payload size gate (100 MB per file)" > ci-logs/linux-x64-upstream-failure.txt
+            exit 1
+          fi
+
+      # Package gate: report the root failure HERE rather than letting the
+      # upload step emit a vague "no files were found" annotation.
+      # FAIL-CLOSED (matching the Windows lane): the upstream-failure
+      # marker names the FIRST failed gate; a completed packaging path
+      # that lacks its archive still fails hard.
+      - name: Linux package gate (root-cause reporter)
+        if: always() && matrix.target == 'linux-x64'
+        run: |
+          set -uo pipefail
+          archive="dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz"
+          if [ -f ci-logs/linux-x64-upstream-failure.txt ]; then
+            gate="$(cat ci-logs/linux-x64-upstream-failure.txt)"
+            echo "::error::package: BLOCKED_BY_UPSTREAM_TEST_FAILURE - first upstream failure: job 'Platform build (linux-x64)' gate '${gate}'"
+            exit 1
+          fi
+          if [ ! -f "$archive" ]; then
+            echo "::error::the Linux portable package was not produced - see the FIRST failed step of this job for the root cause (this gate intentionally reports the missing package once, with cause context)"
+            exit 1
+          fi
+          echo "package gate: reached"
+
+      # ==================================================================
+      # MACOS LANES (targets macos-arm64 / macos-x64) - the retired
+      # build-macos.yml gates, dispatched per-phase to
+      # scripts/build/macos.sh (the two architectures are DISTINCT matrix
+      # entries on distinct runner images; the portable zip is written to
+      # the dist/ ROOT under the artifact-derived name - the FIXED upload
+      # path).
+      # ==================================================================
+      - name: gofmt (enforced)
+        if: startsWith(matrix.target, 'macos-')
+        shell: bash
+        run: |
+          mkdir -p ci-logs
+          if ! TARGET="${{ matrix.target }}" bash scripts/build/macos.sh gofmt; then
+            echo "::error::gofmt gate failed"
+            echo "gofmt (enforced)" > ci-logs/${{ matrix.target }}-upstream-failure.txt
+            exit 1
+          fi
+
+      - name: Headless core suite (darwin, ${{ matrix.target }})
+        if: startsWith(matrix.target, 'macos-')
+        shell: bash
+        run: |
+          mkdir -p ci-logs
+          if ! TARGET="${{ matrix.target }}" bash scripts/build/macos.sh headless-tests; then
+            echo "::error::headless core suite failed"
+            echo "Headless core suite (darwin, ${{ matrix.target }})" > ci-logs/${{ matrix.target }}-upstream-failure.txt
+            exit 1
+          fi
+
+      - name: Release-contract suite (darwin, ${{ matrix.target }})
+        if: startsWith(matrix.target, 'macos-')
+        shell: bash
+        run: |
+          mkdir -p ci-logs
+          if ! TARGET="${{ matrix.target }}" bash scripts/build/macos.sh release-contract; then
+            echo "::error::release-contract suite failed"
+            echo "Release-contract suite (darwin, ${{ matrix.target }})" > ci-logs/${{ matrix.target }}-upstream-failure.txt
+            exit 1
+          fi
+
+      - name: Build the full desktop application (native darwin, ${{ matrix.target }})
+        if: startsWith(matrix.target, 'macos-')
+        shell: bash
+        run: |
+          if ! TARGET="${{ matrix.target }}" bash scripts/build/macos.sh build; then
+            echo "::error::darwin desktop build failed"
+            echo "Build the full desktop application (native darwin, ${{ matrix.target }})" > ci-logs/${{ matrix.target }}-upstream-failure.txt
+            exit 1
+          fi
+
+      - name: Cross-check the compiled binary's build identity
+        if: startsWith(matrix.target, 'macos-')
+        shell: bash
+        run: |
+          if ! TARGET="${{ matrix.target }}" bash scripts/build/macos.sh build-info-probe; then
+            echo "::error::compiled build identity cross-check failed"
+            echo "Cross-check the compiled binary's build identity" > ci-logs/${{ matrix.target }}-upstream-failure.txt
+            exit 1
+          fi
+
+      - name: Stage the .app bundle (portable, ad-hoc signed)
+        if: startsWith(matrix.target, 'macos-')
+        shell: bash
+        run: |
+          if ! TARGET="${{ matrix.target }}" bash scripts/build/macos.sh stage-app; then
+            echo "::error::.app staging failed"
+            echo "Stage the .app bundle (portable, ad-hoc signed)" > ci-logs/${{ matrix.target }}-upstream-failure.txt
+            exit 1
+          fi
+
+      - name: Launch smoke (bounded, runner window server)
+        if: startsWith(matrix.target, 'macos-')
+        shell: bash
+        run: |
+          if ! TARGET="${{ matrix.target }}" bash scripts/build/macos.sh smoke; then
+            echo "::error::macOS launch smoke failed"
+            echo "Launch smoke (bounded, runner window server)" > ci-logs/${{ matrix.target }}-upstream-failure.txt
+            exit 1
+          fi
+
+      - name: Create the portable .zip (no PKG/DMG)
+        if: startsWith(matrix.target, 'macos-')
+        shell: bash
+        run: |
+          if ! TARGET="${{ matrix.target }}" bash scripts/build/macos.sh zip; then
+            echo "::error::portable .zip creation failed"
+            echo "Create the portable .zip (no PKG/DMG)" > ci-logs/${{ matrix.target }}-upstream-failure.txt
+            exit 1
+          fi
+
+      - name: Verify the portable .zip (fail-closed)
+        if: startsWith(matrix.target, 'macos-')
+        shell: bash
+        run: |
+          if ! TARGET="${{ matrix.target }}" bash scripts/build/macos.sh verify-zip; then
+            echo "::error::portable .zip verification failed"
+            echo "Verify the portable .zip (fail-closed)" > ci-logs/${{ matrix.target }}-upstream-failure.txt
+            exit 1
+          fi
+
+      - name: macOS package gate (root-cause reporter)
+        if: always() && startsWith(matrix.target, 'macos-')
+        run: |
+          set -uo pipefail
+          zip="dist/SHEYTAN-LA-ALPHA-${{ matrix.target }}-portable.zip"
+          if [ -f "ci-logs/${{ matrix.target }}-upstream-failure.txt" ]; then
+            gate="$(cat "ci-logs/${{ matrix.target }}-upstream-failure.txt")"
+            echo "::error::package: BLOCKED_BY_UPSTREAM_TEST_FAILURE - first upstream failure: job 'Platform build (${{ matrix.target }})' gate '${gate}'"
+            exit 1
+          fi
+          if [ ! -f "$zip" ]; then
+            echo "::error::the macOS portable package was not produced - see the FIRST failed step of this job for the root cause"
+            exit 1
+          fi
+          echo "package gate: reached"
+
+      # ==================================================================
+      # ANDROID LANE (target android-arm64) - the retired
+      # build-android.yml gates with the run 44457547289 step-8 root cause
+      # FIXED: fyne packaging runs FROM the app package directory (or
+      # gomobile bind packages ./cmd/sheytan-mobile when the Go-Gui mobile
+      # shell exists). Dispatched per-phase to scripts/build/android.sh.
+      # ==================================================================
+      - name: Headless core suite (android lane host)
+        if: matrix.target == 'android-arm64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/android.sh headless-tests; then echo "::error::headless core suite failed"; echo "Headless core suite (android lane host)" > ci-logs/android-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: Install gomobile toolchain at the exact pinned version (never @latest)
+        if: matrix.target == 'android-arm64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/android.sh mobile-toolchain; then echo "::error::gomobile toolchain install failed"; echo "Install gomobile toolchain at the exact pinned version (never @latest)" > ci-logs/android-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: Locate or install the Android NDK (fail-closed, actionable)
+        if: matrix.target == 'android-arm64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/android.sh ndk; then echo "::error::Android NDK setup failed"; echo "Locate or install the Android NDK (fail-closed, actionable)" > ci-logs/android-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: Package the Android arm64 app (debug-signed, never committed keys)
+        if: matrix.target == 'android-arm64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/android.sh package; then echo "::error::Android packaging failed"; echo "Package the Android arm64 app (debug-signed, never committed keys)" > ci-logs/android-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: Verify the APK/AAB (fail-closed structural checks)
+        if: matrix.target == 'android-arm64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/android.sh verify; then echo "::error::Android package verification failed"; echo "Verify the APK/AAB (fail-closed structural checks)" > ci-logs/android-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: Repo cleanliness guard (no keys, no build residue committed)
+        if: matrix.target == 'android-arm64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/android.sh cleanliness; then echo "::error::repo cleanliness guard failed"; echo "Repo cleanliness guard (no keys, no build residue committed)" > ci-logs/android-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: Android package gate (root-cause reporter)
+        if: always() && matrix.target == 'android-arm64'
+        run: |
+          set -uo pipefail
+          if [ -f ci-logs/android-arm64-upstream-failure.txt ]; then
+            gate="$(cat ci-logs/android-arm64-upstream-failure.txt)"
+            echo "::error::package: BLOCKED_BY_UPSTREAM_TEST_FAILURE - first upstream failure: job 'Platform build (android-arm64)' gate '${gate}'"
+            exit 1
+          fi
+          pkg="$(ls dist/SHEYTAN-LA-ALPHA-android-arm64-debug.apk dist/SHEYTAN-LA-ALPHA-android-arm64-debug.aab 2>/dev/null | head -1 || true)"
+          if [ -z "$pkg" ] || [ ! -s "$pkg" ]; then
+            echo "::error::the Android debug package was not produced - see the FIRST failed step of this job for the root cause"
+            exit 1
+          fi
+          echo "package gate: reached ($pkg)"
+
+      # ==================================================================
+      # iOS LANE (target ios-simulator-arm64) - the retired build-ios.yml
+      # gates with the fyne packaging CWD fixed (run from
+      # cmd/sheytan-local-agent). Dispatched per-phase to
+      # scripts/build/ios.sh. The artifact is SIMULATOR-ONLY: never an IPA.
+      # ==================================================================
+      - name: Headless core suite (iOS lane host)
+        if: matrix.target == 'ios-simulator-arm64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/ios.sh headless-tests; then echo "::error::headless core suite failed"; echo "Headless core suite (iOS lane host)" > ci-logs/ios-simulator-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: Install gomobile toolchain at the exact pinned version (never @latest)
+        if: matrix.target == 'ios-simulator-arm64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/ios.sh mobile-toolchain; then echo "::error::gomobile toolchain install failed"; echo "Install gomobile toolchain at the exact pinned version (never @latest)" > ci-logs/ios-simulator-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: Package the iOS SIMULATOR .app (no signing identity required)
+        if: matrix.target == 'ios-simulator-arm64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/ios.sh package; then echo "::error::iOS simulator packaging failed"; echo "Package the iOS SIMULATOR .app (no signing identity required)" > ci-logs/ios-simulator-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: Verify the simulator .app (fail-closed structural checks)
+        if: matrix.target == 'ios-simulator-arm64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/ios.sh verify-app; then echo "::error::simulator .app verification failed"; echo "Verify the simulator .app (fail-closed structural checks)" > ci-logs/ios-simulator-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: Repo cleanliness guard (no residue committed)
+        if: matrix.target == 'ios-simulator-arm64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/ios.sh cleanliness; then echo "::error::repo cleanliness guard failed"; echo "Repo cleanliness guard (no residue committed)" > ci-logs/ios-simulator-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: Bundle the simulator .app as the portable zip (SIMULATOR-ONLY)
+        if: matrix.target == 'ios-simulator-arm64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/ios.sh zip; then echo "::error::simulator zip creation failed"; echo "Bundle the simulator .app as the portable zip (SIMULATOR-ONLY)" > ci-logs/ios-simulator-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: Verify the simulator zip (fail-closed)
+        if: matrix.target == 'ios-simulator-arm64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/ios.sh verify-zip; then echo "::error::simulator zip verification failed"; echo "Verify the simulator zip (fail-closed)" > ci-logs/ios-simulator-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: iOS package gate (root-cause reporter, SIMULATOR-ONLY)
+        if: always() && matrix.target == 'ios-simulator-arm64'
+        run: |
+          set -uo pipefail
+          if [ -f ci-logs/ios-simulator-arm64-upstream-failure.txt ]; then
+            gate="$(cat ci-logs/ios-simulator-arm64-upstream-failure.txt)"
+            echo "::error::package: BLOCKED_BY_UPSTREAM_TEST_FAILURE - first upstream failure: job 'Platform build (ios-simulator-arm64)' gate '${gate}'"
+            exit 1
+          fi
+          if [ ! -s "dist/ios/SHEYTAN-LA-ALPHA-ios-simulator-arm64.zip" ]; then
+            echo "::error::the iOS SIMULATOR-ONLY zip was not produced - see the FIRST failed step of this job for the root cause"
+            exit 1
+          fi
+          echo "package gate: reached (SIMULATOR-ONLY qualification)"
+
+      # ------------------------------------------------------------------
+      # Common tail: the per-job machine-readable diagnostics index
+      # (always built, best-effort - never masks the job conclusion).
+      # ------------------------------------------------------------------
+      - name: Build the per-job diagnostics index (always run)
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          bash scripts/ci/diagnostics-index.sh --job "Platform build (${{ matrix.target }})" \
+            || echo "::error::diagnostics index build failed (non-masking; original job conclusion stands)"
+        env:
+          DIAGNOSTICS_CACHE_HIT: ${{ steps.setup-go.outputs.cache-hit }}
+
+      # ------------------------------------------------------------------
+      # Evidence artifacts. Both uploads run with if: always() so red
+      # lanes keep their evidence. (a) the verified package artifact (the
+      # lane scripts finalize their package to dist/<artifact>.<ext>, so
+      # the dist/SHEYTAN-LA-ALPHA-* glob matches exactly this leg's
+      # package; error on missing - a silently absent package is a
+      # contract breach); (b) the build-evidence bundle (ci-logs/, warn on
+      # missing - diagnostics may legitimately be sparse on a green lane).
+      # ------------------------------------------------------------------
+      - name: Upload the platform package
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/SHEYTAN-LA-ALPHA-*
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+
+      - name: Upload build evidence (ci-logs)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: build-evidence-${{ matrix.target }}-${{ github.run_attempt }}
+          path: ci-logs/
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
+
+  # ==========================================================================
+  # collect-errors - the ONE failure-tolerant collector. Runs after
+  # platform-build reaches a terminal state (any outcome: if: always()),
+  # pulls every completed job's log from the paginated jobs API (never the
+  # in-progress run-attempt archive), and writes the TWO run-level
+  # evidence artifacts. Red runs keep their evidence: the collector writes
+  # the report BEFORE exiting nonzero on coverage gaps, and the uploads
+  # below run with if: !cancelled().
+  # ==========================================================================
+  collect-errors:
+    name: Collect errors
+    runs-on: ubuntu-26.04
+    needs: [platform-build]
+    if: always()
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout (collector script)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # ONE collector, TWO run-level artifacts (plain-text report + a
+      # machine-readable run-diagnostics.json). The collector pulls the
+      # COMPLETED JOB-SPECIFIC LOGS (GET /actions/jobs/{job_id}/logs) for
+      # every upstream job that reached a terminal state, using the
+      # paginated jobs metadata. The collector's own progress is embedded
+      # as a local COLLECTOR SELF-LOG (the runner-provided GITHUB_JOB key
+      # "collect-errors" normalizes against this job's display name).
+      - name: Collect the run-attempt logs into one plain-text report
+        id: collector
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONSOLIDATE_REPO: ${{ github.repository }}
+          CONSOLIDATE_RUN_ID: ${{ github.run_id }}
+          CONSOLIDATE_ATTEMPT: ${{ github.run_attempt }}
+          CONSOLIDATE_COMMIT: ${{ github.sha }}
+          CONSOLIDATE_REF: ${{ github.ref }}
+          CONSOLIDATE_WORKFLOW: ${{ github.workflow }}
+          CONSOLIDATE_TRIGGER: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          rc=0
+          bash scripts/ci/consolidate-run-log.sh \
+            --out SHEYTAN-LA-errors-warnings.txt \
+            --json-out run-diagnostics.json || rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Collect errors: collector reported a coverage/verification gap (rc=$rc) - the report artifact still carries the diagnosis"
+          fi
+          {
+            echo "## Consolidated run log"
+            echo ""
+            echo "Artifacts: \`SHEYTAN-LA-errors-warnings.txt\` (ONE errors/warnings-only plain-text file, upload-artifact archive:false) and \`run-diagnostics.json\` (machine-readable per-job index), attempt ${{ github.run_attempt }} recorded INSIDE both."
+            echo "If the report contains a MISSING LOG SOURCES section, job logs could not be recovered for those jobs and coverage=INCOMPLETE."
+            echo ""
+            echo "Job results: platform-build=${{ needs.platform-build.result }} (the six-lane matrix; this collector job reports its own conclusion in the run page)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The ONE mandatory user-facing log artifact. upload-artifact uses
+      # the upstream v7 RELEASE TAG (repo-wide action-reference policy);
+      # archive:false uploads the file ITSELF (filename = artifact display
+      # name, no ZIP wrapper); if-no-files-found: error (never ignore -
+      # a silently absent log is a contract breach); stable name - a rerun
+      # replaces the same artifact; the attempt number lives inside the
+      # report content.
+      - name: Upload the errors-warnings-only consolidated diagnostic (single plain-text artifact)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: SHEYTAN-LA-errors-warnings.txt
+          path: SHEYTAN-LA-errors-warnings.txt
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+          archive: false
+
+      # The machine-readable run-level diagnostics index (section 9.2):
+      # every job of the run with its API status/conclusion/id and the
+      # collector's per-job log-source category (CAPTURED / SKIPPED /
+      # MISSING / IN_PROGRESS / SELF). Red runs keep it: same
+      # !cancelled() condition as the plain-text report.
+      - name: Upload the machine-readable run diagnostics index
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: run-diagnostics.json
+          path: run-diagnostics.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+          archive: false
+
+      - name: Collector verdict (fail the job on coverage gaps)
+        if: ${{ !cancelled() }}
+        run: |
+          rc="${{ steps.collector.outputs.rc }}"
+          if [ -z "$rc" ]; then
+            echo "::error::collector step produced no verdict - fail closed"
+            exit 1
+          fi
+          if [ "$rc" != "0" ]; then
+            echo "::error::collector exited $rc - the report artifact names the missing log sources / errors"
+            exit 1
+          fi
+          echo "collector verdict: complete report (rc=0)"
+
+  # ==========================================================================
+  # Final verdict - the STRICT overall conclusion. Separating evidence
+  # collection from the verdict means a red lane can never be hidden, and
+  # the workflow still fails whenever ANY required gate is not success.
+  #   - No continue-on-error anywhere: job continuation (gates run) and
+  #     result acceptance (gates must be green) are different concerns.
+  #   - The loop below is the required-gate list: platform-build (the six
+  #     matrix lanes) AND collect-errors. A collector SUCCESS can never
+  #     override a platform failure (the platform gate is checked in the
+  #     same loop), and a collector coverage-gap failure keeps the run red.
+  #   - Runs after every expected job reached a terminal state
+  #     (!cancelled()); a skipped REQUIRED gate (impossible while the
+  #     needs list is intact) also fails the verdict - only the tag-only
+  #     release job may legitimately be skipped.
+  # ==========================================================================
+  final-verdict:
+    name: Final verdict (all required gates)
+    runs-on: ubuntu-26.04
+    needs: [platform-build, collect-errors]
+    if: ${{ !cancelled() }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Render the gate matrix
+        run: |
+          echo "Required gates: platform-build=${{ needs.platform-build.result }} collect-errors=${{ needs.collect-errors.result }}"
+          echo "platform-build is the SIX-target matrix (windows-x64, linux-x64, macos-arm64, macos-x64, android-arm64, ios-simulator-arm64); with fail-fast: false every lane ran to its terminal state."
+      - name: Verdict (fail unless every required gate is success)
+        run: |
+          verdict=0
+          for gate in "platform-build:${{ needs.platform-build.result }}" \
+                     "collect-errors:${{ needs.collect-errors.result }}"; do
+            name="${gate%%:*}"
+            result="${gate#*:}"
+            if [ "$result" != "success" ]; then
+              echo "::error::required gate '$name' concluded '$result' - the overall workflow verdict is FAILURE"
+              verdict=1
+            fi
+          done
+          if [ "$verdict" -ne 0 ]; then
+            echo "FINAL VERDICT: FAILURE - a collector report can never turn a red run green; the failed gate's evidence is in SHEYTAN-LA-errors-warnings.txt"
+            exit 1
+          fi
+          echo "FINAL VERDICT: SUCCESS - every required gate (platform-build six-lane matrix, collect-errors) is green."
+
+  # ==========================================================================
+  # Release - tags only. Publishes the contracted artifacts: the VERIFIED
+  # portable names (the FIXED publish list - the retired orchestrator
+  # published dist/SHEYTAN-LA-v${APP_VERSION}-* names that were never
+  # produced). The manifest + SHA256SUMS.txt are generated HERE from the
+  # exact artifact bytes being published, deterministically.
+  # ==========================================================================
+  release:
+    name: Release (tags only)
+    runs-on: ubuntu-26.04
+    needs: [platform-build, collect-errors, final-verdict]
+    if: startsWith(github.ref, 'refs/tags/v')
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows portable package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: SHEYTAN-LA-ALPHA-windows-x64-portable
+          path: dist/
+
+      - name: Download Linux portable package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: SHEYTAN-LA-ALPHA-linux-x64-portable
+          path: dist/
+
+      - name: Verify the artifact set against the release contract
+        run: |
+          set -euo pipefail
+          for want in \
+            "SHEYTAN-LA-ALPHA-windows-x64-portable.zip" \
+            "SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz"; do
+            test -f "dist/$want" || { echo "::error::release artifact missing: $want"; exit 1; }
+          done
+          echo "release artifact set OK"
+
+      # UPDATE.md contract: the in-app updater (internal/updater,
+      # AppManifestURL) consumes release-manifest.json - version +
+      # per-platform url/sha256/sizeBytes/kind - and the release carries a
+      # deterministic SHA256SUMS.txt. Both are generated HERE from the
+      # exact artifact bytes being published (never hand-written):
+      # jq -nS emits sorted keys; SHA256SUMS.txt is LC_ALL=C-sorted by
+      # filename with the canonical two-space separator.
+      - name: Generate release-manifest.json and SHA256SUMS.txt
+        env:
+          APP_VERSION: "1.11.1"
+        run: |
+          set -euo pipefail
+          ver="${APP_VERSION}"
+          base="${{ github.server_url }}/${{ github.repository }}/releases/download/v${ver}"
+          win_zip="SHEYTAN-LA-ALPHA-windows-x64-portable.zip"
+          lin_zip="SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz"
+          win_sha="$(sha256sum "dist/${win_zip}" | cut -d' ' -f1)"
+          win_size="$(stat -c%s "dist/${win_zip}")"
+          lin_sha="$(sha256sum "dist/${lin_zip}" | cut -d' ' -f1)"
+          lin_size="$(stat -c%s "dist/${lin_zip}")"
+          jq -nS \
+            --arg ver "$ver" \
+            --arg winurl "${base}/${win_zip}" \
+            --arg winsha "$win_sha" \
+            --arg winsize "$win_size" \
+            --arg linurl "${base}/${lin_zip}" \
+            --arg linsha "$lin_sha" \
+            --arg linsize "$lin_size" \
+            '{version: $ver,
+              platforms: {
+                "linux-x64":   {url: $linurl, sha256: $linsha, sizeBytes: ($linsize|tonumber), kind: "tar.gz"},
+                "windows-x64": {url: $winurl, sha256: $winsha, sizeBytes: ($winsize|tonumber), kind: "zip"}
+              }}' > dist/release-manifest.json
+          {
+            printf '%s  %s\n' "$(sha256sum "dist/${lin_zip}" | cut -d' ' -f1)" "${lin_zip}"
+            printf '%s  %s\n' "$(sha256sum "dist/${win_zip}" | cut -d' ' -f1)" "${win_zip}"
+            printf '%s  %s\n' "$(sha256sum "dist/release-manifest.json" | cut -d' ' -f1)" "release-manifest.json"
+          } | LC_ALL=C sort -k2 > dist/SHA256SUMS.txt
+          jq -e '.version == $ver and (.platforms["windows-x64"].sha256 | length == 64) and (.platforms["linux-x64"].sha256 | length == 64)' --arg ver "$ver" dist/release-manifest.json > /dev/null \
+            || { echo "::error::generated release-manifest.json failed its contract self-check"; exit 1; }
+          test "$(wc -l < dist/SHA256SUMS.txt)" -eq 3 || { echo "::error::SHA256SUMS.txt must list exactly 3 files (linux tar.gz, windows zip, release-manifest.json)"; exit 1; }
+          echo "--- SHA256SUMS.txt ---"; cat dist/SHA256SUMS.txt
+
+      - name: Publish the release
+        # v1.11.1 (CodeQL run 43883548572, alert #186): immutable 40-hex
+        # commit pin for the verified upstream v3 tag - same policy as
+        # every external action in this workflow.
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3
+        with:
+          # The FIXED publish list: the VERIFIED names the lanes actually
+          # produce (never the retired dist/SHEYTAN-LA-v${APP_VERSION}-*
+          # spellings that no lane ever wrote).
+          files: |
+            dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip
+            dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz
+            dist/release-manifest.json
+            dist/SHA256SUMS.txt
+          generate_release_notes: true

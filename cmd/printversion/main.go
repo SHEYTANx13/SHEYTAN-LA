@@ -1,7 +1,9 @@
 // printversion — the CI/packaging version resolver.
 //
 // ONE authority: internal/config.AppVersion. This command exists so the
-// build-desktop workflow can resolve the product version WITHOUT compiling
+// platform-build workflow (.github/workflows/build.yml — the ONE
+// consolidated CI workflow, successor of the retired build-desktop.yml
+// orchestrator) can resolve the product version WITHOUT compiling
 // the Fyne desktop UI: run #54 (40394318382) failed its Linux
 // version-resolution step and its audit stress gate for the same root
 // cause — `go run ./cmd/sheytan-local-agent version` pulls in ui/fyne via

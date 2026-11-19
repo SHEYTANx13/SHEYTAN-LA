@@ -104,10 +104,10 @@ func TestSourceTreeHasNoOversizedFiles(t *testing.T) {
 
 // TestPackagingLanesEnforceSizeCeiling pins the lane-side enforcement in
 // the REAL build workflow: the Linux lane invokes the shared audit
-// script against BOTH the staging tree and the finished ZIP, the Windows
-// lane carries the equivalent PowerShell staging-tree and archive-member
-// scans, and the shared script's production default stays pinned to the
-// exact 100,000,000-byte threshold.
+// script against BOTH the staging tree and the finished archive, the
+// Windows lane carries the equivalent PowerShell staging-tree and
+// archive-member scans, and the shared script's production default stays
+// pinned to the exact 100,000,000-byte threshold.
 func TestPackagingLanesEnforceSizeCeiling(t *testing.T) {
 	root := findRepoRoot(t)
 
@@ -119,10 +119,10 @@ func TestPackagingLanesEnforceSizeCeiling(t *testing.T) {
 		t.Fatalf("%s no longer pins the production default LIMIT=100000000 — the hard ceiling must stay exact (do not raise it to make a package pass)", sizeAuditScriptPath)
 	}
 
-	// The lanes now live in their single authoritative reusable files
-	// (run 44306343338 §6.2 consolidation).
-	w := readTreeFile(t, windowsLaneRelPath)
-	linW := readTreeFile(t, linuxLaneRelPath)
+	// The CI consolidation: both size gates live in the platform-build
+	// job of the ONE build.yml (per-target conditional steps).
+	w := readTreeFile(t, workflowRelPath)
+	linW := w
 
 	// Linux lane: the shared script must audit the staging tree AND the
 	// finished archive's uncompressed members.

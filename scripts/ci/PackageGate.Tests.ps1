@@ -10,7 +10,7 @@
   The harness is stream-safe and contract-pinned (carried over from run
   42928792246):
 
-    - It captures ALL streams (`*&1`), so expected negative-fixture
+    - It captures ALL streams (`*>&1`), so expected negative-fixture
       output is inert test data — never a live GitHub annotation — and
       the RAW captured lines are preserved (prefixed per line so they
       can never start a workflow command) in
@@ -86,7 +86,7 @@ function Invoke-Gate {
     # $LASTEXITCODE (it may stay unset under strict mode or keep a STALE
     # value from an earlier native command). Invoke the gate as a NATIVE
     # child process so the $LASTEXITCODE read below is genuine.
-    $out = & pwsh -NoProfile -NonInteractive -File ./scripts/ci/PackageGate.ps1 @GateArgs *&1 | Out-String
+    $out = & pwsh -NoProfile -NonInteractive -File ./scripts/ci/PackageGate.ps1 @GateArgs *>&1 | Out-String
     $code = $LASTEXITCODE
     foreach ($line in ($out -split "`r?`n")) {
         if ($line.Trim().Length -gt 0) {
@@ -229,20 +229,40 @@ try {
     Assert-Equal "OK" $json.token "result-file token"
     Assert-Equal $realBytes $json.zipBytes "result-file byte count"
     Assert-Equal $realSha $json.zipSha256 "result-file digest"
-    Assert-Equal 8 $json.zipEntryCount "result-file entry count (6 required entries)"
+    Assert-Equal $requiredEntries.Count $json.zipEntryCount "result-file entry count (the fixture ZIP carries exactly the required entries)"
     Assert-Equal "SHEYTAN-LA" $json.expectedRoot "result-file expected root"
 
     # ------------------------------------------------------------------
-    # 9. INVALID_ARGUMENTS: missing -Zip, empty ExpectedRoot, empty
-    #    required entry — deterministic exit 1.
+    # 9. INVALID_ARGUMENTS: missing -Zip, empty ExpectedRoot, blank/
+    #    malformed manifest — deterministic exit 1. Array-shaped args go
+    #    through the -ManifestFile channel: pwsh -File does not splat
+    #    PowerShell arrays across a native command line (the trailing
+    #    token would land in the next positional parameter), so the
+    #    manifest FILE is the only honest native-invocation carrier for
+    #    a required-entry list (run 44457547289 §1.1).
     # ------------------------------------------------------------------
     $r = Invoke-Gate @()
     Assert-Equal 1 $r.ExitCode "INVALID_ARGUMENTS (missing -Zip) exit code"
     Assert-Equal "INVALID_ARGUMENTS" (Gate-Token $r.Output).Token "INVALID_ARGUMENTS (missing -Zip) token"
     $r = Invoke-Gate @("-Zip", $goodZip, "-ExpectedRoot", "")
     Assert-Equal 1 $r.ExitCode "INVALID_ARGUMENTS (empty ExpectedRoot) exit code"
-    $r = Invoke-Gate @("-Zip", $goodZip, "-RequiredEntries", @("SHEYTAN-LA.exe", " "))
-    Assert-Equal 1 $r.ExitCode "INVALID_ARGUMENTS (blank required entry) exit code"
+
+    $blankManifest = Join-Path $base "blank-entry-manifest.json"
+    Set-Content -Path $blankManifest -Value '{"requiredEntries": ["SHEYTAN-LA.exe", " "]}' -Encoding utf8NoBOM
+    $r = Invoke-Gate @("-Zip", $goodZip, "-ManifestFile", $blankManifest)
+    Assert-Equal 1 $r.ExitCode "INVALID_ARGUMENTS (blank manifest entry) exit code"
+    Assert-Equal "INVALID_ARGUMENTS" (Gate-Token $r.Output).Token "INVALID_ARGUMENTS (blank manifest entry) token"
+
+    $malformedManifest = Join-Path $base "malformed-manifest.json"
+    Set-Content -Path $malformedManifest -Value '{"requiredEntries": [' -Encoding utf8NoBOM
+    $r = Invoke-Gate @("-Zip", $goodZip, "-ManifestFile", $malformedManifest)
+    Assert-Equal 1 $r.ExitCode "INVALID_ARGUMENTS (malformed manifest JSON) exit code"
+    Assert-Equal "INVALID_ARGUMENTS" (Gate-Token $r.Output).Token "INVALID_ARGUMENTS (malformed manifest JSON) token"
+
+    $emptyManifest = Join-Path $base "empty-manifest.json"
+    Set-Content -Path $emptyManifest -Value '{"requiredEntries": []}' -Encoding utf8NoBOM
+    $r = Invoke-Gate @("-Zip", $goodZip, "-ManifestFile", $emptyManifest)
+    Assert-Equal 1 $r.ExitCode "INVALID_ARGUMENTS (empty manifest entries) exit code"
 
     # ------------------------------------------------------------------
     # 10. Dependency closure: FAIL report fails, PASS report passes.
@@ -271,6 +291,43 @@ try {
     $r = Invoke-Gate @("-Zip", (Join-Path $base "nope.zip"))
     Assert-Equal 2 $r.ExitCode "marker absent: absent ZIP still fails (fail-closed)"
     Assert-Equal "ZIP_MISSING" (Gate-Token $r.Output).Token "marker absent: ZIP_MISSING token"
+
+    # ------------------------------------------------------------------
+    # 11b. STALE_PACKAGE: a package written BEFORE the staleness
+    #      reference is residue from a previous run — detected without
+    #      any sleeps (mtimes are pinned explicitly, deterministic).
+    # ------------------------------------------------------------------
+    $staleZip = Join-Path $base "stale.zip"
+    New-Zip -Path $staleZip -Entries $requiredEntries
+    [System.IO.File]::SetLastWriteTimeUtc($staleZip, [datetime]"2020-01-01T00:00:00Z")
+    $freshRef = Join-Path $base "build-info-ref.txt"
+    Set-Content -Path $freshRef -Value "this run's build marker" -Encoding utf8NoBOM
+    $r = Invoke-Gate @("-Zip", $staleZip, "-StalenessReference", $freshRef)
+    Assert-Equal 2 $r.ExitCode "STALE_PACKAGE exit code"
+    Assert-Equal "STALE_PACKAGE" (Gate-Token $r.Output).Token "STALE_PACKAGE token"
+    # A package written AFTER the reference is not stale.
+    $currentZip = Join-Path $base "current.zip"
+    New-Zip -Path $currentZip -Entries $requiredEntries
+    $r = Invoke-Gate @("-Zip", $currentZip, "-StalenessReference", $freshRef)
+    Assert-Equal 0 $r.ExitCode "fresh package passes the staleness contract"
+    # A missing staleness reference is an explicit invalid argument.
+    $r = Invoke-Gate @("-Zip", $currentZip, "-StalenessReference", (Join-Path $base "absent-ref.txt"))
+    Assert-Equal 1 $r.ExitCode "missing staleness reference is INVALID_ARGUMENTS"
+
+    # ------------------------------------------------------------------
+    # 11c. Path containing spaces: the portable ZIP lives in a
+    #      directory with spaces end-to-end (run 44457547289 §1.1
+    #      regression coverage) — extraction/launch parity contract.
+    # ------------------------------------------------------------------
+    $spacesDir = Join-Path $base "dist with spaces"
+    New-Item -ItemType Directory -Force -Path $spacesDir | Out-Null
+    $spacesZip = Join-Path $spacesDir "SHEYTAN-LA-ALPHA-windows-x64-portable.zip"
+    New-Zip -Path $spacesZip -Entries $requiredEntries
+    $r = Invoke-Gate @("-Zip", $spacesZip, "-DistDir", $spacesDir, "-ResultFile", (Join-Path $spacesDir "ok-result.json"))
+    Assert-Equal 0 $r.ExitCode "path with spaces passes"
+    Assert-Equal "OK" (Gate-Token $r.Output).Token "path with spaces token"
+    $spacesJson = Get-Content -Raw -Path (Join-Path $spacesDir "ok-result.json") | ConvertFrom-Json
+    Assert-Equal "SHEYTAN-LA" $spacesJson.expectedRoot "spaces-path result file carries the expected root"
 
     # ------------------------------------------------------------------
     # 12. Installer retirement pins (master work order §10): the gate

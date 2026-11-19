@@ -7,9 +7,11 @@ import (
 	"testing"
 )
 
-// workflowRelPath points at the REAL build-desktop workflow — the DAG
-// contract reads the file that ships, never a copied example.
-var dagWorkflowRelPath = filepath.Join("..", "..", ".github", "workflows", "build-desktop.yml")
+// workflowRelPathForDAG points at the REAL consolidated platform-build
+// workflow — the DAG contract reads the file that ships, never a copied
+// example. (The retired build-desktop.yml orchestrator + five reusable
+// lane files were merged into this ONE file by the CI consolidation.)
+var dagWorkflowRelPath = filepath.Join("..", "..", ".github", "workflows", "build.yml")
 
 // codeqlWorkflowRelPath points at the REAL CodeQL workflow.
 var codeqlWorkflowRelPath = filepath.Join("..", "..", ".github", "workflows", "codeql.yml")
@@ -22,16 +24,16 @@ var codeqlWorkflowRelPath = filepath.Join("..", "..", ".github", "workflows", "c
 // failures this loader fixes): the hosted Windows runner materializes
 // the working tree with Git-for-Windows' default core.autocrlf=true, and
 // .gitattributes deliberately pins only *.go (LF) and *.bat (CRLF) —
-// *.yml falls through to the platform default, so build-desktop.yml
-// arrives with CRLF line endings on Windows while staying LF on Linux.
-// The semantic YAML validators never cared (yaml.v3 accepts CRLF), which
-// is why every positive DAG test stayed green on both platforms — but
-// the REGRESSION fixtures in this file perform multi-line string surgery
-// with LF-only needles (`"  "+job+":\n    name:"), and under CRLF those
-// needles matched nothing: the "mutated" workflow was byte-identical to
-// the healthy one, the validator correctly accepted it, and the tests
-// failed as "the regression detector is broken" — a fixture portability
-// bug masquerading as a contract bug.
+// *.yml falls through to the platform default, so the workflow arrives
+// with CRLF line endings on Windows while staying LF on Linux. The
+// semantic YAML validators never cared (yaml.v3 accepts CRLF), which is
+// why every positive DAG test stayed green on both platforms — but the
+// REGRESSION fixtures in this file perform multi-line string surgery
+// with LF-only needles, and under CRLF those needles matched nothing:
+// the "mutated" workflow was byte-identical to the healthy one, the
+// validator correctly accepted it, and the tests failed as "the
+// regression detector is broken" — a fixture portability bug masquerading
+// as a contract bug.
 //
 // Normalizing HERE (the single load seam) keeps the contract tests
 // reading the file that ships while making the fixture surgery
@@ -54,16 +56,20 @@ func loadWorkflowForDAG(t *testing.T, rel string) string {
 	return text
 }
 
-// TestBuildWorkflowIndependentGatesDAG proves the run-43630164424 repair
-// against the real YAML: preflight is not a prerequisite of the four
-// validation gates, every gate owns its checkout, the collector is
-// failure-tolerant, and the strict final verdict exists and inspects
-// every required gate.
-func TestBuildWorkflowIndependentGatesDAG(t *testing.T) {
+// TestPlatformBuildWorkflowDAG proves the consolidated DAG contract
+// against the real YAML: the platform-build matrix job has no needs
+// (every matrix instance is an independent gate), the matrix structure
+// is exactly the six contracted targets with fail-fast false, the
+// collector is failure-tolerant, and the strict final verdict exists and
+// inspects every required gate.
+func TestPlatformBuildWorkflowDAG(t *testing.T) {
 	w := loadWorkflowForDAG(t, dagWorkflowRelPath)
 
 	if err := ValidateIndependentGatesDAG(w); err != nil {
 		t.Fatalf("independent-gates DAG contract: %v", err)
+	}
+	if err := ValidatePlatformMatrixStructure(w); err != nil {
+		t.Fatalf("platform matrix structure contract: %v", err)
 	}
 	if err := ValidateFinalVerdictJob(w); err != nil {
 		t.Fatalf("final-verdict contract: %v", err)
@@ -73,115 +79,90 @@ func TestBuildWorkflowIndependentGatesDAG(t *testing.T) {
 	}
 }
 
-// TestRedPreflightDoesNotSkipGates is the run-43630164424 regression
-// fixture: with preflight FAILED, the four independent gates still run
-// to their terminal states, the collector still runs, and the final
-// verdict is FAILURE — a red run with full evidence, never four skipped
-// gates.
-func TestRedPreflightDoesNotSkipGates(t *testing.T) {
+// TestRedPlatformBuildKeepsCollectorRunning is the run-43630164424
+// regression fixture, recast for the matrix topology: with the
+// platform-build matrix FAILED, the collector still runs to publish the
+// evidence (its always() condition), the final verdict still renders,
+// and the verdict is FAILURE — a red run with full evidence, never
+// skipped gates.
+func TestRedPlatformBuildKeepsCollectorRunning(t *testing.T) {
 	w := loadWorkflowForDAG(t, dagWorkflowRelPath)
 
 	outcomes, err := SimulateGateMatrix(w, map[string]string{
-		"preflight": "failure",
+		PlatformBuildJobKey: "failure",
 	})
 	if err != nil {
 		t.Fatalf("simulate: %v", err)
 	}
 
-	for _, gate := range IndependentGateJobs {
-		if outcomes[gate] == "skipped" {
-			t.Fatalf("red preflight skipped %q — the run-43630164424 orchestration defect is back: independent gates must run to terminal states (outcome=%q)", gate, outcomes[gate])
-		}
+	if outcomes[CollectorJobKey] == "skipped" {
+		t.Fatalf("a red matrix skipped %q — the run-43630164424 orchestration defect is back: the collector must run after any platform outcome (outcome=%q)", CollectorJobKey, outcomes[CollectorJobKey])
 	}
-	if outcomes["consolidate-logs"] != "success" {
-		t.Fatalf("collector must still run on a red matrix, got %q", outcomes["consolidate-logs"])
+	if outcomes[CollectorJobKey] != "success" {
+		t.Fatalf("collector must still run on a red matrix, got %q", outcomes[CollectorJobKey])
 	}
-	if verdictFails(outcomes) {
-		// expected: the verdict is red because preflight is red
-	} else {
-		t.Fatalf("final verdict must be FAILURE when preflight failed: %+v", outcomes)
+	if outcomes[FinalVerdictJobKey] == "skipped" {
+		t.Fatalf("a red matrix skipped %q — the verdict must still render", FinalVerdictJobKey)
+	}
+	if !verdictFails(outcomes) {
+		t.Fatalf("final verdict must be FAILURE when platform-build failed: %+v", outcomes)
 	}
 }
 
-// TestOldPreflightDAGShapeIsRejected proves the contract FAILS against
-// the previous DAG (needs: [preflight] re-introduced on the four gates)
-// — the exact shape that turned run 43630164424 into a red run with
-// four skipped gates.
+// TestRedCollectorCannotHideGreenMatrix is the second mandatory fixture:
+// platform-build green, the collector RED (a coverage gap) — the final
+// verdict is FAILURE. The collector is a REQUIRED gate in the verdict
+// loop: report-generation success can never override a failed gate, and
+// a collector failure can never be waved through either.
+func TestRedCollectorCannotHideGreenMatrix(t *testing.T) {
+	w := loadWorkflowForDAG(t, dagWorkflowRelPath)
+
+	outcomes, err := SimulateGateMatrix(w, map[string]string{
+		PlatformBuildJobKey: "success",
+		CollectorJobKey:     "failure",
+	})
+	if err != nil {
+		t.Fatalf("simulate: %v", err)
+	}
+
+	if outcomes[PlatformBuildJobKey] != "success" {
+		t.Fatalf("platform-build must stay green in this fixture, got %q", outcomes[PlatformBuildJobKey])
+	}
+	if !verdictFails(outcomes) {
+		t.Fatalf("final verdict must be FAILURE when the collector reported a coverage gap: %+v", outcomes)
+	}
+}
+
+// TestNeedsChainedPlatformBuildIsRejected proves the contract FAILS
+// against the needs-chained shape (a needs list on the platform-build
+// job) — the exact shape that turned run 43630164424 into a red run with
+// skipped gates, and the platform-to-platform needs chain the matrix
+// replaced.
 //
 // Run-43718750096 portability note: the surgery below uses LF-only
 // needles; loadWorkflowForDAG normalizes the real file to LF first, and
 // the application guard proves every injection landed — under the old
 // loader a CRLF checkout silently produced an unmutated workflow and
 // this test failed as a broken detector instead of a broken fixture.
-func TestOldPreflightDAGShapeIsRejected(t *testing.T) {
+func TestNeedsChainedPlatformBuildIsRejected(t *testing.T) {
 	w := loadWorkflowForDAG(t, dagWorkflowRelPath)
 
-	// Re-introduce the run-43630164424 defect shape.
-	old := w
-	applied := 0
-	for _, job := range IndependentGateJobs {
-		needle := "  " + job + ":\n    name:"
-		injection := "  " + job + ":\n    needs: [preflight]\n    name:"
-		if _, isLane := laneWorkflowUses[job]; isLane {
-			needle = "  " + job + ":\n"
-			injection = "  " + job + ":\n    needs: [preflight]\n"
-		}
-		mutated := strings.Replace(old, needle, injection, 1)
-		if mutated != old {
-			applied++
-		}
-		old = mutated
-	}
-	if applied != len(IndependentGateJobs) {
-		t.Fatalf("the defect-shape surgery applied to only %d/%d independent gates — the job-header shape in build-desktop.yml changed; update the mutation needle in this test (a silent no-op here once produced a false 'broken detector' failure on Windows)",
-			applied, len(IndependentGateJobs))
+	// Re-introduce the run-43630164424 defect shape on the matrix job.
+	mutated := strings.Replace(w,
+		"  platform-build:\n    name:",
+		"  platform-build:\n    needs: [collect-errors]\n    name:", 1)
+	if mutated == w {
+		t.Fatalf("the defect-shape surgery did not apply — the platform-build job header in build.yml changed; update the mutation needle in this test (a silent no-op here once produced a false 'broken detector' failure on Windows)")
 	}
 
-	if err := ValidateIndependentGatesDAG(old); err == nil {
-		t.Fatalf("the old needs:[preflight] DAG passed the contract — the regression detector is broken")
+	if err := ValidateIndependentGatesDAG(mutated); err == nil {
+		t.Fatalf("a needs-chained platform-build job passed the contract — the regression detector is broken")
 	}
 
-	// And the simulator must show the old shape skipping the gates.
-	outcomes, err := SimulateGateMatrix(old, map[string]string{"preflight": "failure"})
-	if err != nil {
-		t.Fatalf("simulate old DAG: %v", err)
-	}
-	skipped := 0
-	for _, gate := range IndependentGateJobs {
-		if outcomes[gate] == "skipped" {
-			skipped++
-		}
-	}
-	if skipped != len(IndependentGateJobs) {
-		t.Fatalf("old DAG simulation: expected all %d gates skipped, got %d (%+v)", len(IndependentGateJobs), skipped, outcomes)
-	}
-}
-
-// TestRedPlatformGateKeepsOthersRunning is the second mandatory
-// fixture: preflight green, one platform gate red — every unrelated
-// gate still runs, the collector runs, and the final verdict is still
-// FAILURE (strict verdict preserved).
-func TestRedPlatformGateKeepsOthersRunning(t *testing.T) {
-	w := loadWorkflowForDAG(t, dagWorkflowRelPath)
-
-	outcomes, err := SimulateGateMatrix(w, map[string]string{
-		"preflight":        "success",
-		"platform-windows": "failure",
-	})
-	if err != nil {
-		t.Fatalf("simulate: %v", err)
-	}
-
-	for _, gate := range []string{"audit", "ui", "platform-linux", "platform-macos", "platform-android", "platform-ios"} {
-		if outcomes[gate] != "success" {
-			t.Fatalf("unrelated gate %q must still run to success, got %q", gate, outcomes[gate])
-		}
-	}
-	if outcomes["consolidate-logs"] != "success" {
-		t.Fatalf("collector must run after the red platform gate, got %q", outcomes["consolidate-logs"])
-	}
-	if !verdictFails(outcomes) {
-		t.Fatalf("final verdict must be FAILURE when platform-windows failed: %+v", outcomes)
+	// And the simulator must show the chained shape as unrunnable (a
+	// needs cycle), never as a silently successful run.
+	if _, err := SimulateGateMatrix(mutated, map[string]string{PlatformBuildJobKey: "failure"}); err == nil {
+		t.Fatalf("the needs-chained DAG simulated successfully — a platform-to-platform needs cycle must be unrunnable, not silently green")
 	}
 }
 
@@ -189,15 +170,16 @@ func TestRedPlatformGateKeepsOthersRunning(t *testing.T) {
 // required gate must fail the contract (green-washing hazard).
 //
 // Run-43718750096 portability note: same CRLF defect class as
-// TestOldPreflightDAGShapeIsRejected — the LF-normalized loader plus the
-// application guard below keep the injection real on every platform.
+// TestNeedsChainedPlatformBuildIsRejected — the LF-normalized loader
+// plus the application guard below keep the injection real on every
+// platform.
 func TestContinueOnErrorIsRejected(t *testing.T) {
 	w := loadWorkflowForDAG(t, dagWorkflowRelPath)
 	greenwashed := strings.Replace(w,
-		"  preflight:\n    name: Preflight compile gate",
-		"  preflight:\n    continue-on-error: true\n    name: Preflight compile gate", 1)
+		"  platform-build:\n    name:",
+		"  platform-build:\n    continue-on-error: true\n    name:", 1)
 	if greenwashed == w {
-		t.Fatalf("the continue-on-error injection did not apply — the preflight job header in build-desktop.yml changed; update the mutation needle in this test (a silent no-op here once produced a false 'broken detector' failure on Windows)")
+		t.Fatalf("the continue-on-error injection did not apply — the platform-build job header in build.yml changed; update the mutation needle in this test (a silent no-op here once produced a false 'broken detector' failure on Windows)")
 	}
 
 	if err := ValidateFinalVerdictJob(greenwashed); err == nil {
@@ -219,7 +201,7 @@ func verdictFails(outcomes map[string]string) bool {
 }
 
 // TestCodeQLWorkflowResilience proves the CodeQL contract on the real
-// YAML: independent triggers, no build-desktop dependency, Go + actions
+// YAML: independent triggers, no platform-build dependency, Go + actions
 // scanning with security-and-quality, analyze-after-build-failure,
 // upload: always, and the failure-tolerant collector.
 func TestCodeQLWorkflowResilience(t *testing.T) {
@@ -353,36 +335,38 @@ func TestCodeQLResilienceRejectsRegressions(t *testing.T) {
 	}
 }
 
-// TestFiveReusableLanesInvokedOnce is the run 44306343338 §6.2 regression
-// fixture: the orchestrator invokes each of the five reusable platform
-// workflows EXACTLY ONCE, no other job invokes platform workflows, every
-// reusable file subscribes to workflow_call ONLY, and the retired legacy
-// in-orchestrator platform lanes never reappear (one authoritative build
-// path per platform).
-func TestFiveReusableLanesInvokedOnce(t *testing.T) {
-	orchestrator := loadWorkflowForDAG(t, dagWorkflowRelPath)
+// TestSixMatrixTargetsDefinedOnce is the CI-consolidation successor of
+// the run 44306343338 §6.2 five-lane fixture: the ONE platform-build
+// workflow defines the SIX matrix targets exactly once each (no
+// duplicate platform-to-platform mapping), the collector and verdict are
+// wired to the matrix job, and the retired five reusable lane files are
+// GONE — a reusable-lane invocation or a reappearing lane file recreates
+// the multi-file topology the consolidation removed.
+func TestSixMatrixTargetsDefinedOnce(t *testing.T) {
+	w := loadWorkflowForDAG(t, dagWorkflowRelPath)
 
-	laneFiles := []string{
-		"build-windows.yml", "build-linux.yml", "build-macos.yml",
-		"build-android.yml", "build-ios.yml",
-	}
-	laneTexts := map[string]string{}
-	for _, f := range laneFiles {
-		laneTexts[".github/workflows/"+f] = loadWorkflowForDAG(t,
-			filepath.Join("..", "..", ".github", "workflows", f))
+	if err := ValidatePlatformMatrixStructure(w); err != nil {
+		t.Fatalf("six-target matrix contract: %v", err)
 	}
 
-	if err := ValidateFiveReusableLanesInvokedOnce(orchestrator, laneTexts); err != nil {
-		t.Fatalf("five-lane work-order-6.2 topology contract: %v", err)
+	// No reusable-lane invocation may survive.
+	if strings.Contains(w, "uses: ./.github/workflows/build-") {
+		t.Fatalf("the workflow still invokes a reusable platform lane via workflow_call — the six-target matrix replaced the five reusable files")
 	}
 
-	doc, err := parseWorkflow(orchestrator)
-	if err != nil {
-		t.Fatalf("parse orchestrator: %v", err)
-	}
-	for _, retired := range retiredLaneJobKeys {
-		if _, ok := doc.Jobs[retired]; ok {
-			t.Errorf("retired legacy lane job %q reappeared in the orchestrator", retired)
+	// The retired lane files must be absent from the tracked tree.
+	root := findRepoRoot(t)
+	for _, retired := range RetiredLaneWorkflowFiles {
+		if _, err := os.Stat(filepath.Join(root, ".github", "workflows", retired)); err == nil {
+			t.Errorf("retired platform workflow file %s reappeared — the consolidation requires exactly build.yml + codeql.yml", retired)
 		}
+	}
+
+	// The collector and the verdict must be wired to the matrix job.
+	if err := ValidateFailureTolerantCollector(w); err != nil {
+		t.Fatalf("collector wiring: %v", err)
+	}
+	if err := ValidateFinalVerdictJob(w); err != nil {
+		t.Fatalf("verdict wiring: %v", err)
 	}
 }

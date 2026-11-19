@@ -1,10 +1,11 @@
-// five_platform_contract_test.go — master work order §10/§14: five
-// dedicated platform workflows must exist as REAL reusable definitions,
-// be invoked by the build-desktop orchestrator via workflow_call, and be
-// REQUIRED by its final verdict. A platform workflow that exists but is
-// not required by the verdict is a green-washing hazard (§1 rule 12:
-// never obtain green status by skipping or masking a gate), so the
-// orchestrator wiring is pinned here, not just the file names.
+// five_platform_contract_test.go — master work order §10/§14 (as carried
+// into the CI consolidation): the FIVE per-lane build scripts must exist
+// as real definitions under scripts/build/, be dispatched by the ONE
+// platform-build workflow's six-target matrix, and be REQUIRED by its
+// final verdict. A lane that exists but is not dispatched (or a red lane
+// that floats outside the verdict) is a green-washing hazard (§1 rule
+// 12: never obtain green status by skipping or masking a gate), so the
+// wiring is pinned here, not just the file names.
 
 package releasecontract
 
@@ -15,110 +16,85 @@ import (
 	"testing"
 )
 
-// fivePlatformWorkflows — the exact §10 file set.
-var fivePlatformWorkflows = []string{
-	"build-windows.yml",
-	"build-linux.yml",
-	"build-macos.yml",
-	"build-android.yml",
-	"build-ios.yml",
+// fiveLaneScripts — the exact §10 lane-script set (the successors of the
+// retired five reusable workflow files).
+var fiveLaneScripts = []string{
+	"windows.ps1",
+	"linux.sh",
+	"macos.sh",
+	"android.sh",
+	"ios.sh",
 }
 
-// TestFivePlatformWorkflowsAreRealReusableDefinitions pins that each §10
-// workflow file exists, is triggered ONLY by workflow_call (the
-// orchestrator owns the push/PR triggers — duplicate push builds are a
-// documented anti-goal), carries least-privilege permissions, and pins
-// its external actions to immutable 40-hex SHAs (the repo-wide
-// action-reference policy).
-func TestFivePlatformWorkflowsAreRealReusableDefinitions(t *testing.T) {
+// TestFiveLaneScriptsAreRealDefinitions pins that each §10 lane script
+// exists, carries its verification gates (a core `go test` invocation),
+// writes the upstream-failure marker the if:always() package-gate
+// reporter consumes, and finalizes its package under the contracted
+// dist/ name. Stubs would fail these honesty checks.
+func TestFiveLaneScriptsAreRealDefinitions(t *testing.T) {
 	root := findRepoRoot(t)
-	for _, name := range fivePlatformWorkflows {
-		rel := filepath.Join(".github", "workflows", name)
+	for _, name := range fiveLaneScripts {
+		rel := filepath.Join("scripts", "build", name)
 		raw, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
-			t.Errorf("§10 workflow %s is missing — the five-platform matrix is not deliverable", rel)
+			t.Errorf("§10 lane script %s is missing — the six-target matrix is not deliverable", rel)
 			continue
 		}
 		text := string(raw)
 
-		if !strings.Contains(text, "workflow_call") {
-			t.Errorf("%s does not declare a workflow_call trigger — it must be a reusable workflow invoked by the orchestrator", rel)
-		}
-		if strings.Contains(text, "push:") || strings.Contains(text, "pull_request:") {
-			t.Errorf("%s declares its own push/pull_request trigger — the orchestrator owns the triggers (duplicate push builds are forbidden)", rel)
-		}
-		if !strings.Contains(text, "contents: read") {
-			t.Errorf("%s does not carry least-privilege permissions (contents: read)", rel)
-		}
-		// Real definitions carry at least one build/test/verify step —
-		// stubs would fail this honesty check.
+		// Real definitions carry at least one core gate — stubs would
+		// fail this honesty check.
 		if !strings.Contains(text, "go test") {
-			t.Errorf("%s runs no test suite — a §10 platform lane without its core gates is a stub, not a build definition", rel)
+			t.Errorf("%s runs no test suite — a §10 lane without its core gates is a stub, not a build definition", rel)
 		}
-		if !strings.Contains(text, "actions/upload-artifact@") {
-			t.Errorf("%s uploads no artifact — the platform's portable output must be produced and preserved", rel)
+
+		// The upstream-failure marker contract: the first failed gate's
+		// step name lands in ci-logs/<target>-upstream-failure.txt so the
+		// package-gate reporter names ONE root error.
+		if !strings.Contains(text, "upstream-failure.txt") {
+			t.Errorf("%s never writes the upstream-failure marker — the if:always() package-gate reporter cannot name the first failed gate", rel)
 		}
-		for _, line := range strings.Split(text, "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "uses: ") && !strings.HasPrefix(line, "uses: ./.github/workflows/") {
-				ref := strings.TrimPrefix(line, "uses: ")
-				if i := strings.IndexByte(ref, ' '); i >= 0 {
-					ref = ref[:i]
-				}
-				at := strings.LastIndexByte(ref, '@')
-				sha := ref[at+1:]
-				if len(sha) != 40 {
-					t.Errorf("%s references %q — every external action must be pinned to an immutable 40-hex commit SHA", rel, ref)
-				}
-			}
+
+		// The packaging honesty: the lane references its dist/ output.
+		if !strings.Contains(text, "dist/") {
+			t.Errorf("%s produces no dist/ package — the platform's portable output must be produced and preserved", rel)
 		}
 	}
 }
 
-// TestFivePlatformWorkflowsAreInvokedAndRequiredByTheVerdict pins the
-// orchestrator wiring: build-desktop.yml calls all five via
-// `uses: ./.github/workflows/build-*.yml` jobs, the collector waits for
-// them, and the final verdict needs + inspects every platform job's
-// result — a red platform lane must render the whole run red.
-func TestFivePlatformWorkflowsAreInvokedAndRequiredByTheVerdict(t *testing.T) {
+// TestSixMatrixTargetsDispatchTheLanesAndRequiredByTheVerdict pins the
+// consolidated wiring: build.yml defines the six matrix targets exactly
+// once (validated structurally), dispatches to the five lane scripts,
+// and the final verdict needs + inspects the platform-build result — a
+// red lane must render the whole run red.
+func TestSixMatrixTargetsDispatchTheLanesAndRequiredByTheVerdict(t *testing.T) {
 	text := readTreeFile(t, workflowRelPath)
 
-	invocations := map[string]bool{
-		"./.github/workflows/build-windows.yml": false,
-		"./.github/workflows/build-linux.yml":   false,
-		"./.github/workflows/build-macos.yml":   false,
-		"./.github/workflows/build-android.yml": false,
-		"./.github/workflows/build-ios.yml":     false,
+	// Structural matrix validation (six targets, unique triples,
+	// fail-fast false, no cancel-in-progress).
+	if err := ValidatePlatformMatrixStructure(text); err != nil {
+		t.Fatalf("six-target matrix contract: %v", err)
 	}
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "uses: ") {
-			continue
-		}
-		ref := strings.TrimPrefix(line, "uses: ")
-		if _, wanted := invocations[ref]; wanted {
-			invocations[ref] = true
-		}
-	}
-	for uses, found := range invocations {
-		if !found {
-			t.Errorf("build-desktop.yml never invokes %s — the orchestrator must call all five §10 platform workflows via workflow_call", uses)
+
+	// Every lane script must be dispatched by the workflow.
+	for _, name := range fiveLaneScripts {
+		if !strings.Contains(text, "scripts/build/"+name) {
+			t.Errorf("build.yml never dispatches scripts/build/%s — the §10 lane is not wired into the run", name)
 		}
 	}
 
-	// The final verdict must require and inspect every platform job.
-	for _, job := range []string{
-		"platform-windows",
-		"platform-linux",
-		"platform-macos",
-		"platform-android",
-		"platform-ios",
-	} {
-		if !strings.Contains(text, "needs."+job+".result") {
-			t.Errorf("the final verdict never inspects needs.%s.result — a red platform lane must fail the overall verdict, not float outside it", job)
-		}
-		if !strings.Contains(text, job) {
-			t.Errorf("build-desktop.yml has no %s job — the §10 lane is not wired into the run", job)
+	// The final verdict must require and inspect the platform-build
+	// result (the six lanes run as ONE matrix job with fail-fast: false —
+	// a red lane keeps the run red through the matrix job's conclusion).
+	if !strings.Contains(text, "needs."+PlatformBuildJobKey+".result") {
+		t.Errorf("the final verdict never inspects needs.%s.result — a red lane must fail the overall verdict, not float outside it", PlatformBuildJobKey)
+	}
+
+	// The retired lane files must not reappear.
+	root := findRepoRoot(t)
+	for _, retired := range RetiredLaneWorkflowFiles {
+		if _, err := os.Stat(filepath.Join(root, ".github", "workflows", retired)); err == nil {
+			t.Errorf("retired platform workflow file %s reappeared — the consolidation requires exactly build.yml + codeql.yml", retired)
 		}
 	}
 }

@@ -50,17 +50,18 @@ func TestCurrentIdentityIsV1111(t *testing.T) {
 	}
 }
 
-// TestWorkflowAppVersionTracksAuthority reads build-desktop.yml and
-// asserts every `APP_VERSION: "X"` declaration equals the Go authority,
-// and that the resolution step still derives the live value from
-// cmd/printversion (never from the literal alone).
+// TestWorkflowAppVersionTracksAuthority reads build.yml (the ONE
+// platform-build workflow) and the desktop lane scripts and asserts
+// every `APP_VERSION: "X"` declaration equals the Go authority, and that
+// the resolution step still derives the live value from cmd/printversion
+// (never from the literal alone).
 func TestWorkflowAppVersionTracksAuthority(t *testing.T) {
 	root := findRepoRoot(t)
 
-	laneFiles := []string{"build-windows.yml", "build-linux.yml"}
+	laneFiles := []string{windowsLaneRelPath, linuxLaneRelPath}
 	texts := map[string]string{}
 	for _, lane := range laneFiles {
-		raw, err := os.ReadFile(filepath.Join(root, ".github", "workflows", lane))
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(lane)))
 		if err != nil {
 			t.Fatalf("read %s: %v", lane, err)
 		}
@@ -69,21 +70,24 @@ func TestWorkflowAppVersionTracksAuthority(t *testing.T) {
 
 	decl := regexp.MustCompile(`APP_VERSION:\s*"([^"]+)"`)
 
+	// The consolidated workflow declares the version once at the
+	// workflow-level env block.
+	workflow := readTreeFile(t, workflowRelPath)
+	matches := decl.FindAllStringSubmatch(workflow, -1)
+	if len(matches) == 0 {
+		t.Fatalf("no APP_VERSION declaration found in %s — the version chain is broken", workflowRelPath)
+	}
+	for _, m := range matches {
+		if m[1] != config.AppVersion {
+			t.Errorf("%s APP_VERSION = %q, want the Go authority %q (the hosted cross-check would fail AFTER the artifacts were built)", workflowRelPath, m[1], config.AppVersion)
+		}
+	}
+
+	// The live resolution must still come from the ONE CGO-free helper,
+	// in BOTH desktop lane scripts.
 	for lane, text := range texts {
-		matches := decl.FindAllStringSubmatch(text, -1)
-		if len(matches) == 0 {
-			t.Fatalf("no APP_VERSION declaration found in %s — the version chain is broken", lane)
-		}
-
-		for _, m := range matches {
-			if m[1] != config.AppVersion {
-				t.Errorf("%s APP_VERSION = %q, want the Go authority %q (the hosted cross-check would fail AFTER the artifacts were built)", lane, m[1], config.AppVersion)
-			}
-		}
-
-		// The live resolution must still come from the ONE CGO-free helper.
 		if !strings.Contains(text, "go run ./cmd/printversion --plain") {
-			t.Error("build-windows.yml lost the printversion resolution step — the version chain is broken")
+			t.Errorf("%s lost the printversion resolution step — the version chain is broken", lane)
 		}
 	}
 }

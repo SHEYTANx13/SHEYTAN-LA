@@ -32,6 +32,7 @@ import (
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/localipc"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/platform"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/renderboot"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/startup"
 	fyneui "github.com/SHEYTANx13/SHEYTAN-LA/ui/fyne"
 )
@@ -143,6 +144,11 @@ func Run(cfg *config.Config) int {
 
 	logging.Default().Info("desktop", "%s v%s (Fyne desktop, one Go UI)", config.AppName, config.AppVersion)
 	fmt.Printf("%s v%s (Fyne desktop, one Go UI)\n", config.AppName, config.AppVersion)
+
+	// Run 44457547289 §5: the GoGPU render service verification runs in
+	// the BACKGROUND (never on the first-frame path); its observation is
+	// published to the toolkit-neutral channel the UIs read.
+	renderboot.Start()
 	// v1.11.1: the transport KIND is logged, never the endpoint path —
 	// on Windows the pipe name embeds the account name and on Unix the
 	// path embeds the uid; neither belongs in a log file an operator
