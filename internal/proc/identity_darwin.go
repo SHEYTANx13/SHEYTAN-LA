@@ -55,7 +55,6 @@ import (
 #include <sys/param.h>
 #include <sys/proc_info.h>
 #include <sys/socket.h>
-#include <sys/limits.h>
 #include <netinet/in.h>
 #include <string.h>
 
@@ -68,8 +67,15 @@ static int c_socket_fdinfo_size(void)  { return (int)sizeof(struct socket_fdinfo
 static int c_bsdinfo_size(void)        { return (int)sizeof(struct proc_bsdinfo); }
 static int c_pathinfo_size(void)       { return (int)PROC_PIDPATHINFO_SIZE; }
 
-// c_pid_max is the documented kernel pid space upper bound (sys/limits.h).
-static int c_pid_max(void) { return PID_MAX; }
+// NOTE (run 44663205295 repair): the previous prelude included
+// <sys/limits.h> and read PID_MAX through a C helper. Neither exists in
+// the public Apple SDK: sys/limits.h is a BSD header the macOS SDK does
+// not ship (fatal error: 'sys/limits.h' file not found) and PID_MAX
+// lives in the XNU-PRIVATE sys/proc_internal.h. The pid-space upper
+// bound therefore lives on the Go side as the explicit typed constant
+// darwinPIDSpaceUpperBound below — the walk stays bounded by an
+// explicit maximum allocation with a typed truncation error instead of
+// depending on a private or unavailable macro.
 
 // c_list_all_pids fills buf with every PID (PROC_ALL_PIDS) through the
 // documented proc_listallpids wrapper. Returns the pid COUNT (the
@@ -205,6 +211,17 @@ func mapProcInfoErrno(err error) error {
 	}
 }
 
+// darwinPIDSpaceUpperBound is the kernel pid space upper bound the walk
+// validates every decoded pid against. The value mirrors the documented
+// XNU historical PID_MAX (99999): the constant CANNOT be read from a
+// public Apple SDK header (sys/limits.h is not shipped on macOS and
+// PID_MAX lives in the XNU-private sys/proc_internal.h — run
+// 44663205295 repair), so it is carried here as an explicit, typed
+// bound instead of depending on a private or unavailable macro. A pid
+// outside [1, darwinPIDSpaceUpperBound] means the buffer decode is
+// wrong and the walk fails typed — never a silent partial answer.
+const darwinPIDSpaceUpperBound = 99999
+
 // listAllPIDs returns every PID the kernel reports (PROC_ALL_PIDS) via
 // proc_listallpids. The buffer grows until the documented pid-count answer
 // no longer fills it; every returned pid is validated, and an answer that
@@ -232,15 +249,18 @@ func listAllPIDs() ([]int32, error) {
 
 		if int(n) < capPIDs {
 			pids := make([]int32, 0, int(n))
-			pidMax := int(C.c_pid_max())
 
 			for i := 0; i < int(n); i++ {
 				p := int(C.c_pid_at(unsafe.Pointer(&buf[0]), C.int(i)))
 				runtime.KeepAlive(buf)
 
-				// Semantic validation: a pid outside [1, PID_MAX] means
-				// the buffer decode is wrong — fail closed, never guess.
-				if p <= 0 || p > pidMax {
+				// Semantic validation: a pid outside [1,
+				// darwinPIDSpaceUpperBound] means the buffer decode is
+				// wrong — fail closed, never guess. The bound is the
+				// explicit Go-side constant above (the public Apple SDK
+				// does not ship sys/limits.h, and XNU's PID_MAX is
+				// private — run 44663205295 repair).
+				if p <= 0 || p > darwinPIDSpaceUpperBound {
 					return nil, fmt.Errorf("%w: proc_listallpids returned pid %d at index %d — outside the documented pid space", errProcTruncated, p, i)
 				}
 

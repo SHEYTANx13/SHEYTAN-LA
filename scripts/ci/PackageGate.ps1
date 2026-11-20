@@ -65,6 +65,15 @@
                                    ran — the report names the FIRST
                                    failing gate instead of inventing a
                                    second root error. Still fail-closed.
+    CONTRADICTORY_PACKAGE_STATE
+                               2   the -UpstreamFailureMarker exists AND
+                                   a package file exists at -Zip: both
+                                   stories cannot hold (the blocker says
+                                   the package was never produced, yet a
+                                   package is present). The gate refuses
+                                   to bless either; the upstream gate
+                                   text rides the token line as detail
+                                   (run 44663205295 repair).
     INVALID_ARGUMENTS          1   required arguments missing/invalid
                                    (deterministic: explicit validation,
                                    never the interactive prompt machinery)
@@ -255,6 +264,21 @@ try {
             try { $gate = ([System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $UpstreamFailureMarker).Path)).Trim() } catch { }
             if (-not $gate) { $gate = "<empty marker>" }
             $script:Result.upstreamFailure = $gate
+
+            # Contradiction guard (run 44663205295 repair): the marker
+            # says the package-producing steps never ran, yet a package
+            # EXISTS at the expected path. Both stories cannot hold: a
+            # package whose own blocker record says it was never
+            # produced is not this run's verified output. Fail closed
+            # with the contradiction named; the upstream gate text stays
+            # on the token line as detail (never truncated) so the
+            # first root cause is still the one reported.
+            $contradictingPackage = $false
+            try { $contradictingPackage = [bool](Test-Path -LiteralPath $Zip -PathType Leaf) } catch { $contradictingPackage = $false }
+            if ($contradictingPackage) {
+                Fail-State -Token "CONTRADICTORY_PACKAGE_STATE" -Code 2 -Detail $gate -Message ("CONTRADICTORY PACKAGE STATE — the upstream failure marker names gate '{0}', but a package EXISTS at '{1}'; a package whose own blocker record says it was never produced is not this run's verified output" -f $gate, $Zip)
+            }
+
             Fail-State -Token "BLOCKED_BY_UPSTREAM_TEST_FAILURE" -Code 2 -Detail $gate -Message ("packaging was BLOCKED BY UPSTREAM TEST FAILURE — the first failing gate is '{0}' (marker '{1}'); the package was never produced by that failed run, so there is no second package defect to report" -f $gate, $UpstreamFailureMarker)
         }
     }

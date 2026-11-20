@@ -132,7 +132,8 @@ jobs:
 
       # Manual Go build: compile every Linux package so the Go extractor
       # observes the actual application, with the EXACT CGO/build-tag
-      # settings each link graph requires (run 44547031698 §3.2/§3.7):
+      # settings each link graph requires (run 44547031698 §3.2/§3.7;
+      # run 44663205241 repair):
       #
       # (a) CGO_ENABLED=1 with -tags nogogpu: the Linux-supported
       #     application graph. The pinned goffi v0.6.8 documents that a
@@ -140,8 +141,25 @@ jobs:
       #     purego) fails to link on Linux with "unhandled relocation ...
       #     (SDYNIMPORT)" (goffi issue #72; macOS/Windows are unaffected)
       #     - the nogogpu seam excludes the adapter on Linux exactly as
-      #     the desktop lane does. -json emits structured build-fail
-      #     events (work order §8.2).
+      #     the desktop lane does. REPAIRED (run 44663205241): the
+      #     command previously built `./...`, which INCLUDES
+      #     cmd/sheytan-renderprobe - the one package that
+      #     deliberately imports BOTH stacks (internal/render -> gogpu ->
+      #     goffi AND ui/gogui -> go-gui -> purego) in ONE binary, so
+      #     under CGO_ENABLED=1 it hits exactly the documented
+      #     goffi+other-cgo link failure ("unhandled relocation ...
+      #     (SDYNIMPORT) (R_CALL)" for the goffi_dlopen/dlsym/dlerror/
+      #     errno_location stubs) and build (a) failed on it. The probe's
+      #     DOCUMENTED link configuration is (b) below - CGO_ENABLED=0
+      #     with -tags nofakecgo (goffi Workaround A) - which is also how
+      #     every platform lane links it (scripts/build/linux.sh). Build
+      #     (a) therefore compiles every package of ./... EXCEPT that one
+      #     package; build (b) still compiles AND LINKS the probe at its
+      #     documented configuration, so no package loses extraction
+      #     coverage (the library packages internal/render,
+      #     internal/renderboot are still compiled - not linked - by
+      #     build (a): goffi archives compile fine under CGO_ENABLED=1,
+      #     only the MIXED-STACK link is impossible).
       # (b) CGO_ENABLED=0 with -tags nofakecgo: goffi's documented
       #     Workaround A for the purego+goffi duplicate-_cgo_init link
       #     conflict. cmd/sheytan-renderprobe imports BOTH stacks (Go-Gui
@@ -149,6 +167,16 @@ jobs:
       #     production-shaped link regression target. This command also
       #     extracts the gogpu/goffi adapter source (internal/render,
       #     internal/renderboot) so no package loses coverage.
+      #
+      # Failure handling (work order §6.2): the previous handler
+      #     grep -m1 -E '"ImportPath|Err"'
+      # matched the FIRST metadata line of the JSONL stream (an
+      # "ImportPath" line) instead of the build-fail event and its
+      # compiler output, so the actual source location disappeared. The
+      # handlers now parse the stream with scripts/ci/go-build-jsonl-
+      # diagnose.py (JSON events only, full compiler output, first
+      # diagnostic path:line:col) while the raw JSONL stays the job's
+      # evidence.
       - name: Build all Go packages for CodeQL
         if: matrix.language == 'go'
         shell: bash
@@ -157,10 +185,13 @@ jobs:
         run: |
           set -euo pipefail
           go env GOTOOLCHAIN
-          echo "build (a): CGO_ENABLED=1 -tags nogogpu go build -json ./..."
-          CGO_ENABLED=1 go build -json -tags nogogpu ./... > "$RUNNER_TEMP/codeql-go-build-a.jsonl" || { cat "$RUNNER_TEMP/codeql-go-build-a.jsonl" | grep -m1 -E '"ImportPath|Err"' || true; exit 1; }
+          mapfile -t build_a_packages < <(go list -tags nogogpu ./... | grep -v '^github\.com/SHEYTANx13/SHEYTAN-LA/cmd/sheytan-renderprobe$')
+          echo "build (a): CGO_ENABLED=1 -tags nogogpu go build -json (every package of ./... EXCEPT cmd/sheytan-renderprobe, whose documented link configuration is build (b) - goffi v0.6.8 documents the goffi+other-cgo mixed-stack link as impossible on Linux, goffi issue #72)"
+          echo "build (a) package count: ${#build_a_packages[@]} (go list ./... minus the renderprobe)"
+          CGO_ENABLED=1 go build -json -tags nogogpu "${build_a_packages[@]}" > "$RUNNER_TEMP/codeql-go-build-a.jsonl" || { python3 scripts/ci/go-build-jsonl-diagnose.py "$RUNNER_TEMP/codeql-go-build-a.jsonl" || true; exit 1; }
           echo "build (b): CGO_ENABLED=0 -tags nofakecgo go build -json ./cmd/sheytan-renderprobe (combined go-gui+gogpu link)"
-          CGO_ENABLED=0 go build -json -tags nofakecgo -o "$RUNNER_TEMP/sheytan-renderprobe-codeql" ./cmd/sheytan-renderprobe > "$RUNNER_TEMP/codeql-go-build-b.jsonl" || { cat "$RUNNER_TEMP/codeql-go-build-b.jsonl" | grep -m1 -E '"ImportPath|Err"' || true; exit 1; }
+          CGO_ENABLED=0 go build -json -tags nofakecgo -o "$RUNNER_TEMP/sheytan-renderprobe-codeql" ./cmd/sheytan-renderprobe > "$RUNNER_TEMP/codeql-go-build-b.jsonl" || { python3 scripts/ci/go-build-jsonl-diagnose.py "$RUNNER_TEMP/codeql-go-build-b.jsonl" || true; exit 1; }
+          python3 scripts/ci/go-build-jsonl-diagnose.py --summary "$RUNNER_TEMP/codeql-go-build-a.jsonl" "$RUNNER_TEMP/codeql-go-build-b.jsonl"
           "$RUNNER_TEMP/sheytan-renderprobe-codeql"
 
       # Manual C++ build: compile the engine, IPC host, and all native test

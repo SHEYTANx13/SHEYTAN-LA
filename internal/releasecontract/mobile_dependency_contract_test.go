@@ -1,16 +1,19 @@
 // Package releasecontract — mobile_dependency_contract_test.go
 //
 // Run 44378562071 work order §4.1.6 (SUPERSEDES the run 44306343338
-// module-graph resolution): the product module imports NO x/mobile
-// runtime package, so go mod tidy correctly removes any unused indirect
-// pin from go.mod — keeping one there made the committed manifests drift
-// from the toolchain-canonical state and failed the preflight module
-// integrity gate (the recorded tidy-drift failure of run 44378562071).
-// The gomobile/gobind CLI tools are instead installed by the Android and
-// iOS lanes at THIS EXACT recorded version — never @latest, never a
-// moving branch, never a graph re-resolution that could silently pull
-// the 2023-era pseudo-version and its broken golang.org/x/tools
-// v0.16.0 ("invalid array length -delta * delta" under Go 1.27.4).
+// module-graph resolution), as AMENDED on 2026-11-21 (runs
+// 44663205295 + 44663205241): the Android entrypoint repair gave the
+// product module a REAL x/mobile runtime import (cmd/sheytan-mobile/
+// mobile_android_main.go imports golang.org/x/mobile/app + the
+// event packages to bridge the NativeActivity glue to the go-gui
+// Pattern-B Android backend), so go.mod now CARRIES the pin — at the
+// SAME exact recorded version the lanes install the gomobile/gobind CLI
+// tools from. The original hazard (an UNUSED pin drifting from the
+// tidy-canonical state, silently pulling the 2023-era pseudo-version
+// with its broken golang.org/x/tools v0.16.0, "invalid array length
+// -delta * delta" under Go 1.27.4) is now guarded from BOTH sides: the
+// pin must exist AND be genuinely imported, at the exact lane version —
+// never @latest, never a moving branch, never a graph re-resolution.
 package releasecontract
 
 import (
@@ -35,13 +38,13 @@ const retiredMobileGraphVersion = "v0.0.0-20231127183840-76ac6878050a"
 func TestMobileToolchainPin(t *testing.T) {
 	root := findRepoRoot(t)
 
-	// 1. The product module stays tidy-canonical: NO x/mobile pin in
-	// go.mod. Nothing in the product graph imports it (run 44378562071
-	// §4.1: the unused indirect pin WAS the committed tidy drift). If a
-	// future change starts importing x/mobile runtime packages, go mod
-	// tidy will keep the require line and THIS assertion — checked
-	// against the live toolchain by scripts/ci/module-integrity.sh —
-	// must be revisited alongside that import.
+	// 1. (Amended 2026-11-21) go.mod MUST carry the x/mobile pin at the
+	// EXACT lane version, AND the import must be real: the Android
+	// entrypoint imports the runtime, so an absent pin breaks the build
+	// and an unused pin would re-open the run-44378562071 tidy drift.
+	// Both sides of the invariant are pinned here; the tidy-canonical
+	// state itself is checked against the live toolchain by
+	// scripts/ci/module-integrity.sh.
 	data, err := os.ReadFile(filepath.Join(root, "go.mod"))
 	if err != nil {
 		t.Fatalf("read go.mod: %v", err)
@@ -49,8 +52,17 @@ func TestMobileToolchainPin(t *testing.T) {
 
 	mod := string(data)
 
-	if strings.Contains(mod, "golang.org/x/mobile ") {
-		t.Fatalf("go.mod must NOT carry an unused golang.org/x/mobile pin — the product module imports no x/mobile runtime package and the unused indirect pin re-opens the committed tidy drift of run 44378562071 (install the CLI tools at the exact lane pin instead)")
+	pinLine := "golang.org/x/mobile " + mobileToolchainPin
+	if !strings.Contains(mod, pinLine) {
+		t.Fatalf("go.mod must pin golang.org/x/mobile at the exact lane version %s — the Android entrypoint (cmd/sheytan-mobile/mobile_android_main.go) imports the runtime; a missing or drifting pin re-opens the run 44378562071 tidy drift", mobileToolchainPin)
+	}
+
+	entrypoint, err := os.ReadFile(filepath.Join(root, filepath.FromSlash("cmd/sheytan-mobile/mobile_android_main.go")))
+	if err != nil {
+		t.Fatalf("read the Android entrypoint: %v", err)
+	}
+	if !strings.Contains(string(entrypoint), `"golang.org/x/mobile/app"`) {
+		t.Fatalf("go.mod carries the x/mobile pin but cmd/sheytan-mobile/mobile_android_main.go no longer imports golang.org/x/mobile/app — an unused pin re-opens the run 44378562071 tidy drift; move the pin back into the lane scripts")
 	}
 
 	if strings.Contains(mod, retiredMobileGraphVersion) {
@@ -82,8 +94,9 @@ func TestMobileToolchainPin(t *testing.T) {
 			t.Errorf("%s installs the mobile toolchain with @latest — the version authority is the exact recorded pin", lane)
 		}
 
-		if strings.Contains(workflow, `go list -m golang.org/x/mobile`) {
-			t.Errorf("%s still resolves the toolchain from the module graph — with the pin moved out of go.mod that lookup fails (module not in graph) and the old path re-opens the committed tidy drift", lane)
-		}
+		// (Amended 2026-11-21: the module IS in the graph now — the
+		// entrypoint imports it — so the old "go list -m would fail"
+		// prohibition no longer applies. The lane pin equality above is
+		// the binding contract.)
 	}
 }

@@ -20,8 +20,13 @@
 #     (../../ui/fyne/assets/logo-512.png).
 #   - gomobile/gobind are installed at the EXACT recorded pin
 #     v0.0.0-20261117202452-47699113848a - never @latest, never a moving
-#     branch (run 44378562071 section 4.1.6: the product module imports
-#     no x/mobile runtime package, so the pin lives HERE, not in go.mod).
+#     branch. Run 44663205295 repair: the product module NOW imports
+#     golang.org/x/mobile (app + event lifecycle/size/paint) in
+#     cmd/sheytan-mobile/mobile_android_main.go - the Android entrypoint
+#     bridges the NativeActivity glue to the go-gui Pattern-B Android
+#     backend - at the SAME exact pin, carried in go.mod (the version
+#     authority); this lane keeps installing the TOOLCHAIN binaries at
+#     the identical recorded version, so both sides always match.
 #   - the NDK setup is fail-closed; debug-signed only, never committed
 #     keys; the lane ends with the repo-cleanliness guard
 #     test -z "$(git status --porcelain)".

@@ -1,10 +1,14 @@
 # ============================================================================
 # SHEYTAN-LA - build.yml (CI consolidation: the ONE platform-build workflow)
 # ============================================================================
-# The ONE CI pipeline for the ONE Go + Fyne application. The six platform
+# The ONE CI pipeline for the ONE Go + Fyne application. The platform
 # build lanes (the retired build-desktop.yml orchestrator and the five
 # reusable build-windows/linux/macos/android/ios.yml files) are consolidated
-# into ONE workflow with ONE six-target matrix. .github/workflows/codeql.yml
+# into ONE workflow with ONE matrix of SEVEN targets: windows-x64,
+# linux-x64, macos-arm64, macos-x64, android-arm64, ios-simulator-arm64
+# (the six required lanes) plus ios-device-arm64 (structurally present,
+# honestly gated on the Apple signing secrets — BLOCKED_EXTERNAL_PREREQUISITE
+# without them, never a fabricated IPA). .github/workflows/codeql.yml
 # is the only other workflow and remains untouched.
 #
 # Topology:
@@ -1096,15 +1100,45 @@ jobs:
       # package; error on missing - a silently absent package is a
       # contract breach); (b) the build-evidence bundle (ci-logs/, warn on
       # missing - diagnostics may legitimately be sparse on a green lane).
-      # Run 44547031698 §7.5: the package upload is SKIPPED when the
-      # upstream-failure marker exists - the package gate already reported
-      # BLOCKED_BY_UPSTREAM_TEST_FAILURE once, and invoking upload-artifact
-      # against a missing glob would only produce the duplicate
-      # "No files were found with the provided path" noise the report must
-      # not carry. The evidence upload stays unconditional.
+      #
+      # Run 44663205295 repair: the previous upload decision was
+      # `hashFiles('ci-logs/${{ matrix.target }}-upstream-failure.txt') == ''
+      # && hashFiles('ci-logs/${{ matrix.target }}-blocked.txt') == ''` —
+      # on the blocked iOS device lane the upload STILL ran and failed
+      # against the intentionally absent package (a hashFiles-based
+      # marker condition is fragile: it depends on the marker file being
+      # visible to the expression evaluator at exactly the right moment,
+      # and fails silently to "no match" = upload). The upload decision
+      # is now an EXPLICIT, INSPECTABLE step output: the step below reads
+      # the workspace directly (test -f on the two marker files, then a
+      # real glob check for the package), reports WHY, and the upload
+      # keys off steps.package-eligibility.outputs.upload-package alone.
+      # An intentionally absent package is never uploaded; the evidence
+      # upload stays unconditional.
       # ------------------------------------------------------------------
+      - name: Determine package upload eligibility (explicit step output)
+        id: package-eligibility
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          upload="false"
+          if [ -f "ci-logs/${{ matrix.target }}-blocked.txt" ]; then
+            reason="blocked marker present: $(head -1 "ci-logs/${{ matrix.target }}-blocked.txt")"
+          elif [ -f "ci-logs/${{ matrix.target }}-upstream-failure.txt" ]; then
+            reason="upstream-failure marker present: $(head -1 "ci-logs/${{ matrix.target }}-upstream-failure.txt")"
+          elif compgen -G "dist/SHEYTAN-LA-ALPHA-*" > /dev/null; then
+            upload="true"
+            reason="package present: $(ls dist/SHEYTAN-LA-ALPHA-* | tr '\n' ' ')"
+          else
+            reason="no package and no marker - refusing upload (the package gate owns the root cause)"
+            echo "::error::package upload eligibility: no package at dist/SHEYTAN-LA-ALPHA-* and no state marker - the package gate reports the root cause"
+          fi
+          echo "upload-package=$upload" >> "$GITHUB_OUTPUT"
+          echo "package upload eligibility: $upload ($reason)"
+
       - name: Upload the platform package
-        if: always() && hashFiles('ci-logs/${{ matrix.target }}-upstream-failure.txt') == '' && hashFiles('ci-logs/${{ matrix.target }}-blocked.txt') == ''
+        if: always() && steps.package-eligibility.outputs.upload-package == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ matrix.artifact }}
@@ -1257,7 +1291,7 @@ jobs:
       - name: Render the gate matrix
         run: |
           echo "Required gates: platform-build=${{ needs.platform-build.result }} collect-errors=${{ needs.collect-errors.result }}"
-          echo "platform-build is the SIX-target matrix (windows-x64, linux-x64, macos-arm64, macos-x64, android-arm64, ios-simulator-arm64); with fail-fast: false every lane ran to its terminal state."
+          echo "platform-build is the SEVEN-target matrix (windows-x64, linux-x64, macos-arm64, macos-x64, android-arm64, ios-simulator-arm64 + the signing-gated ios-device-arm64); with fail-fast: false every lane ran to its terminal state."
       - name: Verdict (fail unless every required gate is success)
         run: |
           verdict=0

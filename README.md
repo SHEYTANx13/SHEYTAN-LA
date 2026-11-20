@@ -170,6 +170,8 @@ Live configuration is one concurrency-safe source (`config.Source`) shared by ev
 - Reasoning-depth budgets are real request-level parameters on the llama.cpp serving backend. A non-thinking model simply ignores the budget. The native C++ path has no reasoning-budget control and the level is inert there.
 - The engine is supervised machinery: it boots on first use, restarts after engine-affecting changes, and recovers on its own. The UI represents its state.
 - CI (Windows and Linux) is build/test evidence, not physical-host runtime evidence.
+- SHEYTAN-Engine.go (`internal/engine`) is a verified CPU reference vertical slice (real kernels over a deterministic fixture model). Real pretrained checkpoints, GGUF/LiteRT-LM execution, GPU/NPU backends and every comparative performance claim are NOT part of this ALPHA — see [`docs/architecture/sheytan-engine-architecture.md`](docs/architecture/sheytan-engine-architecture.md).
+- The Android APK builds through the pinned `gomobile build` (verified structurally: manifest, dex, arm64-v8a native library, gomobile debug certificate); no emulator or physical-device launch is claimed.
 - Future roadmap items (advanced computer-use, evaluation framework, multi-model routing, etc.) are not implemented. See [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ---

@@ -268,7 +268,7 @@
     "path": "cmd/sheytan-mobile/main.go",
     "type": "go",
     "language": "Go",
-    "purpose": "CLI source — main.go",
+    "purpose": "The mobile host entrypoint (!android): gomobile-bindable shape over the headless core client",
     "layer": "cli",
     "subsystem": "cmd",
     "status": "active"
@@ -277,7 +277,16 @@
     "path": "cmd/sheytan-mobile/mobile_android.go",
     "type": "go",
     "language": "Go",
-    "purpose": "CLI source — mobile_android.go",
+    "purpose": "androidBoot: the go-gui Android SetWindow seam",
+    "layer": "cli",
+    "subsystem": "cmd",
+    "status": "active"
+  },
+  {
+    "path": "cmd/sheytan-mobile/mobile_android_main.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "The Android DEVICE entrypoint (run 44663205295 repair): x/mobile app event loop bridged to the go-gui Pattern-B Android backend",
     "layer": "cli",
     "subsystem": "cmd",
     "status": "active"
@@ -286,7 +295,16 @@
     "path": "cmd/sheytan-mobile/mobile_android_nocgo.go",
     "type": "go",
     "language": "Go",
-    "purpose": "CLI source — mobile_android_nocgo.go",
+    "purpose": "The CGO_ENABLED=0 android type-check shape: typed refusal without a GL surface",
+    "layer": "cli",
+    "subsystem": "cmd",
+    "status": "active"
+  },
+  {
+    "path": "cmd/sheytan-mobile/mobile_window.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "The shared mobile window construction (host + android \u0026\u0026 cgo entrypoints; ONE wiring source)",
     "layer": "cli",
     "subsystem": "cmd",
     "status": "active"
@@ -604,6 +622,15 @@
     "type": "doc",
     "language": "Markdown",
     "purpose": "Documentation — WEBVIEW-SECURITY",
+    "layer": "docs",
+    "subsystem": "docs",
+    "status": "active"
+  },
+  {
+    "path": "docs/architecture/sheytan-engine-architecture.md",
+    "type": "doc",
+    "language": "Markdown",
+    "purpose": "Documentation — sheytan-engine-architecture",
     "layer": "docs",
     "subsystem": "docs",
     "status": "active"
@@ -3125,6 +3152,174 @@
     "layer": "domain",
     "subsystem": "internal/engdiscovery",
     "status": "active"
+  },
+  {
+    "path": "internal/engine/backend.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "The backend capability contract (Info/Capabilities/Allocate/Upload/Download/Compile/Submit/Synchronize/MemoryInfo/Close) + CPU reference backend + operation registry",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "status": "active"
+  },
+  {
+    "path": "internal/engine/bench_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/engine (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/engine/engine.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "The Engine: architecture registry, safetensors loading with complete mapping, bounded admission queue, ownership/Close semantics",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "status": "active"
+  },
+  {
+    "path": "internal/engine/engine_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/engine (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/engine/errors.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "SHEYTAN-Engine.go typed error vocabulary (unsupported model/operator/dtype/quant/backend/memory + container/session/engine closed)",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "status": "active"
+  },
+  {
+    "path": "internal/engine/graph.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "The canonical graph IR: ordered nodes, validate-before-execute ordering contract, reference executor",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "status": "active"
+  },
+  {
+    "path": "internal/engine/kernels_cpu.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "The CPU REFERENCE kernel set (correctness baseline): matmul/add/mul/softmax/rmsnorm/embedding/causal-attention/silu/argmax",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "status": "active"
+  },
+  {
+    "path": "internal/engine/kernels_cpu_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/engine (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/engine/model.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Model/config/tokenizer/Architecture-registry layer (complete fail-closed tensor mapping)",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "status": "active"
+  },
+  {
+    "path": "internal/engine/model_fixture.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "tiny-fixture-1: the deterministic fixture architecture executed end to end (real kernels; NOT a language-model claim)",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "status": "active"
+  },
+  {
+    "path": "internal/engine/progress.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Structured load/generation progress events (timestamped, JSON-serializable)",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "status": "active"
+  },
+  {
+    "path": "internal/engine/safetensors.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Safetensors STRICT header parsing (METADATA_INSPECTION_ONLY): bounds, overflow, overlap detection; zero-copy tensor materialization with typed dtype gates",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "status": "active"
+  },
+  {
+    "path": "internal/engine/safetensors_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/engine (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/engine/sampling.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Deterministic seeded sampling: greedy/temperature/top-k/top-p + stop conditions (reproducibility is contractual)",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "status": "active"
+  },
+  {
+    "path": "internal/engine/sampling_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/engine (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/engine/session.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "The Session: request-local history/sampling/stream/cancellation (KV answer: full-prefix recompute; no fabricated cache)",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "status": "active"
+  },
+  {
+    "path": "internal/engine/tensor.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Engine tensor foundation: dtype table, shape/stride validation, checked integer arithmetic (overflow-safe numel/offset)",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "status": "active"
+  },
+  {
+    "path": "internal/engine/tensor_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/engine (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/engine",
+    "testOnly": true,
+    "status": "test"
   },
   {
     "path": "internal/englease/lease.go",
@@ -5668,6 +5863,15 @@
     "status": "test"
   },
   {
+    "path": "internal/releasegate/doc.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Non-test package file so go build ./... compiles the test-only releasegate gate (CodeQL run 44663205241 repair)",
+    "layer": "domain",
+    "subsystem": "internal/releasegate",
+    "status": "active"
+  },
+  {
     "path": "internal/releasegate/releasegate_test.go",
     "type": "go",
     "language": "Go",
@@ -8185,6 +8389,15 @@
     "layer": "ci-tooling",
     "subsystem": "scripts/ci",
     "sideEffects": "executes (writes logs/fixtures under its own contract when run)",
+    "status": "active"
+  },
+  {
+    "path": "scripts/ci/go-build-jsonl-diagnose.py",
+    "type": "other",
+    "language": "",
+    "purpose": "go build -json JSONL failure parser: real build-fail events, full compiler output, first path:line:col (replaces the fragile grep handler)",
+    "layer": "ci-tooling",
+    "subsystem": "scripts/ci",
     "status": "active"
   },
   {

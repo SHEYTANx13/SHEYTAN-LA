@@ -17,6 +17,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/tc-hib/winres v0.3.1
 	golang.org/x/image v0.48.0
+	golang.org/x/mobile v0.0.0-20261117202452-47699113848a
 	golang.org/x/net v0.62.0
 	golang.org/x/sys v0.50.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -25,6 +26,7 @@ require (
 require (
 	github.com/coder/websocket v1.8.14 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
+	golang.org/x/exp/shiny v0.0.0-20261113113407-e3970619a1a4 // indirect
 	golang.org/x/term v0.47.0 // indirect
 )
 

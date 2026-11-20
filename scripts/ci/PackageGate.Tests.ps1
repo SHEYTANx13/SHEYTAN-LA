@@ -57,9 +57,11 @@ Add-Type -AssemblyName System.IO.Compression -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
 
 $failures = New-Object System.Collections.Generic.List[string]
+$script:checks = 0
 
 function Assert-True {
     param([bool]$Condition, [string]$What)
+    $script:checks++
     if (-not $Condition) {
         $script:failures.Add($What) | Out-Null
         Write-Host "FAIL: $What"
@@ -97,9 +99,24 @@ function Invoke-Gate {
 }
 
 function Gate-Token {
+    # Parses the STABLE status token separately from its optional
+    # descriptive suffix (run 44663205295, Windows package-gate fixture
+    # contract regression): the token is the FIRST whitespace-delimited
+    # word after PACKAGE_GATE_RESULT; everything after it is the DETAIL
+    # (the first failing gate text for BLOCKED_BY_UPSTREAM_TEST_FAILURE,
+    # the affected path for a missing package). Production diagnostic
+    # context is asserted verbatim, never truncated to satisfy an
+    # exact-string comparison, and never merged into the token.
     param([string]$Output)
     $hits = @($Output -split "`r?`n" | Where-Object { $_ -like "PACKAGE_GATE_RESULT *" })
-    return [pscustomobject]@{ Lines = $hits; Token = $(if ($hits.Count -eq 1) { ($hits[0] -replace '^PACKAGE_GATE_RESULT\s+', '') } else { "<tokens:$($hits.Count)>" }) }
+    if ($hits.Count -ne 1) {
+        return [pscustomobject]@{ Lines = $hits; Token = "<tokens:$($hits.Count)>"; Detail = "" }
+    }
+    $payload = ($hits[0] -replace '^PACKAGE_GATE_RESULT\s+', '')
+    $parts = @($payload -split '\s+', 2)
+    $detail = ""
+    if ($parts.Count -gt 1) { $detail = $parts[1] }
+    return [pscustomobject]@{ Lines = $hits; Token = $parts[0]; Detail = $detail }
 }
 
 # Fixture workspace (unique per invocation, cleaned up at the end).
@@ -284,13 +301,35 @@ try {
     # 11. BLOCKED_BY_UPSTREAM_TEST_FAILURE + marker-absent fallback.
     # ------------------------------------------------------------------
     $marker = Join-Path $base "win-upstream-failure.txt"
-    Set-Content -Path $marker -Value "Launch smoke (window + IPC handshake + core read + logging persistence + graceful close)" -Encoding utf8NoBOM
-    $r = Invoke-Gate @("-Zip", (Join-Path $base "nope.zip"), "-UpstreamFailureMarker", $marker)
+    $expectedGate = "Launch smoke (window + IPC handshake + core read + logging persistence + graceful close)"
+    Set-Content -Path $marker -Value $expectedGate -Encoding utf8NoBOM
+    $r = Invoke-Gate @("-Zip", (Join-Path $base "nope.zip"), "-UpstreamFailureMarker", $marker, "-ResultFile", (Join-Path $base "blocked-result.json"))
     Assert-Equal 2 $r.ExitCode "BLOCKED_BY_UPSTREAM_TEST_FAILURE exit code"
-    Assert-Equal "BLOCKED_BY_UPSTREAM_TEST_FAILURE" (Gate-Token $r.Output).Token "BLOCKED_BY_UPSTREAM token"
+    Assert-Equal "BLOCKED_BY_UPSTREAM_TEST_FAILURE" (Gate-Token $r.Output).Token "BLOCKED_BY_UPSTREAM token (stable token alone, suffix split off)"
+    Assert-Equal $expectedGate (Gate-Token $r.Output).Detail "BLOCKED_BY_UPSTREAM detail (descriptive gate text retained verbatim, never truncated)"
+    $blockedJson = Get-Content -Raw -Path (Join-Path $base "blocked-result.json") | ConvertFrom-Json
+    Assert-Equal "BLOCKED_BY_UPSTREAM_TEST_FAILURE" $blockedJson.token "BLOCKED_BY_UPSTREAM structured JSON token"
+    Assert-Equal $expectedGate $blockedJson.detail "BLOCKED_BY_UPSTREAM structured JSON detail"
     $r = Invoke-Gate @("-Zip", (Join-Path $base "nope.zip"))
     Assert-Equal 2 $r.ExitCode "marker absent: absent ZIP still fails (fail-closed)"
     Assert-Equal "ZIP_MISSING" (Gate-Token $r.Output).Token "marker absent: ZIP_MISSING token"
+
+    # ------------------------------------------------------------------
+    # 11d. CONTRADICTORY_PACKAGE_STATE: the upstream marker says the
+    #      package-producing steps never ran, yet a package EXISTS at
+    #      the expected path. Both stories cannot hold — the gate
+    #      refuses to bless either: exit 2, the first upstream failure
+    #      rides the token line as detail (diagnostic context kept),
+    #      and the contradiction itself is named in the human
+    #      diagnostic (run 44663205295 fixture-contract repair).
+    # ------------------------------------------------------------------
+    $r = Invoke-Gate @("-Zip", $goodZip, "-UpstreamFailureMarker", $marker, "-ResultFile", (Join-Path $base "contradiction-result.json"))
+    Assert-Equal 2 $r.ExitCode "CONTRADICTORY_PACKAGE_STATE exit code"
+    Assert-Equal "CONTRADICTORY_PACKAGE_STATE" (Gate-Token $r.Output).Token "CONTRADICTORY_PACKAGE_STATE token"
+    Assert-Equal $expectedGate (Gate-Token $r.Output).Detail "CONTRADICTORY_PACKAGE_STATE detail (upstream gate text retained)"
+    $contradictionJson = Get-Content -Raw -Path (Join-Path $base "contradiction-result.json") | ConvertFrom-Json
+    Assert-Equal "CONTRADICTORY_PACKAGE_STATE" $contradictionJson.token "contradiction structured JSON token"
+    Assert-True ($null -ne $contradictionJson.upstreamFailure -and "" -ne [string]$contradictionJson.upstreamFailure) "contradiction result names the upstream failure"
 
     # ------------------------------------------------------------------
     # 11b. STALE_PACKAGE: a package written BEFORE the staleness
@@ -330,6 +369,34 @@ try {
     Assert-Equal "SHEYTAN-LA" $spacesJson.expectedRoot "spaces-path result file carries the expected root"
 
     # ------------------------------------------------------------------
+    # 14. Token parser contract (run 44663205295 repair): the stable
+    #     token and its optional descriptive suffix are parsed
+    #     INDEPENDENTLY. Pure parser fixtures — deterministic, no gate
+    #     invocation, no fixtures on disk.
+    # ------------------------------------------------------------------
+    $pt = Gate-Token "PACKAGE_GATE_RESULT ZIP_MISSING"
+    Assert-Equal "ZIP_MISSING" $pt.Token "parser: token without descriptive suffix"
+    Assert-Equal "" $pt.Detail "parser: token without suffix carries no detail"
+    $pt = Gate-Token "PACKAGE_GATE_RESULT BLOCKED_BY_UPSTREAM_TEST_FAILURE Launch smoke (window + IPC handshake + core read + logging persistence + graceful close)"
+    Assert-Equal "BLOCKED_BY_UPSTREAM_TEST_FAILURE" $pt.Token "parser: token with descriptive suffix splits correctly"
+    Assert-Equal "Launch smoke (window + IPC handshake + core read + logging persistence + graceful close)" $pt.Detail "parser: suffix preserved verbatim (spaces and parentheses intact)"
+    $pt = Gate-Token "PACKAGE_GATE_RESULT SOMETHING_ODD extra words here"
+    Assert-Equal "SOMETHING_ODD" $pt.Token "parser: unknown/malformed token surfaces lexically (never swallowed, never coerced)"
+    Assert-Equal "extra words here" $pt.Detail "parser: unknown-token detail preserved"
+    $pt = Gate-Token "PACKAGE_GATE_RESULT "
+    Assert-Equal 1 $pt.Lines.Count "parser: empty-payload token line is still detected"
+    Assert-Equal "" $pt.Token "parser: empty payload flags an empty token (never OK)"
+    $pt = Gate-Token "PACKAGE_GATE_RESULT FIRST one`nPACKAGE_GATE_RESULT SECOND two"
+    Assert-Equal 2 $pt.Lines.Count "parser: duplicate token lines are never silently merged"
+    Assert-True ($pt.Token -like "<tokens:2>") "parser: multi-line output is flagged, never treated as one verdict"
+    $pt = Gate-Token "no gate result line at all"
+    Assert-Equal 0 $pt.Lines.Count "parser: missing token line reported"
+    Assert-True ($pt.Token -like "<tokens:0>") "parser: missing token line is flagged, never OK"
+    $pt = Gate-Token ""
+    Assert-Equal 0 $pt.Lines.Count "parser: empty output reported"
+    Assert-True ($pt.Token -like "<tokens:0>") "parser: empty output is flagged, never OK"
+
+    # ------------------------------------------------------------------
     # 12. Installer retirement pins (master work order §10): the gate
     #     script must no longer accept -Installer or reference NSIS.
     # ------------------------------------------------------------------
@@ -349,7 +416,7 @@ try {
     # ------------------------------------------------------------------
     # Summary.
     # ------------------------------------------------------------------
-    Write-Host ("package gate fixtures: {0} checks, {1} failures" -f "", $failures.Count)
+    Write-Host ("package gate fixtures: {0} checks, {1} failures" -f $script:checks, $failures.Count)
     if ($failures.Count -gt 0) {
         Write-Host "FAILED ASSERTIONS:"
         foreach ($f in $failures) { Write-Host ("  - " + $f) }

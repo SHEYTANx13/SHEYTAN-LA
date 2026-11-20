@@ -8,6 +8,18 @@ the wired production shell (`internal/desktop` still constructs the Fyne
 app), `ui/gogui` is the complete migration candidate with its own test
 suite, and the flip is a deliberate follow-up gate (see "Flip procedure").
 
+## Status addendum (2026-11-21, runs 44663205295 + CodeQL 44663205241)
+
+Re-verified counts this pass: `ui/fyne` = 49 Go files (10 view files, 22
+test files) — still the wired production shell; `ui/gogui` = 33 Go files
+(14 view files, 5 test files) — the candidate, whose suite passes
+(`go test ./ui/gogui/` green on linux/amd64 go1.27.4). The production
+wire flip is again NOT done in this pass: nothing here is claimed as a
+cutover. The candidate-vs-production delta is the concrete flip scope:
+the Fyne-side interaction suites (22 test files) have no Go-Gui
+counterparts for most screens yet, and the launch smoke + packaging
+gates (Windows PE/Xvfb/fyne-package) all still pin the Fyne binary.
+
 ## Toolkit decision
 
 - Target: `github.com/go-gui-org/go-gui v0.97.0` (pinned in the root

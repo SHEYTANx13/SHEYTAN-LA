@@ -90,3 +90,7 @@ Thumbs.db
 # `go build ./...` inside the nested module produces it) - a build
 # artifact, never a source file.
 /experiments/ui-engine-poc/wails-webview/wails-webview
+
+# Session hygiene (run 44663205295): local build products of the
+# tag-matrix link experiments must never join the tracked tree.
+/sheytan-renderprobe
