@@ -152,20 +152,30 @@ function Write-ResultFile {
 }
 
 function Complete-Gate {
-    param([string]$Token, [int]$Code)
+    param([string]$Token, [int]$Code, [string]$Detail)
     $script:Result.token = $Token
     $script:Result.exitCode = $Code
+    if ($Detail) { $script:Result.detail = $Detail }
     # The ONE machine-readable outcome line: success stream, invariant
-    # token, exactly once, in every state.
-    Write-Output ("PACKAGE_GATE_RESULT {0}" -f $Token)
+    # token, exactly once, in every state. The optional DETAIL (the first
+    # failing gate name for BLOCKED_BY_UPSTREAM_TEST_FAILURE, the expected
+    # path for a missing package) is carried ON the same line so the
+    # consolidated-log collector can name the root cause in the package
+    # summary (run 44547031698 §7.5/§8: the collector aggregates these
+    # lines; a blocked package must name its first upstream failure).
+    if ($Detail) {
+        Write-Output ("PACKAGE_GATE_RESULT {0} {1}" -f $Token, $Detail)
+    } else {
+        Write-Output ("PACKAGE_GATE_RESULT {0}" -f $Token)
+    }
     Write-ResultFile
     exit $Code
 }
 
 function Fail-State {
-    param([string]$Token, [int]$Code, [string]$Message)
+    param([string]$Token, [int]$Code, [string]$Message, [string]$Detail)
     Write-Host ("::error::package gate: {0}" -f $Message)
-    Complete-Gate -Token $Token -Code $Code
+    Complete-Gate -Token $Token -Code $Code -Detail $Detail
 }
 
 try {
@@ -245,7 +255,7 @@ try {
             try { $gate = ([System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $UpstreamFailureMarker).Path)).Trim() } catch { }
             if (-not $gate) { $gate = "<empty marker>" }
             $script:Result.upstreamFailure = $gate
-            Fail-State -Token "BLOCKED_BY_UPSTREAM_TEST_FAILURE" -Code 2 -Message ("packaging was BLOCKED BY UPSTREAM TEST FAILURE — the first failing gate is '{0}' (marker '{1}'); the package was never produced by that failed run, so there is no second package defect to report" -f $gate, $UpstreamFailureMarker)
+            Fail-State -Token "BLOCKED_BY_UPSTREAM_TEST_FAILURE" -Code 2 -Detail $gate -Message ("packaging was BLOCKED BY UPSTREAM TEST FAILURE — the first failing gate is '{0}' (marker '{1}'); the package was never produced by that failed run, so there is no second package defect to report" -f $gate, $UpstreamFailureMarker)
         }
     }
 

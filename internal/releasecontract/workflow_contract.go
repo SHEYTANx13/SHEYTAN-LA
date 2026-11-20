@@ -71,8 +71,9 @@ const (
 	LinuxPackageArtifactName      = "SHEYTAN-LA-ALPHA-linux-x64-portable"
 	MacOSArm64PackageArtifactName = "SHEYTAN-LA-ALPHA-macos-arm64-portable"
 	MacOSX64PackageArtifactName   = "SHEYTAN-LA-ALPHA-macos-x64-portable"
-	AndroidArtifactName           = "SHEYTAN-LA-ALPHA-android-arm64-debug"
+	AndroidArtifactName           = "SHEYTAN-LA-ALPHA-android-arm64"
 	IOSArtifactName               = "SHEYTAN-LA-ALPHA-ios-simulator-arm64"
+	IOSDeviceArtifactName         = "SHEYTAN-LA-ALPHA-ios-device-arm64"
 )
 
 // BuildEvidenceArtifactSkeleton is the contracted build-evidence
@@ -108,10 +109,15 @@ type PlatformMatrixTarget struct {
 	Kind     string
 }
 
-// PlatformMatrixTargets is the EXACT six-entry matrix the platform-build
+// PlatformMatrixTargets is the EXACT seven-entry matrix the platform-build
 // job must carry: unique targets, unique (target, os, artifact) triples,
 // the two macOS architectures on DISTINCT runner images, and the
-// windows/linux runners pinned per the v1.11.1 runner policy.
+// windows/linux runners pinned per the v1.11.1 runner policy. The seventh
+// entry is the run 44547031698 §6.3 iOS DEVICE target: its matrix entry is
+// structural, its EXECUTION is honestly gated on the Apple signing secrets
+// (scripts/build/ios-device.sh check phase) - without them the lane records
+// BLOCKED BY MISSING APPLE SIGNING CONFIGURATION and never fabricates an
+// IPA.
 var PlatformMatrixTargets = []PlatformMatrixTarget{
 	{"windows-x64", "windows-2025", WindowsPackageArtifactName, "zip"},
 	{"linux-x64", "ubuntu-26.04", LinuxPackageArtifactName, "targz"},
@@ -119,6 +125,7 @@ var PlatformMatrixTargets = []PlatformMatrixTarget{
 	{"macos-x64", "macos-15-intel", MacOSX64PackageArtifactName, "appzip"},
 	{"android-arm64", "ubuntu-26.04", AndroidArtifactName, "apk"},
 	{"ios-simulator-arm64", "macos-15", IOSArtifactName, "simzip"},
+	{"ios-device-arm64", "macos-15", IOSDeviceArtifactName, "ipa"},
 }
 
 // PlatformBuildJobKey / CollectorJobKey are the YAML job keys of the
@@ -166,7 +173,7 @@ func ValidatePlatformMatrixStructure(workflowText string) error {
 	}
 
 	if job.Strategy == nil || job.Strategy.Matrix == nil || len(job.Strategy.Matrix.Include) == 0 {
-		return fmt.Errorf("job %q carries no strategy.matrix.include — exactly one matrix with the six contracted targets is required", PlatformBuildJobKey)
+		return fmt.Errorf("job %q carries no strategy.matrix.include — exactly one matrix with the seven contracted targets is required", PlatformBuildJobKey)
 	}
 
 	if job.Strategy.FailFast == nil {
@@ -187,7 +194,7 @@ func ValidatePlatformMatrixStructure(workflowText string) error {
 	seenTriple := map[string]int{}
 	for _, e := range include {
 		if prev, dup := seenTarget[e.Target]; dup {
-			errs = append(errs, fmt.Sprintf("matrix target %q is defined %d times — each of the six targets must appear EXACTLY once", e.Target, prev+1))
+			errs = append(errs, fmt.Sprintf("matrix target %q is defined %d times — each of the seven targets must appear EXACTLY once", e.Target, prev+1))
 		}
 		seenTarget[e.Target]++
 
@@ -224,7 +231,7 @@ func ValidatePlatformMatrixStructure(workflowText string) error {
 			}
 		}
 		if !found {
-			errs = append(errs, fmt.Sprintf("matrix target %q is missing — the six-target platform matrix is incomplete", want.Target))
+			errs = append(errs, fmt.Sprintf("matrix target %q is missing — the seven-target platform matrix is incomplete", want.Target))
 		}
 	}
 
@@ -978,7 +985,7 @@ func ValidateUploadArtifactContract(workflowText string) error {
 }
 
 // ValidatePlatformPackageUploadContract enforces the section 6.3 package
-// surface of the SIX matrix targets against the ONE workflow: the matrix
+// surface of the SEVEN matrix targets against the ONE workflow: the matrix
 // must resolve the ${{ matrix.artifact }} upload to exactly the
 // contracted portable names (windows/linux/macOSx2/android/ios), each
 // target defined once, and the windows/linux payload kinds must match
@@ -987,7 +994,7 @@ func ValidateUploadArtifactContract(workflowText string) error {
 func ValidatePlatformPackageUploadContract(workflowText string) error {
 	var errs []string
 
-	// The six matrix targets must be structurally present and each must
+	// The seven matrix targets must be structurally present and each must
 	// upload its CONTRACTED portable artifact name (no duplicate or
 	// retired naming).
 	include := platformMatrixIncludeOf(workflowText)

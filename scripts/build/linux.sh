@@ -161,10 +161,35 @@ case "$phase" in
 
   build)
     mkdir -p "dist/linux/app/${LINUX_PKG_ROOT}"
-    if ! go build -trimpath -o "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA" ./cmd/sheytan-local-agent; then
+    # Run 44547031698 §3.2: the pinned goffi v0.6.8 documents that a
+    # binary containing goffi AND other cgo code (fyne/go-gl, purego)
+    # fails to link on Linux with "unhandled relocation ... (SDYNIMPORT)"
+    # (goffi issue #72; macOS and Windows are not affected). The Linux
+    # desktop build therefore EXCLUDES the gogpu adapter through the
+    # -tags nogogpu seam (internal/desktop: the render-verification
+    # wiring publishes the honest not-wired observation) and ships the
+    # CPU/Go-Gui path. The combined gogpu link regression proof runs on
+    # the macOS/Windows lanes, where upstream documents the combination
+    # as supported.
+    if ! go build -trimpath -tags nogogpu -o "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA" ./cmd/sheytan-local-agent; then
       fail_gate "Build the full desktop application (native linux/amd64)" "the linux/amd64 desktop build failed"
     fi
     chmod +x "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA"
+    # Run 44547031698 §3.7.4/§3.7.5: the combined go-gui+gogpu link
+    # regression proof. ONE binary imports BOTH stacks (purego + goffi);
+    # under CGO_ENABLED=0 their fakecgo copies duplicate _cgo_init unless
+    # goffi's documented Workaround A (-tags nofakecgo) is applied. The
+    # probe links and runs here on every CI build so the documented
+    # configuration can never silently regress. (The CGO=1 desktop binary
+    # itself carries fyne+gogpu on the macOS/Windows lanes, where goffi
+    # documents the combination as supported.)
+    if ! CGO_ENABLED=0 go build -tags nofakecgo -o dist/linux/sheytan-renderprobe ./cmd/sheytan-renderprobe; then
+      fail_gate "Build the full desktop application (native linux/amd64)" "the combined go-gui+gogpu link probe failed (CGO_ENABLED=0 -tags nofakecgo)"
+    fi
+    if ! dist/linux/sheytan-renderprobe > dist/linux/renderprobe.log 2>&1; then
+      fail_gate "Build the full desktop application (native linux/amd64)" "the combined-link probe binary did not run cleanly (see dist/linux/renderprobe.log)"
+    fi
+    echo "combined go-gui+gogpu link probe: $(cat dist/linux/renderprobe.log | tail -1)"
     ;;
 
   build-info-probe)

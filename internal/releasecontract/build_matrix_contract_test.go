@@ -42,6 +42,7 @@ var matrixBuildIdentity = map[string][2]string{
 	"macos-x64":           {"darwin", "amd64"},
 	"android-arm64":       {"android", "arm64"},
 	"ios-simulator-arm64": {"ios", "arm64"},
+	"ios-device-arm64":    {"ios", "arm64"},
 }
 
 // loadBuildMatrix parses the real build.yml platform-build matrix for
@@ -84,7 +85,7 @@ func TestBuildMatrixNoDuplicatePlatformMapping(t *testing.T) {
 	for _, e := range include {
 		pair, known := matrixBuildIdentity[e.Target]
 		if !known {
-			t.Errorf("matrix target %q is not one of the six contracted platform identities — an unknown target recreates an uncontracted lane", e.Target)
+			t.Errorf("matrix target %q is not one of the seven contracted platform identities — an unknown target recreates an uncontracted lane", e.Target)
 			continue
 		}
 

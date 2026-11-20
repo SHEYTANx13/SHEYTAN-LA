@@ -14,6 +14,7 @@ func processAliveImpl(pid int) bool {
 
 // processStartTimeImpl is per-OS (run 44306343338 repair §4.7):
 // alive_linux.go reads /proc/<pid>/stat + /proc/stat btime;
-// alive_darwin.go returns the typed unsupported result. The Linux-only
-// /proc implementation must never be compiled under a broad Unix tag
-// again.
+// identity_darwin.go (run 44547031698 §5: the cgo libproc bridge) carries
+// the darwin implementation, identity_darwin_nocgo.go and identity_ios.go
+// the typed unsupported/contained results. The Linux-only /proc
+// implementation must never be compiled under a broad Unix tag again.

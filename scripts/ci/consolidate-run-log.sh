@@ -526,6 +526,14 @@ capture_job_log() {  # $1 = job id; on success writes $2 = log file; echoes "" o
 parse_go_test_json() {  # $1 = job index; $2 = cleaned log file; $3 = job id
   local jidx="$1" log="$2" jid="$3"
   local norm="$WORK/gotest-norm-$jid.tsv"
+  # Run 44547031698 §8.2: real GitHub Actions logs prefix EVERY line -
+  # including go test -json events - with an ISO-8601 timestamp. Strip
+  # that prefix BEFORE jq so the hosted stream parses as one JSON object
+  # per line; without this the hosted go test -json evidence was
+  # silently dropped (the fixture logs were bare JSON and never caught
+  # the gap).
+  local jlog="$WORK/gotest-json-$jid.in"
+  sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z[ \t]+//' "$log" > "$jlog" 2>>"$DIAG" || cp "$log" "$jlog"
   # Normalize the event stream to TAB records via jq (already a required
   # dependency of the jobs-metadata stage):
   #   VERD <action> <package> <test> <failedBuild>
@@ -537,7 +545,7 @@ parse_go_test_json() {  # $1 = job index; $2 = cleaned log file; $3 = job id
     elif ((.Action? // "") == "pass") or ((.Action? // "") == "fail") or ((.Action? // "") == "skip") then
       ["VERD", ((.Action // "")), ((.Package // "")), ((.Test // "")), ((.FailedBuild // false) | tostring)] | @tsv
     else empty end
-  ' "$log" > "$norm" 2>>"$DIAG" || true
+  ' "$jlog" > "$norm" 2>>"$DIAG" || true
 
   local passf="$WORK/gotest-pass-$jid.txt"
   local failf="$WORK/gotest-fail-$jid.txt"
@@ -651,6 +659,13 @@ parse_go_test_json() {  # $1 = job index; $2 = cleaned log file; $3 = job id
       next
     }
     body ~ /^\{"Action":/ { next }  # raw JSON event lines: structure, not evidence
+    # Run 44547031698 §8.2: mangled go test -json event residue (a
+    # double-serialized fragment such as ,"OutputType":"frame"} after a
+    # test name) is SERIALIZATION NOISE, never human-readable evidence -
+    # the plain-text pass refuses to attribute it.
+    index(body, "\"OutputType\"") > 0 { next }
+    index(body, ",\"Output\":") > 0 { next }
+    index(body, "{\"Time\":") > 0 { next }
     {
       trimmed = trim(body)
       if (isfileline(trimmed) && cur != "") {
@@ -746,7 +761,14 @@ classify_job_log() {  # $1 = job index; $2 = has_ann(0/1); $3 = annotations ndjs
       # go test -json event lines are STRUCTURE, not evidence text (run
       # 44457547289 3.4): the stateful pre-classifier already attributed
       # their diagnostics - a raw event object is never an error row.
+      # Run 44547031698 §8.2: the same refusal covers mangled event
+      # fragments (","OutputType":"frame"} residue, double-serialized
+      # Time/Output objects) that no longer start the line with
+      # {"Action": - serialization noise is never an error row.
       if (rest ~ /^\{"Action":/) next
+      if (index(rest, "\"OutputType\"") > 0) next
+      if (index(rest, ",\"Output\":") > 0) next
+      if (index(rest, "{\"Time\":") > 0) next
       # structured PACKAGE_GATE_RESULT (checked first; BLOCKED never becomes
       # an error row — it reports the first upstream failure instead)
       if (rest ~ /^PACKAGE_GATE_RESULT[ \t]+/) {
@@ -755,7 +777,10 @@ classify_job_log() {  # $1 = job index; $2 = has_ann(0/1); $3 = annotations ndjs
         det = body; sub(/^[ \t]*[^ \t]+[ \t]*/, "", det)
         if (tok == "OK") {
           print "OK\t" >> pkgfile
-        } else if (tok ~ /^BLOCKED_BY_UPSTREAM/) {
+        } else if (tok ~ /^BLOCKED_BY_/) {
+          # BLOCKED_BY_UPSTREAM_TEST_FAILURE and BLOCKED_BY_MISSING_APPLE_SIGNING
+          # (run 44547031698 §6.3) are BLOCKED states: the first failing gate
+          # or the required secret names ride on the line as detail.
           if (det == "") det = tok
           print "BLOCKED\t" det >> pkgfile
         } else {
@@ -946,7 +971,14 @@ if [ -s "$WORK/jobs.ndjson" ]; then
     classify_job_log "$JIDX" "$has_ann" "$annfile" "$pkgfile" "$jconc" "$WORK/gotest-pass-$jid.txt" "$WORK/gotest-fail-$jid.txt" < "$c2"
 
     case "$(normalize_job_name "$jname")" in
-      *package*) printf '%d\t%s\n' "$JIDX" "$jid" >> "$PKGJOBS";;
+      # Package-state owners: legacy "*package*" job names PLUS the
+      # platform-build matrix jobs - every "Platform build (<target>)"
+      # job owns a package gate that runs with if:always() and emits the
+      # structured PACKAGE_GATE_RESULT verdict (run 44547031698 §7.5: the
+      # top-level package verdict derives from EVERY platform gate, so a
+      # platform job whose gate never reported is a package-report gap,
+      # never a silent OK).
+      *package*|*platformbuild*) printf '%d\t%s\n' "$JIDX" "$jid" >> "$PKGJOBS";;
     esac
 
     printf '%s' "$job" | jq -c --arg l "CAPTURED" '{name: .name, status: .status, conclusion: (if .conclusion == null then null else .conclusion end), id: (.id | tostring), log_source: $l}' >> "$WORK/jobs-diag.ndjson" 2>>"$DIAG"
@@ -965,22 +997,48 @@ fi
 diag "accounting: captured=$CAPTURED missing=$MISSING skipped=$NEVER_STARTED in_progress=$IN_PROGRESS self=$SELF_IN_PROGRESS total=$TOTAL_JOBS (sum=$((CAPTURED+MISSING+NEVER_STARTED+IN_PROGRESS+SELF_IN_PROGRESS)))"
 
 # --- packaging state -------------------------------------------------------
-# BLOCKED_BY_UPSTREAM* -> package blocked, FIRST upstream failure reported.
+# BLOCKED_BY_UPSTREAM* (and BLOCKED_BY_MISSING_APPLE_SIGNING) -> package
+# blocked, FIRST upstream failure / required secret names reported.
 # A missing-package error is reported ONLY when packaging actually ran
 # (a terminal package job was captured) and produced no gate result.
-pkg_blocked=0; pkg_failed=0; pkg_ok=0; PKG_DETAIL=""
+# Run 44547031698 §7.5/§8: the top-level verdict is OK only when EVERY
+# package-state owner (every platform-build job among the captured
+# terminal jobs) reported OK - one OK lane never outvotes blocked,
+# failed or silent siblings again (the contradictory package=OK of the
+# four-blocked run).
+pkg_blocked=0; pkg_failed=0; pkg_ok_count=0; pkg_report_jobs=0; PKG_DETAIL=""
+PKG_BLOCKED_LIST=""
 for pf in "$WORK"/pkg-*.txt; do
   [ -e "$pf" ] || continue
+  [ -s "$pf" ] || continue
+  pkg_report_jobs=$((pkg_report_jobs+1))
+  job_ok=1
   while IFS= read -r pl; do
     [ -z "$pl" ] && continue
     st="${pl%%"$tabchar"*}"; dt="${pl#*"$tabchar"}"
     case "$st" in
-      BLOCKED) pkg_blocked=1; if [ -n "$dt" ] && [ -z "$PKG_DETAIL" ]; then PKG_DETAIL="$dt"; fi;;
-      FAILED) pkg_failed=1;;
-      OK) pkg_ok=1;;
+      BLOCKED) pkg_blocked=1; if [ -n "$dt" ] && [ -z "$PKG_DETAIL" ]; then PKG_DETAIL="$dt"; fi; case "$PKG_BLOCKED_LIST" in *"|$dt|") ;; *) PKG_BLOCKED_LIST="${PKG_BLOCKED_LIST:-}|$dt|";; esac; job_ok=0;;
+      FAILED) pkg_failed=1; job_ok=0;;
+      OK) ;;
+      *) pkg_failed=1; job_ok=0;;
     esac
   done < "$pf"
+  [ "$job_ok" = 1 ] && pkg_ok_count=$((pkg_ok_count+1))
 done
+pkgjobs_count=0
+[ -s "$PKGJOBS" ] && pkgjobs_count="$(wc -l < "$PKGJOBS")"
+pkg_gap=0
+if [ -s "$PKGJOBS" ]; then
+  while IFS= read -r row; do
+    [ -z "$row" ] && continue
+    pjidx="${row%%"$tabchar"*}"
+    pjjid="${row#*"$tabchar"}"
+    if [ ! -s "$WORK/pkg-$pjjid.txt" ]; then
+      pkg_gap=$((pkg_gap+1))
+      printf '%s\t0000\t999998\tplatform job captured but produced no PACKAGE_GATE_RESULT (package state unknown; top-level verdict is never OK on a report gap)\n' "$pjidx" >> "$ERRIDX"
+    fi
+  done < "$PKGJOBS"
+fi
 PKG="NOT_DETECTED"
 if [ "$pkg_blocked" = 1 ]; then
   PKG="BLOCKED"
@@ -988,9 +1046,12 @@ if [ "$pkg_blocked" = 1 ]; then
 elif [ "$pkg_failed" = 1 ]; then
   PKG="FAILED"
   diag "package: FAILED (non-OK PACKAGE_GATE_RESULT)"
-elif [ "$pkg_ok" = 1 ]; then
+elif [ "$pkg_gap" -gt 0 ]; then
+  PKG="FAILED"
+  diag "package: FAILED (${pkg_gap} captured package-state owner(s) reported no PACKAGE_GATE_RESULT - package state unknown, never OK)"
+elif [ "$pkgjobs_count" -gt 0 ] && [ "$pkg_ok_count" = "$pkgjobs_count" ] && [ "$pkg_report_jobs" = "$pkgjobs_count" ]; then
   PKG="OK"
-  diag "package: OK"
+  diag "package: OK (every ${pkgjobs_count} package-state owner reported OK)"
 elif [ -s "$PKGJOBS" ]; then
   PKG="MISSING"
   pj="$(sed -n '1p' "$PKGJOBS")"
@@ -1098,6 +1159,13 @@ now_utc="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     fi
     if [ "$PKG" = "BLOCKED" ]; then
       echo "package: BLOCKED by upstream failure (${PKG_DETAIL:-no detail})"
+      # Run 44547031698 §8.1: repeated blocked targets are reported
+      # explicitly (deduped, deterministic job order) so one root cause
+      # naming never hides its other affected platforms.
+      printf '%s\n' "$PKG_BLOCKED_LIST" | tr '|' '\n' | while IFS= read -r blocked_gate; do
+        [ -n "$blocked_gate" ] && [ "$blocked_gate" != "$PKG_DETAIL" ] && \
+          echo "package: also blocked by upstream failure (${blocked_gate})"
+      done
     fi
     [ "$HARD_ERROR" -gt 0 ] && echo "collector hard errors: $HARD_ERROR (see ERRORS and COVERAGE)"
     echo ""

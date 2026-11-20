@@ -84,3 +84,9 @@ Thumbs.db
 # source file). The Qt-host CMake build-tree ignore is retired with the
 # Qt host itself: no ui/qt tree exists.
 /ci-logs/
+
+# Run 44547031698: the Wails Web Workspace POC's local build output (the
+# binary name equals the module directory basename; a local
+# `go build ./...` inside the nested module produces it) - a build
+# artifact, never a source file.
+/experiments/ui-engine-poc/wails-webview/wails-webview

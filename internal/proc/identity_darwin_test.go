@@ -1,12 +1,17 @@
-//go:build darwin
+//go:build darwin && !ios
 
 package proc
 
 // Native darwin identity tests (run 44457547289 §1.3.a item 7): the fd
 // walk must prove the RIGHT process, refuse the wrong one, and fail
 // closed on every unprovable state. These tests exercise the real
-// __proc_info syscall path — a Linux test of shared helpers is not
-// native darwin proof.
+// libproc bridge — a Linux test of shared helpers is not native darwin
+// proof, and a CGO_ENABLED=0 build (typed-unsupported provider,
+// identity_darwin_nocgo.go) cannot claim the walk either, so the
+// native-walk assertions skip with an explicit reason there instead of
+// faking a pass (run 44547031698 §5.4: record the exact native evidence
+// class; do not treat a cross-compile or a CGO-free build as native
+// proof).
 
 import (
 	"errors"
@@ -17,6 +22,18 @@ import (
 	"testing"
 	"time"
 )
+
+// requireNativeWalk guards every assertion that needs the linked libproc
+// bridge. On the macOS runners (cgo toolchain present) this is a no-op
+// and the tests are the native proof; under CGO_ENABLED=0 the build
+// honestly reports identity as unsupported and the tests say so.
+func requireNativeWalk(t *testing.T) {
+	t.Helper()
+
+	if !darwinIdentityNative {
+		t.Skip("darwin identity walk requires the cgo libproc bridge; this CGO_ENABLED=0 build carries the typed-unsupported provider")
+	}
+}
 
 // childListenMode is the env key that turns the re-exec'd test binary
 // into a minimal listener child: it binds 127.0.0.1:0 (or the requested
@@ -100,6 +117,8 @@ func spawnListenerChild(t *testing.T) int {
 // engine scenario): the PID must be the child's, the exe path must be
 // this test binary, and the start time must be the child's — not ours.
 func TestListeningProcessAttributesForeignChildListener(t *testing.T) {
+	requireNativeWalk(t)
+
 	port := spawnListenerChild(t)
 
 	pid, exe, ok, err := ListeningProcess(port)
@@ -147,6 +166,8 @@ func TestListeningProcessAttributesForeignChildListener(t *testing.T) {
 // port is never attributed to the queried port (no port confusion, no
 // byte-order guessing game).
 func TestListeningProcessWrongPortRefused(t *testing.T) {
+	requireNativeWalk(t)
+
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -176,6 +197,8 @@ func TestListeningProcessWrongPortRefused(t *testing.T) {
 // adoptable: a dead PID must surface ErrProcessNotFound for the
 // metadata probes (never a stale identity).
 func TestListeningProcessDeadOwnerRefused(t *testing.T) {
+	requireNativeWalk(t)
+
 	cmd := exec.Command("/bin/sleep", "0")
 	if err := cmd.Start(); err != nil {
 		t.Skipf("cannot spawn a probe process: %v", err)
@@ -202,6 +225,8 @@ func TestListeningProcessDeadOwnerRefused(t *testing.T) {
 // real epoch value (monotonic sanity: our own start time is in the past
 // and stable across repeated reads — the PID-reuse defense contract).
 func TestProcessStartTimeBindsIncarnation(t *testing.T) {
+	requireNativeWalk(t)
+
 	a, err := ProcessStartTime(os.Getpid())
 	if err != nil {
 		t.Fatalf("own start time: %v", err)

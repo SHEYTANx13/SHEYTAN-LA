@@ -523,6 +523,27 @@ func stressReleaseSurface() error {
 	// Requiring a retired package here made the stress gate fail hosted
 	// runs while the workflow itself was correct (run 38569081029) — the
 	// pin tracks the CURRENT contract, never a retired transport.
+	//
+	// Run 44547031698 repair: since the CI consolidation moved the apt
+	// package list into the ONE Linux lane script
+	// (scripts/build/linux.sh, phase `prereqs`), build.yml no longer
+	// carries the package names — it dispatches the phase. Checking the
+	// WORKFLOW TEXT for the package literals made this scenario fail on
+	// every hosted Linux run whose image did not preinstall the set
+	// (the stress gate runs BEFORE the prereqs step and the literal is
+	// simply absent from build.yml). The canonical owner of the
+	// dependency list is the lane script: the package names are
+	// validated THERE, and build.yml must still dispatch the prereqs
+	// phase. The gate is not weakened — the same package set, severity
+	// and fail-closed behavior are enforced at the new canonical source.
+	linuxLane := laneTexts[1]
+
+	if !strings.Contains(w, "scripts/build/linux.sh prereqs") {
+		return fmt.Errorf(
+			"the platform-build workflow does not dispatch the Linux prerequisite phase (expected `scripts/build/linux.sh prereqs`) — the Fyne CGO build and the Xvfb smoke are uninstallable without it",
+		)
+	}
+
 	for _, linuxDep := range []string{
 		"gcc",
 		"pkg-config",
@@ -539,9 +560,9 @@ func stressReleaseSurface() error {
 		"xvfb",
 		"xauth",
 	} {
-		if !strings.Contains(w, linuxDep) {
+		if !strings.Contains(linuxLane, linuxDep) {
 			return fmt.Errorf(
-				"Linux CI dependencies missing %q — the Fyne desktop build (CGO/X11/OpenGL/Wayland) and the Xvfb smoke need the documented prerequisite set",
+				"Linux CI dependencies missing %q from scripts/build/linux.sh (the canonical prereqs phase) — the Fyne desktop build (CGO/X11/OpenGL/Wayland) and the Xvfb smoke need the documented prerequisite set",
 				linuxDep,
 			)
 		}
@@ -613,8 +634,14 @@ func stressReleaseSurface() error {
 		releasecontract.LinuxAppDirWorkflowSlot,
 		"Create Windows ZIP",
 		"Verify Windows ZIP",
-		"Upload the portable ZIP",
-		"Upload the portable archive",
+		// Run 44547031698 repair: the artifact upload was
+		// consolidated into ONE per-leg step for every matrix
+		// target ("Upload the platform package", if: always());
+		// the retired per-platform spellings ("Upload the
+		// portable ZIP" / "Upload the portable archive") no
+		// longer exist anywhere in the topology. The pin tracks
+		// the current upload contract, not retired step names.
+		"Upload the platform package",
 	}
 
 	for _, fragment := range requiredWorkflowFragments {
@@ -738,9 +765,14 @@ func stressReleaseSurface() error {
 	// run #54's "Stress + release-surface gate" step died in ~1s (cgo
 	// glfw compile: missing graphics headers), while the same suite
 	// passed 47/47 on a host that had the headers.
-	if !strings.Contains(w, "go run -tags headless ./cmd/sheytan-local-agent stress") {
+	//
+	// Run 44547031698 repair: the stress invocation lives in the Linux
+	// LANE script since the consolidation (build.yml dispatches
+	// `linux.sh stress`), so the pinned command is validated against
+	// the combined workflow + lane text, not the workflow alone.
+	if !strings.Contains(allWorkflows, "go run -tags headless ./cmd/sheytan-local-agent stress") {
 		return fmt.Errorf(
-			"audit job must run the stress gate headless (expected `go run -tags headless ./cmd/sheytan-local-agent stress`) — the audit runner has no Fyne/CGO graphics prerequisites and the desktop build would fail to compile there (run #54 root cause)",
+			"audit job must run the stress gate headless (expected `go run -tags headless ./cmd/sheytan-local-agent stress` in the consolidated topology) — the audit runner has no Fyne/CGO graphics prerequisites and the desktop build would fail to compile there (run #54 root cause)",
 		)
 	}
 
@@ -749,15 +781,24 @@ func stressReleaseSurface() error {
 	// the workflow must provision UCRT64 with the ucrt package set and
 	// the /ucrt64/bin PATH, and must not regress to the MINGW64
 	// spellings.
+	//
+	// Run 44547031698 repair: the MSYS2 provisioning (`msystem: UCRT64`,
+	// the ucrt gcc package) lives in build.yml's setup step while the
+	// CGO env/PATH wiring lives in windows.ps1 — the msys2 October 2026
+	// consolidation split the surface across BOTH files. The contract is
+	// validated against the combined Windows surface (workflow + lane),
+	// never against either file alone.
+	winSurface := w + winLane
+
 	for _, ucrt := range []string{
 		"msystem: UCRT64",
 		"mingw-w64-ucrt-x86_64-gcc",
 		"/ucrt64/bin",
 		"C:\\msys64\\ucrt64\\bin",
 	} {
-		if !strings.Contains(winLane, ucrt) {
+		if !strings.Contains(winSurface, ucrt) {
 			return fmt.Errorf(
-				"Windows CI must provision the UCRT64 toolchain (missing %q) — MINGW64 is deprecated per msys2's October 2026 announcement",
+				"Windows CI must provision the UCRT64 toolchain (missing %q across build.yml + windows.ps1) — MINGW64 is deprecated per msys2's October 2026 announcement",
 				ucrt,
 			)
 		}
@@ -768,7 +809,7 @@ func stressReleaseSurface() error {
 		"/mingw64/bin",
 		"C:\\msys64\\mingw64\\bin",
 	} {
-		if strings.Contains(winLane, mingw64) {
+		if strings.Contains(winSurface, mingw64) {
 			return fmt.Errorf(
 				"deprecated MINGW64 fragment %q still in the workflow — migrate to UCRT64 (mingw-w64-ucrt-x86_64-*, /ucrt64/bin) per msys2's October 2026 deprecation",
 				mingw64,

@@ -435,12 +435,16 @@ func TestUploadArtifactContractFixtures(t *testing.T) {
             kind: appzip
           - target: android-arm64
             os: ubuntu-26.04
-            artifact: SHEYTAN-LA-ALPHA-android-arm64-debug
+            artifact: SHEYTAN-LA-ALPHA-android-arm64
             kind: apk
           - target: ios-simulator-arm64
             os: macos-15
             artifact: SHEYTAN-LA-ALPHA-ios-simulator-arm64
             kind: simzip
+          - target: ios-device-arm64
+            os: macos-15
+            artifact: SHEYTAN-LA-ALPHA-ios-device-arm64
+            kind: ipa
     steps:
       - name: Upload the platform package
         uses: actions/upload-artifact@v7

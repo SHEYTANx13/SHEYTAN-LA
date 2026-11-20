@@ -20,14 +20,18 @@ One Go process owns the entire runtime (runs, tools, sessions, memory, approvals
 > suites are verified locally on linux/amd64 (Go 1.27.4); the CI
 > topology is a single orchestrator invoking exactly five reusable
 > platform lanes. Windows x64, Linux x64, macOS (arm64/x64), Android
-> arm64 and iOS simulator lanes build in CI but **hosted execution for
+> arm64 (debug-signed `SHEYTAN-LA-ALPHA-android-arm64.apk` via gomobile
+> build), iOS simulator and the signing-gated iOS device lanes build in
+> CI but **hosted execution for
 > this candidate is NOT RUN** — no push has been authorized; platform
 > test packages are produced only by lanes whose gates actually pass on
 > hosted runners. Portable archives only; there are no installers. The
 > desktop shell is the Fyne UI (49 files); the Go-Gui primary-shell
 > migration is authorized work, not shipped functionality. Known
 > platform limitations (ad-hoc macOS signing, simulator-only iOS,
-> debug-signed Android, no emulator/device smoke on hosted runners)
+> debug-signed Android via gomobile build, no emulator/device smoke on
+> hosted runners, iOS device IPA produced only with real Apple signing
+> configuration - BLOCKED BY MISSING APPLE SIGNING CONFIGURATION otherwise)
 > are stated by the lanes themselves, never papered over.
 
 Licensed under a conservative mixed model — Apache-2.0 for explicitly designated open components, the **Proprietary License** for SHEYTAN-specific material. The complete licensing picture lives in `LICENSE.md`.

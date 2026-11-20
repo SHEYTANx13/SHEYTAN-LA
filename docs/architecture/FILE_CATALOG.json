@@ -292,6 +292,15 @@
     "status": "active"
   },
   {
+    "path": "cmd/sheytan-renderprobe/main.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "CLI source — main.go",
+    "layer": "cli",
+    "subsystem": "cmd",
+    "status": "active"
+  },
+  {
     "path": "cmd/shtn-perf/helpers.go",
     "type": "go",
     "language": "Go",
@@ -519,6 +528,15 @@
     "status": "active"
   },
   {
+    "path": "docs/architecture/RENDERING.md",
+    "type": "doc",
+    "language": "Markdown",
+    "purpose": "Documentation — RENDERING",
+    "layer": "docs",
+    "subsystem": "docs",
+    "status": "active"
+  },
+  {
     "path": "docs/architecture/REQUIREMENTS-TRACEABILITY.md",
     "type": "doc",
     "language": "Markdown",
@@ -613,6 +631,15 @@
     "type": "data",
     "language": "JSON",
     "purpose": "Documentation — run-44205355718-ledger",
+    "layer": "docs",
+    "subsystem": "docs",
+    "status": "active"
+  },
+  {
+    "path": "docs/platforms/IOS_SIGNING.md",
+    "type": "doc",
+    "language": "Markdown",
+    "purpose": "Documentation — IOS_SIGNING",
     "layer": "docs",
     "subsystem": "docs",
     "status": "active"
@@ -2968,6 +2995,24 @@
     "status": "active"
   },
   {
+    "path": "internal/desktop/renderboot.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/desktop — The desktop application boot: core lifecycle, signals, ordered shutdown",
+    "layer": "domain",
+    "subsystem": "internal/desktop",
+    "status": "active"
+  },
+  {
+    "path": "internal/desktop/renderboot_nogogpu.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/desktop — The desktop application boot: core lifecycle, signals, ordered shutdown",
+    "layer": "domain",
+    "subsystem": "internal/desktop",
+    "status": "active"
+  },
+  {
     "path": "internal/downloader/downloader.go",
     "type": "go",
     "language": "Go",
@@ -5125,15 +5170,6 @@
     "status": "active"
   },
   {
-    "path": "internal/proc/alive_darwin.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Implementation file in internal/proc — Bounded subprocess runner: hidden windows, sanitized environment, process-group kill",
-    "layer": "domain",
-    "subsystem": "internal/proc",
-    "status": "active"
-  },
-  {
     "path": "internal/proc/alive_linux.go",
     "type": "go",
     "language": "Go",
@@ -5190,6 +5226,24 @@
     "status": "active"
   },
   {
+    "path": "internal/proc/identity_darwin_nocgo.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/proc — Bounded subprocess runner: hidden windows, sanitized environment, process-group kill",
+    "layer": "domain",
+    "subsystem": "internal/proc",
+    "status": "active"
+  },
+  {
+    "path": "internal/proc/identity_darwin_path.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/proc — Bounded subprocess runner: hidden windows, sanitized environment, process-group kill",
+    "layer": "domain",
+    "subsystem": "internal/proc",
+    "status": "active"
+  },
+  {
     "path": "internal/proc/identity_darwin_test.go",
     "type": "go",
     "language": "Go",
@@ -5198,6 +5252,15 @@
     "subsystem": "internal/proc",
     "testOnly": true,
     "status": "test"
+  },
+  {
+    "path": "internal/proc/identity_ios.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/proc — Bounded subprocess runner: hidden windows, sanitized environment, process-group kill",
+    "layer": "domain",
+    "subsystem": "internal/proc",
+    "status": "active"
   },
   {
     "path": "internal/proc/identity_linux.go",
@@ -5419,6 +5482,16 @@
   },
   {
     "path": "internal/releasecontract/build_matrix_contract_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/releasecontract (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/releasecontract",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/releasecontract/core_facade_contract_test.go",
     "type": "go",
     "language": "Go",
     "purpose": "Tests for internal/releasecontract (deterministic, table-driven where applicable)",
@@ -7958,6 +8031,16 @@
     "type": "script",
     "language": "bash",
     "purpose": "The Android lane of the platform-build matrix: pinned gomobile/gobind, fail-closed NDK, debug-signed APK/AAB packaging and structural verification",
+    "layer": "ci-tooling",
+    "subsystem": "scripts",
+    "sideEffects": "executes (writes logs/fixtures under its own contract when run)",
+    "status": "active"
+  },
+  {
+    "path": "scripts/build/ios-device.sh",
+    "type": "script",
+    "language": "bash",
+    "purpose": "CI/tooling script — ios-device.sh",
     "layer": "ci-tooling",
     "subsystem": "scripts",
     "sideEffects": "executes (writes logs/fixtures under its own contract when run)",

@@ -64,8 +64,10 @@ Native adapters: `internal/platform` carries the typed provider
 interfaces (DocumentProvider, ClipboardProvider, PermissionProvider,
 NotificationProvider, AccessibilityProvider, PowerProvider,
 LifecycleProvider, WebWorkspaceProvider) with honest unsupported
-defaults; `cmd/sheytan-mobile` is the gomobile-bindable entrypoint for
-the Android lane. The mobile adapters return typed unsupported states
+defaults; `cmd/sheytan-mobile` is the Go-Gui mobile entrypoint
+(package main + func main — the gomobile BUILD shape; run 44547031698 §6:
+`gomobile build -target=android/arm64` produces the debug-signed APK,
+`gomobile bind` builds an AAR library and is retired from the APK lane). The mobile adapters return typed unsupported states
 until go-gui's mobile services reach parity — never silent fakes.
 
 ## Test evidence

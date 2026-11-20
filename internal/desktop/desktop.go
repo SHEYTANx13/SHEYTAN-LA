@@ -32,7 +32,6 @@ import (
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/localipc"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/platform"
-	"github.com/SHEYTANx13/SHEYTAN-LA/internal/renderboot"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/startup"
 	fyneui "github.com/SHEYTANx13/SHEYTAN-LA/ui/fyne"
 )
@@ -148,7 +147,14 @@ func Run(cfg *config.Config) int {
 	// Run 44457547289 §5: the GoGPU render service verification runs in
 	// the BACKGROUND (never on the first-frame path); its observation is
 	// published to the toolkit-neutral channel the UIs read.
-	renderboot.Start()
+	//
+	// Run 44547031698 §3.2: the link graph is build-profile dependent
+	// (the gogpu/goffi stack cannot link beside other cgo code on Linux
+	// per the pinned goffi v0.6.8 documentation, goffi issue #72), so
+	// the wiring lives behind the nogogpu build seam - the default
+	// build links the render service, -tags nogogpu builds publish the
+	// honest not-wired observation instead.
+	startRenderVerification()
 	// v1.11.1: the transport KIND is logged, never the endpoint path —
 	// on Windows the pipe name embeds the account name and on Unix the
 	// path embeds the uid; neither belongs in a log file an operator

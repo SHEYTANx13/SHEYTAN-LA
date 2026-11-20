@@ -1,247 +1,180 @@
-//go:build darwin
+//go:build darwin && !ios && cgo
 
 package proc
 
-// Darwin port-owner identity (run 44457547289 §1.3.a): the REAL libproc
-// implementation this build previously refused to link. Port ownership is
-// resolved through the genuine __proc_info BSD syscall (SYS_PROC_INFO) —
-// the same mechanism the public libproc wrappers use — never through
-// shell parsing, port guessing, or partial evidence.
+// Darwin port-owner identity (run 44547031698 §5): the documented PUBLIC
+// libproc API through a small Darwin-only CGo bridge and the ACTUAL macOS
+// SDK headers.
 //
-// Every structure and constant below is transcribed from the public XNU
-// headers (bsd/sys/proc_info.h, libsyscall/wrappers/libproc/libproc.h);
-// none are hand-derived offsets. The call numbers (PROC_INFO_CALL_*,
-// xnu-7195 public header, ABI-stable) and the PIDINFO/PIDFDINFO flavor
-// spaces (PROC_PIDLISTFDS/PROC_PIDTBSDINFO/PROC_PIDPATHINFO and
-// PROC_PIDFDSOCKETINFO in xnu main) were verified against the public
-// headers at implementation time.
+// The previous implementation hand-transcribed the XNU proc_info
+// structures into Go and invoked the raw __proc_info SYS_PROC_INFO trap.
+// Cross-compilation succeeded, but the native suites failed on both macOS
+// architectures and the macOS-host iOS lane: a transcription can never be
+// proven against the real kernel ABI (the PROC_PIDTBSDINFO flavor was
+// transcribed as 3 — the real sys/proc_info.h value is 4, flavor 3 is
+// PROC_PIDTASKALLINFO — and the socket_fdinfo layout was modeled with a
+// hand-padded union tail that no header corroborates). This file removes
+// every transcribed layout: all structure knowledge lives in C, compiled
+// against libproc.h + sys/proc_info.h from the SDK, and Go receives only
+// scalar answers.
 //
-// Failure model (fail closed, run 44457547289 §1.3.a item 6):
-//   - a candidate process that exits mid-walk is skipped (ESRCH);
-//   - a candidate that cannot be inspected (EPERM/EACCES) is recorded as
-//     an inaccessible candidate — if the walk ends without a proven owner,
-//     the answer is the typed ErrPortOwnerUnknown, never a guess;
-//   - a truncated descriptor list is retried with a larger buffer and,
-//     at the cap, surfaces a typed error — never a silent partial walk;
+// Public API used (libproc.h, all stable since macOS 10.5):
+//   proc_listallpids  — every PID (documented pid-count return)
+//   proc_pidinfo      — PROC_PIDLISTFDS (fd walk, byte-count return)
+//                       PROC_PIDTBSDINFO (start identity, byte-count return)
+//   proc_pidfdinfo    — PROC_PIDFDSOCKETINFO (socket record, byte-count return)
+//   proc_pidpath      — executable image path (path-length return)
+//
+// Failure model (fail closed, work order §5.1):
+//   - a candidate that exits mid-walk is skipped (ESRCH → typed gone);
+//   - a candidate that cannot be inspected is recorded as inaccessible —
+//     if the walk ends without a proven owner the answer is the typed
+//     ErrPortOwnerUnknown, never a guess;
+//   - a truncated list is retried with a larger buffer and, at the cap,
+//     surfaces a typed error — never a silent partial walk;
+//   - every returned byte count is validated against the documented
+//     contract (kernel-ambiguous answers fail closed, never reinterpreted);
 //   - a PID alone is never identity: the caller pairs the returned PID
 //     with the resolved executable path (and, at the adoption layer,
-//     start-time/SHA proofs).
+//     start-time/SHA proofs);
+//   - no Go pointer is retained in C: buffers are passed for the duration
+//     of one call only and pinned with runtime.KeepAlive.
 
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"runtime"
+	"syscall"
+	"time"
 	"unsafe"
-
-	"golang.org/x/sys/unix"
 )
 
-// ---------------------------------------------------------------------------
-// Public XNU constants (bsd/sys/proc_info.h; call numbers from the public
-// xnu-7195 header, identical in the current kernel switch order).
-// ---------------------------------------------------------------------------
+/*
+#include <errno.h>
+#include <libproc.h>
+#include <sys/param.h>
+#include <sys/proc_info.h>
+#include <sys/socket.h>
+#include <sys/limits.h>
+#include <netinet/in.h>
+#include <string.h>
 
-// __proc_info call numbers (bsd/sys/proc_info.h, PROC_INFO_CALL_*).
-const (
-	procInfoCallListPIDs  = 0x1 // PROC_INFO_CALL_LISTPIDS
-	procInfoCallPIDInfo   = 0x2 // PROC_INFO_CALL_PIDINFO
-	procInfoCallPIDFDInfo = 0x3 // PROC_INFO_CALL_PIDFDINFO
-)
+// c_pid_t_size / c_proc_fdinfo_size / c_socket_fdinfo_size /
+// c_bsdinfo_size / c_pathinfo_size report the REAL SDK sizes — the Go
+// side never hard-codes a layout byte count.
+static int c_pid_t_size(void)          { return (int)sizeof(pid_t); }
+static int c_proc_fdinfo_size(void)    { return (int)sizeof(struct proc_fdinfo); }
+static int c_socket_fdinfo_size(void)  { return (int)sizeof(struct socket_fdinfo); }
+static int c_bsdinfo_size(void)        { return (int)sizeof(struct proc_bsdinfo); }
+static int c_pathinfo_size(void)       { return (int)PROC_PIDPATHINFO_SIZE; }
 
-// PIDINFO flavor space (bsd/sys/proc_info.h).
-const (
-	procPIDListFDs  = 1  // PROC_PIDLISTFDS
-	procPIDTBSDInfo = 3  // PROC_PIDTBSDINFO
-	procPIDPathInfo = 11 // PROC_PIDPATHINFO
-)
+// c_pid_max is the documented kernel pid space upper bound (sys/limits.h).
+static int c_pid_max(void) { return PID_MAX; }
 
-// PIDFDINFO flavor space (bsd/sys/proc_info.h).
-const (
-	procPIDFDSocketInfo = 3 // PROC_PIDFDSOCKETINFO
-)
-
-// procListPIDs type (bsd/sys/proc_info.h).
-const procAllPIDs = 1 // PROC_ALL_PIDS
-
-// Descriptor types (bsd/sys/proc_info.h, PROX_FDTYPE_*).
-const (
-	proxFDTypeVNode  = 1
-	proxFDTypeSocket = 2
-)
-
-// maxPathLen mirrors MAXPATHLEN (sys/param.h) for the PROC_PIDPATHINFO
-// buffer contract (PROC_PIDPATHINFO_SIZE = MAXPATHLEN).
-const maxPathLen = 1024
-
-// sysProcInfo is the SYS_PROC_INFO trap number (both darwin architectures
-// define the identical BSD syscall number; x/sys/unix zsysnum_darwin_*).
-var sysProcInfo = unix.SYS_PROC_INFO
-
-// ---------------------------------------------------------------------------
-// Public XNU structures (bsd/sys/proc_info.h) — field-for-field
-// transcriptions; fixed-size arrays keep the C layout exactly. Size
-// assertions below pin the transcription at init on every darwin
-// architecture so a header drift can never silently misread memory.
-// ---------------------------------------------------------------------------
-
-// procFDInfo mirrors struct proc_fdinfo.
-type procFDInfo struct {
-	FD     int32
-	FDType uint32
+// c_list_all_pids fills buf with every PID (PROC_ALL_PIDS) through the
+// documented proc_listallpids wrapper. Returns the pid COUNT (the
+// documented contract of proc_listallpids), or -1 with errno set.
+static int c_list_all_pids(void *buf, int cap_pids) {
+        return proc_listallpids(buf, cap_pids * (int)sizeof(pid_t));
 }
 
-// procBsdInfo mirrors struct proc_bsdinfo (MAXCOMLEN = 16).
-type procBsdInfo struct {
-	Flags       uint32
-	Status      uint32
-	XStatus     uint32
-	PID         uint32
-	PPID        uint32
-	UID         uint32
-	GID         uint32
-	RUID        uint32
-	RGID        uint32
-	SVUID       uint32
-	SVGID       uint32
-	Rfu1        uint32
-	Comm        [16]byte
-	Name        [32]byte
-	NFiles      uint32
-	PGrp        uint32
-	PJobC       uint32
-	TDev        uint32
-	TPGID       uint32
-	Nice        int32
-	StartTVSec  uint64
-	StartTVUsec uint64
+// c_pid_at reads one decoded pid from the list buffer.
+static int c_pid_at(const void *buf, int index) {
+        const pid_t *pids = (const pid_t *)buf;
+        return (int)pids[index];
 }
 
-// sockbufInfo mirrors struct sockbuf_info.
-type sockbufInfo struct {
-	CC    uint32
-	HiWat uint32
-	MBCnt uint32
-	MBMax uint32
-	LowAt uint32
-	Flags int16
-	Timeo int16
+// c_list_fds returns the PROC_PIDLISTFDS answer in BYTES for pid
+// (the documented proc_pidinfo byte-count contract), or -1 with errno set.
+static int c_list_fds(int pid, void *buf, int bytes) {
+        return (int)proc_pidinfo(pid, PROC_PIDLISTFDS, 0, buf, bytes);
 }
 
-// inSockInfo mirrors struct in_sockinfo. insi_fport/insi_lport are
-// stored by the kernel in NETWORK byte order; use localPortOf.
-type inSockInfo struct {
-	FPort  int32
-	LPort  int32
-	GenCnt uint64
-	Flags  uint32
-	Flow   uint32
-	VFlag  uint8
-	TTL    uint8
-	_      [2]byte
-	Rfu1   uint32
-	FAddr  [16]byte
-	LAddr  [16]byte
-	V4     [1]byte
-	_      [3]byte
-	V6     [12]byte
+// c_fd_at / c_fdtype_at decode one proc_fdinfo record from the list buffer
+// through the real header structure — no Go-side layout knowledge.
+static int c_fd_at(const void *buf, int index) {
+        const struct proc_fdinfo *fds = (const struct proc_fdinfo *)buf;
+        return (int)fds[index].proc_fd;
 }
 
-// tcpSockInfo mirrors struct tcp_sockinfo (TSI_T_NTIMERS = 8).
-type tcpSockInfo struct {
-	Ini   inSockInfo
-	State int32
-	Timer [8]int32
-	MSS   int32
-	Flags uint32
-	Rfu1  uint32
-	TP    uint64
+static int c_fdtype_at(const void *buf, int index) {
+        const struct proc_fdinfo *fds = (const struct proc_fdinfo *)buf;
+        return (int)fds[index].proc_fdtype;
 }
 
-// socketInfo mirrors struct socket_info up to and including the soi_proto
-// union. The union's largest member is tcp_sockinfo; pri_in (in_sockinfo)
-// overlays the union start for INET/INET6 sockets, so the remaining union
-// tail is carried as fixed padding.
-type socketInfo struct {
-	Stat      [136]byte // struct vinfo_stat (unused fields)
-	So        uint64
-	PCB       uint64
-	Type      int32
-	Protocol  int32
-	Family    int32
-	Options   int16
-	Linger    int16
-	State     int16
-	QLen      int16
-	IncQLen   int16
-	QLimit    int16
-	Timeo     int16
-	Error     uint16
-	OOBMark   uint32
-	Rcv       sockbufInfo
-	Snd       sockbufInfo
-	Kind      int32
-	Rfu2      uint32
-	PriIn     inSockInfo
-	ProtoTail [56]byte // union tail beyond in_sockinfo (tcp_sockinfo is 136)
+// c_prox_fdtype_socket is the real sys/proc_info.h descriptor type for
+// sockets (PROX_FDTYPE_SOCKET).
+static int c_prox_fdtype_socket(void) { return PROX_FDTYPE_SOCKET; }
+
+// c_socket_fdinfo fetches the PROC_PIDFDSOCKETINFO record for one
+// descriptor. Returns the byte count written (must equal sizeof(struct
+// socket_fdinfo)), or -1 with errno set.
+static int c_socket_fdinfo(int pid, int fd, void *buf, int bytes) {
+        return (int)proc_pidfdinfo(pid, fd, PROC_PIDFDSOCKETINFO, buf, bytes);
 }
 
-// socketFDInfo mirrors struct socket_fdinfo.
-type socketFDInfo struct {
-	PFI procFileinfo
-	PSI socketInfo
+// c_socket_fields extracts ONLY the scalar fields the listener decision
+// needs, from the REAL header structure. raw_lport is returned exactly as
+// the kernel stores it (network byte order in the low half) — the
+// Go side owns the documented ntohs convention and its regression test.
+static void c_socket_fields(const void *buf, int *family, int *protocol, int *options, int *raw_lport) {
+        const struct socket_fdinfo *sfi = (const struct socket_fdinfo *)buf;
+        *family    = (int)sfi->psi.soi_family;
+        *protocol  = (int)sfi->psi.soi_protocol;
+        *options   = (int)sfi->psi.soi_options;
+        *raw_lport = (int)sfi->psi.soi_proto.insi.insi_lport;
 }
 
-// procFileinfo mirrors struct proc_fileinfo.
-type procFileinfo struct {
-	OpenFlags  uint32
-	Status     uint32
-	Offset     int64
-	Type       int32
-	GuardFlags uint32
+// c_so_acceptconn is the real sys/socket.h value of SO_ACCEPTCONN: only a
+// socket in the listen state carries it.
+static int c_so_acceptconn(void) { return SO_ACCEPTCONN; }
+
+// c_af_inet / c_af_inet6 / c_ipproto_tcp are the real header constants
+// for the INET listener contract.
+static int c_af_inet(void)      { return AF_INET; }
+static int c_af_inet6(void)     { return AF_INET6; }
+static int c_ipproto_tcp(void)  { return IPPROTO_TCP; }
+
+// c_proc_path resolves the image path through proc_pidpath (the documented
+// public wrapper). Returns the path length (>0), 0 when the process has no
+// resolvable path, or -1 with errno set.
+static int c_proc_path(int pid, void *buf, int bytes) {
+        return (int)proc_pidpath(pid, buf, (uint32_t)bytes);
 }
 
-// Layout pins (compile-time): every transcription must occupy exactly the
-// C size on both darwin architectures before the walk is allowed to run.
-const (
-	expectedProcFDInfoSize   = 8   // PROC_PIDLISTFD_SIZE
-	expectedProcBsdInfoSize  = 136 // PROC_PIDTBSDINFO_SIZE
-	expectedInSockInfoSize   = 80
-	expectedTCPSockInfoSize  = 136
-	expectedProcFileinfoSize = 24
-	expectedSocketFDInfoSize = 400 // PROC_PIDFDSOCKETINFO_SIZE
-)
-
-func init() {
-	if unsafe.Sizeof(procFDInfo{}) != expectedProcFDInfoSize {
-		panic("proc: darwin proc_fdinfo layout drift")
-	}
-
-	if unsafe.Sizeof(procBsdInfo{}) != expectedProcBsdInfoSize {
-		panic("proc: darwin proc_bsdinfo layout drift")
-	}
-
-	if unsafe.Sizeof(inSockInfo{}) != expectedInSockInfoSize {
-		panic("proc: darwin in_sockinfo layout drift")
-	}
-
-	if unsafe.Sizeof(tcpSockInfo{}) != expectedTCPSockInfoSize {
-		panic("proc: darwin tcp_sockinfo layout drift")
-	}
-
-	if unsafe.Sizeof(procFileinfo{}) != expectedProcFileinfoSize {
-		panic("proc: darwin proc_fileinfo layout drift")
-	}
-
-	if unsafe.Sizeof(socketFDInfo{}) != expectedSocketFDInfoSize {
-		panic("proc: darwin socket_fdinfo layout drift")
-	}
+// c_start_time fetches PROC_PIDTBSDINFO and returns the absolute epoch
+// start identity (pbi_start_tvsec / pbi_start_tvusec) — the PID-reuse
+// defense values, read through the real header structure. Return codes:
+//   0  success (sec/usec filled);
+//   1  proc_pidinfo answered SHORT without a kernel errno — the Go side
+//      turns this into a typed error, never a fabricated timestamp;
+//  -1  proc_pidinfo failed with errno set (ESRCH for a dead pid,
+//      EPERM/EACCES for an uninspectable one).
+static int c_start_time(int pid, long long *sec, long long *usec) {
+        struct proc_bsdinfo bsd;
+        memset(&bsd, 0, sizeof(bsd));
+        errno = 0;
+        int n = (int)proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, (int)sizeof(bsd));
+        if (n == (int)sizeof(bsd)) {
+                *sec  = (long long)bsd.pbi_start_tvsec;
+                *usec = (long long)bsd.pbi_start_tvusec;
+                return 0;
+        }
+        if (n < 0) {
+                return -1;
+        }
+        errno = 0;
+        return 1;
 }
+*/
+import "C"
 
-// ---------------------------------------------------------------------------
-// Typed walk states (run 44457547289 §1.3.a item 6).
-// ---------------------------------------------------------------------------
+// darwinIdentityNative reports that this build links the real libproc
+// bridge (the native-walk test contract applies; the CGO_ENABLED=0 and
+// ios builds carry the typed-unsupported provider instead).
+const darwinIdentityNative = true
 
+// Typed walk states (fail-closed contract).
 var (
 	// errProcGone: the candidate process exited during inspection.
 	errProcGone = errors.New("process exited during inspection")
@@ -255,219 +188,210 @@ var (
 	errProcTruncated = errors.New("process descriptor list truncated")
 )
 
-// ---------------------------------------------------------------------------
-// __proc_info wrappers (SYS_PROC_INFO, six-argument BSD syscall).
-// ---------------------------------------------------------------------------
-
-// procInfoRaw invokes __proc_info(callnum, pid, flavor, arg, buffer, size)
-// and returns the byte count written by the kernel.
-func procInfoRaw(callnum int, pid int32, flavor uint32, arg uint64, buf []byte) (int, error) {
-	var bufPtr uintptr
-
-	if len(buf) > 0 {
-		bufPtr = uintptr(unsafe.Pointer(&buf[0]))
-	}
-
-	r1, _, errno := unix.Syscall6(
-		uintptr(sysProcInfo),
-		uintptr(callnum),
-		uintptr(pid),
-		uintptr(flavor),
-		uintptr(arg),
-		bufPtr,
-		uintptr(len(buf)),
-	)
-
-	if errno != 0 {
-		return 0, errno
-	}
-
-	return int(int32(r1)), nil
-}
-
-// procInfoPIDInfo is proc_pidinfo(pid, flavor, arg, buffer, buffersize).
-func procInfoPIDInfo(pid int32, flavor uint32, arg uint64, buf []byte) (int, error) {
-	return procInfoRaw(procInfoCallPIDInfo, pid, flavor, arg, buf)
-}
-
-// procInfoPIDFDInfo is proc_pidfdinfo(pid, flavor, fd, buffer, buffersize).
-func procInfoPIDFDInfo(pid int32, flavor uint32, fd int32, buf []byte) (int, error) {
-	return procInfoRaw(procInfoCallPIDFDInfo, pid, flavor, uint64(uint32(fd)), buf)
-}
-
-// mapProcInfoErrno translates the __proc_info errno contract into the
-// typed walk states. ESRCH means the candidate died mid-walk; EPERM and
-// EACCES mean this caller may not inspect the candidate.
+// mapProcInfoErrno translates the libproc errno contract into the typed
+// walk states. ESRCH means the candidate died mid-walk; EPERM and EACCES
+// mean this caller may not inspect the candidate.
+// The errno constants come from the stdlib syscall package (typed
+// syscall.Errno): a bare C.ESRCH is an UNTYPED cgo constant and would
+// never match the syscall.Errno cgo returns inside errors.Is.
 func mapProcInfoErrno(err error) error {
 	switch {
-	case errors.Is(err, unix.ESRCH):
+	case errors.Is(err, syscall.ESRCH):
 		return errProcGone
-	case errors.Is(err, unix.EPERM), errors.Is(err, unix.EACCES):
+	case errors.Is(err, syscall.EPERM), errors.Is(err, syscall.EACCES):
 		return errProcAccessDenied
 	default:
 		return err
 	}
 }
 
-// structBytes reinterprets a fixed C-layout structure as its exact byte
-// image for the __proc_info buffer contract.
-func structBytes[T any](p *T) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(p)), int(unsafe.Sizeof(*p)))
-}
-
-// ---------------------------------------------------------------------------
-// Port-owner walk.
-// ---------------------------------------------------------------------------
-
-// listAllPIDs returns every PID the kernel reports (PROC_ALL_PIDS). The
-// buffer grows until the kernel answer no longer fills it; a walk that
-// would exceed the cap fails typed instead of running partially.
+// listAllPIDs returns every PID the kernel reports (PROC_ALL_PIDS) via
+// proc_listallpids. The buffer grows until the documented pid-count answer
+// no longer fills it; every returned pid is validated, and an answer that
+// cannot fit the documented contract fails typed instead of guessing.
 func listAllPIDs() ([]int32, error) {
-	const initialBytes = 8192
-	const maxBytes = 16 << 20 // 16 MiB — far beyond any real process table
+	const initialPIDs = 8192
+	const maxPIDs = 1 << 21 // 2,097,152 pids — far beyond any real process table
 
-	size := initialBytes
+	pidSize := int(C.c_pid_t_size())
+	capPIDs := initialPIDs
 
 	for {
-		buf := make([]byte, size)
+		buf := make([]byte, capPIDs*pidSize)
 
-		n, err := procInfoRaw(procInfoCallListPIDs, procAllPIDs, 0, 0, buf)
+		n, err := C.c_list_all_pids(unsafe.Pointer(&buf[0]), C.int(capPIDs))
+		runtime.KeepAlive(buf)
+
 		if err != nil {
 			return nil, mapProcInfoErrno(err)
 		}
 
-		if n < 0 || n%int(unsafe.Sizeof(int32(0))) != 0 {
-			return nil, fmt.Errorf("%w: kernel returned %d bytes for the PID list", errProcTruncated, n)
+		if n < 0 || int(n) > capPIDs {
+			return nil, fmt.Errorf("%w: proc_listallpids answered %d against a %d-pid buffer — the kernel answer does not fit the documented pid-count contract", errProcTruncated, n, capPIDs)
 		}
 
-		if n < size {
-			pids := make([]int32, n/int(unsafe.Sizeof(int32(0))))
+		if int(n) < capPIDs {
+			pids := make([]int32, 0, int(n))
+			pidMax := int(C.c_pid_max())
 
-			for i := range pids {
-				pids[i] = *(*int32)(unsafe.Pointer(&buf[i*int(unsafe.Sizeof(int32(0)))]))
+			for i := 0; i < int(n); i++ {
+				p := int(C.c_pid_at(unsafe.Pointer(&buf[0]), C.int(i)))
+				runtime.KeepAlive(buf)
+
+				// Semantic validation: a pid outside [1, PID_MAX] means
+				// the buffer decode is wrong — fail closed, never guess.
+				if p <= 0 || p > pidMax {
+					return nil, fmt.Errorf("%w: proc_listallpids returned pid %d at index %d — outside the documented pid space", errProcTruncated, p, i)
+				}
+
+				pids = append(pids, int32(p))
 			}
 
 			return pids, nil
 		}
 
-		if size >= maxBytes {
-			return nil, fmt.Errorf("%w: PID list exceeds the %d byte walk cap", errProcTruncated, maxBytes)
+		if capPIDs >= maxPIDs {
+			return nil, fmt.Errorf("%w: the pid list exceeds the %d-pid walk cap", errProcTruncated, maxPIDs)
 		}
 
-		size *= 2
+		capPIDs *= 2
 	}
 }
 
 // listProcSocketFDs returns the socket-type descriptor numbers of pid via
-// PROC_PIDLISTFDS. Truncation grows the buffer; the cap fails typed.
+// PROC_PIDLISTFDS. proc_pidinfo answers in BYTES (the documented
+// contract); truncation grows the buffer and the cap fails typed.
 func listProcSocketFDs(pid int32) ([]int32, error) {
 	const initialBytes = 4096
 	const maxBytes = 8 << 20 // 8 MiB of proc_fdinfo records
+
+	recSize := int(C.c_proc_fdinfo_size())
+	fdSocket := int(C.c_prox_fdtype_socket())
 
 	size := initialBytes
 
 	for {
 		buf := make([]byte, size)
 
-		n, err := procInfoPIDInfo(pid, procPIDListFDs, 0, buf)
+		n, err := C.c_list_fds(C.int(pid), unsafe.Pointer(&buf[0]), C.int(size))
+		runtime.KeepAlive(buf)
+
 		if err != nil {
 			return nil, mapProcInfoErrno(err)
 		}
 
-		if n < 0 || n%int(unsafe.Sizeof(procFDInfo{})) != 0 {
-			return nil, fmt.Errorf("%w: kernel returned %d bytes for the fd list of pid %d", errProcTruncated, n, pid)
+		if n < 0 || int(n) > size {
+			return nil, fmt.Errorf("%w: PROC_PIDLISTFDS for pid %d returned %d bytes against a %d-byte buffer", errProcTruncated, pid, n, size)
 		}
 
-		full := n == size
+		full := int(n) == size
 
-		count := n / int(unsafe.Sizeof(procFDInfo{}))
-		infos := make([]procFDInfo, count)
+		if int(n)%recSize != 0 {
+			return nil, fmt.Errorf("%w: PROC_PIDLISTFDS for pid %d returned %d bytes — not a whole proc_fdinfo record count", errProcTruncated, pid, n)
+		}
+
+		count := int(n) / recSize
+		var sockets []int32
 
 		for i := 0; i < count; i++ {
-			infos[i] = *(*procFDInfo)(unsafe.Pointer(&buf[i*int(unsafe.Sizeof(procFDInfo{}))]))
+			fd := int(C.c_fd_at(unsafe.Pointer(&buf[0]), C.int(i)))
+			fdtype := int(C.c_fdtype_at(unsafe.Pointer(&buf[0]), C.int(i)))
+			runtime.KeepAlive(buf)
+
+			// Semantic validation: descriptors and fd types live in the
+			// documented kernel spaces; anything else means the record
+			// decode is wrong — fail closed.
+			if fd < 0 {
+				return nil, fmt.Errorf("%w: PROC_PIDLISTFDS for pid %d returned descriptor %d at index %d", errProcTruncated, pid, fd, i)
+			}
+
+			if fdtype == fdSocket {
+				sockets = append(sockets, int32(fd))
+			}
 		}
 
 		if !full {
-			var sockets []int32
-
-			for _, fi := range infos {
-				if fi.FDType == proxFDTypeSocket {
-					sockets = append(sockets, fi.FD)
-				}
-			}
-
 			return sockets, nil
 		}
 
 		if size >= maxBytes {
-			return nil, fmt.Errorf("%w: fd list of pid %d exceeds the %d byte walk cap", errProcTruncated, pid, maxBytes)
+			return nil, fmt.Errorf("%w: the fd list of pid %d exceeds the %d-byte walk cap", errProcTruncated, pid, maxBytes)
 		}
 
 		size *= 2
 	}
 }
 
-// readSocketFDInfo reads PROC_PIDFDSOCKETINFO for one descriptor. A short
-// answer is a typed error, never a partially-read structure.
-func readSocketFDInfo(pid int32, fd int32) (socketFDInfo, error) {
-	var sfi socketFDInfo
+// socketRecord is the scalar projection of ONE PROC_PIDFDSOCKETINFO record
+// the listener decision needs. The struct layout itself never leaves C.
+type socketRecord struct {
+	Family   int32
+	Protocol int32
+	Options  int32
+	RawLPort int32 // kernel network byte order in the low half
+}
 
-	want := int(unsafe.Sizeof(sfi))
+// readSocketFDInfo reads PROC_PIDFDSOCKETINFO for one descriptor through
+// proc_pidfdinfo. A short or over-long answer is a typed error — never a
+// partially-read record.
+func readSocketFDInfo(pid int32, fd int32) (socketRecord, error) {
+	want := int(C.c_socket_fdinfo_size())
+	buf := make([]byte, want)
 
-	n, err := procInfoPIDFDInfo(pid, procPIDFDSocketInfo, fd, unsafe.Slice((*byte)(unsafe.Pointer(&sfi)), want))
+	n, err := C.c_socket_fdinfo(C.int(pid), C.int(fd), unsafe.Pointer(&buf[0]), C.int(want))
+	runtime.KeepAlive(buf)
+
 	if err != nil {
-		return socketFDInfo{}, mapProcInfoErrno(err)
+		return socketRecord{}, mapProcInfoErrno(err)
 	}
 
-	if n != want {
-		return socketFDInfo{}, fmt.Errorf("%w: PROC_PIDFDSOCKETINFO for pid %d fd %d returned %d of %d bytes",
+	if int(n) != want {
+		return socketRecord{}, fmt.Errorf("%w: PROC_PIDFDSOCKETINFO for pid %d fd %d returned %d of %d bytes",
 			errProcTruncated, pid, fd, n, want)
 	}
 
-	return sfi, nil
-}
+	var (
+		family   C.int
+		protocol C.int
+		options  C.int
+		rawLPort C.int
+	)
 
-// localPortOf decodes insi_lport. The kernel stores the 16-bit port in
-// NETWORK byte order (the convention every public PROC_PIDFDSOCKETINFO
-// consumer applies via ntohs); both darwin architectures are
-// little-endian, so the byte-swapped low half is the host port.
-func localPortOf(raw int32) int {
-	v := uint32(raw)
+	C.c_socket_fields(unsafe.Pointer(&buf[0]), &family, &protocol, &options, &rawLPort)
+	runtime.KeepAlive(buf)
 
-	if v > 0xFFFF {
-		// A well-formed entry never sets the upper half; treat it as
-		// unusable evidence rather than guessing.
-		return 0
-	}
-
-	return int(v>>8&0xFF | v<<8&0xFF00)
+	return socketRecord{
+		Family:   int32(family),
+		Protocol: int32(protocol),
+		Options:  int32(options),
+		RawLPort: int32(rawLPort),
+	}, nil
 }
 
 // isTCPListenerOn reports whether the socket record is an INET/INET6 TCP
-// socket in the listening state (SO_ACCEPTCONN) bound to the target port.
-func isTCPListenerOn(sfi *socketFDInfo, port int) bool {
-	if sfi.PSI.Family != unix.AF_INET && sfi.PSI.Family != unix.AF_INET6 {
+// socket in the listening state (SO_ACCEPTCONN, the real sys/socket.h
+// value) bound to the target port.
+func isTCPListenerOn(rec *socketRecord, port int) bool {
+	if rec.Family != int32(C.c_af_inet()) && rec.Family != int32(C.c_af_inet6()) {
 		return false
 	}
 
-	if sfi.PSI.Protocol != unix.IPPROTO_TCP {
+	if rec.Protocol != int32(C.c_ipproto_tcp()) {
 		return false
 	}
 
-	// SO_ACCEPTCONN = 0x0002 on darwin: only a socket in the listen
-	// state carries it.
-	if sfi.PSI.Options&0x0002 == 0 {
+	if rec.Options&int32(C.c_so_acceptconn()) == 0 {
 		return false
 	}
 
-	return localPortOf(sfi.PSI.PriIn.LPort) == port
+	return localPortOf(rec.RawLPort) == port
 }
 
 // listeningProcessImpl resolves the PID owning a listening TCP socket on
 // 127.0.0.1:port (loopback contract of ListeningProcess) through the real
 // Darwin fd walk: PROC_ALL_PIDS -> PROC_PIDLISTFDS -> PROC_PIDFDSOCKETINFO,
-// then PROC_PIDPATHINFO for the executable identity. See the file header
-// for the fail-closed states.
+// then proc_pidpath for the executable identity. See the file header for
+// the fail-closed states.
 func listeningProcessImpl(port int) (int, string, bool, error) {
 	pids, err := listAllPIDs()
 	if err != nil {
@@ -499,7 +423,7 @@ func listeningProcessImpl(port int) (int, string, bool, error) {
 
 	fdLoop:
 		for _, fd := range fds {
-			sfi, serr := readSocketFDInfo(pid, fd)
+			rec, serr := readSocketFDInfo(pid, fd)
 			if serr != nil {
 				switch {
 				case errors.Is(serr, errProcGone):
@@ -514,7 +438,7 @@ func listeningProcessImpl(port int) (int, string, bool, error) {
 				}
 			}
 
-			if !isTCPListenerOn(&sfi, port) {
+			if !isTCPListenerOn(&rec, port) {
 				continue
 			}
 
@@ -545,48 +469,77 @@ func listeningProcessImpl(port int) (int, string, bool, error) {
 	return 0, "", false, nil
 }
 
-// processExePathImpl resolves the image path via PROC_PIDPATHINFO (the
-// mechanism proc_pidpath uses). Typed results: ErrProcessNotFound for a
-// vanished PID, errProcAccessDenied for an uninspectable one.
+// processExePathImpl resolves the image path via the documented public
+// proc_pidpath API. Typed results: ErrProcessNotFound for a vanished or
+// path-less pid, errProcAccessDenied for an uninspectable one.
 func processExePathImpl(pid int) (string, error) {
 	if pid <= 0 {
 		return "", ErrProcessNotFound
 	}
 
-	buf := make([]byte, maxPathLen)
+	pathSize := int(C.c_pathinfo_size())
+	buf := make([]byte, pathSize)
 
-	n, err := procInfoPIDInfo(int32(pid), procPIDPathInfo, 0, buf)
+	n, err := C.c_proc_path(C.int(pid), unsafe.Pointer(&buf[0]), C.int(pathSize))
+	runtime.KeepAlive(buf)
+
 	if err != nil {
 		return "", mapProcInfoErrno(err)
 	}
 
-	// The kernel writes a NUL-terminated path; the byte count covers it.
-	end := n
-	if end > len(buf) {
-		end = len(buf)
+	if n < 0 {
+		// proc_pidpath failed without a mapped errno class — fail closed.
+		return "", fmt.Errorf("proc_pidpath for pid %d failed with no typed errno class", pid)
 	}
 
-	for end > 0 && buf[end-1] == 0 {
-		end--
+	if n == 0 {
+		// No resolvable image path: identity is NOT provable.
+		return "", ErrProcessNotFound
 	}
 
-	if end == 0 {
-		return "", fmt.Errorf("%w: pid %d image path is empty", ErrProcessMetadataUnsupported, pid)
+	end := int(n)
+	if end > pathSize {
+		end = pathSize
 	}
 
 	return string(buf[:end]), nil
 }
 
-// sameExecutableImpl on darwin resolves symlinks and compares paths
-// (darwin is case-sensitive, unlike the Windows implementation).
-func sameExecutableImpl(a, b string) bool {
-	if ra, err := filepath.EvalSymlinks(a); err == nil {
-		a = ra
+// processStartTimeImpl on darwin: PROC_PIDTBSDINFO (proc_pidinfo) carries
+// pbi_start_tvsec/pbi_start_tvusec — the absolute epoch start time of the
+// process incarnation (run 44457547289 §1.3.a item 2: PID-reuse defense
+// needs the real start identity, not a name). The answer is typed:
+//   - a vanished PID is ErrProcessNotFound;
+//   - an uninspectable PID is a typed denied error — callers see "unknown",
+//     never a fabricated timestamp (run 44306343338 repair §4.7).
+func processStartTimeImpl(pid int) (time.Time, error) {
+	if pid <= 0 {
+		return time.Time{}, ErrProcessNotFound
 	}
 
-	if rb, err := filepath.EvalSymlinks(b); err == nil {
-		b = rb
+	var (
+		sec  C.longlong
+		usec C.longlong
+	)
+
+	ret, err := C.c_start_time(C.int(pid), &sec, &usec)
+	if err != nil {
+		// Map the RAW kernel errno first — the typed sentinels are only
+		// produced by mapProcInfoErrno, never by the cgo call itself.
+		switch mapped := mapProcInfoErrno(err); {
+		case errors.Is(mapped, errProcGone):
+			return time.Time{}, ErrProcessNotFound
+		case errors.Is(mapped, errProcAccessDenied):
+			return time.Time{}, fmt.Errorf("%w (pid %d): %v", ErrProcessMetadataUnsupported, pid, mapped)
+		default:
+			return time.Time{}, fmt.Errorf("darwin start-time probe for pid %d failed: %v", pid, mapped)
+		}
 	}
 
-	return a == b
+	if ret != 0 {
+		// A short PROC_PIDTBSDINFO answer carries NO start identity.
+		return time.Time{}, fmt.Errorf("darwin start-time probe for pid %d returned %d of %d bytes", pid, ret, int(C.c_bsdinfo_size()))
+	}
+
+	return time.Unix(int64(sec), int64(usec)*1_000).UTC(), nil
 }

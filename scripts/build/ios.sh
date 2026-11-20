@@ -131,7 +131,12 @@ case "$phase" in
       fail_gate "Bundle the simulator .app as the portable zip (SIMULATOR-ONLY)" "ditto failed for the simulator .app"
     fi
     test -s "$ZIP" || fail_gate "Bundle the simulator .app as the portable zip (SIMULATOR-ONLY)" "the simulator zip is missing or empty"
-    echo "simulator zip created (SIMULATOR-ONLY qualification)"
+    # Run 44547031698 §7.5: the shared upload step globs the dist ROOT
+    # (dist/SHEYTAN-LA-ALPHA-*) - stage the verified package there so the
+    # artifact upload matches exactly this leg's package (the dist/ios/
+    # original stays as the verified source of truth).
+    cp "$ZIP" "dist/SHEYTAN-LA-ALPHA-ios-simulator-arm64.zip"
+    echo "simulator zip created (SIMULATOR-ONLY qualification); staged at dist/ root for the artifact upload"
     ;;
 
   verify-zip)

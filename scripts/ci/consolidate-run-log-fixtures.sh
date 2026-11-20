@@ -39,7 +39,7 @@
 #   N. machine-readable run-diagnostics.json stays in sync (jq-valid)
 #   O. workflow shape: build.yml (the ONE consolidated platform-build
 #      workflow) uploads the errors/warnings-only diagnostic exactly once,
-#      defines the SIX matrix targets exactly once each, wires the
+#      defines the SEVEN matrix targets exactly once each, wires the
 #      collector to the matrix job, and the retired all-logs/package
 #      names and reusable-lane invocations never reappear
 #
@@ -543,10 +543,10 @@ grep -q 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9' "$wor
 [ "$(grep -c 'path: run-diagnostics.json' "$workflow")" = "1" ] || yml_ok=0
 grep -q -- '--json-out run-diagnostics.json' "$workflow" || yml_ok=0
 grep -q -- '--out SHEYTAN-LA-errors-warnings.txt' "$workflow" || yml_ok=0
-# Consolidation topology: each of the SIX matrix targets defined EXACTLY
+# Consolidation topology: each of the SEVEN matrix targets defined EXACTLY
 # ONCE in the single matrix.include list (the successor of the five
 # reusable-lane invocations).
-for target in windows-x64 linux-x64 macos-arm64 macos-x64 android-arm64 ios-simulator-arm64; do
+for target in windows-x64 linux-x64 macos-arm64 macos-x64 android-arm64 ios-simulator-arm64 ios-device-arm64; do
   [ "$(grep -c "^[[:space:]]*- target: ${target}$" "$workflow")" = "1" ] || yml_ok=0
 done
 [ "$(grep -c '^      fail-fast: false$' "$workflow")" = "1" ] || yml_ok=0
@@ -575,7 +575,7 @@ grep -q 'dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz' "$workflow" || yml_ok=
 grep -q 'GITHUB_JOB' "$collector" || grep -q 'CONSOLIDATE_SELF_JOB_NAME' "$collector" || yml_ok=0
 grep -q 'normalize_job_name' "$collector" || yml_ok=0
 if [ "$yml_ok" = 1 ]; then
-  ok "clause O: build.yml uploads the errors/warnings-only diagnostic exactly once; SIX matrix targets defined once each; collector wired; retired names absent; self-detection wired"
+  ok "clause O: build.yml uploads the errors/warnings-only diagnostic exactly once; SEVEN matrix targets defined once each; collector wired; retired names absent; self-detection wired"
 else
   bad "workflow shape contract"
 fi
@@ -613,8 +613,189 @@ else
   bad "self-display extraction source contract"
 fi
 
-printf 'fixtures: %d pass / %d fail\n' "$pass" "$fail"
-[ "$fail" = 0 ]
+# 28. run 44547031698 §8.5: the package=OK contradiction is impossible ------
+# Five platform-build matrix jobs: four blocked by upstream failures, one
+# OK (the Windows lane of the actual run). The top-level package verdict
+# MUST be BLOCKED with the first upstream failure named - never OK.
+f="$work/case28"; mkdir -p "$f"
+ids=($(mk_jobs "$f" \
+  "Platform build (macos-arm64)|completed|failure" \
+  "Platform build (macos-x64)|completed|failure" \
+  "Platform build (ios-simulator-arm64)|completed|failure" \
+  "Platform build (linux-x64)|completed|failure" \
+  "Platform build (windows-x64)|completed|success"
+))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+2026-11-18T10:01:01.0000000Z PACKAGE_GATE_RESULT BLOCKED_BY_UPSTREAM_TEST_FAILURE Headless core suite (darwin, macos-arm64)
+EOF
+mk_joblog "$f" "${ids[1]}" <<'EOF'
+2026-11-18T10:01:02.0000000Z PACKAGE_GATE_RESULT BLOCKED_BY_UPSTREAM_TEST_FAILURE Headless core suite (darwin, macos-x64)
+EOF
+mk_joblog "$f" "${ids[2]}" <<'EOF'
+2026-11-18T10:01:03.0000000Z PACKAGE_GATE_RESULT BLOCKED_BY_UPSTREAM_TEST_FAILURE Headless core suite (iOS lane host)
+EOF
+mk_joblog "$f" "${ids[3]}" <<'EOF'
+2026-11-18T10:01:04.0000000Z PACKAGE_GATE_RESULT BLOCKED_BY_UPSTREAM_TEST_FAILURE Stress + release-surface gate (headless)
+EOF
+mk_joblog "$f" "${ids[4]}" <<'EOF'
+2026-11-18T10:01:05.0000000Z PACKAGE_GATE_RESULT OK dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-errors-warnings.txt"
+if [ $rc -eq 0 ] && grep -q "package: BLOCKED" "$out" \
+  && ! grep -q "package: OK" "$out" \
+  && grep -q "Stress + release-surface gate (headless)" "$out"; then
+  ok "run 44547031698 §8.5: four blocked platform gates outvote one OK lane - the package verdict is BLOCKED, never OK"
+else
+  bad "package=OK contradiction case (rc=$rc)"
+fi
+
+# 29. run 44547031698 §8.5: a captured platform job with NO PACKAGE_GATE_RESULT
+# is a report gap - the verdict can never be OK on unknown package state ------
+f="$work/case29"; mkdir -p "$f"
+ids=($(mk_jobs "$f" \
+  "Platform build (linux-x64)|completed|success" \
+  "Platform build (windows-x64)|completed|success"
+))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+2026-11-18T10:02:00.0000000Z PACKAGE_GATE_RESULT OK dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz
+EOF
+mk_joblog "$f" "${ids[1]}" <<'EOF'
+2026-11-18T10:02:01.0000000Z some step output with no gate line at all
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-errors-warnings.txt"
+if [ $rc -eq 0 ] && ! grep -q "package: OK" "$out" \
+  && grep -q "package: FAILED" "$out" \
+  && grep -q "produced no PACKAGE_GATE_RESULT" "$out"; then
+  ok "run 44547031698 §8.5: a silent platform job fails the package verdict (never OK on unknown state)"
+else
+  bad "silent package owner case (rc=$rc)"
+fi
+
+# 30. run 44547031698 §8.5: every producer passed but the package is missing -
+# a real package error (PACKAGE_MISSING), not a blocked state -----------------
+f="$work/case30"; mkdir -p "$f"
+ids=($(mk_jobs "$f" "Platform build (linux-x64)|completed|success"))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+2026-11-18T10:03:00.0000000Z PACKAGE_GATE_RESULT PACKAGE_MISSING dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-errors-warnings.txt"
+if [ $rc -eq 0 ] && grep -q "PACKAGE_MISSING" "$out" \
+  && ! grep -q "package: BLOCKED" "$out"; then
+  ok "run 44547031698 §8.5: PACKAGE_MISSING after producers passed is a real package error"
+else
+  bad "missing-package-after-producers case (rc=$rc)"
+fi
+
+# 31. run 44547031698 §8.5: mangled go test -json residue (,"OutputType":"frame"})
+# after test names never reaches the human-readable report --------------------
+f="$work/case31"; mkdir -p "$f"
+ids=($(mk_jobs "$f" "Headless core suite (darwin, macos-arm64)|completed|failure"))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+2026-11-18T10:04:00.0000000Z {"Time":"2026-11-18T10:03:59.9Z","Action":"output","Package":"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc","Test":"TestListeningProcessAttributesForeignChildListener","Output":"    identity_darwin_test.go:124: child start time must resolve natively: darwin start-time probe failed\n"}
+2026-11-18T10:04:00.1000000Z {"Time":"2026-11-18T10:04:00.0Z","Action":"fail","Package":"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc","Test":"TestListeningProcessAttributesForeignChildListener","Elapsed":0.01}
+2026-11-18T10:04:00.2000000Z {"Time":"2026-11-18T10:04:00.1Z","Action":"output","Package":"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc","Test":"TestListeningProcessWrongPortRefused","Output":"--- FAIL: TestListeningProcessWrongPortRefused (0.00s)\n","OutputType":"frame"}
+2026-11-18T10:04:00.3000000Z     identity_darwin_test.go:170: ","OutputType":"frame"}
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-errors-warnings.txt"
+if [ $rc -eq 0 ] && grep -q "TestListeningProcessAttributesForeignChildListener" "$out" \
+  && ! grep -q '"OutputType"' "$out" \
+  && ! grep -q '"Output"' "$out" \
+  && ! grep -q '"Time"' "$out"; then
+  ok "run 44547031698 §8.5: JSON event residue (OutputType/frame) is never leaked into the report"
+else
+  bad "json fragment residue case (rc=$rc)"
+fi
+
+# 32. run 44547031698 §8.5: the five Darwin process-identity failures keep
+# per-test provenance (one root cause, five named records) --------------------
+f="$work/case32"; mkdir -p "$f"
+ids=($(mk_jobs "$f" "Headless core suite (darwin, macos-arm64)|completed|failure"))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+2026-11-18T10:05:00.0000000Z {"Time":"2026-11-18T10:04:59.0Z","Action":"run","Package":"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc","Test":"TestListeningProcessAttributesForeignChildListener"}
+2026-11-18T10:05:00.1000000Z {"Time":"2026-11-18T10:04:59.1Z","Action":"output","Package":"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc","Test":"TestListeningProcessAttributesForeignChildListener","Output":"    identity_darwin_test.go:131: child start time must resolve natively: darwin start-time probe for pid 4242 failed\n"}
+2026-11-18T10:05:00.2000000Z {"Time":"2026-11-18T10:04:59.2Z","Action":"fail","Package":"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc","Test":"TestListeningProcessAttributesForeignChildListener","Elapsed":0.2}
+2026-11-18T10:05:01.0000000Z {"Time":"2026-11-18T10:05:00.9Z","Action":"output","Package":"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm","Test":"TestAdoptionAcceptsManagedEngine","Output":"    lifecycle_v136_test.go:410: the managed engine binary serving the port must be adoptable\n"}
+2026-11-18T10:05:01.1000000Z {"Time":"2026-11-18T10:05:01.0Z","Action":"fail","Package":"github.com/SHEYTANx13/SHEYTAN-LA/internal/llm","Test":"TestAdoptionAcceptsManagedEngine","Elapsed":5.0}
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-errors-warnings.txt"
+if [ $rc -eq 0 ] \
+  && grep -q "\[test github.com/SHEYTANx13/SHEYTAN-LA/internal/proc.TestListeningProcessAttributesForeignChildListener\]" "$out" \
+  && grep -q "\[test github.com/SHEYTANx13/SHEYTAN-LA/internal/llm.TestAdoptionAcceptsManagedEngine\]" "$out" \
+  && grep -q "identity_darwin_test.go:131" "$out"; then
+  ok "run 44547031698 §8.5: failing-test diagnostics carry [test pkg.Test] provenance with exact source lines"
+else
+  bad "darwin five-test provenance case (rc=$rc)"
+fi
+
+# 33. run 44547031698 §8.5: bash ERR-trap diagnostics keep source location ----
+f="$work/case33"; mkdir -p "$f"
+ids=($(mk_jobs "$f" "Platform build (linux-x64)|completed|failure"))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+2026-11-18T10:06:00.0000000Z ::error::scripts/build/linux.sh: line 164: go build: exit code 1
+2026-11-18T10:06:00.1000000Z ::error::ERR trap: BASH_SOURCE=scripts/build/linux.sh LINENO=164 BASH_COMMAND=go build -trimpath -o dist/linux/app/SHEYTAN-LA ./cmd/sheytan-local-agent EXIT=1
+2026-11-18T10:06:00.2000000Z PACKAGE_GATE_RESULT BLOCKED_BY_UPSTREAM_TEST_FAILURE Build the full desktop application (native linux/amd64)
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-errors-warnings.txt"
+if [ $rc -eq 0 ] && grep -q "BASH_SOURCE=scripts/build/linux.sh LINENO=164" "$out" \
+  && grep -q "exit code 1" "$out"; then
+  ok "run 44547031698 §8.5: bash BASH_SOURCE/LINENO/BASH_COMMAND/exit-code diagnostics preserved"
+else
+  bad "bash ERR-trap diagnostics case (rc=$rc)"
+fi
+
+# 34. run 44547031698 §8.5: PowerShell source line/column + native exit code --
+f="$work/case34"; mkdir -p "$f"
+ids=($(mk_jobs "$f" "Platform build (windows-x64)|completed|failure"))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+2026-11-18T10:07:00.0000000Z ::error::scripts/build/windows.ps1:164 char:5: the compiled SHEYTAN-LA build-info probe exited 1 (PowerShell $LASTEXITCODE=1, NativeCommandError, source line recorded)
+2026-11-18T10:07:00.1000000Z ::error::At C:\Windows\system32\WindowsPowerShell\v1.0\Modules\Microsoft.PowerShell.Utility\Write-Output.ps1:0 char:0
+2026-11-18T10:07:00.2000000Z PACKAGE_GATE_RESULT BLOCKED_BY_UPSTREAM_TEST_FAILURE Cross-check the compiled binary's build identity
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-errors-warnings.txt"
+if [ $rc -eq 0 ] && grep -q "windows.ps1:164" "$out" \
+  && grep -q 'LASTEXITCODE=1' "$out"; then
+  ok "run 44547031698 §8.5: PowerShell source line + native exit code preserved as shell-location diagnostics"
+else
+  bad "PowerShell diagnostics case (rc=$rc)"
+fi
+
+# 35. run 44547031698 §8.5: CodeQL Go build failure with source positions -----
+f="$work/case35"; mkdir -p "$f"
+ids=($(mk_jobs "$f" "Analyze (go)|completed|failure"))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+2026-11-18T10:08:00.0000000Z 2026-11-18T10:08:00.000Z ##[error]Build all Go packages for CodeQL: exit code 1
+2026-11-18T10:08:00.1000000Z 2026-11-18T10:08:00.100Z ##[error]/home/z/go/pkg/mod/github.com/go-webgpu/goffi@v0.6.8/ffi/trampolines_amd64.s:123:89: unhandled relocation for SDYNIMPORT symbol _cgo_init (goffi issue 72): the linker cannot combine goffi with other cgo code on linux/amd64
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-errors-warnings.txt"
+if [ $rc -eq 0 ] && grep -q "Build all Go packages for CodeQL: exit code 1" "$out" \
+  && grep -q "SDYNIMPORT" "$out"; then
+  ok "run 44547031698 §8.5: CodeQL Go build failure keeps the exact command, exit code and linker symbol"
+else
+  bad "CodeQL build failure case (rc=$rc)"
+fi
+
+# 36. run 44547031698 §8.5: the C++ overlay warning is a WARNING, not the failure
+f="$work/case36"; mkdir -p "$f"
+ids=($(mk_jobs "$f" "Analyze (cpp)|completed|success"))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+2026-11-18T10:09:00.0000000Z 2026-11-18T10:09:00.000Z ##[warning]overlay-base database cannot be built while build-mode is manual; CodeQL falls back to a normal full database
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-errors-warnings.txt"
+if [ $rc -eq 0 ] && grep -q "overlay-base database cannot be built" "$out" \
+  && grep -q "WARNINGS" "$out" && ! grep -q "ERRORS" "$out"; then
+  ok "run 44547031698 §8.5: the C++ overlay notice is classified as a warning in a successful job"
+else
+  bad "C++ overlay warning case (rc=$rc)"
+fi
 
 # 21. run 44378562071 §4.7/§8.4: passing Core audit t.Log diagnostics are
 #     NOT errors. The recorded false-positive lines (installer scan, asset
@@ -823,3 +1004,6 @@ if cmp -s "$f/report-a.txt" "$f/report-b.txt"; then
 else
   bad "byte-level determinism"
 fi
+
+printf 'fixtures: %d pass / %d fail\n' "$pass" "$fail"
+[ "$fail" = 0 ]

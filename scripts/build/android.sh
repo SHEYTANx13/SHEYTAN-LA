@@ -10,8 +10,10 @@
 # at the repository root, which has NO Go package - the packaging step
 # must run from a directory that actually contains a Go main package:
 #   - PRIMARY path: when cmd/sheytan-mobile exists (the Go-Gui mobile
-#     shell migration target), the lane packages it with `gomobile bind`
-#     at the EXACT pinned x/mobile version (never @latest);
+#     shell migration target), the lane packages it with `gomobile build`
+#     at the EXACT pinned x/mobile version (never @latest) - the APK
+#     command. Run 44547031698 §6: `gomobile bind` builds an AAR
+#     LIBRARY and failed on the main package - it is retired here.
 #   - FALLBACK path (current product truth: Fyne shell): `fyne package`
 #     executed FROM the app package directory (cd cmd/sheytan-local-agent),
 #     with the icon path spelled RELATIVE TO THAT CWD
@@ -36,7 +38,7 @@ MARKER="ci-logs/${TARGET}-upstream-failure.txt"
 GO_TEST_TIMEOUT="${GO_TEST_TIMEOUT:-25m}"
 APP_VERSION="${APP_VERSION:?APP_VERSION must be provided by the workflow env}"
 mobilePin="v0.0.0-20261117202452-47699113848a"
-CANONICAL="dist/SHEYTAN-LA-ALPHA-android-arm64-debug"
+CANONICAL="dist/SHEYTAN-LA-ALPHA-android-arm64"
 
 mkdir -p ci-logs
 
@@ -88,15 +90,29 @@ case "$phase" in
     ;;
 
   package)
+    # Run 44547031698 §6 ROOT CAUSE: the previous lane ran
+    # `gomobile bind -o dist/android/....aab ./cmd/sheytan-mobile` and the
+    # hosted run failed exactly there ("gomobile bind for
+    # ./cmd/sheytan-mobile failed"). The official Go Mobile command
+    # contract (x/mobile cmd/gomobile/doc.go at the pinned version):
+    #   gomobile bind   builds a LIBRARY for Android/iOS (an AAR) and
+    #                   requires exported binding APIs;
+    #   gomobile build  "compiles and encodes the app named by the import
+    #                   path. The named package must define a main
+    #                   function" and produces the Android APK.
+    # cmd/sheytan-mobile is `package main` with `func main` - the
+    # gomobile BUILD (APK) shape. The APK is debug-signed by gomobile's
+    # own embedded debug certificate (cmd/gomobile/build_androidapp.go:
+    # debugCert) - no keystore file is created, so nothing can leak into
+    # the repository or the artifact.
     mkdir -p dist/android
     if [ -d "cmd/sheytan-mobile" ]; then
-      # PRIMARY path: the Go-Gui mobile shell exists - package it with
-      # gomobile at the pinned toolchain (AAB output, -work=false).
-      echo "cmd/sheytan-mobile present - packaging with gomobile bind"
-      if ! gomobile bind -target=android -androidapi 24 -o dist/android/SHEYTAN-LA-ALPHA-android-arm64.aab -work=false ./cmd/sheytan-mobile; then
-        fail_gate "Package the Android arm64 app (debug-signed, never committed keys)" "gomobile bind for ./cmd/sheytan-mobile failed"
+      # PRIMARY path: the Go-Gui mobile shell - the arm64-v8a APK through
+      # gomobile build at the pinned toolchain (single ABI, -work=false).
+      echo "cmd/sheytan-mobile present - building the arm64-v8a APK with gomobile build (the app command; bind builds an AAR library)"
+      if ! gomobile build -target=android/arm64 -androidapi 24 -work=false -o "${CANONICAL}.apk" ./cmd/sheytan-mobile; then
+        fail_gate "Package the Android arm64 app (debug-signed, never committed keys)" "gomobile build for ./cmd/sheytan-mobile failed (the APK command; the retired bind command builds an AAR library, never the APK)"
       fi
-      cp dist/android/SHEYTAN-LA-ALPHA-android-arm64.aab "${CANONICAL}.aab"
     else
       # FALLBACK path (current product truth): fyne package FROM the app
       # package directory. Run 44457547289 step-8 root cause: fyne package
@@ -124,25 +140,31 @@ case "$phase" in
       cp "$apk" "${CANONICAL}.apk"
     fi
     ls -la dist/android
-    echo "canonical package: ${CANONICAL}.apk/.aab"
+    echo "canonical package: ${CANONICAL}.apk (debug-signed app build - emulator/device smoke NOT RUN here, work order §6.1 gates it separately)"
     ;;
 
   verify)
-    # Fail-closed structural checks on the CANONICAL package: the APK/AAB
+    # Fail-closed structural checks on the CANONICAL package: the APK
     # is a zip - AndroidManifest.xml + classes.dex must be present, and
     # installer-class payload extensions are rejected.
-    pkg="$(ls "${CANONICAL}".apk "${CANONICAL}".aab 2>/dev/null | head -1 || true)"
-    test -s "$pkg" || fail_gate "Verify the APK/AAB (fail-closed structural checks)" "no Android package at ${CANONICAL}.apk/.aab"
+    pkg="${CANONICAL}.apk"
+    test -s "$pkg" || fail_gate "Verify the APK (fail-closed structural checks)" "no APK at ${CANONICAL}.apk"
     members="$(unzip -Z1 "$pkg")"
-    echo "$members" | grep -Eq '(^|/)AndroidManifest\.xml$' || fail_gate "Verify the APK/AAB (fail-closed structural checks)" "AndroidManifest.xml missing from $pkg"
-    echo "$members" | grep -Eq '(^|/)classes.*\.dex$' || fail_gate "Verify the APK/AAB (fail-closed structural checks)" "no classes.dex in $pkg"
+    echo "$members" | grep -Eq '(^|/)AndroidManifest\.xml$' || fail_gate "Verify the APK (fail-closed structural checks)" "AndroidManifest.xml missing from $pkg"
+    echo "$members" | grep -Eq '(^|/)classes.*\.dex$' || fail_gate "Verify the APK (fail-closed structural checks)" "no classes.dex in $pkg"
     if echo "$members" | grep -Eqi '\.(nsi|msi|msix)$'; then
-      fail_gate "Verify the APK/AAB (fail-closed structural checks)" "installer-class payload found inside $pkg"
+      fail_gate "Verify the APK (fail-closed structural checks)" "installer-class payload found inside $pkg"
+    fi
+    # Single-ABI honesty: the artifact is the android-ARM64 package, so
+    # the only native library ABI is arm64-v8a (run 44547031698 §6.1:
+    # no unexpected ABI, no duplicate libraries).
+    libabis="$(echo "$members" | grep -E '^lib/[^/]+/' | cut -d/ -f2 | sort -u || true)"
+    if [ -n "$libabis" ] && [ "$libabis" != "arm64-v8a" ]; then
+      fail_gate "Verify the APK (fail-closed structural checks)" "unexpected native ABI set in $pkg: $(echo "$libabis" | tr '\n' ' ')(want arm64-v8a only)"
     fi
     # The manifest must declare the debuggable/testable dev package
-    # honestly: aapt reports the package name for the record (APK only -
-    # an AAB is not aapt-badging shaped, its manifest is still checked above).
-    if [ "${pkg##*.}" = "apk" ] && [ -n "${ANDROID_HOME:-}" ]; then
+    # honestly: aapt reports the package name for the record.
+    if [ -n "${ANDROID_HOME:-}" ]; then
       buildToolsDir="$(ls -d "$ANDROID_HOME"/build-tools/* 2>/dev/null | sort -V | tail -1 || true)"
       if [ -n "$buildToolsDir" ] && [ -x "$buildToolsDir/aapt" ]; then
         "$buildToolsDir/aapt" dump badging "$pkg" | head -4 || true

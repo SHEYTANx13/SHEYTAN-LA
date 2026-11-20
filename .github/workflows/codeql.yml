@@ -130,18 +130,38 @@ jobs:
           # security-and-quality includes default + security-extended + quality queries.
           queries: security-and-quality
 
-      # Manual Go build: compile every Linux/CGO-enabled package so the Go
-      # extractor observes the actual application and Fyne native build path.
+      # Manual Go build: compile every Linux package so the Go extractor
+      # observes the actual application, with the EXACT CGO/build-tag
+      # settings each link graph requires (run 44547031698 §3.2/§3.7):
+      #
+      # (a) CGO_ENABLED=1 with -tags nogogpu: the Linux-supported
+      #     application graph. The pinned goffi v0.6.8 documents that a
+      #     binary containing goffi AND other cgo code (fyne/go-gl,
+      #     purego) fails to link on Linux with "unhandled relocation ...
+      #     (SDYNIMPORT)" (goffi issue #72; macOS/Windows are unaffected)
+      #     - the nogogpu seam excludes the adapter on Linux exactly as
+      #     the desktop lane does. -json emits structured build-fail
+      #     events (work order §8.2).
+      # (b) CGO_ENABLED=0 with -tags nofakecgo: goffi's documented
+      #     Workaround A for the purego+goffi duplicate-_cgo_init link
+      #     conflict. cmd/sheytan-renderprobe imports BOTH stacks (Go-Gui
+      #     shell + GoGPU render service) in ONE binary - the combined
+      #     production-shaped link regression target. This command also
+      #     extracts the gogpu/goffi adapter source (internal/render,
+      #     internal/renderboot) so no package loses coverage.
       - name: Build all Go packages for CodeQL
         if: matrix.language == 'go'
         shell: bash
         env:
-          CGO_ENABLED: "1"
           GOTOOLCHAIN: auto
         run: |
           set -euo pipefail
-          go env CGO_ENABLED GOTOOLCHAIN
-          go build ./...
+          go env GOTOOLCHAIN
+          echo "build (a): CGO_ENABLED=1 -tags nogogpu go build -json ./..."
+          CGO_ENABLED=1 go build -json -tags nogogpu ./... > "$RUNNER_TEMP/codeql-go-build-a.jsonl" || { cat "$RUNNER_TEMP/codeql-go-build-a.jsonl" | grep -m1 -E '"ImportPath|Err"' || true; exit 1; }
+          echo "build (b): CGO_ENABLED=0 -tags nofakecgo go build -json ./cmd/sheytan-renderprobe (combined go-gui+gogpu link)"
+          CGO_ENABLED=0 go build -json -tags nofakecgo -o "$RUNNER_TEMP/sheytan-renderprobe-codeql" ./cmd/sheytan-renderprobe > "$RUNNER_TEMP/codeql-go-build-b.jsonl" || { cat "$RUNNER_TEMP/codeql-go-build-b.jsonl" | grep -m1 -E '"ImportPath|Err"' || true; exit 1; }
+          "$RUNNER_TEMP/sheytan-renderprobe-codeql"
 
       # Manual C++ build: compile the engine, IPC host, and all native test
       # targets while CodeQL's compiler tracing is active.

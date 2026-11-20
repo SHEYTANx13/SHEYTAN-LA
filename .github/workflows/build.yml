@@ -113,12 +113,21 @@ jobs:
             kind: appzip
           - target: android-arm64
             os: ubuntu-26.04
-            artifact: SHEYTAN-LA-ALPHA-android-arm64-debug
+            artifact: SHEYTAN-LA-ALPHA-android-arm64
             kind: apk
           - target: ios-simulator-arm64
             os: macos-15
             artifact: SHEYTAN-LA-ALPHA-ios-simulator-arm64
             kind: simzip
+          # Run 44547031698 §6.3/§7.1: the iOS DEVICE target. The matrix
+          # entry is structural; its execution is honestly gated on the
+          # Apple signing secrets - without them the lane records
+          # BLOCKED BY MISSING APPLE SIGNING CONFIGURATION (never a
+          # fabricated or unsigned IPA).
+          - target: ios-device-arm64
+            os: macos-15
+            artifact: SHEYTAN-LA-ALPHA-ios-device-arm64
+            kind: ipa
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -743,12 +752,18 @@ jobs:
           if [ -f ci-logs/linux-x64-upstream-failure.txt ]; then
             gate="$(cat ci-logs/linux-x64-upstream-failure.txt)"
             echo "::error::package: BLOCKED_BY_UPSTREAM_TEST_FAILURE - first upstream failure: job 'Platform build (linux-x64)' gate '${gate}'"
+            # ONE machine-readable package verdict line (run 44547031698: the
+            # collector aggregates ONLY these - a blocked package must never
+            # aggregate as OK beside an OK sibling lane).
+            echo "PACKAGE_GATE_RESULT BLOCKED_BY_UPSTREAM_TEST_FAILURE ${gate}"
             exit 1
           fi
           if [ ! -f "$archive" ]; then
             echo "::error::the Linux portable package was not produced - see the FIRST failed step of this job for the root cause (this gate intentionally reports the missing package once, with cause context)"
+            echo "PACKAGE_GATE_RESULT PACKAGE_MISSING ${archive}"
             exit 1
           fi
+          echo "PACKAGE_GATE_RESULT OK ${archive}"
           echo "package gate: reached"
 
       # ==================================================================
@@ -860,12 +875,15 @@ jobs:
           if [ -f "ci-logs/${{ matrix.target }}-upstream-failure.txt" ]; then
             gate="$(cat "ci-logs/${{ matrix.target }}-upstream-failure.txt")"
             echo "::error::package: BLOCKED_BY_UPSTREAM_TEST_FAILURE - first upstream failure: job 'Platform build (${{ matrix.target }})' gate '${gate}'"
+            echo "PACKAGE_GATE_RESULT BLOCKED_BY_UPSTREAM_TEST_FAILURE ${gate}"
             exit 1
           fi
           if [ ! -f "$zip" ]; then
             echo "::error::the macOS portable package was not produced - see the FIRST failed step of this job for the root cause"
+            echo "PACKAGE_GATE_RESULT PACKAGE_MISSING ${zip}"
             exit 1
           fi
+          echo "PACKAGE_GATE_RESULT OK ${zip}"
           echo "package gate: reached"
 
       # ==================================================================
@@ -918,13 +936,16 @@ jobs:
           if [ -f ci-logs/android-arm64-upstream-failure.txt ]; then
             gate="$(cat ci-logs/android-arm64-upstream-failure.txt)"
             echo "::error::package: BLOCKED_BY_UPSTREAM_TEST_FAILURE - first upstream failure: job 'Platform build (android-arm64)' gate '${gate}'"
+            echo "PACKAGE_GATE_RESULT BLOCKED_BY_UPSTREAM_TEST_FAILURE ${gate}"
             exit 1
           fi
-          pkg="$(ls dist/SHEYTAN-LA-ALPHA-android-arm64-debug.apk dist/SHEYTAN-LA-ALPHA-android-arm64-debug.aab 2>/dev/null | head -1 || true)"
-          if [ -z "$pkg" ] || [ ! -s "$pkg" ]; then
-            echo "::error::the Android debug package was not produced - see the FIRST failed step of this job for the root cause"
+          pkg="dist/SHEYTAN-LA-ALPHA-android-arm64.apk"
+          if [ ! -s "$pkg" ]; then
+            echo "::error::the Android APK package was not produced - see the FIRST failed step of this job for the root cause"
+            echo "PACKAGE_GATE_RESULT PACKAGE_MISSING ${pkg}"
             exit 1
           fi
+          echo "PACKAGE_GATE_RESULT OK ${pkg}"
           echo "package gate: reached ($pkg)"
 
       # ==================================================================
@@ -982,13 +1003,76 @@ jobs:
           if [ -f ci-logs/ios-simulator-arm64-upstream-failure.txt ]; then
             gate="$(cat ci-logs/ios-simulator-arm64-upstream-failure.txt)"
             echo "::error::package: BLOCKED_BY_UPSTREAM_TEST_FAILURE - first upstream failure: job 'Platform build (ios-simulator-arm64)' gate '${gate}'"
+            echo "PACKAGE_GATE_RESULT BLOCKED_BY_UPSTREAM_TEST_FAILURE ${gate}"
             exit 1
           fi
           if [ ! -s "dist/ios/SHEYTAN-LA-ALPHA-ios-simulator-arm64.zip" ]; then
             echo "::error::the iOS SIMULATOR-ONLY zip was not produced - see the FIRST failed step of this job for the root cause"
+            echo "PACKAGE_GATE_RESULT PACKAGE_MISSING dist/ios/SHEYTAN-LA-ALPHA-ios-simulator-arm64.zip"
             exit 1
           fi
+          echo "PACKAGE_GATE_RESULT OK dist/ios/SHEYTAN-LA-ALPHA-ios-simulator-arm64.zip"
           echo "package gate: reached (SIMULATOR-ONLY qualification)"
+
+      # ==================================================================
+      # IOS DEVICE LANE (target ios-device-arm64) - run 44547031698 §6.3.
+      # A device-installable IPA ONLY when valid Apple signing exists;
+      # otherwise an honest BLOCKED BY MISSING APPLE SIGNING
+      # CONFIGURATION record naming the required secrets. Secrets never
+      # reach logs or artifacts; temporary signing material is deleted in
+      # the cleanup step even after failure.
+      # ==================================================================
+      - name: Apple signing configuration check (honest gate)
+        if: matrix.target == 'ios-device-arm64'
+        shell: bash
+        run: |
+          if ! bash scripts/build/ios-device.sh check; then echo "::error::Apple signing configuration check failed"; echo "Apple signing configuration check (honest gate)" > ci-logs/ios-device-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: Build the iOS device .app (iphoneos arm64, real signing)
+        if: always() && matrix.target == 'ios-device-arm64' && hashFiles('ci-logs/ios-device-arm64-blocked.txt') == ''
+        shell: bash
+        run: |
+          if ! bash scripts/build/ios-device.sh build; then echo "::error::iOS device build failed"; echo "Build the iOS device .app (iphoneos arm64, real signing)" > ci-logs/ios-device-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: Sign and export the device IPA (ad-hoc)
+        if: always() && matrix.target == 'ios-device-arm64' && hashFiles('ci-logs/ios-device-arm64-blocked.txt') == ''
+        shell: bash
+        run: |
+          if ! bash scripts/build/ios-device.sh export; then echo "::error::iOS device IPA export failed"; echo "Sign and export the device IPA (ad-hoc)" > ci-logs/ios-device-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: Verify the device IPA (fail-closed)
+        if: always() && matrix.target == 'ios-device-arm64' && hashFiles('ci-logs/ios-device-arm64-blocked.txt') == ''
+        shell: bash
+        run: |
+          if ! bash scripts/build/ios-device.sh verify; then echo "::error::device IPA verification failed"; echo "Verify the device IPA (fail-closed)" > ci-logs/ios-device-arm64-upstream-failure.txt; exit 1; fi
+
+      - name: Cleanup temporary signing material (always, even on failure)
+        if: always() && matrix.target == 'ios-device-arm64'
+        shell: bash
+        run: bash scripts/build/ios-device.sh cleanup || true
+
+      - name: iOS device package gate (root-cause reporter)
+        if: always() && matrix.target == 'ios-device-arm64'
+        run: |
+          set -uo pipefail
+          if [ -f ci-logs/ios-device-arm64-blocked.txt ]; then
+            head -1 ci-logs/ios-device-arm64-blocked.txt
+            echo "PACKAGE_GATE_RESULT BLOCKED_BY_MISSING_APPLE_SIGNING IOS_DISTRIBUTION_P12_BASE64, IOS_DISTRIBUTION_P12_PASSWORD, IOS_ADHOC_PROFILE_BASE64, IOS_TEAM_ID, IOS_BUNDLE_ID"
+            exit 0
+          fi
+          if [ -f ci-logs/ios-device-arm64-upstream-failure.txt ]; then
+            gate="$(cat ci-logs/ios-device-arm64-upstream-failure.txt)"
+            echo "::error::package: BLOCKED_BY_UPSTREAM_TEST_FAILURE - first upstream failure: job 'Platform build (ios-device-arm64)' gate '${gate}'"
+            echo "PACKAGE_GATE_RESULT BLOCKED_BY_UPSTREAM_TEST_FAILURE ${gate}"
+            exit 1
+          fi
+          if [ ! -s "dist/ios/SHEYTAN-LA-ALPHA-ios-device-arm64.ipa" ]; then
+            echo "::error::the iOS device IPA was not produced - see the FIRST failed step of this job for the root cause"
+            echo "PACKAGE_GATE_RESULT PACKAGE_MISSING dist/ios/SHEYTAN-LA-ALPHA-ios-device-arm64.ipa"
+            exit 1
+          fi
+          echo "PACKAGE_GATE_RESULT OK dist/ios/SHEYTAN-LA-ALPHA-ios-device-arm64.ipa"
+          echo "package gate: reached (device IPA, real signing verified)"
 
       # ------------------------------------------------------------------
       # Common tail: the per-job machine-readable diagnostics index
@@ -1012,9 +1096,15 @@ jobs:
       # package; error on missing - a silently absent package is a
       # contract breach); (b) the build-evidence bundle (ci-logs/, warn on
       # missing - diagnostics may legitimately be sparse on a green lane).
+      # Run 44547031698 §7.5: the package upload is SKIPPED when the
+      # upstream-failure marker exists - the package gate already reported
+      # BLOCKED_BY_UPSTREAM_TEST_FAILURE once, and invoking upload-artifact
+      # against a missing glob would only produce the duplicate
+      # "No files were found with the provided path" noise the report must
+      # not carry. The evidence upload stays unconditional.
       # ------------------------------------------------------------------
       - name: Upload the platform package
-        if: always()
+        if: always() && hashFiles('ci-logs/${{ matrix.target }}-upstream-failure.txt') == '' && hashFiles('ci-logs/${{ matrix.target }}-blocked.txt') == ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ matrix.artifact }}
