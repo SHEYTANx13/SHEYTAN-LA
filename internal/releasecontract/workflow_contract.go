@@ -48,17 +48,56 @@ import (
 // validator, contract test and the stress gate reads THIS path.
 const PlatformBuildWorkflowPath = ".github/workflows/build.yml"
 
-// ConsolidatedLogArtifactName is the ONE run-level plain-text
-// diagnostic artifact: errors/warnings-only per the run 44306343338
-// work order §7 (exact ASCII spelling as used by the workflow and the
-// collector; the verbose all-logs artifact is retired).
-const ConsolidatedLogArtifactName = "SHEYTAN-LA-errors-warnings.txt"
+// ConsolidatedLogReportFileName is the LOCAL errors/warnings-only report
+// file the collector writes inside the runner workspace (--out). Run
+// 44835425398 policy: the report stays LOCAL to the job — uploading it
+// (or any build evidence) as a workflow artifact is PROHIBITED. The
+// normal GitHub Actions job logs remain the platform's log surface.
+const ConsolidatedLogReportFileName = "SHEYTAN-LA-errors-warnings.txt"
 
-// RunDiagnosticsArtifactName is the machine-readable run-level
-// diagnostics index uploaded by the same collector job (run 43630164424
-// repair, work order §9.2): one JSON object with every job's API
-// status/conclusion/id and the collector's log-source category.
-const RunDiagnosticsArtifactName = "run-diagnostics.json"
+// RunDiagnosticsReportFileName is the LOCAL machine-readable run-level
+// diagnostics index the collector writes next to the report (--json-out).
+// Like the report it is a workspace file, never an uploaded artifact
+// (run 44835425398 artifact policy).
+const RunDiagnosticsReportFileName = "run-diagnostics.json"
+
+// ForbiddenArtifactUploadNames are the evidence artifact names whose
+// upload is PROHIBITED by the run 44835425398 artifact policy: the two
+// collector reports (local files), the per-lane build-evidence bundle,
+// and the CodeQL log/diagnostics-index uploads. Any upload step carrying
+// one of these names fails the contract.
+var ForbiddenArtifactUploadNames = []string{
+	ConsolidatedLogReportFileName,
+	RunDiagnosticsReportFileName,
+	ForbiddenBuildEvidenceArtifactName,
+	"SHEYTAN-LA-codeql-all-logs.txt",
+	"codeql-run-diagnostics.json",
+}
+
+// ForbiddenArtifactUploadSubstrings are the evidence markers whose
+// appearance in an upload NAME or PATH fails the contract: diagnostic
+// logs, build evidence, test reports, JSONL compiler output, run
+// diagnostics, coverage/race reports and temporary build directories
+// (work order §5.1: build evidence is never uploaded as an artifact).
+var ForbiddenArtifactUploadSubstrings = []string{
+	"ci-logs",
+	"build-evidence",
+	"errors-warnings",
+	"run-diagnostics",
+	"codeql-all-logs",
+	"test-results",
+	"junit",
+	"coverage",
+	"race-report",
+	".jsonl",
+	".log",
+}
+
+// ForbiddenBuildEvidenceArtifactName is the contracted per-lane
+// build-evidence artifact name the previous policy uploaded. Uploading
+// it is now PROHIBITED (run 44835425398): the name survives only as a
+// banned value the artifact allowlist rejects.
+const ForbiddenBuildEvidenceArtifactName = "build-evidence-${{ matrix.target }}-${{ github.run_attempt }}"
 
 // The stable package artifact names (work order §6.3: the exact
 // platform/arch-qualified portable names; the generic -package names
@@ -76,16 +115,10 @@ const (
 	IOSDeviceArtifactName         = "SHEYTAN-LA-ALPHA-ios-device-arm64"
 )
 
-// BuildEvidenceArtifactSkeleton is the contracted build-evidence
-// artifact name: one per matrix target per run attempt (the attempt
-// number is CONTRACTED here - it keeps parallel rerun attempts from
-// colliding; the stable-name/no-attempt rule continues to govern the
-// consolidated log, the diagnostics index and the package artifacts).
-const BuildEvidenceArtifactSkeleton = "build-evidence-${{ matrix.target }}-${{ github.run_attempt }}"
-
-// The matrix upload step's name spelling: with the single platform-build
-// job the package upload is ONE step whose with.name is the matrix
-// expression (resolved per leg to the six contracted names above).
+// MatrixPackageArtifactSlot is the ONE permitted upload-artifact name in
+// the platform-build workflow: the package upload is ONE step whose
+// with.name is the matrix expression (resolved per leg to the seven
+// contracted names above).
 const MatrixPackageArtifactSlot = "${{ matrix.artifact }}"
 
 // RetiredLaneWorkflowFiles are the retired reusable-lane + orchestrator
@@ -564,6 +597,7 @@ type ArtifactStep struct {
 	Step    string
 	Uses    string
 	Ref     string // the part of uses: after the final '@'
+	If      string // the step-level if condition ("" when absent)
 	Name    string // with.name ("" when absent)
 	Path    string // with.path ("" when absent)
 	With    map[string]any
@@ -648,6 +682,7 @@ func ArtifactSteps(workflowText, actionID string) ([]ArtifactStep, error) {
 				Step:    step.Name,
 				Uses:    step.Uses,
 				Ref:     step.Uses[idx+1:],
+				If:      step.If,
 				Name:    withStringValue(step.With, "name"),
 				Path:    withStringValue(step.With, "path"),
 				With:    step.With,
@@ -699,7 +734,8 @@ func allActionSteps(workflowText string) ([]ArtifactStep, error) {
 // fails too. Mutable tags (v7), branch refs (@main), partial hashes,
 // malformed references and SHA-without-comment are all rejected. The
 // workflow must carry at least one actions/upload-artifact step (the
-// consolidated log upload) or the contract is violated by definition.
+// matrix package upload — the ONLY permitted artifact under the run
+// 44835425398 policy) or the contract is violated by definition.
 func ValidateUploadArtifactPins(workflowText string) error {
 	all, err := allActionSteps(workflowText)
 	if err != nil {
@@ -734,7 +770,7 @@ func ValidateUploadArtifactPins(workflowText string) error {
 	}
 
 	if !hasUpload {
-		return errors.New("no actions/upload-artifact step found — the consolidated log upload is missing from the workflow")
+		return errors.New("no actions/upload-artifact step found — the matrix package upload is missing from the workflow")
 	}
 	return nil
 }
@@ -805,23 +841,36 @@ func validateUsesVersionComments(workflowText string, parsedExternal int) error 
 	return nil
 }
 
-// ValidateUploadArtifactContract enforces the consolidated upload
-// surface of the ONE platform-build workflow, scoped per step and per
-// owning job (parsed, never grepped):
+// ValidateUploadArtifactContract enforces the run 44835425398 artifact
+// policy on the parsed upload surface of the ONE platform-build
+// workflow, scoped per step and per owning job (parsed, never grepped):
 //
-//   - EXACTLY ONE upload named SHEYTAN-LA-errors-warnings.txt - the ONE
-//     consolidated log artifact - uploading the file itself
-//     (archive: false, path == the artifact name) from the collector job;
-//   - exactly ONE run-diagnostics.json upload from the SAME collector
-//     job (archive: false, path == the artifact name);
-//   - exactly ONE matrix package upload step named ${{ matrix.artifact }}
-//     from the platform-build job, resolving per leg to the six
-//     contracted portable names, if: always(), if-no-files-found: error;
-//   - exactly ONE build-evidence upload with the contracted
-//     build-evidence-${{ matrix.target }}-${{ github.run_attempt }} name
-//     (path ci-logs/, if-no-files-found: warn);
-//   - NO other upload-artifact step may exist: the whole upload surface
-//     is exactly the four contracted shapes.
+//   - EXACTLY ONE upload step exists in the whole workflow: the matrix
+//     package upload named ${{ matrix.artifact }} from the platform-build
+//     job, resolving per leg to the seven contracted portable names;
+//   - its path stages ONLY the dist/ portable package
+//     (dist/SHEYTAN-LA-ALPHA-*), never a diagnostic or evidence
+//     directory;
+//   - its eligibility condition is enforced: if always() &&
+//     steps.package-eligibility.outputs.upload-package == 'true' — the
+//     package is uploaded only when the valid package exists, and an
+//     intentionally absent package is never uploaded;
+//   - it carries if-no-files-found: error (a silently absent package is
+//     a contract breach) and overwrite: true;
+//   - NO build-evidence or diagnostic upload exists: no upload name or
+//     path may carry any name from ForbiddenArtifactUploadNames or any
+//     substring from ForbiddenArtifactUploadSubstrings (ci-logs, build
+//     evidence, run diagnostics, test reports, JSONL compiler output,
+//     coverage/race reports, .log files...);
+//   - NO other upload-artifact step of any kind may exist: the expected
+//     platform-build upload surface is the actual platform distribution
+//     package ONLY.
+//
+// The collector keeps generating its LOCAL report files inside the
+// runner workspace (ConsolidatedLogReportFileName /
+// RunDiagnosticsReportFileName) and the Actions step summary carries the
+// concise status; uploading either as a workflow artifact is exactly
+// what this contract now rejects.
 func ValidateUploadArtifactContract(workflowText string) error {
 	uploads, err := ArtifactSteps(workflowText, "actions/upload-artifact")
 	if err != nil {
@@ -830,147 +879,98 @@ func ValidateUploadArtifactContract(workflowText string) error {
 
 	if len(uploads) == 0 {
 		return errors.New(
-			"no actions/upload-artifact steps found - the extraction is broken or the workflow has no uploads",
+			"no actions/upload-artifact steps found - the platform package upload is missing or the extraction is broken",
 		)
 	}
 
 	var errs []string
 
-	logUploads, diagUploads, matrixUploads, evidenceUploads := 0, 0, 0, 0
+	matrixUploads := 0
 
 	for _, u := range uploads {
-		switch u.Name {
-		case ConsolidatedLogArtifactName:
-			logUploads++
-
-			if u.Path != ConsolidatedLogArtifactName {
+		// The evidence ban applies to EVERY upload first: a forbidden
+		// name/path is a violation regardless of anything else.
+		for _, banned := range ForbiddenArtifactUploadNames {
+			if u.Name == banned {
 				errs = append(errs, fmt.Sprintf(
-					"job %q: the consolidated diagnostic upload must set with.path to the exact file %q (archive:false means the artifact IS the file), got %q",
-					u.Job, ConsolidatedLogArtifactName, u.Path,
+					"job %q step %q: uploading %q is PROHIBITED by the run 44835425398 artifact policy - build evidence is never uploaded as a workflow artifact; the collector's report stays local to the runner and the Actions job logs remain the log surface",
+					u.Job, u.Step, u.Name,
 				))
 			}
+		}
 
-			if arch, ok := u.With["archive"]; !ok || arch != false {
+		joined := strings.ToLower(u.Name + " " + u.Path)
+		for _, marker := range ForbiddenArtifactUploadSubstrings {
+			if strings.Contains(joined, marker) {
 				errs = append(errs, fmt.Sprintf(
-					"job %q: the consolidated diagnostic upload must carry `archive: false` (the artifact must BE the plain-text file, not a ZIP wrapper)",
-					u.Job,
+					"job %q step %q (artifact %q, path %q): the name/path carries the evidence marker %q - diagnostic logs, build evidence, test reports and compiler output are never uploaded as artifacts",
+					u.Job, u.Step, u.Name, u.Path, marker,
 				))
 			}
+		}
 
-			if u.Job != CollectorJobKey {
-				errs = append(errs, fmt.Sprintf(
-					"job %q: the consolidated diagnostic upload belongs to the %s collector job (same collector, same evidence lifetime)",
-					u.Job, CollectorJobKey,
-				))
-			}
-
-		case RunDiagnosticsArtifactName:
-			diagUploads++
-
-			if u.Path != RunDiagnosticsArtifactName {
-				errs = append(errs, fmt.Sprintf(
-					"job %q: the run diagnostics upload must set with.path to the exact file %q (archive:false means the artifact IS the file), got %q",
-					u.Job, RunDiagnosticsArtifactName, u.Path,
-				))
-			}
-
-			if arch, ok := u.With["archive"]; !ok || arch != false {
-				errs = append(errs, fmt.Sprintf(
-					"job %q: the run diagnostics upload must carry `archive: false` (the artifact must BE the JSON file, not a ZIP wrapper)",
-					u.Job,
-				))
-			}
-
-			if u.Job != CollectorJobKey {
-				errs = append(errs, fmt.Sprintf(
-					"job %q: the run diagnostics upload belongs to the %s collector job (same collector, same evidence lifetime)",
-					u.Job, CollectorJobKey,
-				))
-			}
-
-		case MatrixPackageArtifactSlot:
-			matrixUploads++
-
-			if u.Job != PlatformBuildJobKey {
-				errs = append(errs, fmt.Sprintf(
-					"job %q: the ${{ matrix.artifact }} package upload belongs to the platform-build matrix job",
-					u.Job,
-				))
-			}
-
-			if cond, ok := u.With["if-no-files-found"]; !ok || withStringValue(u.With, "if-no-files-found") == "" || cond != "error" {
-				errs = append(errs, fmt.Sprintf(
-					"job %q step %q: the matrix package upload must carry if-no-files-found: error (a silently absent package is a contract breach)",
-					u.Job, u.Step,
-				))
-			}
-
-			if !strings.Contains(u.Path, "dist/") {
-				errs = append(errs, fmt.Sprintf(
-					"job %q step %q: the matrix package upload must stage the dist/ portable package, got %q",
-					u.Job, u.Step, u.Path,
-				))
-			}
-
-		case BuildEvidenceArtifactSkeleton:
-			evidenceUploads++
-
-			if u.Job != PlatformBuildJobKey {
-				errs = append(errs, fmt.Sprintf(
-					"job %q: the build-evidence upload belongs to the platform-build matrix job",
-					u.Job,
-				))
-			}
-
-			if cond := withStringValue(u.With, "if-no-files-found"); cond != "warn" {
-				errs = append(errs, fmt.Sprintf(
-					"job %q step %q: the build-evidence upload must carry if-no-files-found: warn (diagnostics may legitimately be sparse on a green lane), got %q",
-					u.Job, u.Step, cond,
-				))
-			}
-
-			if !strings.Contains(u.Path, "ci-logs") {
-				errs = append(errs, fmt.Sprintf(
-					"job %q step %q: the build-evidence upload must stage ci-logs/, got %q",
-					u.Job, u.Step, u.Path,
-				))
-			}
-
-		default:
+		if u.Name != MatrixPackageArtifactSlot {
 			errs = append(errs, fmt.Sprintf(
-				"job %q step %q: unexpected upload-artifact name %q - the consolidated workflow's contracted upload surface is exactly the consolidated diagnostic %q, the machine-readable index %q, the matrix package upload %q and the build-evidence upload %q",
-				u.Job, u.Step, u.Name,
-				ConsolidatedLogArtifactName, RunDiagnosticsArtifactName,
-				MatrixPackageArtifactSlot, BuildEvidenceArtifactSkeleton,
+				"job %q step %q: unexpected upload-artifact name %q - the expected platform-build upload surface is exactly the ONE matrix package upload %q (the actual platform distribution package); every evidence upload is banned",
+				u.Job, u.Step, u.Name, MatrixPackageArtifactSlot,
+			))
+
+			continue
+		}
+
+		matrixUploads++
+
+		if u.Job != PlatformBuildJobKey {
+			errs = append(errs, fmt.Sprintf(
+				"job %q: the ${{ matrix.artifact }} package upload belongs to the platform-build matrix job",
+				u.Job,
+			))
+		}
+
+		if cond, ok := u.With["if-no-files-found"]; !ok || withStringValue(u.With, "if-no-files-found") == "" || cond != "error" {
+			errs = append(errs, fmt.Sprintf(
+				"job %q step %q: the matrix package upload must carry if-no-files-found: error (a silently absent package is a contract breach)",
+				u.Job, u.Step,
+			))
+		}
+
+		if ov, ok := u.With["overwrite"]; !ok || ov != true {
+			errs = append(errs, fmt.Sprintf(
+				"job %q step %q: the matrix package upload must carry overwrite: true (a rerun must replace the same package artifact, not fail on it)",
+				u.Job, u.Step,
+			))
+		}
+
+		if !strings.Contains(u.Path, "dist/SHEYTAN-LA-ALPHA-") {
+			errs = append(errs, fmt.Sprintf(
+				"job %q step %q: the matrix package upload must stage ONLY the dist/SHEYTAN-LA-ALPHA-* portable package, got %q (no diagnostic, log or cache directory may ride along)",
+				u.Job, u.Step, u.Path,
+			))
+		}
+
+		// The eligibility condition is CONTRACTED, not optional: the
+		// upload must key off the explicit, inspectable step output of
+		// the package-eligibility gate and must run with always() so a
+		// red lane's valid package still uploads.
+		if !strings.Contains(u.If, "steps.package-eligibility.outputs.upload-package == 'true'") {
+			errs = append(errs, fmt.Sprintf(
+				"job %q step %q: the matrix package upload must key its condition off steps.package-eligibility.outputs.upload-package == 'true' (the explicit, inspectable eligibility decision) - got if: %q",
+				u.Job, u.Step, u.If,
+			))
+		}
+
+		if !strings.Contains(u.If, "always()") {
+			errs = append(errs, fmt.Sprintf(
+				"job %q step %q: the matrix package upload must run with if: always() (a red lane's valid package is still a valid package) - got if: %q",
+				u.Job, u.Step, u.If,
 			))
 		}
 	}
 
-	if logUploads != 1 {
-		errs = append(errs, fmt.Sprintf(
-			"exactly ONE consolidated diagnostic artifact upload is contracted (%q), found %d",
-			ConsolidatedLogArtifactName, logUploads,
-		))
-	}
-
-	if diagUploads != 1 {
-		errs = append(errs, fmt.Sprintf(
-			"exactly ONE run diagnostics artifact upload is contracted (%q), found %d",
-			RunDiagnosticsArtifactName, diagUploads,
-		))
-	}
-
 	if matrixUploads != 1 {
 		errs = append(errs, fmt.Sprintf(
-			"exactly ONE matrix package upload step is contracted (%q), found %d",
+			"exactly ONE matrix package upload step is contracted (%q), found %d - the platform distribution package is the workflow's entire permitted artifact surface",
 			MatrixPackageArtifactSlot, matrixUploads,
-		))
-	}
-
-	if evidenceUploads != 1 {
-		errs = append(errs, fmt.Sprintf(
-			"exactly ONE build-evidence upload step is contracted (%q), found %d",
-			BuildEvidenceArtifactSkeleton, evidenceUploads,
 		))
 	}
 

@@ -37,6 +37,11 @@ token in the verified slice comes from real reference kernels over real
   seeded sampling reproducibility, container corruption cases, end-to-end
   fixture execution, weight sensitivity, admission/cancellation/ownership).
 - **METADATA_INSPECTION_ONLY** — Safetensors: strict header parsing
+  (run 44835425398 pass: the data-section bounds check is
+  overflow-safe — offsets are compared against the section LENGTH
+  instead of an additive check that wrapped near 2^64, and direct
+  `TensorFromSafetensors` calls reject reversed/escaped ranges typed —
+  regression-tested)
   (dtype/shape/offset/byte-count validation, monotonic non-overlapping
   ranges, hostile-length caps) plus the COMPLETE required-tensor mapping
   against a registered architecture. This is NOT model support: no

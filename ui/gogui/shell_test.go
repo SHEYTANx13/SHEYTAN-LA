@@ -189,3 +189,37 @@ func TestSingleParentOwnershipStructural(t *testing.T) {
 		t.Fatalf("duplicate widget ids in the rendered tree: %v", dups)
 	}
 }
+
+// TestSizeClassForBreakpointMatrix pins the SINGLE size-class decision at
+// every breakpoint boundary and across the work-order responsive matrix
+// (§7.3): 360/430 compact phones, 600 small tablet, 768 tablet/compact
+// desktop, 1024 compact desktop, 1280 standard desktop, 1366 laptop,
+// 1920 large desktop. Pure, deterministic, display-free: this pins the
+// classification contract; it is NOT a native rendering proof (the Fyne
+// production shell and native launch smoke tests remain the hosted
+// lanes' evidence — run 44835425398 honesty rules).
+func TestSizeClassForBreakpointMatrix(t *testing.T) {
+	cases := []struct {
+		width float32
+		want  sizeClass
+	}{
+		{360, sizeCompact},
+		{430, sizeCompact},
+		{599.9, sizeCompact},
+		{600, sizeMedium},
+		{768, sizeMedium},
+		{899.9, sizeMedium},
+		{900, sizeDesktop},
+		{1024, sizeDesktop},
+		{1279.9, sizeDesktop},
+		{1280, sizeWide},
+		{1366, sizeWide},
+		{1920, sizeWide},
+	}
+
+	for _, tc := range cases {
+		if got := sizeClassFor(tc.width); got != tc.want {
+			t.Errorf("sizeClassFor(%v) = %v, want %v", tc.width, got, tc.want)
+		}
+	}
+}

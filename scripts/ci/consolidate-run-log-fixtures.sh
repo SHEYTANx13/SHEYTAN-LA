@@ -30,18 +30,21 @@
 #      coverage=INCOMPLETE (never fabricated)
 #   I. the collector SELF job is never classified terminal-missing
 #   J. secrets and signed URLs are redacted
-#   K. output is deterministic (same inputs -> byte-identical artifact)
+#   K. output is deterministic (same inputs -> byte-identical local report)
 #   L. packaging: the FIRST upstream failure is reported and the package
 #      is marked blocked; a missing-package error appears only when
 #      packaging actually ran and failed
 #   M. coverage accounting reconciles to the paginated jobs list; a red
 #      upstream run is not a collector failure (exit 0 with a red report)
 #   N. machine-readable run-diagnostics.json stays in sync (jq-valid)
-#   O. workflow shape: build.yml (the ONE consolidated platform-build
-#      workflow) uploads the errors/warnings-only diagnostic exactly once,
-#      defines the SEVEN matrix targets exactly once each, wires the
-#      collector to the matrix job, and the retired all-logs/package
-#      names and reusable-lane invocations never reappear
+#   O. workflow shape (run 44835425398 artifact policy): build.yml (the
+#      ONE consolidated platform-build workflow) uploads NOTHING but the
+#      platform package — no ci-logs bundle, no consolidated diagnostic
+#      artifact, no diagnostics-index artifact — while the collector keeps
+#      writing its LOCAL reports; the SEVEN matrix targets are defined
+#      exactly once each, the collector is wired to the matrix job, and
+#      the retired all-logs/package names and reusable-lane invocations
+#      never reappear
 #
 # No fixture may assume a missing log means success: the missing-source
 # and hard-error cases must FAIL the collector AFTER the report exists,
@@ -530,19 +533,36 @@ else
   bad "packaging-failed semantics (rc=$rc)"
 fi
 
-# 18. workflow shape contract (clause O) ------------------------------------
-# The ONE consolidated platform-build workflow (build.yml): the SIX-target
-# matrix replaced the five reusable lanes; the collector job wires the
-# errors/warnings-only diagnostic + the machine-readable index.
+# 18. workflow shape contract (clause O, run 44835425398 artifact policy) ----
+# The ONE consolidated platform-build workflow (build.yml): the SEVEN-target
+# matrix replaced the five reusable lanes; the collector keeps its log
+# collection and parsing LOCAL — NO build-evidence artifact of any kind is
+# uploaded, and the ONLY upload-artifact step is the platform package.
 yml_ok=1
 [ -f "$workflow" ] || yml_ok=0
-[ "$(grep -c 'path: SHEYTAN-LA-errors-warnings.txt' "$workflow")" = "1" ] || yml_ok=0
-grep -q 'name: SHEYTAN-LA-errors-warnings.txt' "$workflow" || yml_ok=0
-grep -q 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9' "$workflow" || yml_ok=0
-[ "$(grep -c 'archive: false' "$workflow")" = "2" ] || yml_ok=0
-[ "$(grep -c 'path: run-diagnostics.json' "$workflow")" = "1" ] || yml_ok=0
+# The banned evidence uploads must NOT exist (name or path spellings):
+grep -q 'name: build-evidence-' "$workflow" && yml_ok=0
+grep -q 'path: ci-logs/' "$workflow" && yml_ok=0
+grep -q 'name: ci-logs' "$workflow" && yml_ok=0
+grep -q 'path: SHEYTAN-LA-errors-warnings.txt' "$workflow" && yml_ok=0
+grep -q 'path: run-diagnostics.json' "$workflow" && yml_ok=0
+grep -q 'name: run-diagnostics.json' "$workflow" && yml_ok=0
+# The collector still WRITES its local reports (the workspace files the
+# step summary and the verdict consume — never uploaded).
 grep -q -- '--json-out run-diagnostics.json' "$workflow" || yml_ok=0
 grep -q -- '--out SHEYTAN-LA-errors-warnings.txt' "$workflow" || yml_ok=0
+# EXACTLY ONE upload-artifact step remains: the immutable-pinned platform
+# package upload, keyed off the explicit eligibility output and staging
+# ONLY the dist package (if-no-files-found: error).
+[ "$(grep -c 'uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9' "$workflow")" = "1" ] || yml_ok=0
+grep -q 'name: ${{ matrix.artifact }}' "$workflow" || yml_ok=0
+grep -q 'steps.package-eligibility.outputs.upload-package' "$workflow" || yml_ok=0
+grep -q 'path: dist/SHEYTAN-LA-ALPHA-\*' "$workflow" || yml_ok=0
+grep -q 'if-no-files-found: error' "$workflow" || yml_ok=0
+# The collector's own verdict stays fail-closed and its concise status
+# goes to the Actions step summary (local, not an artifact).
+grep -q 'Collector verdict (fail the job on coverage gaps)' "$workflow" || yml_ok=0
+grep -q 'GITHUB_STEP_SUMMARY' "$workflow" || yml_ok=0
 # Consolidation topology: each of the SEVEN matrix targets defined EXACTLY
 # ONCE in the single matrix.include list (the successor of the five
 # reusable-lane invocations).
@@ -575,7 +595,7 @@ grep -q 'dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz' "$workflow" || yml_ok=
 grep -q 'GITHUB_JOB' "$collector" || grep -q 'CONSOLIDATE_SELF_JOB_NAME' "$collector" || yml_ok=0
 grep -q 'normalize_job_name' "$collector" || yml_ok=0
 if [ "$yml_ok" = 1 ]; then
-  ok "clause O: build.yml uploads the errors/warnings-only diagnostic exactly once; SEVEN matrix targets defined once each; collector wired; retired names absent; self-detection wired"
+  ok "clause O: build.yml uploads ONLY the platform package (no build-evidence artifact remains; collector reports stay local); SEVEN matrix targets defined once each; collector wired fail-closed; retired names absent; self-detection wired"
 else
   bad "workflow shape contract"
 fi

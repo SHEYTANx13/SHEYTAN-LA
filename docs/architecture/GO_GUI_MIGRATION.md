@@ -84,16 +84,24 @@ until go-gui's mobile services reach parity — never silent fakes.
 
 ## Test evidence
 
-- `CGO_ENABLED=0 go test -tags '!headless' ./ui/gogui/ -count=1`: 22
-  tests PASS in the execution sandbox (dock persistence round-trip and
-  garbage recovery, navigation/shortcuts/ownership, theme mapping and
-  live switch, composer send/empty-send/stop-slot, settlement reload).
-- `CGO_ENABLED=0 go build -tags '!headless' ./ui/gogui/...`: clean;
-  pure-Go, no cgo.
+- `go test ./ui/gogui/ -count=1` (run 44835425398 pass, linux-amd64
+  sandbox): PASS — dock persistence round-trip and garbage recovery,
+  navigation/shortcuts/ownership, theme mapping and live switch,
+  composer send/empty-send/stop-slot, settlement reload, PLUS the new
+  `TestSizeClassForBreakpointMatrix` pinning the responsive breakpoint
+  decision (sizeClassFor) at every boundary (360/430/600/768/900/1024/
+  1280/1366/1920 and the 599.9/899.9/1279.9 edges).
+- `go build ./ui/gogui/...`: clean; pure-Go, no cgo.
 - Per-screen interaction tests beyond the ones above are marked PENDING
   in the table — the screens are implemented and compile, but the
   dedicated interaction tests were not completed inside this pass and
   are NOT claimed as verified.
+- The Fyne production suite (internal/desktop) and the native launch
+  smoke tests are NOT RUN in the run 44835425398 pass: the execution
+  sandbox carries no GL headers / pkg-config gl / Wayland headers (and
+  no root to install them), so the cgo Fyne stack cannot compile there —
+  exactly the evidence-class boundary the work order requires stating
+  instead of faking.
 
 ## Flip procedure (follow-up gate)
 

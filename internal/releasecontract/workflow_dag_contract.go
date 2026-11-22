@@ -11,25 +11,30 @@
 // needs (run 44306343338). The consolidated topology makes those shapes
 // impossible by construction:
 //
-//   - ValidateIndependentGatesDAG: the platform-build job owns the six
+//   - ValidateIndependentGatesDAG: the platform-build job owns the seven
 //     matrix targets and has NO needs (every matrix instance is an
 //     independent gate); no workflow_call lane invocations remain; the
 //     retired lane files are gone.
 //   - ValidatePlatformMatrixStructure: exactly one matrix.include with
-//     exactly the six targets, unique (target, os, artifact) triples,
+//     exactly the seven targets, unique (target, os, artifact) triples,
 //     fail-fast EXPLICITLY false, no cancel-in-progress: true.
 //   - ValidateFinalVerdictJob: a strict final verdict exists, needs
 //     platform-build + collect-errors, runs on !cancelled(), and its
 //     verdict step inspects every required gate's result — a collector
 //     success can never override a platform failure.
 //   - ValidateFailureTolerantCollector: the collector job needs exactly
-//     [platform-build], runs on always(), and both its uploads run on
-//     !cancelled() (red runs keep evidence).
+//     [platform-build], runs on always(), keeps its log collection and
+//     parsing LOCAL to the runner (run 44835425398 artifact policy: the
+//     collector uploads NO artifacts — its report and diagnostics index
+//     stay in the workspace, the concise summary goes to the step
+//     summary, and its own failure still fails the required gate).
 //   - ValidateCodeQLWorkflowResilience: CodeQL triggers independently of
 //     the platform build, keeps Go + actions scanning with the
 //     security-and-quality suite, analyzes after a failed manual build
 //     whenever init succeeded, uploads SARIF with upload: always, and
-//     carries a failure-tolerant diagnostics collector.
+//     carries a failure-tolerant diagnostics collector that uploads no
+//     build-log or diagnostics-index artifact (the security-alert report
+//     artifact in the export-alert-report job remains permitted).
 //   - SimulateGateMatrix: a small model of GitHub Actions scheduling
 //     semantics (needs + failure-tolerant if) so the fixture tests can
 //     PROVE the graph behavior: a red matrix keeps the collector running
@@ -44,11 +49,12 @@ import (
 
 // RequiredGateJobs are the YAML job keys whose conclusion the final
 // verdict accepts as the workflow's verdict: any non-success conclusion
-// is a red run. platform-build is the SIX-lane matrix (fail-fast: false
-// keeps every lane running to its terminal state); collect-errors is the
-// failure-tolerant evidence collector whose coverage-gap failure keeps
-// the run red. A collector report-generation SUCCESS can never override
-// a platform failure: both gates are checked in the same required loop.
+// is a red run. platform-build is the SEVEN-target matrix (fail-fast:
+// false keeps every lane running to its terminal state);
+// collect-errors is the failure-tolerant diagnostics collector whose
+// coverage-gap failure keeps the run red. A collector report-generation
+// SUCCESS can never override a platform failure: both gates are checked
+// in the same required loop.
 var RequiredGateJobs = []string{
 	PlatformBuildJobKey,
 	CollectorJobKey,
@@ -179,12 +185,15 @@ func ValidateFinalVerdictJob(workflowText string) error {
 	return joinErrors(errs)
 }
 
-// ValidateFailureTolerantCollector enforces the collector contract: the
-// collect-errors job needs EXACTLY [platform-build] (the ONE build gate
-// the collector reports on) and runs on always() so it publishes evidence
-// after ANY platform outcome; both run-level uploads (plain-text report +
-// machine-readable diagnostics index) carry the failure-tolerant
-// !cancelled() condition.
+// ValidateFailureTolerantCollector enforces the collector contract
+// (run 44835425398 artifact policy): the collect-errors job needs
+// EXACTLY [platform-build] (the ONE build gate the collector reports
+// on), runs on always() so it reports after ANY platform outcome, keeps
+// its log collection and parsing LOCAL to the runner (it still invokes
+// scripts/ci/consolidate-run-log.sh), uploads NO artifact of any kind
+// (the report and the diagnostics index stay in the workspace; the
+// concise status goes to the Actions step summary), and its own verdict
+// step still fails the REQUIRED collector gate on a coverage gap.
 func ValidateFailureTolerantCollector(workflowText string) error {
 	doc, err := parseWorkflow(workflowText)
 	if err != nil {
@@ -193,7 +202,7 @@ func ValidateFailureTolerantCollector(workflowText string) error {
 
 	job, ok := doc.Jobs[CollectorJobKey]
 	if !ok {
-		return fmt.Errorf("no %s job — red runs lose their consolidated evidence", CollectorJobKey)
+		return fmt.Errorf("no %s job — red runs lose their consolidated local diagnosis", CollectorJobKey)
 	}
 
 	var errs []string
@@ -206,20 +215,43 @@ func ValidateFailureTolerantCollector(workflowText string) error {
 	}
 
 	if !strings.Contains(job.If, "always()") {
-		errs = append(errs, "collect-errors must run with if: always() — red runs keep their consolidated log and diagnostics index")
+		errs = append(errs, "collect-errors must run with if: always() — red runs keep their consolidated LOCAL diagnosis and step summary")
 	}
 
-	// Both collector uploads must be failure-tolerant (a step without its
-	// own condition defaults to success() even inside an always() job).
-	for _, want := range []string{ConsolidatedLogArtifactName, RunDiagnosticsArtifactName} {
-		step, ok := findUploadStep(doc, CollectorJobKey, want)
-		if !ok {
-			errs = append(errs, fmt.Sprintf("collect-errors has no upload step named %q", want))
-			continue
+	// Run 44835425398 artifact policy: the collector UPLOADS NOTHING. Its
+	// report files stay in the runner workspace; the platform's log
+	// surface is the built-in Actions job-log display.
+	for _, step := range job.Steps {
+		if strings.HasPrefix(step.Uses, "actions/upload-artifact") {
+			errs = append(errs, fmt.Sprintf(
+				"%s step %q uploads an artifact — the collector must not upload build evidence, consolidated logs or diagnostics indexes (run 44835425398 artifact policy; the report stays a local workspace file)",
+				CollectorJobKey, step.Name,
+			))
 		}
-		if !strings.Contains(step.If, "!cancelled()") {
-			errs = append(errs, fmt.Sprintf("upload step %q must carry if: !cancelled() — the default implicit success() drops the artifact exactly when it is needed most: on a red run", want))
+	}
+
+	// The collection itself must stay real and local: the collector still
+	// runs the shared script against the run's own job logs.
+	collectorRuns := false
+	for _, step := range job.Steps {
+		if strings.Contains(step.Run, "scripts/ci/consolidate-run-log.sh") {
+			collectorRuns = true
 		}
+	}
+	if !collectorRuns {
+		errs = append(errs, "collect-errors no longer invokes scripts/ci/consolidate-run-log.sh — the failure-tolerant LOCAL log collection (and its strict exit-status contract) must survive the artifact-policy change")
+	}
+
+	// The collector's own failure must still fail the required gate: the
+	// verdict step keys off the collector's recorded rc and fails closed.
+	verdictStep := false
+	for _, step := range job.Steps {
+		if strings.Contains(step.Run, "steps.collector.outputs.rc") {
+			verdictStep = true
+		}
+	}
+	if !verdictStep {
+		errs = append(errs, "collect-errors lost its verdict step — the collector's own coverage/verification gap must still fail the REQUIRED collector gate (never hidden behind a best-effort step)")
 	}
 
 	return joinErrors(errs)
@@ -238,9 +270,14 @@ func ValidateFailureTolerantCollector(workflowText string) error {
 //     an initialized database is still analyzed (and its SARIF uploaded)
 //     when a later manual build step fails;
 //   - a collect-codeql-logs job runs after the analyze/export jobs on
-//     !cancelled() with least-privilege permissions and failure-tolerant
-//     uploads, reusing the same collector script as the platform-build
-//     workflow.
+//     !cancelled() with least-privilege permissions, reusing the same
+//     collector script as the platform-build workflow, keeping its
+//     collection LOCAL and uploading NO build-log or diagnostics-index
+//     artifact (run 44835425398 artifact policy). The security-alert
+//     report artifact (reports/code-scanning-alerts.txt, uploaded by the
+//     export-alert-report job) stays permitted: it is a security report,
+//     never build evidence, and GitHub Code Scanning/SARIF remains the
+//     authoritative security finding surface.
 func ValidateCodeQLWorkflowResilience(workflowText string) error {
 	doc, err := parseWorkflow(workflowText)
 	if err != nil {
@@ -378,15 +415,38 @@ func ValidateCodeQLWorkflowResilience(workflowText string) error {
 		errs = append(errs, "collect-codeql-logs must reuse scripts/ci/consolidate-run-log.sh — no second copy of the URL/token collector logic")
 	}
 
-	// The CodeQL uploads must be failure-tolerant.
-	for _, want := range []string{"SHEYTAN-LA-codeql-all-logs.txt", "codeql-run-diagnostics.json"} {
-		step, ok := findUploadStep(doc, "collect-codeql-logs", want)
-		if !ok {
-			errs = append(errs, fmt.Sprintf("collect-codeql-logs has no upload step named %q", want))
-			continue
-		}
-		if !strings.Contains(step.If, "!cancelled()") {
-			errs = append(errs, fmt.Sprintf("upload step %q must carry if: !cancelled() — CodeQL logs/diagnostics/SARIF artifacts must be retained after build/analyze failures", want))
+	// Run 44835425398 artifact policy: the CodeQL collector uploads NO
+	// build-log or diagnostics-index artifact. The forbidden evidence
+	// names must not appear as upload names in ANY job of this
+	// workflow; the ONLY permitted artifact remains the security-alert
+	// plain-text report in the export-alert-report job.
+	for _, jobKey := range sortedJobKeys(doc) {
+		for _, step := range doc.Jobs[jobKey].Steps {
+			if !strings.HasPrefix(step.Uses, "actions/upload-artifact") {
+				continue
+			}
+			name := withStringValue(step.With, "name")
+			if jobKey != "export-alert-report" {
+				errs = append(errs, fmt.Sprintf(
+					"%s step %q uploads an artifact — the ONLY permitted CodeQL artifact is the security-alert report in the export-alert-report job; CodeQL build logs and run diagnostics stay local to the runner (run 44835425398 artifact policy)",
+					jobKey, step.Name,
+				))
+				continue
+			}
+			for _, banned := range ForbiddenArtifactUploadNames {
+				if name == banned {
+					errs = append(errs, fmt.Sprintf(
+						"%s step %q uploads the forbidden evidence artifact %q — build-log and diagnostics-index uploads are banned even in the CodeQL workflow",
+						jobKey, step.Name, name,
+					))
+				}
+			}
+			if name != "" && !strings.Contains(name, "code-scanning-alerts") {
+				errs = append(errs, fmt.Sprintf(
+					"%s step %q uploads unexpected artifact %q — the export-alert-report job may upload only the plain-text security report (reports/code-scanning-alerts.txt)",
+					jobKey, step.Name, name,
+				))
+			}
 		}
 	}
 
@@ -484,7 +544,10 @@ func jobRunsAfterFailure(jobIf string) bool {
 }
 
 // findUploadStep locates the upload-artifact step with the given
-// with.name inside the given job key.
+// with.name inside the given job key. (Retained for diagnostics: the
+// run 44835425398 contract no longer REQUIRES any collector upload
+// step — the platform-build surface is the package only, and the CodeQL
+// surface is the security-alert report only.)
 func findUploadStep(doc *workflowDoc, jobKey, artifactName string) (workflowStep, bool) {
 	job, ok := doc.Jobs[jobKey]
 	if !ok {
@@ -515,6 +578,16 @@ func codeQLMatrixLanguages(workflowText string) map[string]bool {
 		langs[lang] = true
 	}
 	return langs
+}
+
+// sortedJobKeys returns the workflow's job keys in deterministic order.
+func sortedJobKeys(doc *workflowDoc) []string {
+	keys := make([]string, 0, len(doc.Jobs))
+	for key := range doc.Jobs {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // countActiveContinueOnError counts ACTIVE continue-on-error directives

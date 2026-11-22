@@ -501,14 +501,18 @@ jobs:
   # ===========================================================================
   # Collect CodeQL logs — the failure-tolerant CodeQL diagnostics collector
   # (work order §9.5, run 43630164424 repair). It REUSES the same hardened
-  # scripts/ci/consolidate-run-log.sh collector as build-desktop (no second
-  # copy of the URL/token logic): running inside THIS workflow means
-  # github.run_id selects the CodeQL run, so the collector needs no separate
-  # workflow selector. It runs after ANY analyze/export outcome
-  # (!cancelled()), so red CodeQL runs keep their job logs, the collector
-  # self-log and a machine-readable run-diagnostics.json — distinguishing
-  # ran-and-failed, skipped, in-progress, missing log sources and the
-  # collector's own job exactly like the build-desktop collector.
+  # scripts/ci/consolidate-run-log.sh collector as the platform-build
+  # workflow (no second copy of the URL/token logic): running inside THIS
+  # workflow means github.run_id selects the CodeQL run, so the collector
+  # needs no separate workflow selector. It runs after ANY analyze/export
+  # outcome (!cancelled()), so red CodeQL runs keep their LOCAL diagnosis —
+  # distinguishing ran-and-failed, skipped, in-progress, missing log
+  # sources and the collector's own job exactly like the platform-build
+  # collector. Run 44835425398 artifact policy: the collection stays LOCAL
+  # to the runner — NO build-log or diagnostics-index artifact is uploaded
+  # (the built-in job-log display is the log surface); the ONLY artifact
+  # this workflow uploads remains the security-alert report of the
+  # export-alert-report job.
   # Least privilege: contents: read + actions: read only (the SARIF-writing
   # security-events: write permission stays on the analyze jobs alone).
   # ===========================================================================
@@ -525,7 +529,7 @@ jobs:
       - name: Checkout (collector script)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Collect the CodeQL run logs into one plain-text report
+      - name: Collect the CodeQL run logs into one plain-text report (LOCAL, never uploaded)
         id: collector
         env:
           GH_TOKEN: ${{ github.token }}
@@ -544,38 +548,16 @@ jobs:
             --json-out run-diagnostics.json || rc=$?
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           if [ "$rc" -ne 0 ]; then
-            echo "::error::Collect CodeQL logs: collector reported a coverage/verification gap (rc=$rc) — the report artifact still carries the diagnosis"
+            echo "::error::Collect CodeQL logs: collector reported a coverage/verification gap (rc=$rc) — the LOCAL report still carries the diagnosis"
           fi
           {
             echo "## CodeQL consolidated run log"
             echo ""
-            echo "Artifacts: \`SHEYTAN-LA-codeql-all-logs.txt\` (ONE plain-text file, upload-artifact archive:false) and"
-            echo "\`run-diagnostics.json\` (machine-readable per-job index), attempt ${{ github.run_attempt }} recorded INSIDE both."
+            echo "LOCAL reports (run 44835425398 artifact policy — never uploaded as artifacts): \`SHEYTAN-LA-codeql-all-logs.txt\` (ONE plain-text file) and"
+            echo "\`run-diagnostics.json\` (machine-readable per-job index), attempt ${{ github.run_attempt }} recorded INSIDE both. The Actions job logs above are the run's log surface; SARIF remains the authoritative security finding surface."
             echo ""
             echo "Analysis jobs: analyze=${{ needs.analyze.result }} export-alert-report=${{ needs.export-alert-report.result }}"
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload the consolidated CodeQL run log (single plain-text artifact)
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: SHEYTAN-LA-codeql-all-logs.txt
-          path: SHEYTAN-LA-codeql-all-logs.txt
-          if-no-files-found: error
-          retention-days: 14
-          overwrite: true
-          archive: false
-
-      - name: Upload the machine-readable CodeQL run diagnostics index
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: codeql-run-diagnostics.json
-          path: run-diagnostics.json
-          if-no-files-found: error
-          retention-days: 14
-          overwrite: true
-          archive: false
 
       - name: Collector verdict (fail the job on coverage gaps)
         if: ${{ !cancelled() }}
@@ -586,7 +568,7 @@ jobs:
             exit 1
           fi
           if [ "$rc" != "0" ]; then
-            echo "::error::collector exited $rc — the report artifact names the missing log sources / errors"
+            echo "::error::collector exited $rc — the LOCAL report and the step summary name the missing log sources / errors"
             exit 1
           fi
           echo "collector verdict: complete report (rc=0)"

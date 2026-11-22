@@ -40,10 +40,13 @@ push (main, v* tags) + pull_request (main) + workflow_dispatch
                      failure.txt so the if:always() package-gate
                      reporter can name ONE root cause.
     collect-errors   needs exactly [platform-build], if: always():
-                     scripts/ci/consolidate-run-log.sh writes
+                     scripts/ci/consolidate-run-log.sh writes the
+                     LOCAL workspace reports
                      SHEYTAN-LA-errors-warnings.txt +
-                     run-diagnostics.json (both archive:false,
-                     retention 14, if: !cancelled()); a final
+                     run-diagnostics.json (run 44835425398 artifact
+                     policy: NEVER uploaded as artifacts — the built-in
+                     Actions job logs are the run's log surface); the
+                     concise status goes to the step summary; a final
                      fail-closed step re-checks the collector rc and
                      fails on coverage gaps.
     final-verdict    needs [platform-build, collect-errors],
@@ -63,7 +66,7 @@ Rules pinned by the contracts:
   EMPTY or absent `needs` — no platform-to-platform needs chain (the
   run-43630164424 lesson; the strict final verdict owns acceptance).
   `ValidatePlatformMatrixStructure` parses the YAML and asserts exactly
-  six targets with unique (target, os, artifact) triples.
+  seven targets with unique (target, os, artifact) triples.
 - macOS Intel and Apple Silicon stay on DISTINCT runner images
   (macos-15-intel vs macos-15) with DISTINCT artifact names.
 - ONE authoritative trigger block: build.yml owns
@@ -83,11 +86,16 @@ Rules pinned by the contracts:
 | android-arm64 | `SHEYTAN-LA-ALPHA-android-arm64` | pinned gomobile/gobind (v0.0.0-20261117202452-47699113848a, never @latest), fail-closed NDK, debug-signed dev package, manifest/dex checks, repo-cleanliness guard; emulator/device smoke NOT RUN (stated on the artifact) |
 | ios-simulator-arm64 | `SHEYTAN-LA-ALPHA-ios-simulator-arm64` (.zip) | SIMULATOR-ONLY qualification, Mach-O + plist verify; a device IPA is never produced without signing |
 | ios-device-arm64 | `SHEYTAN-LA-ALPHA-ios-device-arm64` (.ipa) | run 44547031698 §6.3: the matrix entry is structural; execution is honestly gated on the five Apple signing secrets — without them the lane records BLOCKED BY MISSING APPLE SIGNING CONFIGURATION (`PACKAGE_GATE_RESULT BLOCKED_BY_MISSING_APPLE_SIGNING`, the job stays green, no IPA is fabricated); with them: real iphoneos arm64 build, per-job temporary keychain (deleted even on failure), ad-hoc export, fail-closed signature/team/slice/profile verification. Physical install requires the device UDID inside the ad-hoc profile and stays NOT RUN without a registered device |
-| collect-errors | `SHEYTAN-LA-errors-warnings.txt` + `run-diagnostics.json` | the §7 errors-and-warnings-only diagnostic (see §4) |
+| collect-errors | (none — LOCAL reports only) | the §7 errors-and-warnings-only diagnostic and the machine-readable index stay LOCAL runner workspace files (see §4); NOTHING is uploaded |
 
-Per target, the platform-build job also uploads
+Run 44835425398 artifact policy: build evidence of ANY kind is never
+uploaded as a workflow artifact. The former per-target
 `build-evidence-${{ matrix.target }}-${{ github.run_attempt }}`
-(ci-logs/, if-no-files-found: warn) so red lanes keep their gate logs.
+(ci-logs/) upload and the collector's two artifact uploads are REMOVED;
+the platform-build workflow's entire permitted artifact surface is the
+ONE matrix package upload, gated on the explicit
+`steps.package-eligibility.outputs.upload-package == 'true'` decision.
+The normal GitHub Actions job logs remain available in the run UI.
 
 
 ### 3a. Structured package verdicts (run 44547031698 §7.5)
@@ -103,10 +111,11 @@ collector aggregates:
 The top-level package verdict is OK only when EVERY platform-build matrix
 job reported OK — a blocked or silent lane can never be outvoted by a green
 sibling again (the hosted run 44547031698 report said package=OK beside four
-blocked gates). The shared artifact upload is skipped while the per-target
-upstream-failure or blocked marker exists, so a blocked package never
-produces the duplicate `No files were found with the provided path` noise;
-the evidence upload (ci-logs/) stays unconditional.
+blocked gates). The package upload is keyed off the explicit
+`steps.package-eligibility.outputs.upload-package == 'true'` decision so
+a blocked package never produces the duplicate
+`No files were found with the provided path` noise; NO evidence upload
+exists anymore (run 44835425398 artifact policy).
 
 ### Carried-over-as-FIXED packaging defects
 
@@ -130,7 +139,8 @@ the evidence upload (ci-logs/) stays unconditional.
 `scripts/ci/consolidate-run-log.sh` fetches completed job logs via the
 jobs API (never the in-progress run-attempt archive), fetches per-job
 check-run annotations as the authoritative annotation channel, and
-writes ONE plain-text artifact that contains ONLY errors, warnings,
+writes ONE plain-text LOCAL report (never an uploaded artifact — run
+44835425398 artifact policy) that contains ONLY errors, warnings,
 test failures (normalized `TEST_FAILURE:`), failed/cancelled job
 metadata, missing-log-source rows and the run/coverage summary.
 ASCII-only English; the substrings `===` and `---` can never appear
@@ -139,8 +149,9 @@ mapped or escaped; secrets and signed URLs are redacted; output is
 deterministic; a red upstream run is NOT a collector failure, a
 missing terminal log IS (fail-closed, report written first). The
 offline fixture suite (`consolidate-run-log-fixtures.sh`) proves every
-clause — clause O pins the build.yml shape (six matrix targets exactly
-once, one errors-warnings upload with archive:false, collector wired,
+clause — clause O pins the build.yml shape (seven matrix targets exactly
+once, NO build-evidence upload of any kind, exactly ONE package upload
+gated on the eligibility output, collector wired fail-closed,
 retired names absent). Application runtime logging is a separate system
 and keeps its structured levels.
 

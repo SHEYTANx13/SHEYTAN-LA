@@ -827,7 +827,7 @@ func stressReleaseSurface() error {
 	// run-id-suffixed consolidated name and the verbose all-logs artifact
 	// are RETIRED — the collector pulls every job's log from the paginated
 	// jobs API and uploads the ONE errors/warnings-only plain-text
-	// diagnostic named by releasecontract.ConsolidatedLogArtifactName
+	// diagnostic named by releasecontract.ConsolidatedLogReportFileName
 	// (archive:false); the attempt number lives ONLY inside the report
 	// (CONSOLIDATE_ATTEMPT). The retired name is BANNED by the
 	// artifact-naming contract test, so a stale anchor here contradicted
@@ -839,13 +839,13 @@ func stressReleaseSurface() error {
 	// anchor uses the SHARED releasecontract constant so this gate and
 	// the contract tests can never drift apart again.
 	for _, consolidation := range []string{
-		releasecontract.ConsolidatedLogArtifactName,
+		releasecontract.ConsolidatedLogReportFileName,
 		"CONSOLIDATE_ATTEMPT: ${{ github.run_attempt }}",
 		"scripts/ci/consolidate-run-log.sh",
 	} {
 		if !strings.Contains(w, consolidation) {
 			return fmt.Errorf(
-				"consolidated run-log contract missing %q — the one-file log must be stable, complete and uploaded on red runs too",
+				"consolidated run-log contract missing %q — the collector must keep writing the stable local report (never uploaded as an artifact; run 44835425398 policy)",
 				consolidation,
 			)
 		}

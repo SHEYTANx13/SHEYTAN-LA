@@ -174,8 +174,17 @@ func ParseSafetensorsHeader(data []byte) (*SafetensorsMeta, error) {
 		if uint64(want) != end-start {
 			return nil, fmt.Errorf("%w: tensor %q: data_offsets span %d bytes but %s %v needs exactly %d", ErrMalformedContainer, name, end-start, dt, []int(shape), want)
 		}
-		if meta.DataStart+start > meta.DataEnd || meta.DataStart+end > meta.DataEnd {
-			return nil, fmt.Errorf("%w: tensor %q: data_offsets [%d,%d] escape the %d-byte data section", ErrMalformedContainer, name, start, end, meta.DataEnd-meta.DataStart)
+		// Overflow-safe bounds check (run 44835425398 engine pass):
+		// the previous form compared meta.DataStart+start against
+		// DataEnd — a uint64 ADDITION that wraps for offsets near
+		// 2^64, so a hostile container escaped the data-section
+		// bounds and materialized a tensor over aliased (header)
+		// bytes. Comparing each offset against the data-section
+		// LENGTH uses no addition and cannot wrap: every offset
+		// larger than the data section fails closed.
+		dataLen := meta.DataEnd - meta.DataStart
+		if start > dataLen || end > dataLen {
+			return nil, fmt.Errorf("%w: tensor %q: data_offsets [%d,%d] escape the %d-byte data section", ErrMalformedContainer, name, start, end, dataLen)
 		}
 		meta.Tensors = append(meta.Tensors, SafetensorsTensorInfo{
 			Name:        name,
@@ -209,6 +218,14 @@ func TensorFromSafetensors(data []byte, info SafetensorsTensorInfo) (*Tensor, er
 	dt, err := info.DType.toEngineDType()
 	if err != nil {
 		return nil, err
+	}
+	// Defense in depth for direct callers (the exported info struct can
+	// be constructed outside the parser): the offsets must be ordered
+	// and inside the buffer — a reversed or escaped range is a typed
+	// error, never a Go slice panic and never aliased bytes (run
+	// 44835425398 engine pass).
+	if info.DataOffsets[0] > info.DataOffsets[1] {
+		return nil, fmt.Errorf("%w: tensor %q: data_offsets [%d,%d] are reversed", ErrMalformedContainer, info.Name, info.DataOffsets[0], info.DataOffsets[1])
 	}
 	if info.DataOffsets[1] > uint64(len(data)) {
 		return nil, fmt.Errorf("%w: tensor %q offsets escape the buffer", ErrMalformedContainer, info.Name)

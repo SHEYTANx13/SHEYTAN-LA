@@ -5,10 +5,6 @@
 //
 //   - NO artifact name (upload or download) carries a run-attempt suffix
 //     in ANY spelling (`-attempt${{ ... }}`, `-attempt-1`, `-attempt1`);
-//   - the consolidated run log is the ONE log artifact: the exact stable
-//     plain-text name SHEYTAN-LA-all-logs.txt (upload-artifact
-//     archive:false — the artifact downloads as the file itself, and the
-//     artifact display name equals the file name);
 //   - the two packages keep the exact stable names on upload (build
 //     jobs) and download (release job);
 //   - the retired five-part log-part era (preflight/audit/ui/windows/
@@ -16,20 +12,32 @@
 //     merge-multiple) must NOT reappear — the collector now pulls every
 //     completed job's log straight from the paginated jobs API, so there
 //     is nothing to flatten in the first place;
-//   - the attempt number survives ONLY inside the consolidated report as
-//     structured provenance metadata (the workflow's CONSOLIDATE_ATTEMPT
-//     env + the fixtures' --attempt rerun case), never in a name.
+//   - the attempt number survives ONLY inside the collector's LOCAL
+//     report as structured provenance metadata (the workflow's
+//     CONSOLIDATE_ATTEMPT env + the fixtures' --attempt rerun case),
+//     never in a name.
+//
+// RUN 44835425398 ARTIFACT POLICY (this pass's controlling contract):
+//
+//   - the platform-build workflow's ENTIRE permitted artifact surface is
+//     the ONE matrix package upload (${{ matrix.artifact }}) gated on
+//     the explicit package-eligibility step output;
+//   - build evidence of ANY kind — consolidated logs, diagnostics
+//     indexes, ci-logs/ bundles, test reports, JSONL compiler output,
+//     coverage/race reports — is NEVER uploaded as a workflow artifact;
+//   - the CodeQL workflow's only artifact remains the security-alert
+//     plain-text report; its build-log and diagnostics-index uploads are
+//     banned;
+//   - the regression coverage below is MUTATION-based: each banned
+//     evidence class is injected into the REAL parsed workflow text and
+//     the contract must reject it — the allowlist is proven on both
+//     sides of every rule, not merely asserted.
 //
 // v1.11.1 (run 41901967798): the extraction below uses the SHARED YAML-
 // parsed, per-job-scoped contract helpers (workflow_contract.go) instead
-// of the retired hand-rolled line scanner. The scanner was CRLF-
-// sensitive: windows-latest materializes the unpinned .yml as CRLF, its
-// job-boundary regexp never matched, step context leaked across jobs and
-// job display names ("Linux x64", "Consolidate logs") were captured as
-// artifact names — "Consolidate logs" contains "logs", so the one-log-
-// upload count found 2 and the Windows headless gate went red on a
-// CORRECT workflow. A real YAML parser is line-ending-proof by
-// construction; fixture coverage pins the CRLF case explicitly.
+// of the retired hand-rolled line scanner. A real YAML parser is
+// line-ending-proof by construction; fixture coverage pins the CRLF case
+// explicitly.
 package releasecontract
 
 import (
@@ -87,10 +95,10 @@ func TestWorkflowUploadArtifactPinsMatchAllowlist(t *testing.T) {
 }
 
 // TestCodeQLWorkflowImmutablePins: the CodeQL workflow follows the SAME
-// immutable-SHA action-reference policy as the desktop workflow — both
-// workflow files are governed, not just build-desktop.yml (SEC-03:
-// pinning the refs never changes the analyzer configuration, the
-// manual C++ extraction or the SARIF uploads).
+// immutable-SHA action-reference policy as the platform-build workflow —
+// both workflow files are governed (SEC-03: pinning the refs never
+// changes the analyzer configuration, the manual C++ extraction or the
+// SARIF uploads).
 func TestCodeQLWorkflowImmutablePins(t *testing.T) {
 	workflow := readTreeFile(t, ".github/workflows/codeql.yml")
 
@@ -99,25 +107,23 @@ func TestCodeQLWorkflowImmutablePins(t *testing.T) {
 	}
 }
 
-// TestWorkflowStableArtifactNamesExact: the ONE consolidated log
-// artifact and the two packages use the exact contracted names, the
-// upload surface is EXACTLY those three steps (scoped per job by the
-// shared parser), and the retired run-id-suffixed log name never
-// reappears.
+// TestWorkflowStableArtifactNamesExact: the ONE permitted platform-build
+// upload is the matrix package step; the upload surface is EXACTLY that
+// step (scoped per job by the shared parser); the release job downloads
+// the exact stable package names; and the retired run-id-suffixed log
+// name never reappears.
 func TestWorkflowStableArtifactNamesExact(t *testing.T) {
 	workflow := readTreeFile(t, workflowRelPath)
 
 	// The shared validators carry the exact contract semantics — the
 	// stress gate runs the SAME functions, so the gates cannot drift.
-	// The orchestrator owns the two evidence uploads; the package
-	// uploads live in their single authoritative reusable lanes.
+	// The package upload is the ONLY upload; no evidence upload exists.
 	if err := ValidateUploadArtifactContract(workflow); err != nil {
-		t.Fatalf("orchestrator upload-artifact contract violated: %v", err)
+		t.Fatalf("platform-build upload-artifact contract violated: %v", err)
 	}
 
-	// The CI consolidation: all six package uploads resolve from the ONE
-	// matrix upload step of build.yml; the per-surface validators parse
-	// that same file.
+	// All seven package names resolve from the ONE matrix upload step of
+	// build.yml; the per-surface validators parse that same file.
 	if err := ValidatePlatformPackageUploadContract(workflow); err != nil {
 		t.Fatalf("platform package upload contract violated: %v", err)
 	}
@@ -126,6 +132,14 @@ func TestWorkflowStableArtifactNamesExact(t *testing.T) {
 	}
 	if err := ValidatePlatformMatrixStructure(workflow); err != nil {
 		t.Fatalf("platform matrix structure violated: %v", err)
+	}
+
+	uploads := mustArtifactSteps(t, workflow, "actions/upload-artifact")
+	if len(uploads) != 1 {
+		t.Fatalf("the platform-build workflow must carry EXACTLY ONE upload (the package), found %d", len(uploads))
+	}
+	if uploads[0].Name != MatrixPackageArtifactSlot {
+		t.Fatalf("the only upload must be the matrix package step %q, got %q", MatrixPackageArtifactSlot, uploads[0].Name)
 	}
 
 	downloads := mustArtifactSteps(t, workflow, "actions/download-artifact")
@@ -155,21 +169,16 @@ func TestWorkflowStableArtifactNamesExact(t *testing.T) {
 }
 
 // TestWorkflowArtifactNamesCarryNoAttemptSuffix: no upload OR download
-// artifact name contains an attempt-suffix in any spelling.
+// artifact name contains an attempt-suffix in any spelling. Run
+// 44835425398: the former build-evidence exception is GONE together with
+// the upload it named — every artifact name is stable.
 func TestWorkflowArtifactNamesCarryNoAttemptSuffix(t *testing.T) {
 	workflow := readTreeFile(t, workflowRelPath)
 
 	for _, action := range []string{"actions/upload-artifact", "actions/download-artifact"} {
 		for _, step := range mustArtifactSteps(t, workflow, action) {
-			// The build-evidence artifact is the ONE contracted exception:
-			// its name carries ${{ github.run_attempt }} so parallel rerun
-			// attempts never collide (the consolidation contract). Every
-			// other artifact name must be stable.
-			if step.Name == BuildEvidenceArtifactSkeleton {
-				continue
-			}
 			if strings.Contains(strings.ToLower(step.Name), "attempt") {
-				t.Errorf("%s artifact name %q carries a run-attempt suffix — stable-name contract (run id/commit/attempt live INSIDE the consolidated report; only the build-evidence artifact may carry the attempt)", action, step.Name)
+				t.Errorf("%s artifact name %q carries a run-attempt suffix — stable-name contract (run id/commit/attempt live INSIDE the collector's LOCAL report; no artifact carries the attempt)", action, step.Name)
 			}
 		}
 	}
@@ -221,7 +230,7 @@ func TestWorkflowHasNoLogPartArtifacts(t *testing.T) {
 }
 
 // TestAttemptSurvivesOnlyAsReportMetadata: the collector still receives
-// the attempt number for provenance INSIDE the report (structured
+// the attempt number for provenance INSIDE the LOCAL report (structured
 // metadata via CONSOLIDATE_ATTEMPT + the fixtures' --attempt rerun
 // case), and the fixtures pin the current coverage classes.
 func TestAttemptSurvivesOnlyAsReportMetadata(t *testing.T) {
@@ -245,17 +254,18 @@ func TestAttemptSurvivesOnlyAsReportMetadata(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Fixture coverage (run 41901967798 §2.2/§2.3): the pin policy and the
-// scoped upload contract are pinned against synthetic workflows so the
-// shared validators are proven on BOTH sides of every rule — including
-// the CRLF materialization that broke the retired scanner on the
-// Windows runner.
+// Fixture coverage (run 41901967798 §2.2/§2.3, redesigned by the run
+// 44835425398 artifact policy): the pin policy and the closed upload
+// allowlist are pinned against synthetic workflows so the shared
+// validators are proven on BOTH sides of every rule — including the
+// CRLF materialization that broke the retired scanner on the Windows
+// runner.
 // ---------------------------------------------------------------------------
 
-// fixtureUploadWorkflow is the CONSOLIDATED upload surface fixture:
-// the platform-build matrix job's package + evidence uploads and the
-// collector job's consolidated diagnostic + machine-readable index.
-// The %s slots receive the upload-artifact refs.
+// fixtureUploadWorkflow is the PERMITTED upload surface fixture: the ONE
+// matrix package upload, gated on the explicit eligibility output, and
+// the collector job WITHOUT any upload step (its reports stay local).
+// The %s slot receives the upload-artifact ref.
 const fixtureUploadWorkflow = `jobs:
   platform-build:
     strategy:
@@ -267,112 +277,54 @@ const fixtureUploadWorkflow = `jobs:
             artifact: SHEYTAN-LA-ALPHA-windows-x64-portable
             kind: zip
     steps:
+      - name: Determine package upload eligibility (explicit step output)
+        id: package-eligibility
+        run: echo "upload-package=true" >> "$GITHUB_OUTPUT"
       - name: Upload the platform package
-        if: always()
+        if: always() && steps.package-eligibility.outputs.upload-package == 'true'
         uses: actions/upload-artifact@%s
         with:
           name: ${{ matrix.artifact }}
           path: dist/SHEYTAN-LA-ALPHA-*
           if-no-files-found: error
-          overwrite: true
-      - name: Upload build evidence (ci-logs)
-        if: always()
-        uses: actions/upload-artifact@%s
-        with:
-          name: build-evidence-${{ matrix.target }}-${{ github.run_attempt }}
-          path: ci-logs/
-          if-no-files-found: warn
+          retention-days: 14
           overwrite: true
   collect-errors:
     name: Collect errors
     steps:
-      - name: Upload the errors-warnings-only consolidated diagnostic (single plain-text artifact)
+      - name: Collect the run-attempt logs into one plain-text report (LOCAL)
+        run: |
+          bash scripts/ci/consolidate-run-log.sh \
+            --out SHEYTAN-LA-errors-warnings.txt \
+            --json-out run-diagnostics.json || rc=$?
+`
+
+// fixtureWithEvidenceUpload appends ONE evidence upload step of the
+// given name/path to the collector job — the banned class fixture.
+func fixtureWithEvidenceUpload(name, path string) string {
+	return fixtureUploadWorkflow + fmt.Sprintf(`      - name: Upload %s
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@%s
+        uses: actions/upload-artifact@v7
         with:
-          name: SHEYTAN-LA-errors-warnings.txt
-          path: SHEYTAN-LA-errors-warnings.txt
+          name: %s
+          path: %s
           if-no-files-found: error
           retention-days: 14
           overwrite: true
           archive: false
-      - name: Upload the machine-readable run diagnostics index
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@%s
-        with:
-          name: run-diagnostics.json
-          path: run-diagnostics.json
-          if-no-files-found: error
-          retention-days: 14
-          overwrite: true
-          archive: false
-`
+`, name, name, path)
+}
 
-// fixtureWithDuplicateLogUpload adds a SECOND consolidated log upload in
-// another job — the negative contract case.
-const fixtureWithDuplicateLogUpload = `jobs:
-  collect-errors:
-    name: Collect errors
-    steps:
-      - name: Upload the consolidated run log (single plain-text artifact)
-        uses: actions/upload-artifact@v7
-        with:
-          name: SHEYTAN-LA-errors-warnings.txt
-          path: SHEYTAN-LA-errors-warnings.txt
-          archive: false
-          overwrite: true
-  debug-logs:
-    name: Debug logs
-    steps:
-      - name: Upload the consolidated run log AGAIN (contract breach)
-        uses: actions/upload-artifact@v7
-        with:
-          name: SHEYTAN-LA-errors-warnings.txt
-          path: SHEYTAN-LA-errors-warnings.txt
-          archive: false
-          overwrite: true
-`
-
-// fixtureWithExtraUpload carries an unrelated fifth upload — the
-// closed-surface negative case.
-const fixtureWithExtraUpload = `jobs:
-  collect-errors:
-    name: Collect errors
-    steps:
-      - name: Upload the consolidated run log (single plain-text artifact)
-        uses: actions/upload-artifact@v7
-        with:
-          name: SHEYTAN-LA-errors-warnings.txt
-          path: SHEYTAN-LA-errors-warnings.txt
-          archive: false
-          overwrite: true
-      - name: Upload the machine-readable run diagnostics index
-        uses: actions/upload-artifact@v7
-        with:
-          name: run-diagnostics.json
-          path: run-diagnostics.json
-          archive: false
-          overwrite: true
-  extra:
-    name: Extra
-    steps:
-      - name: Upload something else
-        uses: actions/upload-artifact@v7
-        with:
-          name: debug-bundle
-          path: debug/
-          overwrite: true
-`
-
-// TestUploadArtifactContractFixtures: the positive fixture (the four
-// contracted upload shapes) PASSES — including its CRLF materialization,
-// the exact shape the retired scanner broke on — and both negative
-// fixtures FAIL with the contract message.
+// TestUploadArtifactContractFixtures: the positive fixture (the ONE
+// permitted package upload, collector uploads nothing) PASSES —
+// including its CRLF materialization, the exact shape the retired
+// scanner broke on — and every banned evidence class FAILS the contract
+// with the policy message.
 func TestUploadArtifactContractFixtures(t *testing.T) {
-	good := fmt.Sprintf(fixtureUploadWorkflow, "v7", "v7", "v7", "v7")
+	good := fmt.Sprintf(fixtureUploadWorkflow, "v7")
 
 	if err := ValidateUploadArtifactContract(good); err != nil {
-		t.Fatalf("the contracted four-upload fixture must pass: %v", err)
+		t.Fatalf("the permitted single-package-upload fixture must pass: %v", err)
 	}
 
 	// CRLF variant — the windows-latest checkout materialization. The
@@ -383,34 +335,61 @@ func TestUploadArtifactContractFixtures(t *testing.T) {
 		t.Fatalf("the CRLF-materialized fixture must pass (run 41901967798 Failure B): %v", err)
 	}
 
-	if err := ValidateUploadArtifactContract(fixtureWithDuplicateLogUpload); err == nil {
-		t.Fatal("a duplicate consolidated log upload must FAIL the contract")
-	} else if !strings.Contains(err.Error(), "exactly ONE consolidated diagnostic artifact upload") {
-		t.Fatalf("duplicate-log failure must name the one-log rule, got: %v", err)
+	// Every banned evidence class must fail, each with the policy
+	// message naming the prohibition.
+	bannedClasses := []struct {
+		desc     string
+		name     string
+		path     string
+		contains string
+	}{
+		{"per-lane build-evidence bundle", "build-evidence-${{ matrix.target }}-${{ github.run_attempt }}", "ci-logs/", "PROHIBITED"},
+		{"consolidated errors/warnings report", "SHEYTAN-LA-errors-warnings.txt", "SHEYTAN-LA-errors-warnings.txt", "PROHIBITED"},
+		{"machine-readable run diagnostics index", "run-diagnostics.json", "run-diagnostics.json", "PROHIBITED"},
+		{"CodeQL consolidated build log", "SHEYTAN-LA-codeql-all-logs.txt", "SHEYTAN-LA-codeql-all-logs.txt", "PROHIBITED"},
+		{"CodeQL run diagnostics index", "codeql-run-diagnostics.json", "codeql-run-diagnostics.json", "PROHIBITED"},
+		{"ci-logs diagnostic directory", "ci-logs", "ci-logs/", "evidence marker"},
+		{"test report directory", "test-results", "test-results/", "evidence marker"},
+		{"junit report", "junit-report", "reports/junit.xml", "evidence marker"},
+		{"coverage report", "coverage", "coverage.out", "evidence marker"},
+		{"JSONL compiler trace", "compiler-trace", "ci-logs/compile.jsonl", "evidence marker"},
+		{"raw log file", "runner-log", "ci-logs/job.log", "evidence marker"},
+		// A matrix-NAMED upload with a non-package path exercises the path
+		// rule itself: ONLY the dist/SHEYTAN-LA-ALPHA-* package may be staged.
+		{"temporary build directory (matrix-named)", "${{ matrix.artifact }}", "/home/runner/work/_temp/build", "must stage ONLY"},
 	}
 
-	if err := ValidateUploadArtifactContract(fixtureWithExtraUpload); err == nil {
-		t.Fatal("an extra (non-contracted) upload must FAIL the contract")
-	} else if !strings.Contains(err.Error(), "debug-bundle") {
-		t.Fatalf("extra-upload failure must name the offending artifact, got: %v", err)
+	for _, tc := range bannedClasses {
+		mutated := fixtureWithEvidenceUpload(tc.name, tc.path)
+		err := ValidateUploadArtifactContract(mutated)
+		if err == nil {
+			t.Errorf("%s: the %q upload must FAIL the contract", tc.desc, tc.name)
+
+			continue
+		}
+		if !strings.Contains(err.Error(), tc.contains) {
+			t.Errorf("%s: failure must carry %q, got: %v", tc.desc, tc.contains, err)
+		}
 	}
 
-	// A package upload must never satisfy the log rule by substring:
-	// a workflow whose ONLY upload is a package has ZERO log uploads.
-	pkgOnly := `jobs:
-  platform-build:
-    steps:
-      - name: Upload the portable ZIP
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ matrix.artifact }}
-          path: dist/SHEYTAN-LA-ALPHA-*
-          overwrite: true
-`
+	// The eligibility condition is contracted: a package upload WITHOUT
+	// the explicit eligibility gate fails (a package must never be
+	// uploaded unconditionally — an intentionally absent package would
+	// otherwise produce an empty or partial artifact).
+	noEligibility := strings.Replace(
+		good,
+		"if: always() && steps.package-eligibility.outputs.upload-package == 'true'",
+		"if: always()",
+		1,
+	)
+	if err := ValidateUploadArtifactContract(noEligibility); err == nil {
+		t.Fatal("a package upload without the eligibility condition must FAIL the contract")
+	} else if !strings.Contains(err.Error(), "package-eligibility.outputs.upload-package") {
+		t.Fatalf("missing-eligibility failure must name the gate, got: %v", err)
+	}
 
-	// The matrix package upload contract (section 6.3 names) and its
-	// negative case: a retired artifact name fails the per-surface
-	// validator.
+	// A retired artifact name still fails the per-surface package
+	// validator (matrix names are contracted exactly).
 	laneGood := `jobs:
   platform-build:
     strategy:
@@ -465,20 +444,19 @@ func TestUploadArtifactContractFixtures(t *testing.T) {
 	if err := ValidatePlatformPackageUploadContract(laneBad); err == nil {
 		t.Fatal("a matrix entry carrying a retired package name must FAIL the per-surface contract")
 	}
-
-	if err := ValidateUploadArtifactContract(pkgOnly); err == nil {
-		t.Fatal("a package-only upload surface must FAIL (zero consolidated log uploads)")
-	}
 }
 
-// TestUploadArtifactPinPolicyFixtures: under the v1.11.1 immutable-SHA
+// TestUploadArtifactPinsPolicyFixtures: under the v1.11.1 immutable-SHA
 // policy (CodeQL run 43883548572, alerts #185/#186) every external
 // uses: ref must be a full 40-hex commit pin carrying a synced
 // release-tag comment; mutable tags, branch refs, partial hashes,
-// malformed refs and uncommented SHAs are rejected.
-func TestUploadArtifactPinPolicyFixtures(t *testing.T) {
+// malformed refs and uncommented SHAs are rejected. The pin validation
+// keeps working against the ONE permitted package upload (run
+// 44835425398 policy — do NOT remove the pin contract together with the
+// removed evidence uploads).
+func TestUploadArtifactPinsPolicyFixtures(t *testing.T) {
 	fixture := func(ref string) string {
-		return fmt.Sprintf(fixtureUploadWorkflow, ref, ref, ref, ref)
+		return fmt.Sprintf(fixtureUploadWorkflow, ref)
 	}
 
 	// Accepted: the reviewed immutable v7 commit pin with the synced
@@ -513,6 +491,144 @@ func TestUploadArtifactPinPolicyFixtures(t *testing.T) {
 
 	// Rejected: no upload-artifact step at all.
 	if err := ValidateUploadArtifactPins("jobs:\n  preflight:\n    steps:\n      - name: empty\n        run: echo hi\n"); err == nil {
-		t.Fatal("a workflow without upload-artifact steps must FAIL the pin policy (the log upload is missing)")
+		t.Fatal("a workflow without upload-artifact steps must FAIL the pin policy (the package upload is missing)")
+	}
+}
+
+// TestPlatformBuildArtifactAllowlistMutations (run 44835425398 §5.7
+// regression): each banned evidence class is INJECTED into the REAL
+// platform-build workflow text (a parseable workflow, not a few
+// strings) and the shared contract must reject the mutation. The
+// unmutated workflow passes — the allowlist is proven closed on both
+// sides.
+func TestPlatformBuildArtifactAllowlistMutations(t *testing.T) {
+	workflow := readTreeFile(t, workflowRelPath)
+
+	if err := ValidateUploadArtifactContract(workflow); err != nil {
+		t.Fatalf("the real workflow must pass its own allowlist before mutations: %v", err)
+	}
+
+	// The injection point: a step list item INSIDE the collect-errors
+	// job (after the collector step, before its verdict step) — the
+	// exact place a future "helpful" evidence upload would appear.
+	anchor := "      - name: Collector verdict (fail the job on coverage gaps)"
+	if !strings.Contains(workflow, anchor) {
+		t.Fatalf("injection anchor missing from the real workflow — update the mutation test")
+	}
+
+	mutate := func(name, path string) string {
+		step := fmt.Sprintf(`      - name: Upload %s
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: %s
+          path: %s
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+          archive: false
+
+`, name, name, path)
+
+		return strings.Replace(workflow, anchor, step+anchor, 1)
+	}
+
+	mutations := []struct {
+		desc string
+		name string
+		path string
+	}{
+		{"build-evidence bundle", "build-evidence-macos-arm64-1", "ci-logs/"},
+		{"consolidated report", ConsolidatedLogReportFileName, ConsolidatedLogReportFileName},
+		{"run diagnostics index", RunDiagnosticsReportFileName, RunDiagnosticsReportFileName},
+		{"ci-logs diagnostic dir", "ci-logs", "ci-logs/"},
+		{"jsonl compiler output", "go-build-jsonl", "ci-logs/build.jsonl"},
+		{"test report", "test-results", "test-results/"},
+		{"junit file", "junit", "reports/junit.xml"},
+		{"coverage report", "coverage", "coverage/"},
+		{"raw workflow log", "workflow-logs", "ci-logs/job.log"},
+	}
+
+	for _, m := range mutations {
+		mutated := mutate(m.name, m.path)
+
+		// The mutation must stay parseable YAML — otherwise the rejection
+		// would prove nothing about the allowlist.
+		if _, err := ArtifactSteps(mutated, "actions/upload-artifact"); err != nil {
+			t.Fatalf("%s: mutated workflow failed to parse (test bug): %v", m.desc, err)
+		}
+
+		if err := ValidateUploadArtifactContract(mutated); err == nil {
+			t.Errorf("%s: the injected %q upload must FAIL the contract", m.desc, m.name)
+		}
+	}
+}
+
+// TestCodeQLWorkflowRejectsEvidenceUploadMutations (run 44835425398
+// §5.7 regression): the CodeQL workflow's resilience contract must
+// reject a reintroduced build-log or diagnostics-index upload, and must
+// keep accepting the security-alert report.
+func TestCodeQLWorkflowRejectsEvidenceUploadMutations(t *testing.T) {
+	codeql := readTreeFile(t, ".github/workflows/codeql.yml")
+
+	if err := ValidateCodeQLWorkflowResilience(codeql); err != nil {
+		t.Fatalf("the real CodeQL workflow must pass its own contract before mutations: %v", err)
+	}
+
+	// The security-alert report upload must remain present in the parsed
+	// workflow (the ONLY permitted CodeQL artifact).
+	foundSecurityReport := false
+
+	steps, err := ArtifactSteps(codeql, "actions/upload-artifact")
+	if err != nil {
+		t.Fatalf("CodeQL workflow parse failed: %v", err)
+	}
+
+	for _, st := range steps {
+		if st.Job == "export-alert-report" && strings.Contains(st.Path, "code-scanning-alerts") {
+			foundSecurityReport = true
+		} else {
+			t.Errorf("unexpected CodeQL artifact upload in job %q: %q (only the security report is permitted)", st.Job, st.Name)
+		}
+	}
+
+	if !foundSecurityReport {
+		t.Fatal("the export-alert-report job must keep uploading reports/code-scanning-alerts.txt (the security report is NOT build evidence)")
+	}
+
+	anchor := "      - name: Collector verdict (fail the job on coverage gaps)"
+	if !strings.Contains(codeql, anchor) {
+		t.Fatalf("injection anchor missing from the CodeQL workflow — update the mutation test")
+	}
+
+	mutate := func(name, path string) string {
+		step := fmt.Sprintf(`      - name: Upload %s
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: %s
+          path: %s
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+          archive: false
+
+`, name, name, path)
+
+		return strings.Replace(codeql, anchor, step+anchor, 1)
+	}
+
+	for _, m := range []struct {
+		desc string
+		name string
+		path string
+	}{
+		{"CodeQL build log", ConsolidatedLogReportFileName, ConsolidatedLogReportFileName},
+		{"CodeQL diagnostics index", RunDiagnosticsReportFileName, RunDiagnosticsReportFileName},
+		{"raw compiler jsonl", "codeql-build-jsonl", "codeql-build.jsonl"},
+	} {
+		if err := ValidateCodeQLWorkflowResilience(mutate(m.name, m.path)); err == nil {
+			t.Errorf("%s: the injected CodeQL upload must FAIL the resilience contract", m.desc)
+		}
 	}
 }

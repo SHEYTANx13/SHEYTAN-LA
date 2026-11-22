@@ -5421,6 +5421,16 @@
     "status": "active"
   },
   {
+    "path": "internal/proc/identity_darwin_cgo_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/proc (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/proc",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
     "path": "internal/proc/identity_darwin_nocgo.go",
     "type": "go",
     "language": "Go",

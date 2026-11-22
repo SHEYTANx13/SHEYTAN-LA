@@ -2,9 +2,19 @@
 
 package proc
 
-// Darwin port-owner identity (run 44547031698 §5): the documented PUBLIC
-// libproc API through a small Darwin-only CGo bridge and the ACTUAL macOS
-// SDK headers.
+// Darwin port-owner identity (run 44547031698 §5): an isolated Darwin
+// libproc adapter — a small Darwin-only CGo bridge compiled against the
+// ACTUAL macOS SDK headers (libproc.h + sys/proc_info.h).
+//
+// INTERFACE STABILITY (run 44835425398 repair): Apple's libproc.h states
+// verbatim — "This header file contains private interfaces to obtain
+// process information. These interfaces are subject to change in future
+// releases." The functions this adapter calls are therefore NOT a stable
+// public API and are never documented as one: this file is the single
+// isolated consumer, every answer is validated against the shape the
+// INSTALLED SDK headers describe, and a future macOS that changes the
+// contract fails typed here instead of producing a guessed port owner.
+// No supported public replacement is claimed to exist.
 //
 // The previous implementation hand-transcribed the XNU proc_info
 // structures into Go and invoked the raw __proc_info SYS_PROC_INFO trap.
@@ -16,10 +26,20 @@ package proc
 // hand-padded union tail that no header corroborates). This file removes
 // every transcribed layout: all structure knowledge lives in C, compiled
 // against libproc.h + sys/proc_info.h from the SDK, and Go receives only
-// scalar answers.
+// scalar answers — no Go-side code depends on an Apple struct layout.
 //
-// Public API used (libproc.h, all stable since macOS 10.5):
-//   proc_listallpids  — every PID (documented pid-count return)
+// Socket-kind gate (run 44835425398 repair): the TCP local port is read
+// ONLY through soi_proto.pri_tcp.tcpsi_ini.insi_lport and ONLY when
+// soi_kind equals the SDK-defined SOCKINFO_TCP — the union member named
+// by the previous code (soi_proto.insi) does not exist, which is exactly
+// the compiler failure all three Darwin lanes reported. Every documented
+// non-TCP kind (SOCKINFO_GENERIC, SOCKINFO_IN, SOCKINFO_UN, SOCKINFO_NDRV,
+// SOCKINFO_KERN_EVENT, SOCKINFO_KERN_CTL) is decoded without touching any
+// union member, and a soi_kind outside the SDK-documented set fails the
+// walk through the typed undocumented-kind error — never interpreted.
+//
+// Adapter surface (libproc.h declarations):
+//   proc_listallpids  — every PID (pid-count return)
 //   proc_pidinfo      — PROC_PIDLISTFDS (fd walk, byte-count return)
 //                       PROC_PIDTBSDINFO (start identity, byte-count return)
 //   proc_pidfdinfo    — PROC_PIDFDSOCKETINFO (socket record, byte-count return)
@@ -32,8 +52,10 @@ package proc
 //     ErrPortOwnerUnknown, never a guess;
 //   - a truncated list is retried with a larger buffer and, at the cap,
 //     surfaces a typed error — never a silent partial walk;
-//   - every returned byte count is validated against the documented
-//     contract (kernel-ambiguous answers fail closed, never reinterpreted);
+//   - a socket record whose kind is not a documented SDK kind fails the
+//     walk typed — never interpreted through a guessed union view;
+//   - every returned byte count is validated against the ABI contract
+//     (kernel-ambiguous answers fail closed, never reinterpreted);
 //   - a PID alone is never identity: the caller pairs the returned PID
 //     with the resolved executable path (and, at the adoption layer,
 //     start-time/SHA proofs);
@@ -78,8 +100,8 @@ static int c_pathinfo_size(void)       { return (int)PROC_PIDPATHINFO_SIZE; }
 // depending on a private or unavailable macro.
 
 // c_list_all_pids fills buf with every PID (PROC_ALL_PIDS) through the
-// documented proc_listallpids wrapper. Returns the pid COUNT (the
-// documented contract of proc_listallpids), or -1 with errno set.
+// proc_listallpids wrapper. Returns the pid COUNT (the ABI contract of
+// proc_listallpids), or -1 with errno set.
 static int c_list_all_pids(void *buf, int cap_pids) {
         return proc_listallpids(buf, cap_pids * (int)sizeof(pid_t));
 }
@@ -120,15 +142,49 @@ static int c_socket_fdinfo(int pid, int fd, void *buf, int bytes) {
 }
 
 // c_socket_fields extracts ONLY the scalar fields the listener decision
-// needs, from the REAL header structure. raw_lport is returned exactly as
-// the kernel stores it (network byte order in the low half) — the
-// Go side owns the documented ntohs convention and its regression test.
-static void c_socket_fields(const void *buf, int *family, int *protocol, int *options, int *raw_lport) {
+// needs, from the REAL header structures, and reports which union view the
+// record actually carries (run 44835425398 repair: the previous version
+// read soi_proto.insi — a member that does not exist in the header union;
+// the TCP local port lives at soi_proto.pri_tcp.tcpsi_ini.insi_lport and
+// that path is valid ONLY when soi_kind is the SDK's SOCKINFO_TCP).
+// Status codes:
+//   0  decoded — soi_kind is SOCKINFO_TCP; raw_lport was read through
+//      pri_tcp.tcpsi_ini.insi_lport, exactly as the kernel stores it
+//      (network byte order in the low half — the Go side owns the ntohs
+//      convention and its regression test).
+//   1  decoded — soi_kind is a documented NON-TCP kind (SOCKINFO_GENERIC,
+//      SOCKINFO_IN, SOCKINFO_UN, SOCKINFO_NDRV, SOCKINFO_KERN_EVENT,
+//      SOCKINFO_KERN_CTL); family/protocol/options/kind are the real
+//      header values and raw_lport is the explicit -1 non-port sentinel —
+//      no union member was interpreted as TCP data.
+//  -1  soi_kind is outside every kind the installed SDK documents — the
+//      record cannot be interpreted; the Go side fails closed on the
+//      typed undocumented-kind error.
+static int c_socket_fields(const void *buf, int *family, int *protocol, int *options, int *kind, int *raw_lport) {
         const struct socket_fdinfo *sfi = (const struct socket_fdinfo *)buf;
         *family    = (int)sfi->psi.soi_family;
         *protocol  = (int)sfi->psi.soi_protocol;
         *options   = (int)sfi->psi.soi_options;
-        *raw_lport = (int)sfi->psi.soi_proto.insi.insi_lport;
+        *kind      = (int)sfi->psi.soi_kind;
+
+        switch (sfi->psi.soi_kind) {
+        case SOCKINFO_TCP:
+                *raw_lport = (int)sfi->psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport;
+                return 0;
+        case SOCKINFO_GENERIC:
+        case SOCKINFO_IN:
+        case SOCKINFO_UN:
+        case SOCKINFO_NDRV:
+        case SOCKINFO_KERN_EVENT:
+        case SOCKINFO_KERN_CTL:
+                // A real, documented non-TCP kind: the TCP union member
+                // MUST NOT be read — mark the record with the non-port
+                // sentinel so no value can be mistaken for a port.
+                *raw_lport = -1;
+                return 1;
+        default:
+                return -1;
+        }
 }
 
 // c_so_acceptconn is the real sys/socket.h value of SO_ACCEPTCONN: only a
@@ -141,8 +197,8 @@ static int c_af_inet(void)      { return AF_INET; }
 static int c_af_inet6(void)     { return AF_INET6; }
 static int c_ipproto_tcp(void)  { return IPPROTO_TCP; }
 
-// c_proc_path resolves the image path through proc_pidpath (the documented
-// public wrapper). Returns the path length (>0), 0 when the process has no
+// c_proc_path resolves the image path through proc_pidpath (the libproc.h
+// wrapper). Returns the path length (>0), 0 when the process has no
 // resolvable path, or -1 with errno set.
 static int c_proc_path(int pid, void *buf, int bytes) {
         return (int)proc_pidpath(pid, buf, (uint32_t)bytes);
@@ -193,6 +249,12 @@ var (
 	// after growth retries — the walk refuses to run on partial data.
 	errProcTruncated = errors.New("process descriptor list truncated")
 )
+
+// errSocketKindUndocumented: a socket record's soi_kind is outside every
+// kind the installed SDK documents — the union layout is unknown, so the
+// walk refuses the record instead of interpreting any union member as TCP
+// data (run 44835425398 repair: fail closed, never a guessed port).
+var errSocketKindUndocumented = errors.New("socket record carries an undocumented kind")
 
 // mapProcInfoErrno translates the libproc errno contract into the typed
 // walk states. ESRCH means the candidate died mid-walk; EPERM and EACCES
@@ -344,16 +406,25 @@ func listProcSocketFDs(pid int32) ([]int32, error) {
 
 // socketRecord is the scalar projection of ONE PROC_PIDFDSOCKETINFO record
 // the listener decision needs. The struct layout itself never leaves C.
+// KindIsTCP is the typed gate produced by the C extractor: only a record
+// whose soi_kind is the SDK's SOCKINFO_TCP is interpreted through the
+// union at all — a non-TCP record's RawLPort is the -1 non-port sentinel
+// and never a decoded port.
 type socketRecord struct {
-	Family   int32
-	Protocol int32
-	Options  int32
-	RawLPort int32 // kernel network byte order in the low half
+	Family    int32
+	Protocol  int32
+	Options   int32
+	RawLPort  int32 // TCP-kind records: kernel network byte order in the low half; non-TCP kinds: -1 sentinel
+	KindIsTCP bool  // soi_kind == SOCKINFO_TCP (the only kind whose union view is interpreted)
 }
 
 // readSocketFDInfo reads PROC_PIDFDSOCKETINFO for one descriptor through
 // proc_pidfdinfo. A short or over-long answer is a typed error — never a
-// partially-read record.
+// partially-read record. The C extractor's status is enforced here: 0 =
+// SOCKINFO_TCP record (union view interpreted), 1 = documented non-TCP
+// kind (decoded, no union interpretation, RawLPort -1 sentinel), anything
+// else = undocumented kind → typed fail-closed error (run 44835425398
+// repair: an invalid kind is never turned into port zero or a guess).
 func readSocketFDInfo(pid int32, fd int32) (socketRecord, error) {
 	want := int(C.c_socket_fdinfo_size())
 	buf := make([]byte, want)
@@ -374,24 +445,48 @@ func readSocketFDInfo(pid int32, fd int32) (socketRecord, error) {
 		family   C.int
 		protocol C.int
 		options  C.int
+		kind     C.int
 		rawLPort C.int
 	)
 
-	C.c_socket_fields(unsafe.Pointer(&buf[0]), &family, &protocol, &options, &rawLPort)
+	status, err := C.c_socket_fields(unsafe.Pointer(&buf[0]), &family, &protocol, &options, &kind, &rawLPort)
 	runtime.KeepAlive(buf)
 
+	if err != nil {
+		return socketRecord{}, mapProcInfoErrno(err)
+	}
+
+	switch {
+	case status == 0:
+		// SOCKINFO_TCP record: the only union view the walk interprets.
+	case status == 1:
+		// A documented non-TCP kind: decoded, never union-interpreted,
+		// RawLPort carries the -1 non-port sentinel.
+	default:
+		return socketRecord{}, fmt.Errorf("%w: PROC_PIDFDSOCKETINFO for pid %d fd %d carries socket kind %d, outside every kind the installed SDK documents — the record is not interpretable and the walk fails closed",
+			errSocketKindUndocumented, pid, fd, int(kind))
+	}
+
 	return socketRecord{
-		Family:   int32(family),
-		Protocol: int32(protocol),
-		Options:  int32(options),
-		RawLPort: int32(rawLPort),
+		Family:    int32(family),
+		Protocol:  int32(protocol),
+		Options:   int32(options),
+		RawLPort:  int32(rawLPort),
+		KindIsTCP: status == 0,
 	}, nil
 }
 
 // isTCPListenerOn reports whether the socket record is an INET/INET6 TCP
 // socket in the listening state (SO_ACCEPTCONN, the real sys/socket.h
-// value) bound to the target port.
+// value) bound to the target port. The kind gate comes first: only a
+// record the C extractor proved to be SOCKINFO_TCP may be considered at
+// all — family/protocol/options alone never justify interpreting a record
+// as TCP data (run 44835425398 repair).
 func isTCPListenerOn(rec *socketRecord, port int) bool {
+	if !rec.KindIsTCP {
+		return false
+	}
+
 	if rec.Family != int32(C.c_af_inet()) && rec.Family != int32(C.c_af_inet6()) {
 		return false
 	}
@@ -489,9 +584,10 @@ func listeningProcessImpl(port int) (int, string, bool, error) {
 	return 0, "", false, nil
 }
 
-// processExePathImpl resolves the image path via the documented public
-// proc_pidpath API. Typed results: ErrProcessNotFound for a vanished or
-// path-less pid, errProcAccessDenied for an uninspectable one.
+// processExePathImpl resolves the image path via proc_pidpath (the
+// libproc.h declaration — private interface, see the file header). Typed
+// results: ErrProcessNotFound for a vanished or path-less pid,
+// errProcAccessDenied for an uninspectable one.
 func processExePathImpl(pid int) (string, error) {
 	if pid <= 0 {
 		return "", ErrProcessNotFound

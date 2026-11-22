@@ -171,3 +171,67 @@ func TestSafetensorsExecutionDTypeGate(t *testing.T) {
 		t.Fatalf("f16 gate: want ErrUnsupportedDType, got %v", err)
 	}
 }
+
+// TestSafetensorsOffsetsNearUint64MaxRejected (run 44835425398 engine
+// pass): the previous escape check compared meta.DataStart+start against
+// DataEnd — a uint64 ADDITION that wraps for offsets near 2^64, so a
+// hostile container was ACCEPTED and its tensor materialized over
+// aliased header bytes. The check now compares each offset against the
+// data-section length (no addition, no wrap): such a container must be
+// rejected with the typed malformed-container error, never materialized.
+func TestSafetensorsOffsetsNearUint64MaxRejected(t *testing.T) {
+	startOff := uint64(18446744073709551608) // 2^64 - 8
+	endOff := startOff + 4                   // exactly the 4 bytes a 1-element F32 record needs
+
+	hj, err := json.Marshal(map[string]json.RawMessage{
+		"a": mustJSON(t, map[string]interface{}{
+			"dtype":        "F32",
+			"shape":        []int{1},
+			"data_offsets": []uint64{startOff, endOff},
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	buf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buf, uint64(len(hj)))
+	buf = append(buf, hj...)
+	buf = append(buf, make([]byte, 8)...) // an 8-byte data section the offsets claim to escape
+
+	meta, perr := ParseSafetensorsHeader(buf)
+	if !errors.Is(perr, ErrMalformedContainer) {
+		t.Fatalf("near-2^64 offsets must be REJECTED with ErrMalformedContainer (fail closed), got meta=%v err=%v", meta, perr)
+	}
+}
+
+// TestTensorFromSafetensorsRejectsReversedDirectOffsets: the exported
+// materializer validates directly-constructed info defensively — a
+// reversed offset range is a typed error, never a Go slice panic.
+func TestTensorFromSafetensorsRejectsReversedDirectOffsets(t *testing.T) {
+	buf := buildSafetensors(t, map[string][2]interface{}{
+		"a": {"F32", Shape{2}},
+	}, nil)
+
+	info := SafetensorsTensorInfo{
+		Name:        "a",
+		DType:       STF32,
+		Shape:       Shape{2},
+		DataOffsets: [2]uint64{16, 8}, // reversed
+	}
+
+	if _, err := TensorFromSafetensors(buf, info); !errors.Is(err, ErrMalformedContainer) {
+		t.Fatalf("reversed direct offsets must fail typed ErrMalformedContainer, got %v", err)
+	}
+}
+
+func mustJSON(t *testing.T, v interface{}) json.RawMessage {
+	t.Helper()
+
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return b
+}
