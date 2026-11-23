@@ -154,15 +154,14 @@ jobs:
       #     extracts the gogpu/goffi adapter source (internal/render,
       #     internal/renderboot) so no package loses coverage.
       #
-      # Failure handling (work order §6.2): the previous handler
-      #     grep -m1 -E '"ImportPath|Err"'
-      # matched the FIRST metadata line of the JSONL stream (an
-      # "ImportPath" line) instead of the build-fail event and its
-      # compiler output, so the actual source location disappeared. The
-      # handlers now parse the stream with scripts/ci/go-build-jsonl-
-      # diagnose.py (JSON events only, full compiler output, first
-      # diagnostic path:line:col) while the raw JSONL stays the job's
-      # evidence.
+      # Failure handling (work order §6.2): on a build failure the step
+      # reruns the failed command ONCE with -json and parses the event
+      # stream with scripts/ci/go-build-jsonl-diagnose.py (full compiler
+      # output, first diagnostic path:line:col). That rerun exists ONLY
+      # for diagnostics — the extraction surface is the plain build
+      # above, which CodeQL's Go tracer observes (run 45086860126:
+      # -json on the traced build extracts NOTHING, exit 32 at
+      # finalize).
       - name: Build all Go packages for CodeQL
         if: matrix.language == 'go'
         shell: bash
@@ -184,12 +183,33 @@ jobs:
             echo "::error::build (a) package list is empty — go list or grep produced no packages; refusing to run a zero-package build"
             exit 1
           fi
-          echo "build (a): CGO_ENABLED=1 -tags nogogpu go build -json (every package of ./... EXCEPT cmd/sheytan-renderprobe, whose documented link configuration is build (b) - goffi v0.6.8 documents the goffi+other-cgo mixed-stack link as impossible on Linux, goffi issue #72)"
+          # Run 45086860126 repair (REPRODUCED locally with codeql-cli
+          # 2.27.5): `go build -json` is INVISIBLE to the CodeQL Go
+          # extractor — a cold traced `go build -json ./...` compiles
+          # every package and the database still finalizes empty with
+          # exit 32 ("CodeQL detected code written in Go but could not
+          # process any of it"), while the SAME command without -json
+          # produces a populated database. The traced builds therefore
+          # run PLAIN (compiler diagnostics go to the job log with the
+          # exact file:line:col); -json is reserved for the FAILURE
+          # path only, where go-build-jsonl-diagnose.py turns the event
+          # stream into precise diagnostics for the collector.
+          echo "build (a): CGO_ENABLED=1 -tags nogogpu go build (every package of ./... EXCEPT cmd/sheytan-renderprobe, whose documented link configuration is build (b) - goffi v0.6.8 documents the goffi+other-cgo mixed-stack link as impossible on Linux, goffi issue #72)"
           echo "build (a) package count: ${#build_a_packages[@]} (go list ./... minus the renderprobe)"
-          CGO_ENABLED=1 go build -json -tags nogogpu "${build_a_packages[@]}" > "$RUNNER_TEMP/codeql-go-build-a.jsonl" || { python3 scripts/ci/go-build-jsonl-diagnose.py "$RUNNER_TEMP/codeql-go-build-a.jsonl" || true; exit 1; }
-          echo "build (b): CGO_ENABLED=0 -tags nofakecgo go build -json ./cmd/sheytan-renderprobe (combined go-gui+gogpu link)"
-          CGO_ENABLED=0 go build -json -tags nofakecgo -o "$RUNNER_TEMP/sheytan-renderprobe-codeql" ./cmd/sheytan-renderprobe > "$RUNNER_TEMP/codeql-go-build-b.jsonl" || { python3 scripts/ci/go-build-jsonl-diagnose.py "$RUNNER_TEMP/codeql-go-build-b.jsonl" || true; exit 1; }
-          python3 scripts/ci/go-build-jsonl-diagnose.py --summary "$RUNNER_TEMP/codeql-go-build-a.jsonl" "$RUNNER_TEMP/codeql-go-build-b.jsonl"
+          CGO_ENABLED=1 go build -tags nogogpu "${build_a_packages[@]}" || {
+            echo "build (a) failed - rerunning with -json ONLY for the diagnostics stream (this rerun is not the extraction surface)"
+            CGO_ENABLED=1 go build -json -tags nogogpu "${build_a_packages[@]}" > "$RUNNER_TEMP/codeql-go-build-a.jsonl" || true
+            python3 scripts/ci/go-build-jsonl-diagnose.py "$RUNNER_TEMP/codeql-go-build-a.jsonl" || true
+            exit 1
+          }
+          echo "build (b): CGO_ENABLED=0 -tags nofakecgo go build ./cmd/sheytan-renderprobe (combined go-gui+gogpu link)"
+          CGO_ENABLED=0 go build -tags nofakecgo -o "$RUNNER_TEMP/sheytan-renderprobe-codeql" ./cmd/sheytan-renderprobe || {
+            echo "build (b) failed - rerunning with -json ONLY for the diagnostics stream"
+            CGO_ENABLED=0 go build -json -tags nofakecgo -o "$RUNNER_TEMP/sheytan-renderprobe-codeql" ./cmd/sheytan-renderprobe > "$RUNNER_TEMP/codeql-go-build-b.jsonl" || true
+            python3 scripts/ci/go-build-jsonl-diagnose.py "$RUNNER_TEMP/codeql-go-build-b.jsonl" || true
+            exit 1
+          }
+          echo "traced builds completed: every compiled package was visible to the CodeQL Go extractor (no -json on the extraction surface)"
           "$RUNNER_TEMP/sheytan-renderprobe-codeql"
 
       # Manual C++ build: compile the engine, IPC host, and all native test
@@ -531,11 +551,15 @@ jobs:
   # outcome (!cancelled()), so red CodeQL runs keep their LOCAL diagnosis —
   # distinguishing ran-and-failed, skipped, in-progress, missing log
   # sources and the collector's own job exactly like the platform-build
-  # collector. Run 44835425398 artifact policy: the collection stays LOCAL
-  # to the runner — NO build-log or diagnostics-index artifact is uploaded
-  # (the built-in job-log display is the log surface); the ONLY artifact
-  # this workflow uploads remains the security-alert report of the
-  # export-alert-report job.
+  # collector. Artifact policy (2026-11-23, owner-directed change of the
+  # run 44835425398 local-only rule): the ONE curated errors/warnings
+  # report IS uploaded as an artifact — it is not a raw log, it is the
+  # distilled error/warning surface with exact file:line or stage, and
+  # the owner reads it directly from the run page. Every other evidence
+  # class stays banned (raw logs, verbose compiler output, diagnostics
+  # indexes, test reports — see internal/releasecontract). The ONLY other
+  # artifact this workflow uploads remains the security-alert report of
+  # the export-alert-report job.
   # Least privilege: contents: read + actions: read only (the SARIF-writing
   # security-events: write permission stays on the analyze jobs alone).
   # ===========================================================================
@@ -552,7 +576,7 @@ jobs:
       - name: Checkout (collector script)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Collect the CodeQL run logs into one plain-text report (LOCAL, never uploaded)
+      - name: Collect the CodeQL run logs into one plain-text errors/warnings report
         id: collector
         env:
           GH_TOKEN: ${{ github.token }}
@@ -571,16 +595,30 @@ jobs:
             --json-out run-diagnostics.json || rc=$?
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           if [ "$rc" -ne 0 ]; then
-            echo "::error::Collect CodeQL logs: collector reported a coverage/verification gap (rc=$rc) — the LOCAL report still carries the diagnosis"
+            echo "::error::Collect CodeQL logs: collector reported a coverage/verification gap (rc=$rc) — the report still carries the diagnosis"
           fi
           {
             echo "## CodeQL consolidated run log"
             echo ""
-            echo "LOCAL reports (run 44835425398 artifact policy — never uploaded as artifacts): \`SHEYTAN-LA-codeql-all-logs.txt\` (ONE plain-text file) and"
-            echo "\`run-diagnostics.json\` (machine-readable per-job index), attempt ${{ github.run_attempt }} recorded INSIDE both. The Actions job logs above are the run's log surface; SARIF remains the authoritative security finding surface."
+            echo "The errors/warnings report \`SHEYTAN-LA-codeql-all-logs.txt\` (ONE plain-text file, attempt ${{ github.run_attempt }} recorded INSIDE it) is UPLOADED as this job's artifact — errors and warnings only, with the exact file:line or build stage. \`run-diagnostics.json\` (machine-readable per-job index) stays a local workspace file. The Actions job logs remain the raw surface; SARIF remains the authoritative security-finding surface."
             echo ""
             echo "Analysis jobs: analyze=${{ needs.analyze.result }} export-alert-report=${{ needs.export-alert-report.result }}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # The ONE evidence artifact (2026-11-23 policy): the curated
+      # errors/warnings-only plain-text report. Uploaded on every terminal
+      # state so a red run's diagnosis is downloadable without admin log
+      # access. if-no-files-found: error — a missing report is a collector
+      # defect and must fail loudly, never silently produce no log.
+      - name: Upload the errors/warnings report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: SHEYTAN-LA-codeql-all-logs
+          path: SHEYTAN-LA-codeql-all-logs.txt
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
 
       - name: Collector verdict (fail the job on coverage gaps)
         if: ${{ !cancelled() }}

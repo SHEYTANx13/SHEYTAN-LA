@@ -600,7 +600,20 @@ func processExePathImpl(pid int) (string, error) {
 	runtime.KeepAlive(buf)
 
 	if err != nil {
-		return "", mapProcInfoErrno(err)
+		// Run 45086860202 repair: a vanished PID surfaces the PUBLIC
+		// ErrProcessNotFound sentinel — exactly like processStartTimeImpl
+		// already does — never the walk-internal errProcGone class.
+		// TestListeningProcessDeadOwnerRefused pins the public contract
+		// (errors.Is(err, ErrProcessNotFound)) and the native darwin suite
+		// finally executed it here; the raw errno passthrough broke it.
+		switch mapped := mapProcInfoErrno(err); {
+		case errors.Is(mapped, errProcGone):
+			return "", ErrProcessNotFound
+		case errors.Is(mapped, errProcAccessDenied):
+			return "", fmt.Errorf("%w (pid %d): %v", ErrProcessMetadataUnsupported, pid, mapped)
+		default:
+			return "", fmt.Errorf("proc_pidpath for pid %d failed: %v", pid, mapped)
+		}
 	}
 
 	if n < 0 {

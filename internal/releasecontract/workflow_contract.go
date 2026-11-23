@@ -48,12 +48,30 @@ import (
 // validator, contract test and the stress gate reads THIS path.
 const PlatformBuildWorkflowPath = ".github/workflows/build.yml"
 
-// ConsolidatedLogReportFileName is the LOCAL errors/warnings-only report
-// file the collector writes inside the runner workspace (--out). Run
-// 44835425398 policy: the report stays LOCAL to the job — uploading it
-// (or any build evidence) as a workflow artifact is PROHIBITED. The
-// normal GitHub Actions job logs remain the platform's log surface.
+// ConsolidatedLogReportFileName is the errors/warnings-only report file
+// the collector writes inside the runner workspace (--out). 2026-11-23
+// owner-directed policy change of the run 44835425398 local-only rule:
+// the report IS uploaded as the ONE evidence artifact (name
+// ConsolidatedLogReportArtifactName) — it is the distilled error/warning
+// surface with exact file:line or build stage, not a raw log, and the
+// owner reads it directly from the run page. Everything else (raw logs,
+// verbose compiler output, diagnostics indexes, test reports) stays
+// banned.
 const ConsolidatedLogReportFileName = "SHEYTAN-LA-errors-warnings.txt"
+
+// ConsolidatedLogReportArtifactName is the contracted artifact NAME of
+// the uploaded consolidated report (the FILE name keeps its .txt
+// extension; the artifact name deliberately does not — attempt suffixes
+// and extension-carrying names stay retired shapes).
+const ConsolidatedLogReportArtifactName = "SHEYTAN-LA-errors-warnings"
+
+// CodeQLLogReportFileName is the CodeQL collector's errors/warnings-only
+// report file (same collector, CodeQL run id) and CodeQLLogReportArtifactName
+// its contracted uploaded artifact name.
+const (
+	CodeQLLogReportFileName     = "SHEYTAN-LA-codeql-all-logs.txt"
+	CodeQLLogReportArtifactName = "SHEYTAN-LA-codeql-all-logs"
+)
 
 // RunDiagnosticsReportFileName is the LOCAL machine-readable run-level
 // diagnostics index the collector writes next to the report (--json-out).
@@ -62,15 +80,15 @@ const ConsolidatedLogReportFileName = "SHEYTAN-LA-errors-warnings.txt"
 const RunDiagnosticsReportFileName = "run-diagnostics.json"
 
 // ForbiddenArtifactUploadNames are the evidence artifact names whose
-// upload is PROHIBITED by the run 44835425398 artifact policy: the two
-// collector reports (local files), the per-lane build-evidence bundle,
-// and the CodeQL log/diagnostics-index uploads. Any upload step carrying
-// one of these names fails the contract.
+// upload is PROHIBITED: extension-carrying report names (the contracted
+// artifact names drop the extension), the machine-readable diagnostics
+// index, the per-lane build-evidence bundle and the CodeQL diagnostics
+// index. Any upload step carrying one of these names fails the contract.
 var ForbiddenArtifactUploadNames = []string{
 	ConsolidatedLogReportFileName,
 	RunDiagnosticsReportFileName,
 	ForbiddenBuildEvidenceArtifactName,
-	"SHEYTAN-LA-codeql-all-logs.txt",
+	CodeQLLogReportFileName,
 	"codeql-run-diagnostics.json",
 }
 
@@ -79,12 +97,14 @@ var ForbiddenArtifactUploadNames = []string{
 // logs, build evidence, test reports, JSONL compiler output, run
 // diagnostics, coverage/race reports and temporary build directories
 // (work order §5.1: build evidence is never uploaded as an artifact).
+// "errors-warnings" and "codeql-all-logs" are deliberately NOT banned
+// markers anymore (2026-11-23): the curated errors/warnings report is the
+// ONE permitted evidence artifact under its exact contracted shape; every
+// other evidence class stays banned.
 var ForbiddenArtifactUploadSubstrings = []string{
 	"ci-logs",
 	"build-evidence",
-	"errors-warnings",
 	"run-diagnostics",
-	"codeql-all-logs",
 	"test-results",
 	"junit",
 	"coverage",
@@ -841,13 +861,14 @@ func validateUsesVersionComments(workflowText string, parsedExternal int) error 
 	return nil
 }
 
-// ValidateUploadArtifactContract enforces the run 44835425398 artifact
-// policy on the parsed upload surface of the ONE platform-build
-// workflow, scoped per step and per owning job (parsed, never grepped):
+// ValidateUploadArtifactContract enforces the 2026-11-23 artifact policy
+// (owner-directed change of the run 44835425398 local-only rule) on the
+// parsed upload surface of the ONE platform-build workflow, scoped per
+// step and per owning job (parsed, never grepped):
 //
-//   - EXACTLY ONE upload step exists in the whole workflow: the matrix
-//     package upload named ${{ matrix.artifact }} from the platform-build
-//     job, resolving per leg to the seven contracted portable names;
+//   - EXACTLY ONE matrix package upload exists: named
+//     ${{ matrix.artifact }} from the platform-build job, resolving per
+//     leg to the seven contracted portable names;
 //   - its path stages ONLY the dist/ portable package
 //     (dist/SHEYTAN-LA-ALPHA-*), never a diagnostic or evidence
 //     directory;
@@ -857,20 +878,23 @@ func validateUsesVersionComments(workflowText string, parsedExternal int) error 
 //     intentionally absent package is never uploaded;
 //   - it carries if-no-files-found: error (a silently absent package is
 //     a contract breach) and overwrite: true;
-//   - NO build-evidence or diagnostic upload exists: no upload name or
-//     path may carry any name from ForbiddenArtifactUploadNames or any
-//     substring from ForbiddenArtifactUploadSubstrings (ci-logs, build
-//     evidence, run diagnostics, test reports, JSONL compiler output,
-//     coverage/race reports, .log files...);
-//   - NO other upload-artifact step of any kind may exist: the expected
-//     platform-build upload surface is the actual platform distribution
-//     package ONLY.
+//   - EXACTLY ONE consolidated errors/warnings report upload exists:
+//     named ConsolidatedLogReportArtifactName, staging ONLY
+//     ConsolidatedLogReportFileName, owned by the collect-errors job,
+//     running with always() and carrying if-no-files-found: error +
+//     overwrite: true — this is the ONE evidence artifact the owner
+//     reads from the run page (errors and warnings only, exact
+//     file:line or stage; raw job logs need admin access);
+//   - NO other evidence upload exists: no upload name or path may carry
+//     any name from ForbiddenArtifactUploadNames or any substring from
+//     ForbiddenArtifactUploadSubstrings (ci-logs, build evidence, run
+//     diagnostics, test reports, JSONL compiler output, coverage/race
+//     reports, .log files...);
+//   - NO third upload-artifact step of any kind may exist.
 //
-// The collector keeps generating its LOCAL report files inside the
-// runner workspace (ConsolidatedLogReportFileName /
-// RunDiagnosticsReportFileName) and the Actions step summary carries the
-// concise status; uploading either as a workflow artifact is exactly
-// what this contract now rejects.
+// The diagnostics index (RunDiagnosticsReportFileName) stays a LOCAL
+// runner workspace file — uploading it is exactly what this contract
+// rejects.
 func ValidateUploadArtifactContract(workflowText string) error {
 	uploads, err := ArtifactSteps(workflowText, "actions/upload-artifact")
 	if err != nil {
@@ -886,6 +910,7 @@ func ValidateUploadArtifactContract(workflowText string) error {
 	var errs []string
 
 	matrixUploads := 0
+	reportUploads := 0
 
 	for _, u := range uploads {
 		// The evidence ban applies to EVERY upload first: a forbidden
@@ -893,7 +918,7 @@ func ValidateUploadArtifactContract(workflowText string) error {
 		for _, banned := range ForbiddenArtifactUploadNames {
 			if u.Name == banned {
 				errs = append(errs, fmt.Sprintf(
-					"job %q step %q: uploading %q is PROHIBITED by the run 44835425398 artifact policy - build evidence is never uploaded as a workflow artifact; the collector's report stays local to the runner and the Actions job logs remain the log surface",
+					"job %q step %q: uploading %q is PROHIBITED by the artifact policy - the curated report uploads under its contracted artifact name; raw logs, diagnostics indexes and build evidence are never uploaded",
 					u.Job, u.Step, u.Name,
 				))
 			}
@@ -909,68 +934,113 @@ func ValidateUploadArtifactContract(workflowText string) error {
 			}
 		}
 
-		if u.Name != MatrixPackageArtifactSlot {
+		switch u.Name {
+		case MatrixPackageArtifactSlot:
+			matrixUploads++
+
+			if u.Job != PlatformBuildJobKey {
+				errs = append(errs, fmt.Sprintf(
+					"job %q: the ${{ matrix.artifact }} package upload belongs to the platform-build matrix job",
+					u.Job,
+				))
+			}
+
+			if cond, ok := u.With["if-no-files-found"]; !ok || withStringValue(u.With, "if-no-files-found") == "" || cond != "error" {
+				errs = append(errs, fmt.Sprintf(
+					"job %q step %q: the matrix package upload must carry if-no-files-found: error (a silently absent package is a contract breach)",
+					u.Job, u.Step,
+				))
+			}
+
+			if ov, ok := u.With["overwrite"]; !ok || ov != true {
+				errs = append(errs, fmt.Sprintf(
+					"job %q step %q: the matrix package upload must carry overwrite: true (a rerun must replace the same package artifact, not fail on it)",
+					u.Job, u.Step,
+				))
+			}
+
+			if !strings.Contains(u.Path, "dist/SHEYTAN-LA-ALPHA-") {
+				errs = append(errs, fmt.Sprintf(
+					"job %q step %q: the matrix package upload must stage ONLY the dist/SHEYTAN-LA-ALPHA-* portable package, got %q (no diagnostic, log or cache directory may ride along)",
+					u.Job, u.Step, u.Path,
+				))
+			}
+
+			// The eligibility condition is CONTRACTED, not optional: the
+			// upload must key off the explicit, inspectable step output of
+			// the package-eligibility gate and must run with always() so a
+			// red lane's valid package still uploads.
+			if !strings.Contains(u.If, "steps.package-eligibility.outputs.upload-package == 'true'") {
+				errs = append(errs, fmt.Sprintf(
+					"job %q step %q: the matrix package upload must key its condition off steps.package-eligibility.outputs.upload-package == 'true' (the explicit, inspectable eligibility decision) - got if: %q",
+					u.Job, u.Step, u.If,
+				))
+			}
+
+			if !strings.Contains(u.If, "always()") {
+				errs = append(errs, fmt.Sprintf(
+					"job %q step %q: the matrix package upload must run with if: always() (a red lane's valid package is still a valid package) - got if: %q",
+					u.Job, u.Step, u.If,
+				))
+			}
+
+		case ConsolidatedLogReportArtifactName:
+			reportUploads++
+
+			if u.Job != CollectorJobKey {
+				errs = append(errs, fmt.Sprintf(
+					"job %q: the %q report upload belongs to the %s collector job",
+					u.Job, ConsolidatedLogReportArtifactName, CollectorJobKey,
+				))
+			}
+
+			if u.Path != ConsolidatedLogReportFileName {
+				errs = append(errs, fmt.Sprintf(
+					"job %q step %q: the consolidated report upload must stage ONLY %q (errors and warnings only), got %q (no diagnostics index or other file may ride along)",
+					u.Job, u.Step, ConsolidatedLogReportFileName, u.Path,
+				))
+			}
+
+			if cond, ok := u.With["if-no-files-found"]; !ok || withStringValue(u.With, "if-no-files-found") == "" || cond != "error" {
+				errs = append(errs, fmt.Sprintf(
+					"job %q step %q: the consolidated report upload must carry if-no-files-found: error (a run whose report cannot be uploaded must fail loudly, never silently produce no log)",
+					u.Job, u.Step,
+				))
+			}
+
+			if ov, ok := u.With["overwrite"]; !ok || ov != true {
+				errs = append(errs, fmt.Sprintf(
+					"job %q step %q: the consolidated report upload must carry overwrite: true (a rerun must replace the same report artifact)",
+					u.Job, u.Step,
+				))
+			}
+
+			if !strings.Contains(u.If, "always()") {
+				errs = append(errs, fmt.Sprintf(
+					"job %q step %q: the consolidated report upload must run with if: always() (a red run's diagnosis is downloadable from the run page on every terminal state) - got if: %q",
+					u.Job, u.Step, u.If,
+				))
+			}
+
+		default:
 			errs = append(errs, fmt.Sprintf(
-				"job %q step %q: unexpected upload-artifact name %q - the expected platform-build upload surface is exactly the ONE matrix package upload %q (the actual platform distribution package); every evidence upload is banned",
-				u.Job, u.Step, u.Name, MatrixPackageArtifactSlot,
-			))
-
-			continue
-		}
-
-		matrixUploads++
-
-		if u.Job != PlatformBuildJobKey {
-			errs = append(errs, fmt.Sprintf(
-				"job %q: the ${{ matrix.artifact }} package upload belongs to the platform-build matrix job",
-				u.Job,
-			))
-		}
-
-		if cond, ok := u.With["if-no-files-found"]; !ok || withStringValue(u.With, "if-no-files-found") == "" || cond != "error" {
-			errs = append(errs, fmt.Sprintf(
-				"job %q step %q: the matrix package upload must carry if-no-files-found: error (a silently absent package is a contract breach)",
-				u.Job, u.Step,
-			))
-		}
-
-		if ov, ok := u.With["overwrite"]; !ok || ov != true {
-			errs = append(errs, fmt.Sprintf(
-				"job %q step %q: the matrix package upload must carry overwrite: true (a rerun must replace the same package artifact, not fail on it)",
-				u.Job, u.Step,
-			))
-		}
-
-		if !strings.Contains(u.Path, "dist/SHEYTAN-LA-ALPHA-") {
-			errs = append(errs, fmt.Sprintf(
-				"job %q step %q: the matrix package upload must stage ONLY the dist/SHEYTAN-LA-ALPHA-* portable package, got %q (no diagnostic, log or cache directory may ride along)",
-				u.Job, u.Step, u.Path,
-			))
-		}
-
-		// The eligibility condition is CONTRACTED, not optional: the
-		// upload must key off the explicit, inspectable step output of
-		// the package-eligibility gate and must run with always() so a
-		// red lane's valid package still uploads.
-		if !strings.Contains(u.If, "steps.package-eligibility.outputs.upload-package == 'true'") {
-			errs = append(errs, fmt.Sprintf(
-				"job %q step %q: the matrix package upload must key its condition off steps.package-eligibility.outputs.upload-package == 'true' (the explicit, inspectable eligibility decision) - got if: %q",
-				u.Job, u.Step, u.If,
-			))
-		}
-
-		if !strings.Contains(u.If, "always()") {
-			errs = append(errs, fmt.Sprintf(
-				"job %q step %q: the matrix package upload must run with if: always() (a red lane's valid package is still a valid package) - got if: %q",
-				u.Job, u.Step, u.If,
+				"job %q step %q: unexpected upload-artifact name %q - the permitted upload surface is exactly the ONE matrix package upload %q and the ONE consolidated report upload %q; every other artifact is banned",
+				u.Job, u.Step, u.Name, MatrixPackageArtifactSlot, ConsolidatedLogReportArtifactName,
 			))
 		}
 	}
 
 	if matrixUploads != 1 {
 		errs = append(errs, fmt.Sprintf(
-			"exactly ONE matrix package upload step is contracted (%q), found %d - the platform distribution package is the workflow's entire permitted artifact surface",
+			"exactly ONE matrix package upload step is contracted (%q), found %d",
 			MatrixPackageArtifactSlot, matrixUploads,
+		))
+	}
+
+	if reportUploads != 1 {
+		errs = append(errs, fmt.Sprintf(
+			"exactly ONE consolidated errors/warnings report upload step is contracted (%q staging %q), found %d - the owner reads the run's error/warning diagnosis directly from the run page",
+			ConsolidatedLogReportArtifactName, ConsolidatedLogReportFileName, reportUploads,
 		))
 	}
 

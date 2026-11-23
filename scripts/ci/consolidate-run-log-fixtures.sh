@@ -533,32 +533,38 @@ else
   bad "packaging-failed semantics (rc=$rc)"
 fi
 
-# 18. workflow shape contract (clause O, run 44835425398 artifact policy) ----
+# 18. workflow shape contract (clause O, 2026-11-23 artifact policy) ----
 # The ONE consolidated platform-build workflow (build.yml): the SEVEN-target
-# matrix replaced the five reusable lanes; the collector keeps its log
-# collection and parsing LOCAL — NO build-evidence artifact of any kind is
-# uploaded, and the ONLY upload-artifact step is the platform package.
+# matrix replaced the five reusable lanes; the collector uploads EXACTLY
+# the ONE curated errors/warnings report (the owner reads the diagnosis
+# from the run page), and NO other evidence class (the diagnostics index,
+# raw logs, build evidence) is uploaded. The platform package upload is
+# the only other artifact.
 yml_ok=1
 [ -f "$workflow" ] || yml_ok=0
 # The banned evidence uploads must NOT exist (name or path spellings):
 grep -q 'name: build-evidence-' "$workflow" && yml_ok=0
 grep -q 'path: ci-logs/' "$workflow" && yml_ok=0
 grep -q 'name: ci-logs' "$workflow" && yml_ok=0
-grep -q 'path: SHEYTAN-LA-errors-warnings.txt' "$workflow" && yml_ok=0
 grep -q 'path: run-diagnostics.json' "$workflow" && yml_ok=0
 grep -q 'name: run-diagnostics.json' "$workflow" && yml_ok=0
-# The collector still WRITES its local reports (the workspace files the
-# step summary and the verdict consume — never uploaded).
+# The collector still WRITES its local diagnostics index (the workspace
+# file the verdict consumes — never uploaded).
 grep -q -- '--json-out run-diagnostics.json' "$workflow" || yml_ok=0
 grep -q -- '--out SHEYTAN-LA-errors-warnings.txt' "$workflow" || yml_ok=0
-# EXACTLY ONE upload-artifact step remains: the immutable-pinned platform
-# package upload, keyed off the explicit eligibility output and staging
-# ONLY the dist package (if-no-files-found: error).
-[ "$(grep -c 'uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9' "$workflow")" = "1" ] || yml_ok=0
+# EXACTLY TWO upload-artifact steps remain with the immutable pin: the
+# platform package upload (keyed off the explicit eligibility output and
+# staging ONLY the dist package) and the ONE curated errors/warnings
+# report upload (exact name, exact file, always(), fail-loud).
+[ "$(grep -c 'uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9' "$workflow")" = "2" ] || yml_ok=0
 grep -q 'name: ${{ matrix.artifact }}' "$workflow" || yml_ok=0
 grep -q 'steps.package-eligibility.outputs.upload-package' "$workflow" || yml_ok=0
 grep -q 'path: dist/SHEYTAN-LA-ALPHA-\*' "$workflow" || yml_ok=0
 grep -q 'if-no-files-found: error' "$workflow" || yml_ok=0
+# The curated report upload carries its exact contracted shape:
+grep -q 'name: SHEYTAN-LA-errors-warnings$' "$workflow" || yml_ok=0
+grep -q 'path: SHEYTAN-LA-errors-warnings.txt' "$workflow" || yml_ok=0
+grep -q 'name: Upload the errors/warnings report' "$workflow" || yml_ok=0
 # The collector's own verdict stays fail-closed and its concise status
 # goes to the Actions step summary (local, not an artifact).
 grep -q 'Collector verdict (fail the job on coverage gaps)' "$workflow" || yml_ok=0

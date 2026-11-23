@@ -139,7 +139,12 @@ func TestListeningProcessAttributesForeignChildListener(t *testing.T) {
 	}
 
 	testBin, _ := os.Executable()
-	if exe != testBin {
+	// Run 45086860202 repair: proc_pidpath returns the canonical vnode
+	// path (/private/var/...), os.Executable() the exec path
+	// (/var/...) — TMPDIR lives behind the /var symlink on every macOS
+	// host, so raw string equality can never hold. SameExecutable is
+	// the repo's canonical comparison (symlink-resolving).
+	if !SameExecutable(exe, testBin) {
 		t.Fatalf("child exe = %q, want the test binary path %q", exe, testBin)
 	}
 

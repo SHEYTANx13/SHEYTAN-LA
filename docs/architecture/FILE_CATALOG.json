@@ -4880,6 +4880,34 @@
     "status": "test"
   },
   {
+    "path": "internal/mesh/peer.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/mesh (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/mesh",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/mesh/role.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/mesh (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/mesh",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/mesh/role_peer_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/mesh (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/mesh",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
     "path": "internal/mesh/worker.go",
     "type": "go",
     "language": "Go",

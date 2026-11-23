@@ -7,6 +7,18 @@ Every release ships with the same invariants: one authority per concern, evidenc
 
 ---
 
+---
+
+## ALPHA — runs 45086860202 + 45086860126 repair, mesh phase 2a, log-artifact policy — 2026-11-23, local candidate, hosted verification NOT RUN
+
+The RED run pair on `1007c35` (platform build #5 + CodeQL #48) root-caused and repaired, plus the owner-directed log-artifact policy and the mesh phase-2a dual-role increment:
+
+- **CodeQL Go exit 32 (reproduced locally, codeql-cli 2.27.5)**: `go build -json` is invisible to the CodeQL Go extractor — the traced build now runs plain and `-json` is reserved for the failure-path diagnostics rerun (`scripts/ci/go-build-jsonl-diagnose.py`).
+- **Darwin headless-suite runtime failures**: `processExePathImpl` now surfaces the public `ErrProcessNotFound` for a vanished PID (the walk-internal `errProcGone` leaked before), and the native tests compare exe identity through the symlink-resolving `SameExecutable` (`proc_pidpath` canonicalizes `/var/...` to `/private/var/...`, `os.Executable()` does not).
+- **Errors/warnings artifact policy (owner-directed change)**: both workflows upload the ONE curated errors/warnings report (`SHEYTAN-LA-errors-warnings`, `SHEYTAN-LA-codeql-all-logs`); every other evidence class stays banned; releasecontract re-pinned as a two-artifact closed allowlist with mutation coverage.
+- **Mesh phase 2a**: dynamic dual-role negotiation (`internal/mesh/role.go` — controller/worker/both from capability + preference inside the static ceiling) and the `PeerExchange`/`LoopbackPeerExchange` seam (`internal/mesh/peer.go`) with provider-side re-validation and requester-side durable commit (`Coordinator.DispatchToPeer`); mesh stays disabled by default; the libp2p LAN/WAN transport remains the next gated phase.
+
+
 ## ALPHA — run-44457547289 repair — 2026-11-19, local candidate on `work/alpha-run444575-repair` (base `613b8c6`), hosted verification NOT RUN
 
 The RED run-44457547289 (main HEAD `613b8c6a909f25f3faeffedaaa1478abac691bf2`) root-caused and repaired, plus the mandated platform-build consolidation and the Go-Gui/GoGPU/Wails integrations. Root causes fixed (each with a regression pin):

@@ -78,6 +78,58 @@ func (c *Coordinator) Resume(ctx context.Context, id string) (JobRecord, error) 
 	return final, nil
 }
 
+// DispatchToPeer drives ONE job end-to-end with the compute executed by
+// a PEER through the exchange seam (phase 2a: the phone-as-interface
+// path — a compact interface device dispatches allowlisted AI-inference
+// work to a workstation and commits the verified result in ITS OWN
+// ledger). The requester-side durability is identical to the local
+// path: the ledger row is created (pending) BEFORE any peer I/O, the
+// attempt is leased under a fencing epoch, and a peer refusal or an
+// unverified result fails the row closed — a dead peer never turns into
+// silent success, and no retry is re-offered to a peer that just
+// refused (cross-peer retries are the phase-3 transport's contract
+// against the same ledger API).
+func (c *Coordinator) DispatchToPeer(ctx context.Context, peer PeerExchange, env Envelope) (JobRecord, error) {
+	if peer == nil {
+		return JobRecord{}, fmt.Errorf("%w: nil peer exchange", ErrPeerExchange)
+	}
+
+	rec, err := c.ledger.Create(env, c.cfg)
+	if err != nil {
+		return JobRecord{}, err
+	}
+
+	leased, err := c.ledger.GrantLease(rec.ID, "peer/loopback", c.cfg.LeaseTTL, c.cfg.RetryCap)
+	if err != nil {
+		return JobRecord{}, err
+	}
+
+	if err := c.ledger.MarkRunning(rec.ID, leased.Epoch); err != nil {
+		return c.failRec(rec.ID, err)
+	}
+
+	result, offerErr := peer.Offer(ctx, env)
+	if offerErr != nil {
+		return c.failRec(rec.ID, fmt.Errorf("%w: peer refused %s %s: %v", ErrPeerExchange, env.Type, env.Privacy, offerErr))
+	}
+
+	if err := c.ledger.DeliverResult(rec.ID, leased.Epoch, result, c.cfg); err != nil {
+		return c.failRec(rec.ID, err)
+	}
+	if verr := verifyResult(env, result); verr != nil {
+		return c.failRec(rec.ID, verr)
+	}
+	if err := c.ledger.MarkVerified(rec.ID); err != nil {
+		return c.failRec(rec.ID, err)
+	}
+	if err := c.ledger.Commit(rec.ID); err != nil {
+		return c.failRec(rec.ID, err)
+	}
+
+	final, _ := c.ledger.Get(rec.ID)
+	return final, nil
+}
+
 // Cancel cancels a non-terminal job (owner action). The typed result
 // makes the terminal-vs-canceled distinction visible.
 func (c *Coordinator) Cancel(id string) error {
@@ -158,6 +210,16 @@ func (c *Coordinator) fail(id string, cause error) error {
 		return errors.Join(cause, ferr)
 	}
 	return cause
+}
+
+// failRec is fail() for the two-value dispatch paths: the FINAL ledger
+// row (state FAILED) is fetched after the typed failure is recorded, so
+// callers always see the terminal state next to the error — the same
+// shape Dispatch returns on failure.
+func (c *Coordinator) failRec(id string, cause error) (JobRecord, error) {
+	err := c.fail(id, cause)
+	final, _ := c.ledger.Get(id)
+	return final, err
 }
 
 // verifyResult is the phase-one controller verification: a result must

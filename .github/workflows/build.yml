@@ -1152,13 +1152,17 @@ jobs:
   # collect-errors - the ONE failure-tolerant collector. Runs after
   # platform-build reaches a terminal state (any outcome: if: always())
   # and pulls every completed job's log from the paginated jobs API
-  # (never the in-progress run-attempt archive). Run 44835425398 artifact
-  # policy: the collection stays LOCAL to the runner - the report and the
-  # diagnostics index are workspace files, the concise status/root-cause
-  # summary goes to the Actions step summary, and NOTHING is uploaded as
-  # a workflow artifact (the built-in job-log display is the log
-  # surface). The collector still exits nonzero on coverage gaps and its
-  # verdict step still fails this REQUIRED gate on such a gap.
+  # (never the in-progress run-attempt archive). Artifact policy
+  # (2026-11-23, owner-directed change of the run 44835425398 local-only
+  # rule): the ONE curated errors/warnings report — errors and warnings
+  # ONLY, with the exact file:line or build stage — IS uploaded as an
+  # artifact, because the owner reads the diagnosis directly from the run
+  # page (raw job logs need admin access). Every other evidence class
+  # stays banned: no raw logs, no verbose compiler output, no diagnostics
+  # index, no test reports (run-diagnostics.json stays a workspace file;
+  # see internal/releasecontract). The collector still exits nonzero on
+  # coverage gaps and its verdict step still fails this REQUIRED gate on
+  # such a gap.
   # ==========================================================================
   collect-errors:
     name: Collect errors
@@ -1173,16 +1177,18 @@ jobs:
       - name: Checkout (collector script)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      # ONE collector, TWO LOCAL run-level report files (plain-text
-      # report + machine-readable run-diagnostics.json) - both stay in the
-      # runner workspace; neither is uploaded as an artifact (run
-      # 44835425398 artifact policy). The collector pulls the COMPLETED
-      # JOB-SPECIFIC LOGS (GET /actions/jobs/{job_id}/logs) for every
-      # upstream job that reached a terminal state, using the paginated
-      # jobs metadata. The collector's own progress is embedded as a local
-      # COLLECTOR SELF-LOG (the runner-provided GITHUB_JOB key
-      # "collect-errors" normalizes against this job's display name).
-      - name: Collect the run-attempt logs into one plain-text report
+      # ONE collector, TWO run-level report files: the plain-text
+      # errors/warnings report (the curated diagnosis: errors and warnings
+      # only, exact file:line or stage) and the machine-readable
+      # run-diagnostics.json. The report is UPLOADED as an artifact (the
+      # ONE evidence artifact); the diagnostics index stays LOCAL to the
+      # runner workspace. The collector pulls the COMPLETED JOB-SPECIFIC
+      # LOGS (GET /actions/jobs/{job_id}/logs) for every upstream job that
+      # reached a terminal state, using the paginated jobs metadata. The
+      # collector's own progress is embedded as a local COLLECTOR SELF-LOG
+      # (the runner-provided GITHUB_JOB key "collect-errors" normalizes
+      # against this job's display name).
+      - name: Collect the run-attempt logs into one plain-text errors/warnings report
         id: collector
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1201,16 +1207,31 @@ jobs:
             --json-out run-diagnostics.json || rc=$?
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           if [ "$rc" -ne 0 ]; then
-            echo "::error::Collect errors: collector reported a coverage/verification gap (rc=$rc) - the LOCAL report still carries the diagnosis"
+            echo "::error::Collect errors: collector reported a coverage/verification gap (rc=$rc) - the report still carries the diagnosis"
           fi
           {
             echo "## Consolidated run log"
             echo ""
-            echo "LOCAL reports (run 44835425398 artifact policy — never uploaded as artifacts): \`SHEYTAN-LA-errors-warnings.txt\` (ONE errors/warnings-only plain-text file) and \`run-diagnostics.json\` (machine-readable per-job index), attempt ${{ github.run_attempt }} recorded INSIDE both. The Actions job logs above are the run's log surface."
+            echo "The errors/warnings report \`SHEYTAN-LA-errors-warnings.txt\` (ONE errors/warnings-only plain-text file, attempt ${{ github.run_attempt }} recorded INSIDE it) is UPLOADED as this job's artifact — errors and warnings only, with the exact file:line or build stage. \`run-diagnostics.json\` (machine-readable per-job index) stays a local workspace file. The Actions job logs above remain the raw surface."
             echo "If the report contains a MISSING LOG SOURCES section, job logs could not be recovered for those jobs and coverage=INCOMPLETE."
             echo ""
             echo "Job results: platform-build=${{ needs.platform-build.result }} (the seven-target matrix; this collector job reports its own conclusion in the run page)"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # The ONE evidence artifact (2026-11-23 policy): the curated
+      # errors/warnings-only plain-text report. Uploaded on every terminal
+      # state so a red run's diagnosis is downloadable from the run page.
+      # if-no-files-found: error — a missing report is a collector defect
+      # and must fail loudly, never silently produce no log.
+      - name: Upload the errors/warnings report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: SHEYTAN-LA-errors-warnings
+          path: SHEYTAN-LA-errors-warnings.txt
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
 
       - name: Collector verdict (fail the job on coverage gaps)
         if: ${{ !cancelled() }}
@@ -1267,7 +1288,7 @@ jobs:
             fi
           done
           if [ "$verdict" -ne 0 ]; then
-            echo "FINAL VERDICT: FAILURE - a collector report can never turn a red run green; the failed gate's root cause is in the collector's LOCAL report and step summary (no evidence artifacts are uploaded; run 44835425398 policy)"
+            echo "FINAL VERDICT: FAILURE - a collector report can never turn a red run green; the failed gate's root cause is in the collector's errors/warnings artifact and step summary (the ONE evidence artifact; 2026-11-23 policy)"
             exit 1
           fi
           echo "FINAL VERDICT: SUCCESS - every required gate (platform-build seven-target matrix, collect-errors) is green."

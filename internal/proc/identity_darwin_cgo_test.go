@@ -231,7 +231,13 @@ func TestOwnProcessListenerAttributed(t *testing.T) {
 	}
 
 	testBin, _ := os.Executable()
-	if exe != testBin {
+	// Run 45086860202 repair: proc_pidpath answers the CANONICAL vnode
+	// path (/private/var/...), while os.Executable() answers the exec
+	// path (/var/... — TMPDIR sits behind the /var symlink on every
+	// macOS host). Raw string equality can never hold across that
+	// boundary; SameExecutable is the repo's canonical comparison
+	// (it resolves symlinks exactly for this purpose).
+	if !SameExecutable(exe, testBin) {
 		t.Fatalf("exe = %q, want our own binary %q", exe, testBin)
 	}
 }

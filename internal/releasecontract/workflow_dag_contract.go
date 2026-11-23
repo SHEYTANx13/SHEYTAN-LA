@@ -186,14 +186,15 @@ func ValidateFinalVerdictJob(workflowText string) error {
 }
 
 // ValidateFailureTolerantCollector enforces the collector contract
-// (run 44835425398 artifact policy): the collect-errors job needs
+// (2026-11-23 policy): the collect-errors job needs
 // EXACTLY [platform-build] (the ONE build gate the collector reports
 // on), runs on always() so it reports after ANY platform outcome, keeps
 // its log collection and parsing LOCAL to the runner (it still invokes
-// scripts/ci/consolidate-run-log.sh), uploads NO artifact of any kind
-// (the report and the diagnostics index stay in the workspace; the
-// concise status goes to the Actions step summary), and its own verdict
-// step still fails the REQUIRED collector gate on a coverage gap.
+// scripts/ci/consolidate-run-log.sh), uploads EXACTLY the ONE curated
+// errors/warnings report (ConsolidatedLogReportArtifactName staging
+// ConsolidatedLogReportFileName — never the diagnostics index, never any
+// other evidence), and its own verdict step still fails the REQUIRED
+// collector gate on a coverage gap.
 func ValidateFailureTolerantCollector(workflowText string) error {
 	doc, err := parseWorkflow(workflowText)
 	if err != nil {
@@ -202,7 +203,7 @@ func ValidateFailureTolerantCollector(workflowText string) error {
 
 	job, ok := doc.Jobs[CollectorJobKey]
 	if !ok {
-		return fmt.Errorf("no %s job — red runs lose their consolidated local diagnosis", CollectorJobKey)
+		return fmt.Errorf("no %s job — red runs lose their consolidated errors/warnings diagnosis", CollectorJobKey)
 	}
 
 	var errs []string
@@ -215,19 +216,31 @@ func ValidateFailureTolerantCollector(workflowText string) error {
 	}
 
 	if !strings.Contains(job.If, "always()") {
-		errs = append(errs, "collect-errors must run with if: always() — red runs keep their consolidated LOCAL diagnosis and step summary")
+		errs = append(errs, "collect-errors must run with if: always() — red runs keep their consolidated errors/warnings report and step summary")
 	}
 
-	// Run 44835425398 artifact policy: the collector UPLOADS NOTHING. Its
-	// report files stay in the runner workspace; the platform's log
-	// surface is the built-in Actions job-log display.
+	// 2026-11-23 artifact policy: the collector uploads EXACTLY the ONE
+	// curated errors/warnings report. The diagnostics index and every
+	// other evidence class stay local workspace files.
+	reportUploads := 0
 	for _, step := range job.Steps {
-		if strings.HasPrefix(step.Uses, "actions/upload-artifact") {
+		if !strings.HasPrefix(step.Uses, "actions/upload-artifact") {
+			continue
+		}
+		reportUploads++
+		name := withStringValue(step.With, "name")
+		if name != ConsolidatedLogReportArtifactName {
 			errs = append(errs, fmt.Sprintf(
-				"%s step %q uploads an artifact — the collector must not upload build evidence, consolidated logs or diagnostics indexes (run 44835425398 artifact policy; the report stays a local workspace file)",
-				CollectorJobKey, step.Name,
+				"%s step %q uploads artifact %q — the collector uploads EXACTLY the curated errors/warnings report %q staging %s; the diagnostics index and every other evidence class stay local workspace files",
+				CollectorJobKey, step.Name, name, ConsolidatedLogReportArtifactName, ConsolidatedLogReportFileName,
 			))
 		}
+	}
+	if reportUploads != 1 {
+		errs = append(errs, fmt.Sprintf(
+			"%s must upload EXACTLY the ONE curated errors/warnings report (%s), found %d upload step(s) — the owner reads the run's error/warning diagnosis (exact file:line or stage) directly from the run page",
+			CollectorJobKey, ConsolidatedLogReportArtifactName, reportUploads,
+		))
 	}
 
 	// The collection itself must stay real and local: the collector still
@@ -239,7 +252,7 @@ func ValidateFailureTolerantCollector(workflowText string) error {
 		}
 	}
 	if !collectorRuns {
-		errs = append(errs, "collect-errors no longer invokes scripts/ci/consolidate-run-log.sh — the failure-tolerant LOCAL log collection (and its strict exit-status contract) must survive the artifact-policy change")
+		errs = append(errs, "collect-errors no longer invokes scripts/ci/consolidate-run-log.sh — the failure-tolerant log collection (and its strict exit-status contract) must survive the artifact-policy change")
 	}
 
 	// The collector's own failure must still fail the required gate: the
@@ -415,36 +428,46 @@ func ValidateCodeQLWorkflowResilience(workflowText string) error {
 		errs = append(errs, "collect-codeql-logs must reuse scripts/ci/consolidate-run-log.sh — no second copy of the URL/token collector logic")
 	}
 
-	// Run 44835425398 artifact policy: the CodeQL collector uploads NO
-	// build-log or diagnostics-index artifact. The forbidden evidence
-	// names must not appear as upload names in ANY job of this
-	// workflow; the ONLY permitted artifact remains the security-alert
-	// plain-text report in the export-alert-report job.
+	// 2026-11-23 artifact policy (owner-directed change of the run
+	// 44835425398 local-only rule): the CodeQL collector uploads EXACTLY
+	// the ONE curated errors/warnings report. The forbidden evidence
+	// names must not appear as upload names in ANY job of this workflow;
+	// the remaining permitted artifacts are the security-alert plain-text
+	// report (export-alert-report) and the CodeQL errors/warnings report
+	// (collect-codeql-logs).
 	for _, jobKey := range sortedJobKeys(doc) {
 		for _, step := range doc.Jobs[jobKey].Steps {
 			if !strings.HasPrefix(step.Uses, "actions/upload-artifact") {
 				continue
 			}
 			name := withStringValue(step.With, "name")
-			if jobKey != "export-alert-report" {
-				errs = append(errs, fmt.Sprintf(
-					"%s step %q uploads an artifact — the ONLY permitted CodeQL artifact is the security-alert report in the export-alert-report job; CodeQL build logs and run diagnostics stay local to the runner (run 44835425398 artifact policy)",
-					jobKey, step.Name,
-				))
-				continue
-			}
-			for _, banned := range ForbiddenArtifactUploadNames {
-				if name == banned {
+			switch {
+			case jobKey == "export-alert-report":
+				for _, banned := range ForbiddenArtifactUploadNames {
+					if name == banned {
+						errs = append(errs, fmt.Sprintf(
+							"%s step %q uploads the forbidden evidence artifact %q — build-log and diagnostics-index uploads are banned even in the CodeQL workflow",
+							jobKey, step.Name, name,
+						))
+					}
+				}
+				if name != "" && !strings.Contains(name, "code-scanning-alerts") {
 					errs = append(errs, fmt.Sprintf(
-						"%s step %q uploads the forbidden evidence artifact %q — build-log and diagnostics-index uploads are banned even in the CodeQL workflow",
+						"%s step %q uploads unexpected artifact %q — the export-alert-report job may upload only the plain-text security report (reports/code-scanning-alerts.txt)",
 						jobKey, step.Name, name,
 					))
 				}
-			}
-			if name != "" && !strings.Contains(name, "code-scanning-alerts") {
+			case jobKey == "collect-codeql-logs":
+				if name != CodeQLLogReportArtifactName {
+					errs = append(errs, fmt.Sprintf(
+						"%s step %q uploads artifact %q — the CodeQL collector uploads EXACTLY the curated errors/warnings report %q staging %s; raw logs, the diagnostics index and every other evidence class stay local workspace files",
+						jobKey, step.Name, name, CodeQLLogReportArtifactName, CodeQLLogReportFileName,
+					))
+				}
+			default:
 				errs = append(errs, fmt.Sprintf(
-					"%s step %q uploads unexpected artifact %q — the export-alert-report job may upload only the plain-text security report (reports/code-scanning-alerts.txt)",
-					jobKey, step.Name, name,
+					"%s step %q uploads an artifact — the ONLY permitted CodeQL artifacts are the security-alert report (export-alert-report) and the curated errors/warnings report (collect-codeql-logs); everything else stays local to the runner",
+					jobKey, step.Name,
 				))
 			}
 		}
