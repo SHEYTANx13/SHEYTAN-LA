@@ -4806,6 +4806,89 @@
     "status": "test"
   },
   {
+    "path": "internal/mesh/coordinator.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/mesh (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/mesh",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/mesh/doc.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/mesh (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/mesh",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/mesh/envelope.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/mesh (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/mesh",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/mesh/job.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/mesh (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/mesh",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/mesh/ledger.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/mesh (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/mesh",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/mesh/manager.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/mesh (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/mesh",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/mesh/manager_testseams_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/mesh (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/mesh",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/mesh/mesh_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/mesh (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/mesh",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/mesh/worker.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/mesh (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/mesh",
+    "status": "needs review"
+  },
+  {
     "path": "internal/multiagent/context.go",
     "type": "go",
     "language": "Go",

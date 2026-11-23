@@ -10,6 +10,14 @@ package proc
 // simply not part of the build, so the CGO-free variant cannot be asked to
 // prove bridge behavior it does not carry.
 //
+// Run 45005960459 repair: the helpers take the SyscallConn-capable
+// socket interface directly, and every net.Listener value is asserted to
+// its concrete type (*net.TCPListener / *net.UnixListener) BEFORE it is
+// passed on. The static net.Listener interface does NOT carry
+// SyscallConn, so passing the interface value is a compile error on the
+// Darwin lanes that build this file (the Linux lanes never see it — the
+// same visibility gap that let the defect reach main).
+//
 // Evidence class: these tests execute against the REAL Darwin kernel
 // records of THIS process (self-inspection needs no special privilege).
 // A Linux or CGO-free build never runs them, and no test fabricates a
@@ -37,9 +45,11 @@ func rawFDOf(t *testing.T, s interface {
 
 	var fd int32
 
-	if cerr := rc.Control(func(f uintptr) error {
+	// syscall.RawConn.Control takes func(fd uintptr) — no error
+	// return (run 45005960459: a func(fd uintptr) error literal does
+	// not compile against the real RawConn contract).
+	if cerr := rc.Control(func(f uintptr) {
 		fd = int32(f)
-		return nil
 	}); cerr != nil {
 		t.Fatalf("Control: %v", cerr)
 	}
@@ -104,7 +114,14 @@ func TestTCPListenerRecordCarriesTCPKindAndCorrectPort(t *testing.T) {
 
 	bound := l.Addr().(*net.TCPAddr).Port
 
-	rec := recordOfListener(t, l)
+	// *net.TCPListener implements SyscallConn; the static
+	// net.Listener interface does not (run 45005960459).
+	tcpListener, ok := l.(*net.TCPListener)
+	if !ok {
+		t.Fatalf("net.Listen returned %T, want *net.TCPListener", l)
+	}
+
+	rec := recordOfListener(t, tcpListener)
 
 	if !rec.KindIsTCP {
 		t.Fatalf("a real TCP listener must decode as a SOCKINFO_TCP record (soi_kind gate), got KindIsTCP=false")
@@ -159,9 +176,18 @@ func TestNonTCPKindRecordsSkipWithoutUnionInterpretation(t *testing.T) {
 
 	tcpPort := tcp.Addr().(*net.TCPAddr).Port
 
+	// Run 45005960459: assert the concrete listener types before the
+	// interface{ SyscallConn() ... } slice — the static net.Listener
+	// interface value does not implement SyscallConn and would not
+	// compile into the slice on the Darwin lanes.
+	unixListener, ok := unix.(*net.UnixListener)
+	if !ok {
+		t.Fatalf("net.Listen(unix) returned %T, want *net.UnixListener", unix)
+	}
+
 	for _, s := range []interface {
 		SyscallConn() (syscall.RawConn, error)
-	}{udp, unix} {
+	}{udp, unixListener} {
 		rec := recordOfListener(t, s)
 
 		if rec.KindIsTCP {

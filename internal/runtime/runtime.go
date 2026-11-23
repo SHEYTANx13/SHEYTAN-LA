@@ -30,6 +30,7 @@ import (
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/memmanager"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/memory"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/mesh"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/multiagent"
 	nativeengine "github.com/SHEYTANx13/SHEYTAN-LA/internal/native/engine"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/preflight"
@@ -69,6 +70,15 @@ type Stack struct {
 	Browser *tools.BrowserTool
 	Sandbox *sandbox.CodeExecSandbox
 	Recall  *recall.Engine
+
+	// Mesh (blueprint 2026-11-22) is the SINGLE private-compute-mesh
+	// authority: typed AI-inference jobs, durable ledger, fencing.
+	// Constructed DISABLED (mesh.DefaultConfig) — no listener, no
+	// discovery, no worker exists until the owner explicitly enables the
+	// feature and a hosted transport phase lands. UI/UX compute is
+	// never shareable: the handler allowlist is AI-inference only and
+	// registration structurally refuses every UI/shell/fs/render type.
+	Mesh *mesh.Manager
 
 	// Sessions (v1.2.4) is the process-wide session store. Previously
 	// each consumer built its own store over the same directory; one
@@ -344,6 +354,16 @@ func NewStack(cfg *config.Config) *Stack {
 	}
 	stack.clientStream = client.StreamChatDetailed
 	orch.SetGenerationStream(stack.streamGeneration)
+
+	// Private compute mesh: constructed disabled with an empty registry.
+	// Construction has NO side effects (no socket, no goroutine); Start
+	// is only reachable behind the owner's explicit enable, which no
+	// current caller performs (the feature flag stays off).
+	if meshMgr, meshErr := mesh.NewManager(mesh.DefaultConfig(), filepath.Join(cfg.DataDir, "mesh")); meshErr == nil {
+		stack.Mesh = meshMgr
+	} else {
+		logging.Default().Warn("runtime", "mesh manager unavailable: %v", meshErr)
+	}
 
 	// v1.2.4: one shared session store + the runtime memory manager.
 	// The manager owns coordinated cleanup: bounded caches stay bounded
@@ -1707,6 +1727,19 @@ func (s *Stack) Close() {
 		}
 
 		_ = s.Llama.Stop()
+
+		// 7. Stop the mesh authority LAST (it is the newest, and
+		// phase-1 keeps it disabled): the bounded Stop flushes the
+		// durable ledger and refuses further submissions. Idempotent
+		// and nil-safe — a disabled manager still returns cleanly.
+		if s.Mesh != nil {
+			stopCtx, cancel := context.WithTimeout(
+				context.Background(),
+				5*time.Second,
+			)
+			_ = s.Mesh.Stop(stopCtx)
+			cancel()
+		}
 	})
 }
 

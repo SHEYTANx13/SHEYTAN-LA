@@ -102,20 +102,6 @@ jobs:
           go-version: "1.27.4"
           cache: false
 
-      # Run vet before CodeQL initialization. It is a useful quality check, but
-      # it is not a compiler build that contributes to the CodeQL database.
-      # Keeping it outside the traced build avoids wasting extraction time.
-      - name: Vet all Go packages
-        if: matrix.language == 'go'
-        shell: bash
-        env:
-          CGO_ENABLED: "1"
-          GOTOOLCHAIN: auto
-        run: |
-          set -euo pipefail
-          go version
-          go vet ./...
-
       - name: Initialize CodeQL
         # v1.11.1 (run 43630164424 repair): the init step carries an explicit
         # id so the analyze step can run EVEN WHEN A LATER MANUAL BUILD STEP
@@ -185,7 +171,19 @@ jobs:
         run: |
           set -euo pipefail
           go env GOTOOLCHAIN
-          mapfile -t build_a_packages < <(go list -tags nogogpu ./... | grep -v '^github\.com/SHEYTANx13/SHEYTAN-LA/cmd/sheytan-renderprobe$')
+          # Run 45005960383 repair: the package list is written to a FILE
+          # and re-read — a process substitution swallows `go list`/`grep`
+          # failures inside mapfile (set -e cannot see them), an empty
+          # array would send zero packages to `go build`, and the step
+          # would fail fast with an unrelated "no Go files" error. The
+          # explicit file + count assertion fails LOUDLY instead.
+          go list -tags nogogpu ./... > "$RUNNER_TEMP/codeql-build-a-all-packages.txt"
+          grep -v '^github\.com/SHEYTANx13/SHEYTAN-LA/cmd/sheytan-renderprobe$' "$RUNNER_TEMP/codeql-build-a-all-packages.txt" > "$RUNNER_TEMP/codeql-build-a-packages.txt"
+          mapfile -t build_a_packages < "$RUNNER_TEMP/codeql-build-a-packages.txt"
+          if [ "${#build_a_packages[@]}" -eq 0 ]; then
+            echo "::error::build (a) package list is empty — go list or grep produced no packages; refusing to run a zero-package build"
+            exit 1
+          fi
           echo "build (a): CGO_ENABLED=1 -tags nogogpu go build -json (every package of ./... EXCEPT cmd/sheytan-renderprobe, whose documented link configuration is build (b) - goffi v0.6.8 documents the goffi+other-cgo mixed-stack link as impossible on Linux, goffi issue #72)"
           echo "build (a) package count: ${#build_a_packages[@]} (go list ./... minus the renderprobe)"
           CGO_ENABLED=1 go build -json -tags nogogpu "${build_a_packages[@]}" > "$RUNNER_TEMP/codeql-go-build-a.jsonl" || { python3 scripts/ci/go-build-jsonl-diagnose.py "$RUNNER_TEMP/codeql-go-build-a.jsonl" || true; exit 1; }
@@ -233,6 +231,31 @@ jobs:
         with:
           category: "/language:${{ matrix.language }}"
           upload: always
+
+      # Run vet AFTER the traced build + analyze (run 45005960383 repair):
+      # when this step ran BEFORE init, its CGO_ENABLED=1 compile of ./...
+      # populated the SHARED Go build cache on the cold runner, so the
+      # subsequent traced `go build -json` replayed every archive and
+      # performed ZERO compile actions — the CodeQL Go extractor saw no
+      # source and `database finalize` failed with exit 32 ("didn't build
+      # any of it", the documented cached-components failure class).
+      # Vet stays in the job (Linux vet coverage is preserved — the
+      # platform-build lanes vet on other host OSes) but can no longer
+      # starve the traced build, and `if: always()` keeps it reporting
+      # even when the analyze step above failed.
+      - name: Vet all Go packages
+        # always() keeps the gate reporting after a failed analyze;
+        # the language guard keeps the Go-only step off the C++/actions
+        # matrix legs (no Go toolchain is installed there).
+        if: ${{ always() && matrix.language == 'go' }}
+        shell: bash
+        env:
+          CGO_ENABLED: "1"
+          GOTOOLCHAIN: auto
+        run: |
+          set -euo pipefail
+          go version
+          go vet ./...
 
   # The alert report also runs after red analysis jobs (!cancelled()):
   # partial SARIF inventories are diagnostics, and the report explicitly
