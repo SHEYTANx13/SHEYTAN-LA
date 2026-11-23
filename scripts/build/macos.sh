@@ -50,6 +50,24 @@ fail_gate() { # $1 = step name, $2 = human message
   exit 1
 }
 
+# summarize_headless_failure (run 45165536396 repair): extracts the
+# suite's OWN root-cause records from the tee'd go test -json stream and
+# emits them as ::error:: annotations. Run 45165536396's macos-arm64 and
+# iOS-lane reports carried ONLY "Process completed with exit code 1"
+# because a suite-timeout panic or a package crash produces NO
+# `--- FAIL:` records for the collector to classify — the diagnosis died
+# with the stream. Both evidence shapes (JSON-wrapped frames and raw
+# stream lines) are matched here and emitted verbatim, so the errors/
+# warnings report names the failing package and the real reason.
+summarize_headless_failure() { # $1 = tee'd stream log, $2 = platform label
+  local stream="$1" label="$2"
+  [ -f "$stream" ] || return 0
+  echo "::error::headless suite failure evidence (${label}): the suite's own root-cause records follow (bounded to 15; the full -json stream is in the step log)"
+  grep -n -E '(--- FAIL:|panic: |fatal error: |^FAIL|test timed out|signal: [A-Z]+)' "$stream" | head -n 15 | while IFS= read -r ev; do
+    echo "::error::${label} suite evidence: ${ev}"
+  done
+}
+
 # write_info_plist emits the bundle's Info.plist (heredoc terminator must
 # sit at column 0; the emitted content is unindented by the leading
 # spaces stripped below via sed -i 's/^[[:space:]]*//' before plutil
@@ -89,10 +107,23 @@ case "$phase" in
     ;;
 
   headless-tests)
+    # Run 45165536396 repair: the gate must never download modules
+    # lazily — the macos-x64 lane's lazy proxy fetches (gogpu/wgpu
+    # family) timed out mid-gate and the suite failed as an opaque build
+    # failure with zero test-failure records. The bounded-retry prefetch
+    # (scripts/ci/module-preflight.sh) runs FIRST and fails closed with
+    # the exact captured proxy error.
+    if ! bash scripts/ci/module-preflight.sh "${TARGET}"; then
+      fail_gate "Module prefetch (darwin/${GOARCH_VALUE})" "module prefetch failed on darwin/${GOARCH_VALUE} — the exact proxy error is in ci-logs/${TARGET}-module-preflight.log and in this step log"
+    fi
     # -json is CONTRACTUAL: the collector's stateful `go test -json`
     # classifier (run 44457547289 3.4) needs the stream.
     echo "RUN go test ./internal/... -tags headless -json (darwin/${GOARCH_VALUE})" >> ci-logs/gate-order.txt
     if ! CGO_ENABLED=1 go test ./internal/... -tags headless -json -count=1 -timeout "${GO_TEST_TIMEOUT}" 2>&1 | tee ci-logs/macos-go-test-headless.log; then
+      # Run 45165536396 repair: a bare exit code is not a diagnosis —
+      # surface the suite's own root-cause records before the gate
+      # marker, so the report names the failing package and reason.
+      summarize_headless_failure ci-logs/macos-go-test-headless.log "darwin/${GOARCH_VALUE}"
       fail_gate "Headless core suite (darwin/${GOARCH_VALUE})" "headless core tests failed on darwin/${GOARCH_VALUE}"
     fi
     echo "gate OK: headless core suite (darwin/${GOARCH_VALUE})" >> ci-logs/gate-order.txt

@@ -167,3 +167,59 @@ func infoLine(k, v string) string {
 	}
 	return fmt.Sprintf("%s: %s", k, v)
 }
+
+// touchFloorLayout is the structural UX-06 hit-area floor (run 45165536396
+// UX pass). The 44/48 DIP touch contract (docs/ui/TOUCH-RESPONSIVE-MATRIX.md
+// §1, tokens TouchTargetMin/TouchTargetPreferred/RowRelaxed) was
+// documented, but only the Engines window controls enforced it
+// structurally — the navigation chrome and the composer shipped at the
+// Fyne default height (~36 DIP), below the floor on every phone-targeted
+// size class. floorTouch WRAPS the real control in a one-child container
+// (never re-types it): the wrapped widget stays an authentic
+// *widget.Button for the button-fit walk and the tap path, while the
+// layout enforces the floor at EVERY width — phone, tablet and big
+// screens alike. The child fills the floored area, so the whole surface
+// is tappable; a HIDDEN child contributes a zero minimum (no reserved
+// gap for the disconnected-state Retry).
+type touchFloorLayout struct {
+	minHeight float32
+}
+
+func (l *touchFloorLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	w, h := float32(0), float32(0)
+	for _, o := range objects {
+		if !o.Visible() {
+			continue // a hidden floored control reserves no space
+		}
+
+		s := o.MinSize()
+		if s.Width > w {
+			w = s.Width
+		}
+
+		hh := s.Height
+		if hh < l.minHeight {
+			hh = l.minHeight
+		}
+
+		if hh > h {
+			h = hh
+		}
+	}
+
+	return fyne.NewSize(w, h)
+}
+
+// Layout stretches the child across the FULL floored area: the entire
+// surface is the tap target, not a small control floating inside it.
+func (l *touchFloorLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	for _, o := range objects {
+		o.Resize(size)
+		o.Move(fyne.NewPos(0, 0))
+	}
+}
+
+// floorTouch wraps content with the given minimum hit-area height.
+func floorTouch(content fyne.CanvasObject, minHeight float32) fyne.CanvasObject {
+	return container.New(&touchFloorLayout{minHeight: minHeight}, content)
+}

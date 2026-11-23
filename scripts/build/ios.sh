@@ -38,14 +38,40 @@ fail_gate() { # $1 = step name, $2 = human message
   exit 1
 }
 
+# summarize_headless_failure (run 45165536396 repair): identical contract
+# to scripts/build/macos.sh — the iOS lane host's opaque "exit code 1"
+# (zero test-failure records in the collector report) loses the suite's
+# own root cause with the stream. Surface the exact records as
+# annotations before the gate marker.
+summarize_headless_failure() { # $1 = tee'd stream log, $2 = platform label
+  local stream="$1" label="$2"
+  [ -f "$stream" ] || return 0
+  echo "::error::headless suite failure evidence (${label}): the suite's own root-cause records follow (bounded to 15; the full -json stream is in the step log)"
+  grep -n -E '(--- FAIL:|panic: |fatal error: |^FAIL|test timed out|signal: [A-Z]+)' "$stream" | head -n 15 | while IFS= read -r ev; do
+    echo "::error::${label} suite evidence: ${ev}"
+  done
+}
+
 phase="${1:-}"
 
 case "$phase" in
   headless-tests)
+    # Run 45165536396 repair: the gate must never download modules
+    # lazily — the bounded-retry prefetch (scripts/ci/module-preflight.sh)
+    # runs FIRST and fails closed with the exact captured proxy error
+    # (the macos-x64 lane's lazy fetches timed out at the proxy and
+    # produced an opaque build failure with zero test-failure records).
+    if ! bash scripts/ci/module-preflight.sh "${TARGET}"; then
+      fail_gate "Module prefetch (iOS lane host)" "module prefetch failed on the iOS lane host — the exact proxy error is in ci-logs/${TARGET}-module-preflight.log and in this step log"
+    fi
     # -json is CONTRACTUAL: the collector's stateful `go test -json`
     # classifier (run 44457547289 3.4) needs the stream.
     echo "RUN go test ./internal/... -tags headless -json (iOS lane host)" >> ci-logs/gate-order.txt
     if ! CGO_ENABLED=1 go test ./internal/... -tags headless -json -count=1 -timeout "${GO_TEST_TIMEOUT}" 2>&1 | tee ci-logs/ios-go-test-headless.log; then
+      # Run 45165536396 repair: a bare exit code is not a diagnosis —
+      # surface the suite's own root-cause records before the gate
+      # marker, so the report names the failing package and reason.
+      summarize_headless_failure ci-logs/ios-go-test-headless.log "iOS lane host"
       fail_gate "Headless core suite (iOS lane host)" "headless core tests failed on the iOS lane host"
     fi
     echo "gate OK: headless core suite (iOS lane host)" >> ci-logs/gate-order.txt

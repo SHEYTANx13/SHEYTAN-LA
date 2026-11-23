@@ -182,10 +182,26 @@ func TestListeningProcessWrongPortRefused(t *testing.T) {
 
 	bound := l.Addr().(*net.TCPAddr).Port
 
-	// Find a different port number for the query.
-	query := bound + 1
-	if query > 65535 {
-		query = bound - 1
+	// Run 45165536396 repair: the wrong-port query must be a port PROVEN
+	// free by this very host, never "bound+1" - on a busy hosted runner
+	// an adjacent ephemeral port can carry a REAL listener owned by
+	// another process, and the walk would answer truthfully (ok=true)
+	// while the test failed as a false port-confusion alarm. Bind a
+	// second listener to obtain a kernel-proven free port, close it,
+	// then query it while the first listener stays open on `bound`.
+	probe, perr := net.Listen("tcp", "127.0.0.1:0")
+	if perr != nil {
+		t.Fatalf("probe listen: %v", perr)
+	}
+
+	query := probe.Addr().(*net.TCPAddr).Port
+
+	if cerr := probe.Close(); cerr != nil {
+		t.Fatalf("probe close: %v", cerr)
+	}
+
+	if query == bound {
+		t.Fatalf("the probe and the listener must never collide on one port (%d)", bound)
 	}
 
 	pid, exe, ok, err := ListeningProcess(query)
@@ -194,7 +210,11 @@ func TestListeningProcessWrongPortRefused(t *testing.T) {
 	}
 
 	if ok {
-		t.Fatalf("port %d has no listener; the walk must not attribute the listener on %d (got pid %d exe %q)", query, bound, pid, exe)
+		if pid == os.Getpid() && SameExecutable(exe, mustOwnExe(t)) {
+			t.Fatalf("port %d carries no listener of ours, yet the walk attributed OUR binary (pid %d exe %q) - a real attribution defect", query, pid, exe)
+		}
+
+		t.Skipf("port %d was recycled by another process (pid %d exe %q) between probe close and query - environment, not attribution", query, pid, exe)
 	}
 }
 

@@ -112,12 +112,15 @@ type primaryActionSlot struct {
 
 func newPrimaryActionSlot(onSend, onStop func()) *primaryActionSlot {
 	s := &primaryActionSlot{
+		// Run 45165536396 UX pass: the ONE primary action carries the
+		// preferred 48 DIP touch floor (UX-06: "48 preferred for primary
+		// actions") — the phone thumb target.
 		send: widget.NewButtonWithIcon("Send", theme.MediaPlayIcon(), onSend),
 		stop: widget.NewButtonWithIcon("Stop", theme.MediaStopIcon(), onStop),
 	}
 	s.send.Importance = widget.HighImportance
 	s.stop.Importance = widget.DangerImportance
-	s.stack = container.NewStack(s.send, s.stop)
+	s.stack = container.NewStack(floorTouch(s.send, TouchTargetPreferred), floorTouch(s.stop, TouchTargetPreferred))
 	s.setBusy(false)
 	return s
 }
@@ -200,11 +203,13 @@ func emptyStateSurface(mode string, input *composerEntry, win fyne.Window) fyne.
 	row := container.NewHBox()
 	for _, sp := range prompts {
 		sample := sp
-		row.Add(widget.NewButton(sample.label, func() {
+		// Run 45165536396 UX pass: sample chips carry the 44 DIP touch
+		// floor - they are the FIRST surface a phone user taps.
+		row.Add(floorTouch(widget.NewButton(sample.label, func() {
 			// DRAFT ONLY: fill the composer, focus it, never send.
 			input.SetText(sample.text)
 			focusComposerIfSafe(win, input)
-		}))
+		}), TouchTargetMin))
 	}
 	box.Add(container.NewPadded(row))
 	hint := wrappedLabel("Samples fill the draft — nothing is sent until you press Send.")

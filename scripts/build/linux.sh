@@ -57,6 +57,13 @@ case "$phase" in
     ;;
 
   headless-tests)
+    # Run 45165536396 repair: the gate must never download modules
+    # lazily — the same bounded-retry prefetch every lane runs (the
+    # macos-x64 lane's lazy proxy fetches timed out mid-gate and failed
+    # the suite as an opaque build failure).
+    if ! bash scripts/ci/module-preflight.sh "linux"; then
+      fail_gate "Module prefetch (linux/amd64)" "module prefetch failed on linux/amd64 — the exact proxy error is in ci-logs/linux-module-preflight.log and in this step log"
+    fi
     # -json is CONTRACTUAL: the consolidated run-log collector's stateful
     # `go test -json` classifier (run 44457547289 3.4) needs the stream.
     echo "RUN go test ./internal/... -tags headless -json (linux/amd64)" >> ci-logs/gate-order.txt

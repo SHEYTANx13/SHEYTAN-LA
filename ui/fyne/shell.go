@@ -209,7 +209,8 @@ func (s *shell) root() fyne.CanvasObject {
 
 	// v1.11.1: the safe reconnect action. Visible ONLY in the
 	// disconnected state; retry is bounded by the app's single-flight
-	// bootstrap guard (no retry storms).
+	// bootstrap guard (no retry storms). Run 45165536396 UX pass: the
+	// hit area carries the UX-06 touch floor (44 DIP) at every width.
 	s.retryB = widget.NewButtonWithIcon("Retry", theme.ViewRefreshIcon(), func() {
 		if ap := s.app; ap != nil {
 			ap.retryBootstrap()
@@ -225,12 +226,15 @@ func (s *shell) root() fyne.CanvasObject {
 	s.errLine.Wrapping = fyne.TextWrapWord
 	s.errLine.Hide()
 
-	// Primary destinations in the rail.
+	// Primary destinations in the rail. Run 45165536396 UX pass: every
+	// rail row carries the UX-06 touch floor — RowRelaxed (44 DIP), the
+	// documented "primary navigation rows" token, applied structurally at
+	// every width (phone AND big screens).
 	for _, v := range primaryViews {
 		vv := v
 		b := widget.NewButton(v.label, func() { s.show(vv.id) })
 		b.Importance = widget.LowImportance
-		s.rail.Add(b)
+		s.rail.Add(floorTouch(b, RowRelaxed))
 	}
 
 	// Utilities — grouped, visually subordinate routes (History,
@@ -242,27 +246,30 @@ func (s *shell) root() fyne.CanvasObject {
 		pp := p
 		b := widget.NewButton(pp.label, func() { s.showSub(pp.id) })
 		b.Importance = widget.LowImportance
-		s.rail.Add(b)
+		s.rail.Add(floorTouch(b, RowRelaxed))
 	}
 
 	// Compact top navigation: one button per primary view, horizontally
 	// scrollable, plus a “More” button that opens the utilities menu —
 	// so narrow windows keep every destination (primary AND utility)
 	// reachable without duplicating any destination in the strip.
+	// Run 45165536396 UX pass: strip rows carry the same RowRelaxed
+	// touch floor as the rail — the phone navigation surface is a
+	// touch surface.
 	strip := container.NewHBox()
 	for _, v := range primaryViews {
 		vv := v
 		b := widget.NewButton(vv.label, func() { s.show(vv.id) })
 		b.Importance = widget.LowImportance
-		strip.Add(b)
+		strip.Add(floorTouch(b, RowRelaxed))
 	}
 	more := widget.NewButtonWithIcon("More", theme.MoreVerticalIcon(), nil)
 	more.Importance = widget.LowImportance
 	more.OnTapped = func() { s.showUtilityMenu(more) }
-	strip.Add(more)
+	strip.Add(floorTouch(more, RowRelaxed))
 	s.topNav = container.NewHScroll(strip)
 
-	statusBar := container.NewVBox(widget.NewSeparator(), container.NewBorder(nil, nil, nil, s.retryB, s.status), s.errLine)
+	statusBar := container.NewVBox(widget.NewSeparator(), container.NewBorder(nil, nil, nil, floorTouch(s.retryB, TouchTargetMin), s.status), s.errLine)
 	// ONE parent per object: the border owns ONLY the body + status
 	// bar — the rail is owned by the responsive container below.
 	content := container.NewBorder(nil, statusBar, nil, nil, s.body)

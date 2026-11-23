@@ -8532,6 +8532,16 @@
     "status": "active"
   },
   {
+    "path": "scripts/ci/module-preflight.sh",
+    "type": "script",
+    "language": "bash",
+    "purpose": "CI/tooling script — module-preflight.sh",
+    "layer": "ci-tooling",
+    "subsystem": "scripts/ci",
+    "sideEffects": "executes (writes logs/fixtures under its own contract when run)",
+    "status": "active"
+  },
+  {
     "path": "scripts/ci/package-size-audit.sh",
     "type": "script",
     "language": "bash",

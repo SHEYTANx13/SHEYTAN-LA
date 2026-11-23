@@ -1031,5 +1031,34 @@ else
   bad "byte-level determinism"
 fi
 
+# 34. run 45165536396: suite-timeout panic / crash signatures are
+#     authoritative error records. The run's darwin/arm64 reports were
+#     opaque ("Process completed with exit code 1" + zero test-failure
+#     records) because a timed-out or crashed package produces NO
+#     --- FAIL records and the collector had no rule for these shapes --
+#     the diagnosis died with the stream. The repair: panic/fatal-error
+#     output buffered per (package, test) becomes an authoritative
+#     "[package pkg]" error row at the package's FAIL verdict, and raw
+#     panic/fatal lines in a failed job are error evidence. Zero
+#     fabricated TEST_FAILURE records ---------------------------------
+f="$work/case34"; mkdir -p "$f"
+ids=($(mk_jobs "$f" "Headless core suite (darwin, macos-arm64)|completed|failure"))
+mk_joblog "$f" "${ids[0]}" <<'EOF'
+2026-11-18T10:06:00.0000000Z {"Time":"2026-11-18T10:05:59.0Z","Action":"output","Package":"github.com/SHEYTANx13/SHEYTAN-LA/internal/mesh","Test":null,"Output":"panic: test timed out after 25m0s running tests:\n"}
+2026-11-18T10:06:00.1000000Z {"Time":"2026-11-18T10:05:59.1Z","Action":"fail","Package":"github.com/SHEYTANx13/SHEYTAN-LA/internal/mesh","Test":null,"Elapsed":1500.1}
+2026-11-18T10:06:00.2000000Z {"Time":"2026-11-18T10:06:00.0Z","Action":"output","Package":"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc","Test":null,"Output":"fatal error: unexpected signal during runtime execution\n"}
+2026-11-18T10:06:00.3000000Z {"Time":"2026-11-18T10:06:00.2Z","Action":"fail","Package":"github.com/SHEYTANx13/SHEYTAN-LA/internal/proc","Test":null,"Elapsed":12.4}
+EOF
+run_collector "$f"; rc=$?
+out="$f/SHEYTAN-LA-errors-warnings.txt"
+if [ $rc -eq 0 ] \
+  && grep -q "\[package github.com/SHEYTANx13/SHEYTAN-LA/internal/mesh\] panic: test timed out after 25m0s running tests:" "$out" \
+  && grep -q "\[package github.com/SHEYTANx13/SHEYTAN-LA/internal/proc\] fatal error: unexpected signal during runtime execution" "$out" \
+  && grep -q "test failures: 0" "$out"; then
+  ok "run 45165536396: suite-timeout panic and crash signatures carry [package pkg] provenance; zero fabricated test-failure records"
+else
+  bad "panic/crash signature classification (rc=$rc)"
+fi
+
 printf 'fixtures: %d pass / %d fail\n' "$pass" "$fail"
 [ "$fail" = 0 ]

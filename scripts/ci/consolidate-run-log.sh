@@ -574,7 +574,10 @@ parse_go_test_json() {  # $1 = job index; $2 = cleaned log file; $3 = job id
       act[k] = $2
       if (k in buf) {
         if ($2 == "fail") {
-          for (i = 1; i <= buf[k]; i++) emit("[test " $3 "." $4 "] " dline[k, i])
+          for (i = 1; i <= buf[k]; i++) {
+            if ($4 == "") emit("[package " $3 "] " dline[k, i])
+            else emit("[test " $3 "." $4 "] " dline[k, i])
+          }
         }
         delete buf[k]
       }
@@ -589,6 +592,18 @@ parse_go_test_json() {  # $1 = job index; $2 = cleaned log file; $3 = job id
       # Trim BEFORE the shape test: go test output carries a 4-space
       # indent that must not defeat the anchored file:line regex.
       t = line; gsub(/^[ \t]+/, "", t); gsub(/[ \t]+$/, "", t)
+      # Run 45165536396 repair: a suite-timeout panic ("panic: test
+      # timed out after ...") or a test-binary crash ("fatal error: ...")
+      # produces NO --- FAIL records - the darwin/arm64 reports of that
+      # run were opaque ("exit code 1", zero test failures) for exactly
+      # this reason. Crash/timeout signatures are buffered per (package,
+      # test) and become authoritative error rows at the package FAIL
+      # verdict (never inside a passing one).
+      if (t ~ /^panic: / || t ~ /^fatal error: /) {
+        k = $2 SUBSEP $3
+        dline[k, ++buf[k]] = t
+        next
+      }
       if ($3 != "" && isfileline(t)) {
         k = $2 SUBSEP $3
         dline[k, ++buf[k]] = t
@@ -844,6 +859,16 @@ classify_job_log() {  # $1 = job index; $2 = has_ann(0/1); $3 = annotations ndjs
           next
         }
         pending = 0
+      }
+      # Run 45165536396 repair: raw crash/timeout signatures. A package
+      # crash ("panic: ...", "fatal error: ...") produces no --- FAIL
+      # records and no file:line diagnostics - the darwin/arm64 reports
+      # of that run were opaque ("exit code 1", zero test failures) for
+      # exactly this reason. In a FAILED (or cancelled) job these
+      # signatures are error evidence; in a successful job they stay
+      # ordinary diagnostics (metadata-authoritative, rule clause C).
+      if (jconc == "failure" || jconc == "cancelled") {
+        if (rest ~ /^panic: / || rest ~ /^fatal error: /) { emit("error", ts, rest); next }
       }
       # compiler / static-analysis lines (file.ext:line[:col]: message)
       # Run 44378562071 §4.7/§8.3.5-8.3.6: a file:line: message is only a

@@ -13,7 +13,20 @@
   floor structurally (custom widgets whose `MinSize` cannot go below
   44×44 — `ui/fyne/window_controls.go`, pinned by
   `TestWindowControlsHitAreas`).
+- **Run 45165536396 UX pass — the floor is now STRUCTURAL for the
+  navigation chrome and the composer too**, at every size class (phone
+  AND big screens): `floorTouch` (ui/fyne/widgets.go) wraps every rail
+  row (primary + utilities), top-strip row, the More button and the
+  disconnected-state Retry at 44 DIP (`RowRelaxed` / `TouchTargetMin`),
+  Send/Stop at 48 DIP (`TouchTargetPreferred`), and the empty-state
+  sample chips at 44 DIP. The wrapper is a one-child container with a
+  visibility-aware layout: the child fills the floored area (the whole
+  surface is the tap target) and a hidden child reserves no space. The
+  structural goldens pin the floored geometry.
 - 8–12 DIP practical spacing between adjacent targets.
+- Known boundary: standard Fyne popup-menu items (the compact strip's
+  More menu) are rendered at the driver's menu metrics and are not
+  floored in this pass — recorded, not claimed.
 - No essential action is hover-only: disabled reasons render as VISIBLE
   labels (the minimize/tray cards), never tooltips-only.
 - Double-submit prevention: state-changing commands are guarded by the

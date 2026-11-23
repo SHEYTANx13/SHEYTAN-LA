@@ -10,91 +10,49 @@ session; rewrite this note so it stays true.
 
 ---
 
-## CURRENT HANDOFF — runs 45086860202 + 45086860126 repair, mesh phase 2a, log-artifact policy (2026-11-23) — supersedes all handoffs below
+## CURRENT HANDOFF — run 45165536396 repair + touch-responsive UX pass (2026-11-23) — supersedes all handoffs below
 
-All earlier session handoffs were PRUNED from this file on 2026-11-23
-(2026-11-18 .. 2026-11-22 states, incl. the runs 45005960459/45005960383
-mesh-phase-1 handoff): they are superseded snapshots and live in git
-history (`git log -- docs/ai-notes.md`). Only the current state is kept
-here, per the file's own snapshot rule.
+Baseline: `93ce07ef6e0bf6562092ee70b40ac7f76efd77f2` (== origin/main == the exact commit the
+run 45165536396 platform build tested; CodeQL went green there per the operator). The prior
+session's candidate (squash of mesh phase 2a + darwin proc fixes + artifact policy) IS
+`93ce07e`; its darwin headless suite STILL failed on all three Apple lanes. Branch:
+`repair/run451655-darwin-runtime-touch` (local only; NO remote operations, per the standing
+manual rule). Delivery `note.md` carries the full evidence matrix.
 
-Baseline: commit `1007c35e78105c8bf2cde42bc4d98092d93f0801` (== origin/main
-== the exact commit both failed runs tested). Branch + candidate tip: see
-the delivery `note.md` of this session. NO remote operations were
-performed (no push, no PR, no tag, no release).
+What this session established and changed:
 
-Root causes fixed this pass (evidence class stated per item):
+1. The run's ONLY captured specifics: macos-x64 failed on lazy module downloads
+   (proxy.golang.org read timeouts, gogpu family, six occurrences); macos-arm64 and the iOS
+   lane host failed with exit 1 and ZERO test-failure records — a suite-timeout panic or a
+   package crash leaves no collector-visible trace (no `--- FAIL:`, no file:line). Hosted job
+   logs were NOT retrievable (anonymous REST rate-limited from this sandbox; no Actions log
+   tool in the plugin set). The exact hosted failure text remains UNKNOWN — the fix makes the
+   next run name it.
+2. `scripts/ci/module-preflight.sh` (NEW): `go mod download all` with exactly three bounded
+   attempts + fixed 15 s backoff, fail-closed with the captured proxy error; wired into
+   macos.sh / ios.sh / linux.sh / android.sh headless-tests BEFORE `go test`. Gates never
+   download.
+3. `summarize_headless_failure` in macos.sh/ios.sh: on suite failure the lane dumps the
+   stream's own root-cause records (panic / fatal error / FAIL / timeout, bounded to 15,
+   verbatim) as `::error::` annotations before the gate marker.
+4. Collector: JSON-frame `panic:` / `fatal error:` output buffers per (package, test) and
+   emits `[package pkg]` rows at the package FAIL verdict; raw panic/fatal lines are error
+   evidence in failed/cancelled jobs. Pinned by fixture case 34 (suite 40/0).
+5. proc darwin determinism: WrongPortRefused queries a kernel-proven free port (bind+close
+   probe) instead of `bound+1` (a busy runner can carry a REAL foreign listener there);
+   ProvenFreePort fails ONLY when the walk attributes OUR closed port to our own binary and
+   skips honestly when a foreign process recycled the ephemeral port.
+6. Touch UX (owner-directed): `floorTouch` (ui/fyne/widgets.go) — a one-child container with
+   a visibility-aware layout — makes the 44/48 DIP UX-06 floor STRUCTURAL for rail rows,
+   strip rows, More, Retry (44) and Send/Stop (48) and the empty-state sample chips (44) at
+   every width. Structural goldens must be REGENERATED on the hosted GL host
+   (FYNE_UPDATE_GOLDENS=1) — NOT run locally (no GL/wayland headers in this sandbox, no root;
+   the ui/fyne compile gate stays the hosted linux lane). Popup-menu items remain
+   driver-metric (recorded boundary in TOUCH-RESPONSIVE-MATRIX.md §1).
+7. Mesh phase-3 libp2p transport stays GATED (owner decision: new dependency + two-device LAN
+   demo prerequisite); nothing else from the previous session's leftover list is code work.
 
-1. **CodeQL "Analyze (go)" exit 32 — REPRODUCED LOCALLY with
-   codeql-cli 2.27.5** (runs 45005960383 AND 45086860126): `go build
-   -json` is INVISIBLE to the CodeQL Go extractor. A cold traced
-   `go build -json ./...` compiles every package and the database still
-   finalizes empty ("CodeQL detected code written in Go but could not
-   process any of it"), while the SAME command without `-json` produces
-   a populated database. The prior fix (vet moved after analyze, run
-   45005960383) removed one cache-warming path but the hosted run still
-   starved: the `-json` flag ITSELF was the extraction blocker. Fix:
-   the traced builds in `codeql.yml` run PLAIN (exact file:line:col
-   compiler diagnostics land in the job log); `-json` is reserved for
-   the FAILURE path only (one bounded rerun feeding
-   `scripts/ci/go-build-jsonl-diagnose.py`). Local proof:
-   `codeql database create` on a minimal module — plain build creates
-   the database, `-json` build reproduces the fatal error verbatim.
-2. **Darwin headless-suite runtime failures — fixed at source, hosted
-   proof pending** (runs 45005960459 compile error was fixed by the
-   prior session; run 45086860202 failed again at RUNTIME — the cgo
-   bridge tests executed for the first time): (a) `processExePathImpl`
-   leaked the walk-internal `errProcGone` for a vanished PID while the
-   public contract (and `TestListeningProcessDeadOwnerRefused`, and the
-   Windows/Linux implementations) require `ErrProcessNotFound` — now
-   translated exactly like `processStartTimeImpl` already did; (b) the
-   native tests compared `proc_pidpath` output to `os.Executable()`
-   with raw string equality — `proc_pidpath` answers the canonical
-   vnode path (`/private/var/...`) while `os.Executable()` answers the
-   exec path (`/var/...`; TMPDIR lives behind the /var symlink on every
-   macOS host) — replaced with the repo's canonical `SameExecutable`
-   comparison. Compile-level verification: full
-   `CGO_ENABLED=1 GOOS=darwin CGO cross-vet of ./internal/... is CLEAN
-   (zig 0.13.0 as the darwin C compiler, `go test -c` compiled the
-   whole proc test binary — only the final link hit zig's missing
-   libresolv stub, an environmental limit, not a repo defect).
-3. **Errors/warnings log artifact — owner-directed policy change
-   (2026-11-23)**: the run-44835425398 local-only rule kept the curated
-   report on the runner, so a red run's diagnosis was invisible from
-   the run page (the owner's exact complaint: "build did not even
-   generate log ... as .txt"). Now BOTH workflows upload the ONE
-   curated errors/warnings report as an artifact
-   (`SHEYTAN-LA-errors-warnings` / `SHEYTAN-LA-codeql-all-logs`,
-   always(), if-no-files-found: error, overwrite: true, exact single
-   file). Everything else stays banned (raw logs, verbose compiler
-   output, diagnostics indexes, test reports) —
-   `internal/releasecontract` re-pinned: `ValidateUploadArtifactContract`
-   is now a two-artifact closed allowlist (matrix package + curated
-   report), `ValidateFailureTolerantCollector` requires EXACTLY the one
-   report upload, `ValidateCodeQLWorkflowResilience` permits the
-   security report + the CodeQL collector report; mutation fixtures and
-   collector-fixture clause O updated (39/0 green).
-
-**Mesh computing phase 2a (new `internal/mesh/role.go` + `peer.go` +
-`role_peer_test.go`)**: dynamic dual-role operation per the owner work
-order ("each device can be both server and user based on need"; the
-phone-as-interface scenario). `NegotiateRole` decides
-controller/worker/both from a typed `DeviceCapability` + owner
-preference, narrowed by the static `Config.Role` ceiling (explicit
-contradictions are typed errors; auto proposals clamp to the ceiling);
-`Manager.NegotiateRole` applies it (refused while disabled) and
-`Status().Role` reflects it. The `PeerExchange` seam + in-process
-`LoopbackPeerExchange` connect TWO managers: the provider
-re-validates every envelope with its OWN gates (UI/UX compute,
-private payloads and oversized envelopes cannot cross), executes
-through its allowlisted registry, and the requester commits the
-verified result in ITS OWN ledger via
-`Coordinator.DispatchToPeer` (durable pending row BEFORE any peer
-I/O, fencing epoch, typed fail-closed refusal). The real LAN/Internet
-transport (blueprint phase 3, libp2p) remains the NEXT gated phase —
-no networking dependency was added; mesh stays disabled by default.
-
-Docs updated: this file (pruned + rewritten), `docs/worklog.md`
-(2026-11-23 row), `docs/changelog.md` (ALPHA section), file catalog
-regenerated. Protected docs (`docs/agent.md`, `docs/Dev-Notes.md`,
-`docs/retired.md`) untouched.
+Next actionable step for the operator: push the branch (or approve the push) and let the
+hosted platform build + CodeQL run on the candidate; the darwin lanes will either go green
+or NAME their failing package in the errors/warnings report. Then regenerate the UI goldens
+on any GL-capable host if the ui gate is touched there.
