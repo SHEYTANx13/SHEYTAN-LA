@@ -24,9 +24,12 @@ package proc
 // kernel record — every record comes from the actual OS.
 
 import (
+	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"testing"
 )
@@ -320,4 +323,91 @@ func TestProvenFreePortReturnsTypedNoOwner(t *testing.T) {
 	}
 
 	t.Skipf("port %d was recycled by another process (pid %d exe %q) between close and query - environment, not attribution", port, pid, exe)
+}
+
+// TestListeningProcessAfterFailedProbeSucceeds pins the run 45323044820
+// repair — the CGO ERRNO PERSISTENCE root cause of the whole darwin
+// attribution failure family. cgo's two-result form surfaces the POSIX
+// thread's errno AT CALL RETURN as the Go error, and a SUCCESSFUL libproc
+// call never resets errno; one failed candidate probe (EPERM on a
+// root-owned process such as launchd, ESRCH on a candidate that exited
+// mid-walk) poisoned the thread so every LATER successful helper call
+// inherited the stale errno as a Go error. On a macOS runner the walk
+// starts at launchd (root): one EPERM made the whole walk answer
+// ErrPortOwnerUnknown and every attribution test failed deterministically
+// on darwin/arm64, darwin/amd64 and the iOS lane host, while Linux (the
+// pure-Go /proc walk, no cgo errno) stayed green.
+//
+// This test reproduces the mechanism EXACTLY and deterministically on the
+// real kernel:
+//
+//  1. lock the OS thread (errno is thread-local TLS — the poison and the
+//     walk must share one thread for the reproduction to be exact);
+//  2. run a probe that FAILS against the kernel (proc_pidpath on a
+//     reaped pid answers ESRCH), leaving errno set on that thread;
+//  3. immediately attribute a live self-owned listener on the SAME
+//     thread.
+//
+// Before the repair, step 3 inherited the stale errno inside
+// c_list_all_pids and the walk collapsed to ErrPortOwnerUnknown; after
+// the repair every libproc helper resets errno BEFORE its call, the walk
+// answers exactly, and the sequence is green. The hosted darwin lanes
+// remain the runtime authority for the full family.
+func TestListeningProcessAfterFailedProbeSucceeds(t *testing.T) {
+	// Pin this goroutine to one thread: errno lives in the thread's TLS,
+	// so the poison and the attribution walk must share it.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	// 1. A real kernel failure: proc_pidpath on a reaped pid answers
+	// ESRCH and leaves errno set on this thread. The typed public
+	// contract of the probe is checked too — passing through any other
+	// class would leave the poison unproven.
+	cmd := exec.Command("/bin/sleep", "0")
+	if err := cmd.Start(); err != nil {
+		t.Skipf("cannot spawn a probe process: %v", err)
+	}
+
+	pid := cmd.Process.Pid
+
+	_, _ = cmd.Process.Wait()
+
+	if _, perr := ProcessExePath(pid); !errors.Is(perr, ErrProcessNotFound) {
+		t.Skipf("the poison probe did not answer the typed not-found class (err=%v) — the pid was recycled before the probe; environment, not identity", perr)
+	}
+
+	// 2. Immediately attribute a live self-owned listener on the SAME
+	// (still-poisoned) thread.
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	defer l.Close()
+
+	port := l.Addr().(*net.TCPAddr).Port
+
+	got, exe, ok, err := ListeningProcess(port)
+	if err != nil {
+		t.Fatalf("a failed probe on this thread must not poison later attribution (stale cgo errno), got error: %v", err)
+	}
+
+	if !ok {
+		t.Fatalf("a live self-owned listener must be attributable after a failed probe on the same thread")
+	}
+
+	if got != os.Getpid() {
+		t.Fatalf("the walk reported pid %d, want our own pid %d", got, os.Getpid())
+	}
+
+	if exe == "" {
+		t.Fatalf("the executable path must resolve for our own process")
+	}
+
+	// 3. The start-time probe on the SAME thread must also still answer
+	// (the errno-reset contract holds for every helper, and the typed
+	// public sentinel must survive the sequence).
+	if _, serr := ProcessStartTime(os.Getpid()); serr != nil {
+		t.Fatalf("own start time must resolve after the poisoned-thread sequence: %v", serr)
+	}
 }

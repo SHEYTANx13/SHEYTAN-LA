@@ -569,10 +569,11 @@ grep -q 'name: Upload the errors/warnings report' "$workflow" || yml_ok=0
 # goes to the Actions step summary (local, not an artifact).
 grep -q 'Collector verdict (fail the job on coverage gaps)' "$workflow" || yml_ok=0
 grep -q 'GITHUB_STEP_SUMMARY' "$workflow" || yml_ok=0
-# Consolidation topology: each of the SEVEN matrix targets defined EXACTLY
+# Consolidation topology: each of the FIVE matrix targets defined EXACTLY
 # ONCE in the single matrix.include list (the successor of the five
-# reusable-lane invocations).
-for target in windows-x64 linux-x64 macos-arm64 macos-x64 android-arm64 ios-simulator-arm64 ios-device-arm64; do
+# reusable-lane invocations; the iOS lanes are retired, run 45323044820
+# repair).
+for target in windows-x64 linux-x64 macos-arm64 macos-x64 android-arm64; do
   [ "$(grep -c "^[[:space:]]*- target: ${target}$" "$workflow")" = "1" ] || yml_ok=0
 done
 [ "$(grep -c '^      fail-fast: false$' "$workflow")" = "1" ] || yml_ok=0
@@ -647,7 +648,7 @@ f="$work/case28"; mkdir -p "$f"
 ids=($(mk_jobs "$f" \
   "Platform build (macos-arm64)|completed|failure" \
   "Platform build (macos-x64)|completed|failure" \
-  "Platform build (ios-simulator-arm64)|completed|failure" \
+  "Platform build (android-arm64)|completed|failure" \
   "Platform build (linux-x64)|completed|failure" \
   "Platform build (windows-x64)|completed|success"
 ))

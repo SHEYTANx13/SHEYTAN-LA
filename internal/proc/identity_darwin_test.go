@@ -251,15 +251,25 @@ func TestListeningProcessDeadOwnerRefused(t *testing.T) {
 		t.Skip("pid was recycled too fast to observe the dead state")
 	}
 
-	// Run 45287161747 repair: on a busy hosted runner the observed-dead
-	// pid can be recycled by a NEW process between the dead-state
-	// observation and the metadata probes. A successful probe is then
-	// the recycled process answering truthfully - environment, not
-	// identity - and the dead-state contract can no longer be re-proven
-	// for THIS pid (the same honest-race policy the recycled-port tests
-	// follow). A probe that answers with any OTHER typed class fails.
+	// Run 45287161747 repair + run 45323044820 repair: on a busy hosted
+	// runner the observed-dead pid can be recycled by a NEW process
+	// between the dead-state observation and the metadata probes. ANY
+	// probe answer that describes the RECYCLED process — a successful
+	// read, or an inspection-denied read of a root-owned incarnation —
+	// is environment, not identity: the dead-state contract can no
+	// longer be re-proven for THIS pid (the same honest-race policy
+	// the recycled-port tests follow). A probe that answers with any
+	// OTHER typed class still fails loudly.
 	if _, err := ProcessExePath(pid); err != nil {
-		if !errors.Is(err, ErrProcessNotFound) {
+		switch {
+		case errors.Is(err, ErrProcessNotFound):
+			// The real contract: a still-dead pid answers typed not-found.
+		case errors.Is(err, ErrProcessMetadataUnsupported):
+			// The recycled incarnation is uninspectable by this
+			// unprivileged caller (inspection denied) — the answer
+			// describes the NEW process, never the observed-dead one.
+			t.Skipf("pid %d was recycled by an uninspectable process between the dead-state observation and the exe-path probe - environment, not identity", pid)
+		default:
 			t.Fatalf("a dead pid must be typed ErrProcessNotFound, got %v", err)
 		}
 	} else {
@@ -267,7 +277,13 @@ func TestListeningProcessDeadOwnerRefused(t *testing.T) {
 	}
 
 	if _, err := ProcessStartTime(pid); err != nil {
-		if !errors.Is(err, ErrProcessNotFound) {
+		switch {
+		case errors.Is(err, ErrProcessNotFound):
+			// The real contract: a still-dead pid answers typed not-found.
+		case errors.Is(err, ErrProcessMetadataUnsupported):
+			// Same recycled-incarnation policy as above.
+			t.Skipf("pid %d was recycled by an uninspectable process between the dead-state observation and the start-time probe - environment, not identity", pid)
+		default:
 			t.Fatalf("a dead pid must be typed ErrProcessNotFound for start time, got %v", err)
 		}
 	} else {

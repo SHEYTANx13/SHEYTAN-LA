@@ -663,15 +663,6 @@
     "status": "active"
   },
   {
-    "path": "docs/platforms/IOS_SIGNING.md",
-    "type": "doc",
-    "language": "Markdown",
-    "purpose": "Documentation — IOS_SIGNING",
-    "layer": "docs",
-    "subsystem": "docs",
-    "status": "active"
-  },
-  {
     "path": "docs/retired.md",
     "type": "doc",
     "language": "Markdown",
@@ -8356,26 +8347,6 @@
     "type": "script",
     "language": "bash",
     "purpose": "The Android lane of the platform-build matrix: pinned gomobile/gobind, fail-closed NDK, debug-signed APK/AAB packaging and structural verification",
-    "layer": "ci-tooling",
-    "subsystem": "scripts",
-    "sideEffects": "executes (writes logs/fixtures under its own contract when run)",
-    "status": "active"
-  },
-  {
-    "path": "scripts/build/ios-device.sh",
-    "type": "script",
-    "language": "bash",
-    "purpose": "CI/tooling script — ios-device.sh",
-    "layer": "ci-tooling",
-    "subsystem": "scripts",
-    "sideEffects": "executes (writes logs/fixtures under its own contract when run)",
-    "status": "active"
-  },
-  {
-    "path": "scripts/build/ios.sh",
-    "type": "script",
-    "language": "bash",
-    "purpose": "The iOS lane of the platform-build matrix: pinned gomobile/gobind and the SIMULATOR-ONLY .app zip (never an IPA)",
     "layer": "ci-tooling",
     "subsystem": "scripts",
     "sideEffects": "executes (writes logs/fixtures under its own contract when run)",

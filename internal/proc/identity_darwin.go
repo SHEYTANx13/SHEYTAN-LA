@@ -99,10 +99,30 @@ static int c_pathinfo_size(void)       { return (int)PROC_PIDPATHINFO_SIZE; }
 // explicit maximum allocation with a typed truncation error instead of
 // depending on a private or unavailable macro.
 
+// CGO ERRNO PERSISTENCE (run 45323044820 repair — the darwin/attribution
+// root cause): cgo's two-result form (r, err := C.f()) surfaces the POSIX
+// THREAD'S errno AT CALL RETURN as the Go error — it does NOT reset errno
+// first, and a SUCCESSFUL libproc call never touches errno either. A
+// failed candidate probe (EPERM for a root-owned process such as launchd,
+// ESRCH for a candidate that exited mid-walk) therefore LEFT errno set on
+// the calling thread, and EVERY subsequent successful helper call on that
+// thread inherited the stale errno as a Go error. On a macOS runner the
+// pid list starts at launchd (root): one EPERM classified every later
+// candidate as inaccessible/unknown and the ENTIRE attribution family
+// failed deterministically on darwin/arm64, darwin/amd64 and the iOS
+// lane host — while Linux (pure-Go /proc walk, no cgo errno) stayed
+// green. Every helper below now resets errno to 0 BEFORE its libproc
+// call, so a successful call always answers err == nil and a real
+// failure still carries its exact kernel errno (the typed
+// mapProcInfoErrno classes are unchanged; c_start_time already carried
+// the pattern). c_pid_at / c_fd_at / c_fdtype_at / c_socket_fields are
+// pure memory reads and need no reset.
+
 // c_list_all_pids fills buf with every PID (PROC_ALL_PIDS) through the
 // proc_listallpids wrapper. Returns the pid COUNT (the ABI contract of
 // proc_listallpids), or -1 with errno set.
 static int c_list_all_pids(void *buf, int cap_pids) {
+        errno = 0;
         return proc_listallpids(buf, cap_pids * (int)sizeof(pid_t));
 }
 
@@ -115,6 +135,7 @@ static int c_pid_at(const void *buf, int index) {
 // c_list_fds returns the PROC_PIDLISTFDS answer in BYTES for pid
 // (the documented proc_pidinfo byte-count contract), or -1 with errno set.
 static int c_list_fds(int pid, void *buf, int bytes) {
+        errno = 0;
         return (int)proc_pidinfo(pid, PROC_PIDLISTFDS, 0, buf, bytes);
 }
 
@@ -138,6 +159,7 @@ static int c_prox_fdtype_socket(void) { return PROX_FDTYPE_SOCKET; }
 // descriptor. Returns the byte count written (must equal sizeof(struct
 // socket_fdinfo)), or -1 with errno set.
 static int c_socket_fdinfo(int pid, int fd, void *buf, int bytes) {
+        errno = 0;
         return (int)proc_pidfdinfo(pid, fd, PROC_PIDFDSOCKETINFO, buf, bytes);
 }
 
@@ -201,6 +223,7 @@ static int c_ipproto_tcp(void)  { return IPPROTO_TCP; }
 // wrapper). Returns the path length (>0), 0 when the process has no
 // resolvable path, or -1 with errno set.
 static int c_proc_path(int pid, void *buf, int bytes) {
+        errno = 0;
         return (int)proc_pidpath(pid, buf, (uint32_t)bytes);
 }
 
@@ -228,6 +251,10 @@ static int c_start_time(int pid, long long *sec, long long *usec) {
         errno = 0;
         return 1;
 }
+
+// NOTE (run 45323044820 repair): the errno = 0 reset above is load-bearing
+// and now precedes EVERY libproc call in this prelude — see the CGO ERRNO
+// PERSISTENCE note for the full contract and the failure it closed.
 */
 import "C"
 

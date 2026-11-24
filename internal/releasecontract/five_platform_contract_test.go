@@ -1,8 +1,10 @@
 // five_platform_contract_test.go — master work order §10/§14 (as carried
-// into the CI consolidation): the FIVE per-lane build scripts must exist
+// into the CI consolidation): the per-lane build scripts must exist
 // as real definitions under scripts/build/, be dispatched by the ONE
-// platform-build workflow's six-target matrix, and be REQUIRED by its
-// final verdict. A lane that exists but is not dispatched (or a red lane
+// platform-build workflow's five-target matrix, and be REQUIRED by its
+// final verdict. The iOS lane script is retired with its lane (run
+// 45323044820 repair, owner direction) — the FIVE platform targets are
+// windows-x64, linux-x64, macos-arm64, macos-x64, android-arm64. A lane that exists but is not dispatched (or a red lane
 // that floats outside the verdict) is a green-washing hazard (§1 rule
 // 12: never obtain green status by skipping or masking a gate), so the
 // wiring is pinned here, not just the file names.
@@ -16,28 +18,41 @@ import (
 	"testing"
 )
 
-// fiveLaneScripts — the exact §10 lane-script set (the successors of the
-// retired five reusable workflow files).
-var fiveLaneScripts = []string{
+// platformLaneScripts — the exact §10 lane-script set (the successors of
+// the retired reusable workflow files; the retired ios.sh belongs to the
+// retired iOS lanes and must NOT reappear).
+var platformLaneScripts = []string{
 	"windows.ps1",
 	"linux.sh",
 	"macos.sh",
 	"android.sh",
-	"ios.sh",
 }
 
-// TestFiveLaneScriptsAreRealDefinitions pins that each §10 lane script
-// exists, carries its verification gates (a core `go test` invocation),
-// writes the upstream-failure marker the if:always() package-gate
-// reporter consumes, and finalizes its package under the contracted
-// dist/ name. Stubs would fail these honesty checks.
-func TestFiveLaneScriptsAreRealDefinitions(t *testing.T) {
+// retiredLaneScripts — lane scripts that must never reappear in the
+// tracked tree (their lanes are retired, run 45323044820 repair).
+var retiredLaneScripts = []string{
+	"ios.sh",
+	"ios-device.sh",
+}
+
+// TestPlatformLaneScriptsAreRealDefinitions pins that each §10 lane
+// script exists, carries its verification gates (a core `go test`
+// invocation), writes the upstream-failure marker the if:always()
+// package-gate reporter consumes, and finalizes its package under the
+// contracted dist/ name. Stubs would fail these honesty checks.
+func TestPlatformLaneScriptsAreRealDefinitions(t *testing.T) {
 	root := findRepoRoot(t)
-	for _, name := range fiveLaneScripts {
+	for _, name := range retiredLaneScripts {
+		rel := filepath.Join("scripts", "build", name)
+		if _, err := os.Stat(filepath.Join(root, rel)); err == nil {
+			t.Errorf("retired lane script %s reappeared — its lane is retired (run 45323044820 repair) and must not come back", rel)
+		}
+	}
+	for _, name := range platformLaneScripts {
 		rel := filepath.Join("scripts", "build", name)
 		raw, err := os.ReadFile(filepath.Join(root, rel))
 		if err != nil {
-			t.Errorf("§10 lane script %s is missing — the six-target matrix is not deliverable", rel)
+			t.Errorf("§10 lane script %s is missing — the five-target matrix is not deliverable", rel)
 			continue
 		}
 		text := string(raw)
@@ -62,29 +77,29 @@ func TestFiveLaneScriptsAreRealDefinitions(t *testing.T) {
 	}
 }
 
-// TestSixMatrixTargetsDispatchTheLanesAndRequiredByTheVerdict pins the
-// consolidated wiring: build.yml defines the six matrix targets exactly
-// once (validated structurally), dispatches to the five lane scripts,
+// TestPlatformMatrixTargetsDispatchTheLanesAndRequiredByTheVerdict pins
+// the consolidated wiring: build.yml defines the five matrix targets
+// exactly once (validated structurally), dispatches to the lane scripts,
 // and the final verdict needs + inspects the platform-build result — a
 // red lane must render the whole run red.
-func TestSixMatrixTargetsDispatchTheLanesAndRequiredByTheVerdict(t *testing.T) {
+func TestPlatformMatrixTargetsDispatchTheLanesAndRequiredByTheVerdict(t *testing.T) {
 	text := readTreeFile(t, workflowRelPath)
 
-	// Structural matrix validation (six targets, unique triples,
+	// Structural matrix validation (five targets, unique triples,
 	// fail-fast false, no cancel-in-progress).
 	if err := ValidatePlatformMatrixStructure(text); err != nil {
-		t.Fatalf("six-target matrix contract: %v", err)
+		t.Fatalf("five-target matrix contract: %v", err)
 	}
 
 	// Every lane script must be dispatched by the workflow.
-	for _, name := range fiveLaneScripts {
+	for _, name := range platformLaneScripts {
 		if !strings.Contains(text, "scripts/build/"+name) {
 			t.Errorf("build.yml never dispatches scripts/build/%s — the §10 lane is not wired into the run", name)
 		}
 	}
 
 	// The final verdict must require and inspect the platform-build
-	// result (the six lanes run as ONE matrix job with fail-fast: false —
+	// result (the five lanes run as ONE matrix job with fail-fast: false —
 	// a red lane keeps the run red through the matrix job's conclusion).
 	if !strings.Contains(text, "needs."+PlatformBuildJobKey+".result") {
 		t.Errorf("the final verdict never inspects needs.%s.result — a red lane must fail the overall verdict, not float outside it", PlatformBuildJobKey)

@@ -123,7 +123,7 @@ func TestWorkflowStableArtifactNamesExact(t *testing.T) {
 		t.Fatalf("platform-build upload-artifact contract violated: %v", err)
 	}
 
-	// All seven package names resolve from the ONE matrix upload step of
+	// All five package names resolve from the ONE matrix upload step of
 	// build.yml; the per-surface validators parse that same file.
 	if err := ValidatePlatformPackageUploadContract(workflow); err != nil {
 		t.Fatalf("platform package upload contract violated: %v", err)
@@ -440,14 +440,6 @@ func TestUploadArtifactContractFixtures(t *testing.T) {
             os: ubuntu-26.04
             artifact: SHEYTAN-LA-ALPHA-android-arm64
             kind: apk
-          - target: ios-simulator-arm64
-            os: macos-15
-            artifact: SHEYTAN-LA-ALPHA-ios-simulator-arm64
-            kind: simzip
-          - target: ios-device-arm64
-            os: macos-15
-            artifact: SHEYTAN-LA-ALPHA-ios-device-arm64
-            kind: ipa
     steps:
       - name: Upload the platform package
         uses: actions/upload-artifact@v7

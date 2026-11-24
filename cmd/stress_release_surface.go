@@ -271,24 +271,24 @@ func stressReleaseSurface() error {
 
 	w := string(wf)
 
-	// CI consolidation: the platform build lanes live in the five
+	// CI consolidation: the platform build lanes live in the four
 	// per-phase scripts under scripts/build/, dispatched by the
 	// platform-build matrix job of build.yml. Platform-specific
 	// release-surface anchors below are validated against the LANE
-	// scripts, and the combined-text checks see the workflow + all five
-	// lane scripts.
+	// scripts, and the combined-text checks see the workflow + all four
+	// lane scripts (the retired ios.sh belongs to the retired iOS lanes,
+	// run 45323044820 repair).
 	lanePaths := []string{
 		filepath.Join("scripts", "build", "windows.ps1"),
 		filepath.Join("scripts", "build", "linux.sh"),
 		filepath.Join("scripts", "build", "macos.sh"),
 		filepath.Join("scripts", "build", "android.sh"),
-		filepath.Join("scripts", "build", "ios.sh"),
 	}
 	laneTexts := make([]string, 0, len(lanePaths))
 	for _, lp := range lanePaths {
 		laneBytes, laneErr := os.ReadFile(lp)
 		if laneErr != nil {
-			return fmt.Errorf("read lane script %q: %v (the consolidated topology requires all five lane scripts)", lp, laneErr)
+			return fmt.Errorf("read lane script %q: %v (the consolidated topology requires all four lane scripts)", lp, laneErr)
 		}
 		laneTexts = append(laneTexts, string(laneBytes))
 	}

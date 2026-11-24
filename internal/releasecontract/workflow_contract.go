@@ -131,13 +131,11 @@ const (
 	MacOSArm64PackageArtifactName = "SHEYTAN-LA-ALPHA-macos-arm64-portable"
 	MacOSX64PackageArtifactName   = "SHEYTAN-LA-ALPHA-macos-x64-portable"
 	AndroidArtifactName           = "SHEYTAN-LA-ALPHA-android-arm64"
-	IOSArtifactName               = "SHEYTAN-LA-ALPHA-ios-simulator-arm64"
-	IOSDeviceArtifactName         = "SHEYTAN-LA-ALPHA-ios-device-arm64"
 )
 
 // MatrixPackageArtifactSlot is the ONE permitted upload-artifact name in
 // the platform-build workflow: the package upload is ONE step whose
-// with.name is the matrix expression (resolved per leg to the seven
+// with.name is the matrix expression (resolved per leg to the five
 // contracted names above).
 const MatrixPackageArtifactSlot = "${{ matrix.artifact }}"
 
@@ -162,23 +160,19 @@ type PlatformMatrixTarget struct {
 	Kind     string
 }
 
-// PlatformMatrixTargets is the EXACT seven-entry matrix the platform-build
+// PlatformMatrixTargets is the EXACT five-entry matrix the platform-build
 // job must carry: unique targets, unique (target, os, artifact) triples,
 // the two macOS architectures on DISTINCT runner images, and the
-// windows/linux runners pinned per the v1.11.1 runner policy. The seventh
-// entry is the run 44547031698 §6.3 iOS DEVICE target: its matrix entry is
-// structural, its EXECUTION is honestly gated on the Apple signing secrets
-// (scripts/build/ios-device.sh check phase) - without them the lane records
-// BLOCKED BY MISSING APPLE SIGNING CONFIGURATION and never fabricates an
-// IPA.
+// windows/linux runners pinned per the v1.11.1 runner policy. The iOS
+// lanes are RETIRED (run 45323044820 repair, owner direction: iOS is not
+// a current delivery target): an ios-* matrix target is a contract
+// violation, never a lane.
 var PlatformMatrixTargets = []PlatformMatrixTarget{
 	{"windows-x64", "windows-2025", WindowsPackageArtifactName, "zip"},
 	{"linux-x64", "ubuntu-26.04", LinuxPackageArtifactName, "targz"},
 	{"macos-arm64", "macos-15", MacOSArm64PackageArtifactName, "appzip"},
 	{"macos-x64", "macos-15-intel", MacOSX64PackageArtifactName, "appzip"},
 	{"android-arm64", "ubuntu-26.04", AndroidArtifactName, "apk"},
-	{"ios-simulator-arm64", "macos-15", IOSArtifactName, "simzip"},
-	{"ios-device-arm64", "macos-15", IOSDeviceArtifactName, "ipa"},
 }
 
 // PlatformBuildJobKey / CollectorJobKey are the YAML job keys of the
@@ -226,7 +220,7 @@ func ValidatePlatformMatrixStructure(workflowText string) error {
 	}
 
 	if job.Strategy == nil || job.Strategy.Matrix == nil || len(job.Strategy.Matrix.Include) == 0 {
-		return fmt.Errorf("job %q carries no strategy.matrix.include — exactly one matrix with the seven contracted targets is required", PlatformBuildJobKey)
+		return fmt.Errorf("job %q carries no strategy.matrix.include — exactly one matrix with the five contracted targets is required", PlatformBuildJobKey)
 	}
 
 	if job.Strategy.FailFast == nil {
@@ -247,7 +241,7 @@ func ValidatePlatformMatrixStructure(workflowText string) error {
 	seenTriple := map[string]int{}
 	for _, e := range include {
 		if prev, dup := seenTarget[e.Target]; dup {
-			errs = append(errs, fmt.Sprintf("matrix target %q is defined %d times — each of the seven targets must appear EXACTLY once", e.Target, prev+1))
+			errs = append(errs, fmt.Sprintf("matrix target %q is defined %d times — each of the five targets must appear EXACTLY once", e.Target, prev+1))
 		}
 		seenTarget[e.Target]++
 
@@ -284,7 +278,7 @@ func ValidatePlatformMatrixStructure(workflowText string) error {
 			}
 		}
 		if !found {
-			errs = append(errs, fmt.Sprintf("matrix target %q is missing — the seven-target platform matrix is incomplete", want.Target))
+			errs = append(errs, fmt.Sprintf("matrix target %q is missing — the five-target platform matrix is incomplete", want.Target))
 		}
 	}
 
@@ -868,7 +862,7 @@ func validateUsesVersionComments(workflowText string, parsedExternal int) error 
 //
 //   - EXACTLY ONE matrix package upload exists: named
 //     ${{ matrix.artifact }} from the platform-build job, resolving per
-//     leg to the seven contracted portable names;
+//     leg to the five contracted portable names;
 //   - its path stages ONLY the dist/ portable package
 //     (dist/SHEYTAN-LA-ALPHA-*), never a diagnostic or evidence
 //     directory;
@@ -1055,16 +1049,16 @@ func ValidateUploadArtifactContract(workflowText string) error {
 }
 
 // ValidatePlatformPackageUploadContract enforces the section 6.3 package
-// surface of the SEVEN matrix targets against the ONE workflow: the matrix
+// surface of the FIVE matrix targets against the ONE workflow: the matrix
 // must resolve the ${{ matrix.artifact }} upload to exactly the
-// contracted portable names (windows/linux/macOSx2/android/ios), each
-// target defined once, and the windows/linux payload kinds must match
-// the release contract (portable zip / tar.gz - installer production is
+// contracted portable names (windows/linux/macOSx2/android), each target
+// defined once, and the windows/linux payload kinds must match the
+// release contract (portable zip / tar.gz - installer production is
 // retired, master work order section 10).
 func ValidatePlatformPackageUploadContract(workflowText string) error {
 	var errs []string
 
-	// The seven matrix targets must be structurally present and each must
+	// The five matrix targets must be structurally present and each must
 	// upload its CONTRACTED portable artifact name (no duplicate or
 	// retired naming).
 	include := platformMatrixIncludeOf(workflowText)
@@ -1103,18 +1097,17 @@ func ValidatePlatformPackageUploadContract(workflowText string) error {
 }
 
 // ValidateMobileArtifactUploadContract enforces the section 6.3 upload
-// surface of the three mobile lanes against the ONE workflow's matrix:
+// surface of the mobile lanes against the ONE workflow's matrix:
 // the macOS arm64/x64 portable zips resolve to DISTINCT artifacts on
-// DISTINCT runner images, the Android debug package and the
-// SIMULATOR-ONLY iOS zip are each defined exactly once, and the retired
-// name fragments never reappear.
+// DISTINCT runner images, the Android debug package is defined exactly
+// once, the retired iOS lanes never reappear as matrix targets, and the
+// retired name fragments never reappear.
 func ValidateMobileArtifactUploadContract(workflowText string) error {
 	var errs []string
 
 	macArm, macArmOK := matrixEntryByTarget(platformMatrixIncludeOf(workflowText), "macos-arm64")
 	macX64, macX64OK := matrixEntryByTarget(platformMatrixIncludeOf(workflowText), "macos-x64")
 	android, androidOK := matrixEntryByTarget(platformMatrixIncludeOf(workflowText), "android-arm64")
-	ios, iosOK := matrixEntryByTarget(platformMatrixIncludeOf(workflowText), "ios-simulator-arm64")
 
 	if !macArmOK || !macX64OK {
 		errs = append(errs, "the macOS matrix targets (macos-arm64, macos-x64) must both be present")
@@ -1136,12 +1129,17 @@ func ValidateMobileArtifactUploadContract(workflowText string) error {
 		errs = append(errs, fmt.Sprintf("android-arm64 artifact %q, want %q (the retired -debug-apk suffix must not reappear)", android.Artifact, AndroidArtifactName))
 	}
 
-	if !iosOK {
-		errs = append(errs, "the ios-simulator-arm64 matrix target must be present")
-	} else if ios.Artifact != IOSArtifactName {
-		errs = append(errs, fmt.Sprintf("ios-simulator-arm64 artifact %q, want %q", ios.Artifact, IOSArtifactName))
-		if strings.Contains(ios.Artifact, "ipa") {
-			errs = append(errs, "the iOS artifact must stay SIMULATOR-ONLY - a device IPA is never produced without signing")
+	// Run 45323044820 repair: the iOS lanes are retired. An ios-* matrix
+	// target (or artifact name) is a contract violation — a reappearance
+	// recreates a lane the owner removed.
+	for _, target := range platformMatrixIncludeOf(workflowText) {
+		if strings.HasPrefix(strings.ToLower(target.Target), "ios") {
+			errs = append(errs, fmt.Sprintf("matrix target %q is retired (run 45323044820 repair) and must not reappear in the platform matrix", target.Target))
+		}
+	}
+	for _, retired := range []string{"SHEYTAN-LA-ALPHA-ios-simulator-arm64", "SHEYTAN-LA-ALPHA-ios-device-arm64"} {
+		if strings.Contains(workflowText, retired) {
+			errs = append(errs, fmt.Sprintf("retired iOS artifact name %q must not reappear in the workflow", retired))
 		}
 	}
 

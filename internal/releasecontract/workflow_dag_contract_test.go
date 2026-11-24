@@ -335,23 +335,23 @@ func TestCodeQLResilienceRejectsRegressions(t *testing.T) {
 	}
 }
 
-// TestSixMatrixTargetsDefinedOnce is the CI-consolidation successor of
-// the run 44306343338 §6.2 five-lane fixture: the ONE platform-build
-// workflow defines the SIX matrix targets exactly once each (no
+// TestPlatformMatrixTargetsDefinedOnce is the CI-consolidation successor
+// of the run 44306343338 §6.2 lane fixture: the ONE platform-build
+// workflow defines the FIVE matrix targets exactly once each (no
 // duplicate platform-to-platform mapping), the collector and verdict are
 // wired to the matrix job, and the retired five reusable lane files are
 // GONE — a reusable-lane invocation or a reappearing lane file recreates
 // the multi-file topology the consolidation removed.
-func TestSixMatrixTargetsDefinedOnce(t *testing.T) {
+func TestPlatformMatrixTargetsDefinedOnce(t *testing.T) {
 	w := loadWorkflowForDAG(t, dagWorkflowRelPath)
 
 	if err := ValidatePlatformMatrixStructure(w); err != nil {
-		t.Fatalf("six-target matrix contract: %v", err)
+		t.Fatalf("five-target matrix contract: %v", err)
 	}
 
 	// No reusable-lane invocation may survive.
 	if strings.Contains(w, "uses: ./.github/workflows/build-") {
-		t.Fatalf("the workflow still invokes a reusable platform lane via workflow_call — the six-target matrix replaced the five reusable files")
+		t.Fatalf("the workflow still invokes a reusable platform lane via workflow_call — the five-target matrix replaced the five reusable files")
 	}
 
 	// The retired lane files must be absent from the tracked tree.

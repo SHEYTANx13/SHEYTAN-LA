@@ -7,8 +7,9 @@
 //
 // The retired topology (the build-desktop.yml orchestrator plus the five
 // reusable build-windows/linux/macos/android/ios.yml lanes) is gone; the
-// six platform targets are now EXACTLY ONE matrix.include list on the
-// ONE platform-build job. These tests pin, structurally:
+// five platform targets are now EXACTLY ONE matrix.include list on the
+// ONE platform-build job (the iOS lanes are retired, run 45323044820
+// repair). These tests pin, structurally:
 //
 //   - no duplicate (GOOS, GOARCH, runner, artifact) platform mapping;
 //   - Windows x64 and Linux x64 each defined exactly once;
@@ -36,13 +37,11 @@ import (
 // about (GOOS, GOARCH) — the pair that must never be produced by two
 // matrix entries with the same runner image and artifact.
 var matrixBuildIdentity = map[string][2]string{
-	"windows-x64":         {"windows", "amd64"},
-	"linux-x64":           {"linux", "amd64"},
-	"macos-arm64":         {"darwin", "arm64"},
-	"macos-x64":           {"darwin", "amd64"},
-	"android-arm64":       {"android", "arm64"},
-	"ios-simulator-arm64": {"ios", "arm64"},
-	"ios-device-arm64":    {"ios", "arm64"},
+	"windows-x64":   {"windows", "amd64"},
+	"linux-x64":     {"linux", "amd64"},
+	"macos-arm64":   {"darwin", "arm64"},
+	"macos-x64":     {"darwin", "amd64"},
+	"android-arm64": {"android", "arm64"},
 }
 
 // loadBuildMatrix parses the real build.yml platform-build matrix for
@@ -85,7 +84,7 @@ func TestBuildMatrixNoDuplicatePlatformMapping(t *testing.T) {
 	for _, e := range include {
 		pair, known := matrixBuildIdentity[e.Target]
 		if !known {
-			t.Errorf("matrix target %q is not one of the seven contracted platform identities — an unknown target recreates an uncontracted lane", e.Target)
+			t.Errorf("matrix target %q is not one of the five contracted platform identities — an unknown target recreates an uncontracted lane", e.Target)
 			continue
 		}
 
@@ -165,21 +164,19 @@ func TestBuildMatrixMobileTargetsExactlyOnce(t *testing.T) {
 	if count["android-arm64"] != 1 {
 		t.Errorf("matrix target android-arm64 defined %d times, want EXACTLY once", count["android-arm64"])
 	}
-	if count["ios-simulator-arm64"] != 1 {
-		t.Errorf("matrix target ios-simulator-arm64 defined %d times, want EXACTLY once", count["ios-simulator-arm64"])
+
+	// Run 45323044820 repair: the iOS lanes are retired (owner direction).
+	// An ios-* matrix target must NEVER reappear — its presence recreates
+	// a lane the owner removed.
+	for _, retired := range []string{"ios-simulator-arm64", "ios-device-arm64"} {
+		if count[retired] != 0 {
+			t.Errorf("retired matrix target %s defined %d times, want ABSENT (run 45323044820 repair)", retired, count[retired])
+		}
 	}
 
 	if android, ok := byTarget["android-arm64"]; ok {
 		if android.Artifact != AndroidArtifactName {
 			t.Errorf("android-arm64 artifact %q, want %q (the retired -debug-apk suffix must not reappear)", android.Artifact, AndroidArtifactName)
-		}
-	}
-	if ios, ok := byTarget["ios-simulator-arm64"]; ok {
-		if ios.Artifact != IOSArtifactName {
-			t.Errorf("ios-simulator-arm64 artifact %q, want %q", ios.Artifact, IOSArtifactName)
-		}
-		if strings.Contains(strings.ToLower(ios.Artifact), "ipa") {
-			t.Errorf("the iOS artifact %q must stay SIMULATOR-ONLY — a device IPA is never produced without signing", ios.Artifact)
 		}
 	}
 }

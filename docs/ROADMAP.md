@@ -50,6 +50,37 @@ Status: **DELIVERED** — proven by current repository behaviour, code, tests or
 - Optional 3D Studio
 - CI visibility, stress gate, UCRT64 Windows, Xvfb Linux desktop smoke
 
+### Go-Gui primary shell (operator direction, 2026-11-24 — recorded, NOT scheduled)
+
+The owner directed a migration of the whole UI/UX onto
+[go-gui](https://github.com/go-gui-org/go-gui) (CGO-free desktop, GPU
+rendering) across all five platforms, learning from the operator's
+mlmvpn clients. The direction is authorized and recorded; THIS update
+did not execute it, because the honest blockers are structural, not
+effort:
+
+- **macos-x64 is unsupportable**: go-gui requires Apple silicon
+  ("Intel Macs are not supported", its README) — the five-platform
+  goal itself is unsatisfiable with go-gui today, and the macos-x64
+  lane is a required platform gate.
+- **The Android backend rides the pinned golang.org/x/mobile cgo
+  stack** (gomobile/NDK) — the same toolchain the current Android lane
+  already manages, with go-gui maturity on Android at ~9 months of
+  project age.
+- **The migration surface is the entire shell**: 49 Go files /
+  ~14.7k lines under `ui/fyne`, including the golden fit matrix
+  (five committed golden layouts), the responsive matrices, the
+  IPC-integration suite and the headless test driver — a
+  multi-session effort that cannot ride inside a repair update without
+  breaking the "app works perfectly" requirement.
+
+Preconditions to schedule it: go-gui ships an Intel-Mac-capable macOS
+backend or the owner explicitly drops the macos-x64 gate; a pinned
+go-gui version with proven Android (x/mobile) support; a
+panel-by-panel migration plan with the golden matrix re-baselined per
+panel. Until then Fyne stays the primary shell (per the architecture
+identity) and go-gui stays tracked here.
+
 ### Renderer convergence (v1.11.1, 2026-11-17 — delivered)
 - The shared design-token catalog (`internal/theme`, six themes,
   WCAG-gated, JSON form for web surfaces) and the live switcher

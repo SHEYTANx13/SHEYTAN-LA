@@ -24,18 +24,20 @@ release-contract suite).
 ```
 push (main, v* tags) + pull_request (main) + workflow_dispatch
   build.yml
-    platform-build   ONE matrix job, SIX include entries, no needs:
+    platform-build   ONE matrix job, FIVE include entries, no needs:
                      windows-x64        -> windows-2025     (zip)
                      linux-x64          -> ubuntu-26.04     (tar.gz)
                      macos-arm64        -> macos-15         (app zip)
                      macos-x64          -> macos-15-intel   (app zip)
-                     android-arm64      -> ubuntu-26.04     (debug apk/aab)
-                     ios-simulator-arm64-> macos-15         (simulator zip)
+                     android-arm64      -> ubuntu-26.04     (debug apk)
                      strategy.fail-fast: EXPLICITLY false — a red lane
                      never cancels its siblings; every lane runs to its
-                     terminal state and keeps its evidence. Each leg
+                     terminal state and keeps its evidence. The iOS
+                     lanes are RETIRED (run 45323044820 repair, owner
+                     direction: iOS is not a current delivery target —
+                     see docs/retired.md). Each leg
                      dispatches per-phase to scripts/build/{windows.ps1,
-                     linux.sh, macos.sh, android.sh, ios.sh}; every
+                     linux.sh, macos.sh, android.sh}; every
                      verification gate writes ci-logs/<target>-upstream-
                      failure.txt so the if:always() package-gate
                      reporter can name ONE root cause.
@@ -66,7 +68,8 @@ Rules pinned by the contracts:
   EMPTY or absent `needs` — no platform-to-platform needs chain (the
   run-43630164424 lesson; the strict final verdict owns acceptance).
   `ValidatePlatformMatrixStructure` parses the YAML and asserts exactly
-  seven targets with unique (target, os, artifact) triples.
+  five targets with unique (target, os, artifact) triples (the retired
+  ios-* targets are contract violations).
 - macOS Intel and Apple Silicon stay on DISTINCT runner images
   (macos-15-intel vs macos-15) with DISTINCT artifact names.
 - ONE authoritative trigger block: build.yml owns
@@ -84,8 +87,6 @@ Rules pinned by the contracts:
 | linux-x64 | `SHEYTAN-LA-ALPHA-linux-x64-portable` (.tar.gz) | ubuntu-26.04 runtime-verified (ID/VERSION_ID/dpkg amd64), absolute build-info probe, ELF verify, Xvfb boot/window/SIGTERM-reap smoke, archive + purity verify, size gate, fail-closed package gate |
 | macos-arm64 / macos-x64 | `SHEYTAN-LA-ALPHA-macos-<arch>-portable` (.zip) | per-arch native compile + tests, ad-hoc signed .app (unnotarized, stated), launch smoke |
 | android-arm64 | `SHEYTAN-LA-ALPHA-android-arm64` | pinned gomobile/gobind (v0.0.0-20261117202452-47699113848a, never @latest), fail-closed NDK, debug-signed dev package, manifest/dex checks, repo-cleanliness guard; emulator/device smoke NOT RUN (stated on the artifact) |
-| ios-simulator-arm64 | `SHEYTAN-LA-ALPHA-ios-simulator-arm64` (.zip) | SIMULATOR-ONLY qualification, Mach-O + plist verify; a device IPA is never produced without signing |
-| ios-device-arm64 | `SHEYTAN-LA-ALPHA-ios-device-arm64` (.ipa) | run 44547031698 §6.3: the matrix entry is structural; execution is honestly gated on the five Apple signing secrets — without them the lane records BLOCKED BY MISSING APPLE SIGNING CONFIGURATION (`PACKAGE_GATE_RESULT BLOCKED_BY_MISSING_APPLE_SIGNING`, the job stays green, no IPA is fabricated); with them: real iphoneos arm64 build, per-job temporary keychain (deleted even on failure), ad-hoc export, fail-closed signature/team/slice/profile verification. Physical install requires the device UDID inside the ad-hoc profile and stays NOT RUN without a registered device |
 | collect-errors | (none — LOCAL reports only) | the §7 errors-and-warnings-only diagnostic and the machine-readable index stay LOCAL runner workspace files (see §4); NOTHING is uploaded |
 
 Run 44835425398 artifact policy: build evidence of ANY kind is never
@@ -149,7 +150,7 @@ mapped or escaped; secrets and signed URLs are redacted; output is
 deterministic; a red upstream run is NOT a collector failure, a
 missing terminal log IS (fail-closed, report written first). The
 offline fixture suite (`consolidate-run-log-fixtures.sh`) proves every
-clause — clause O pins the build.yml shape (seven matrix targets exactly
+clause — clause O pins the build.yml shape (five matrix targets exactly
 once, NO build-evidence upload of any kind, exactly ONE package upload
 gated on the eligibility output, collector wired fail-closed,
 retired names absent). Application runtime logging is a separate system

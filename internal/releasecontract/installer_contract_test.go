@@ -24,16 +24,16 @@ import (
 // platform-build workflow.
 const workflowRelPath = PlatformBuildWorkflowPath
 
-// The five per-lane build scripts — the §10 successors of the retired
+// The four per-lane build scripts — the §10 successors of the retired
 // reusable lane files (the platform-build matrix job dispatches them
-// per phase). Kept as constants so the lane-content pins read the same
-// named seams.
+// per phase; the iOS lane script is retired with its lane, run
+// 45323044820 repair). Kept as constants so the lane-content pins read
+// the same named seams.
 const (
 	windowsLaneRelPath = "scripts/build/windows.ps1"
 	linuxLaneRelPath   = "scripts/build/linux.sh"
 	macosLaneRelPath   = "scripts/build/macos.sh"
 	androidLaneRelPath = "scripts/build/android.sh"
-	iosLaneRelPath     = "scripts/build/ios.sh"
 )
 
 // readTreeFile reads one tracked file relative to the repository root —

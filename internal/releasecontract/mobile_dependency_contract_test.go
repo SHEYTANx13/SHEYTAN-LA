@@ -73,7 +73,7 @@ func TestMobileToolchainPin(t *testing.T) {
 	// pin (never @latest, never module-graph re-resolution). The CI
 	// consolidation moved the lanes to the scripts/build/ dispatch
 	// scripts.
-	for _, lane := range []string{androidLaneRelPath, iosLaneRelPath} {
+	for _, lane := range []string{androidLaneRelPath} {
 		text, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(lane)))
 		if err != nil {
 			t.Fatalf("read %s: %v", lane, err)

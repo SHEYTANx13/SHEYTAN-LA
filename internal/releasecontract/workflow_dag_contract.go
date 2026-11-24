@@ -11,12 +11,12 @@
 // needs (run 44306343338). The consolidated topology makes those shapes
 // impossible by construction:
 //
-//   - ValidateIndependentGatesDAG: the platform-build job owns the seven
+//   - ValidateIndependentGatesDAG: the platform-build job owns the five
 //     matrix targets and has NO needs (every matrix instance is an
 //     independent gate); no workflow_call lane invocations remain; the
 //     retired lane files are gone.
 //   - ValidatePlatformMatrixStructure: exactly one matrix.include with
-//     exactly the seven targets, unique (target, os, artifact) triples,
+//     exactly the five targets, unique (target, os, artifact) triples,
 //     fail-fast EXPLICITLY false, no cancel-in-progress: true.
 //   - ValidateFinalVerdictJob: a strict final verdict exists, needs
 //     platform-build + collect-errors, runs on !cancelled(), and its
@@ -49,7 +49,7 @@ import (
 
 // RequiredGateJobs are the YAML job keys whose conclusion the final
 // verdict accepts as the workflow's verdict: any non-success conclusion
-// is a red run. platform-build is the SEVEN-target matrix (fail-fast:
+// is a red run. platform-build is the FIVE-target matrix (fail-fast:
 // false keeps every lane running to its terminal state);
 // collect-errors is the failure-tolerant diagnostics collector whose
 // coverage-gap failure keeps the run red. A collector report-generation
@@ -96,7 +96,7 @@ func ValidateIndependentGatesDAG(workflowText string) error {
 	for key, j := range doc.Jobs {
 		if j.Uses != "" {
 			errs = append(errs, fmt.Sprintf(
-				"job %q invokes %q via workflow_call — the consolidation replaced the reusable-lane invocations with the six-target matrix; a reusable lane file cannot come back",
+				"job %q invokes %q via workflow_call — the consolidation replaced the reusable-lane invocations with the five-target matrix; a reusable lane file cannot come back",
 				key, j.Uses,
 			))
 		}
