@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 )
 
 // contextBackground is a test-local alias (keeps call sites tidy).
@@ -172,7 +172,7 @@ func (f *fakeCore) handleHandshake(w http.ResponseWriter, r *http.Request) {
 		// internal/config.AppVersion — the fake must track the same
 		// authority so the UI's version display can never pass
 		// against a stale hand-written literal.
-		"coreVersion": config.AppVersion, "api": "v1", "authenticated": true,
+		"coreVersion": brand.DisplayVersion, "api": "v1", "authenticated": true,
 	})
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/api"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
@@ -99,9 +100,13 @@ func (s *Server) handleHandshake(w http.ResponseWriter, r *http.Request) {
 	writeJSONIpc(w, map[string]any{
 		"protocol":        ProtocolName,
 		"protocolVersion": ProtocolVersion,
-		"coreVersion":     config.AppVersion,
-		"api":             "v1",
-		"authenticated":   true,
+		// Run 45287161747 repair (operator direction): the wire carries the
+		// user-facing product identity (ALPHA) as the core version; the
+		// numeric build identifier stays in packaging plumbing. The numeric
+		// protocolVersion above remains the compatibility authority.
+		"coreVersion":   brand.DisplayVersion,
+		"api":           "v1",
+		"authenticated": true,
 	})
 }
 

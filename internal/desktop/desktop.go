@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/api"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/localipc"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
@@ -141,8 +142,12 @@ func Run(cfg *config.Config) int {
 		logging.Default().Info("desktop", "ipc stopped")
 	}()
 
-	logging.Default().Info("desktop", "%s v%s (Fyne desktop, one Go UI)", config.AppName, config.AppVersion)
-	fmt.Printf("%s v%s (Fyne desktop, one Go UI)\n", config.AppName, config.AppVersion)
+	// Run 45287161747 repair (operator direction): the user-facing product
+	// identity is the ALPHA stage (brand.DisplayVersion), never the numeric
+	// build identifier - the numeric id stays in packaging plumbing
+	// (build/config.yml productVersion, BUILD-INFO, update manifests).
+	logging.Default().Info("desktop", "%s v%s (Fyne desktop, one Go UI)", config.AppName, brand.DisplayVersion)
+	fmt.Printf("%s v%s (Fyne desktop, one Go UI)\n", config.AppName, brand.DisplayVersion)
 
 	// Run 44457547289 §5: the GoGPU render service verification runs in
 	// the BACKGROUND (never on the first-frame path); its observation is

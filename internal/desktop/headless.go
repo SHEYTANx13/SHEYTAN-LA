@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/api"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 )
 
@@ -48,7 +49,7 @@ func ServeHeadless(cfg *config.Config) int {
 
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 
-	fmt.Printf("%s v%s (headless)\n", config.AppName, config.AppVersion)
+	fmt.Printf("%s v%s (headless)\n", config.AppName, brand.DisplayVersion)
 	fmt.Printf("  server:  http://localhost:%d/\n", cfg.Port)
 	fmt.Printf("  models:  %s\n", cfg.ModelsDir)
 	fmt.Printf("  data:    %s\n", cfg.DataDir)

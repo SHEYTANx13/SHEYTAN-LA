@@ -157,7 +157,20 @@ func TestNonTCPKindRecordsSkipWithoutUnionInterpretation(t *testing.T) {
 
 	defer udp.Close()
 
-	unixPath := filepath.Join(t.TempDir(), "probe.sock")
+	// Run 45287161747 repair: a t.TempDir() path embeds the 51-char
+	// test name under the runner's long /var/folders/... TMPDIR, which
+	// exceeds the darwin sun_path limit (104) and failed the unix bind
+	// before the walk was ever exercised. A short MkdirTemp pattern
+	// without the test name keeps the socket path safely inside the
+	// limit on every hosted TMPDIR.
+	unixDir, uerr := os.MkdirTemp("", "shy-proc-")
+	if uerr != nil {
+		t.Fatalf("temp dir: %v", uerr)
+	}
+
+	t.Cleanup(func() { _ = os.RemoveAll(unixDir) })
+
+	unixPath := filepath.Join(unixDir, "probe.sock")
 
 	unix, err := net.Listen("unix", unixPath)
 	if err != nil {
@@ -307,18 +320,4 @@ func TestProvenFreePortReturnsTypedNoOwner(t *testing.T) {
 	}
 
 	t.Skipf("port %d was recycled by another process (pid %d exe %q) between close and query - environment, not attribution", port, pid, exe)
-}
-
-// mustOwnExe returns the test binary's own exec path for the
-// same-binary attribution checks above; a failure fails the test
-// loudly instead of comparing against an empty path.
-func mustOwnExe(t *testing.T) string {
-	t.Helper()
-
-	testBin, err := os.Executable()
-	if err != nil {
-		t.Fatalf("os.Executable: %v", err)
-	}
-
-	return testBin
 }

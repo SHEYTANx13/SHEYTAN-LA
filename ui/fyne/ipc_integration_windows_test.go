@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/api"
+	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/localipc"
 	fyneui "github.com/SHEYTANx13/SHEYTAN-LA/ui/fyne"
@@ -91,8 +92,8 @@ func TestCoreClientEndToEndOverWindowsNamedPipe(t *testing.T) {
 	if err := client.Handshake(ctx); err != nil {
 		t.Fatalf("production CoreClient handshake over the Windows named pipe failed: %v", err)
 	}
-	if client.Version() != config.AppVersion {
-		t.Fatalf("handshake coreVersion = %q, want %q", client.Version(), config.AppVersion)
+	if client.Version() != brand.DisplayVersion {
+		t.Fatalf("handshake coreVersion = %q, want %q", client.Version(), brand.DisplayVersion)
 	}
 
 	// 2. Representative real read-only APIs across the views.

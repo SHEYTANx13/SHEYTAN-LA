@@ -362,8 +362,29 @@ func listProcSocketFDs(pid int32) ([]int32, error) {
 			return nil, mapProcInfoErrno(err)
 		}
 
-		if n < 0 || int(n) > size {
-			return nil, fmt.Errorf("%w: PROC_PIDLISTFDS for pid %d returned %d bytes against a %d-byte buffer", errProcTruncated, pid, n, size)
+		if n < 0 {
+			return nil, fmt.Errorf("%w: PROC_PIDLISTFDS for pid %d returned %d", errProcTruncated, pid, n)
+		}
+
+		// Run 45287161747 repair: proc_pidinfo answers with the BYTE COUNT
+		// IT NEEDS when the buffer is too small (the documented resize
+		// contract). The old code failed the whole walk typed-truncated on
+		// that answer, so one same-user process with more than 512 open
+		// descriptors (a long-lived runner agent) aborted attribution for
+		// the ENTIRE system. Grow and retry, bounded by the walk cap.
+		if int(n) > size {
+			if size >= maxBytes {
+				return nil, fmt.Errorf("%w: the fd list of pid %d exceeds the %d-byte walk cap", errProcTruncated, pid, maxBytes)
+			}
+
+			grown := size * 2
+
+			if int(n) > grown {
+				grown = ((int(n) + recSize - 1) / recSize) * recSize
+			}
+
+			size = grown
+			continue
 		}
 
 		full := int(n) == size
@@ -532,7 +553,15 @@ func listeningProcessImpl(port int) (int, string, bool, error) {
 				sawInaccessible = true
 				continue
 			default:
-				return 0, "", false, fmt.Errorf("%w: pid %d fd walk failed: %v", ErrPortOwnerUnknown, pid, ferr)
+				// Run 45287161747 repair: ONE candidate's unreadable or
+				// malformed descriptor list must not abort attribution for
+				// the whole system. The walk records the honest inability
+				// and continues; if a proven owner is found the answer is
+				// exact, and if none is found the accumulated
+				// inaccessibility keeps the final answer fail-closed
+				// (ErrPortOwnerUnknown, never a guessed "nothing").
+				sawInaccessible = true
+				continue
 			}
 		}
 
@@ -549,7 +578,12 @@ func listeningProcessImpl(port int) (int, string, bool, error) {
 					sawInaccessible = true
 					break fdLoop
 				default:
-					return 0, "", false, fmt.Errorf("%w: pid %d fd %d socket info failed: %v", ErrPortOwnerUnknown, pid, fd, serr)
+					// Run 45287161747 repair: an uninterpretable record
+					// (undocumented socket kind, malformed answer) makes
+					// THIS candidate unprovable - not the whole system;
+					// the final fail-closed answer is preserved below.
+					sawInaccessible = true
+					break fdLoop
 				}
 			}
 
@@ -566,7 +600,10 @@ func listeningProcessImpl(port int) (int, string, bool, error) {
 				case errors.Is(perr, errProcAccessDenied):
 					sawInaccessible = true
 				default:
-					return 0, "", false, fmt.Errorf("%w: executable path of pid %d unresolvable: %v", ErrPortOwnerUnknown, pid, perr)
+					// Run 45287161747 repair: an unresolvable path on one
+					// candidate leaves that candidate unproven without
+					// poisoning the remaining candidates.
+					sawInaccessible = true
 				}
 
 				break fdLoop

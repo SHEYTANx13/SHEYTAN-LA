@@ -66,6 +66,55 @@ func TestListeningProcessFindsSelfOwnedListener(t *testing.T) {
 	}
 }
 
+// TestListeningProcessIPv6LoopbackAttributed pins the run 45287161747
+// repair: the liveness pre-probe must never prove an IPv6-only loopback
+// listener absent (the old IPv4-only probe answered ok=false with a nil
+// error for a live [::1] listener, breaking darwin attribution and the
+// engine adoption layer that relies on it). Linux carries the strict
+// attribution assertion natively (/proc/net/tcp6); on darwin the cgo
+// lanes execute the same assertion natively; windows only walks the IPv4
+// listener table today, so a nil-error not-attributed answer is recorded
+// as a skip instead of a false alarm.
+func TestListeningProcessIPv6LoopbackAttributed(t *testing.T) {
+	l, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 loopback unavailable on this host: %v", err)
+	}
+
+	defer l.Close()
+
+	port := l.Addr().(*net.TCPAddr).Port
+
+	pid, exe, ok, err := ListeningProcess(port)
+
+	switch runtime.GOOS {
+	case "linux", "darwin":
+		if err != nil {
+			t.Fatalf("an IPv6 loopback listener must be attributable without error, got: %v", err)
+		}
+
+		if !ok {
+			t.Fatalf("an IPv6 loopback listener must be attributable - the IPv4-only liveness pre-probe must not prove it absent")
+		}
+
+		if pid != os.Getpid() {
+			t.Fatalf("the listener belongs to pid %d, want %d", pid, os.Getpid())
+		}
+
+		if exe == "" {
+			t.Fatalf("the executable path must resolve for our own process")
+		}
+	default:
+		if err == nil && ok {
+			if pid != os.Getpid() {
+				t.Fatalf("the listener belongs to pid %d, want %d", pid, os.Getpid())
+			}
+		} else {
+			t.Skipf("no IPv6 ownership contract on %s yet (err=%v ok=%v)", runtime.GOOS, err, ok)
+		}
+	}
+}
+
 func TestListeningProcessReturnsNotOKForFreePort(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

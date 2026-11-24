@@ -88,19 +88,45 @@ func SameExecutable(a, b string) bool {
 // was refused (nothing listening). proven=false covers inconclusive
 // dial failures (timeouts, unreachable networks) — callers keep the
 // fail-closed path in that case.
+// loopbackListenerExists probes the loopback families with a short
+// connect. proven=true means the OS gave a definitive answer: exists=true
+// when a listener accepted (or queued) the connection, false when every
+// refused connect proves nothing listening. proven=false covers
+// inconclusive dial failures (timeouts, unreachable networks) - callers
+// keep the fail-closed path in that case.
+//
+// Run 45287161747 repair (TestIPv6ListenerAttributed, reproduced on
+// linux): the probe must cover BOTH loopback families. A listener bound
+// to [::1] only never answers an IPv4 connect - the old IPv4-only probe
+// read that refusal as a definitive "nothing is listening" and
+// short-circuited the ownership walk BEFORE it could attribute the live
+// IPv6 listener (ok=false, nil error). A family only contributes a
+// definitive "absent" verdict when its connect is REFUSED; an unreachable
+// or inconclusive family downgrades the whole answer to not-proven so
+// the ownership walk runs.
 func loopbackListenerExists(port int) (exists bool, proven bool) {
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 250*time.Millisecond)
-	if err != nil {
-		// A refused connect on loopback is definitive: no listener.
-		if isConnectRefused(err) {
-			return false, true
+	allProven := true
+
+	for _, addr := range []string{"127.0.0.1", "[::1]"} {
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", addr, port), 250*time.Millisecond)
+		if err != nil {
+			// A refused connect on a loopback family is definitive for
+			// that family: no listener there. Anything else (unreachable,
+			// timeout) is inconclusive and downgrades the answer.
+			if isConnectRefused(err) {
+				continue
+			}
+
+			allProven = false
+			continue
 		}
-		return false, false
+
+		_ = conn.Close()
+
+		return true, true
 	}
 
-	_ = conn.Close()
-
-	return true, true
+	return false, allProven
 }
 
 // isConnectRefused classifies a loopback dial error as "definitively

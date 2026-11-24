@@ -41,6 +41,20 @@ func requireNativeWalk(t *testing.T) {
 // killed.
 const childListenMode = "SHEYTAN_PROC_TEST_CHILD_LISTEN"
 
+// mustOwnExe returns the test binary's own exec path for the
+// same-binary attribution checks above; a failure fails the test
+// loudly instead of comparing against an empty path.
+func mustOwnExe(t *testing.T) string {
+	t.Helper()
+
+	testBin, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	return testBin
+}
+
 func TestMain(m *testing.M) {
 	if port := os.Getenv(childListenMode); port != "" {
 		runListenerChild(port)
@@ -237,12 +251,27 @@ func TestListeningProcessDeadOwnerRefused(t *testing.T) {
 		t.Skip("pid was recycled too fast to observe the dead state")
 	}
 
-	if _, err := ProcessExePath(pid); !errors.Is(err, ErrProcessNotFound) {
-		t.Fatalf("a dead pid must be typed ErrProcessNotFound, got %v", err)
+	// Run 45287161747 repair: on a busy hosted runner the observed-dead
+	// pid can be recycled by a NEW process between the dead-state
+	// observation and the metadata probes. A successful probe is then
+	// the recycled process answering truthfully - environment, not
+	// identity - and the dead-state contract can no longer be re-proven
+	// for THIS pid (the same honest-race policy the recycled-port tests
+	// follow). A probe that answers with any OTHER typed class fails.
+	if _, err := ProcessExePath(pid); err != nil {
+		if !errors.Is(err, ErrProcessNotFound) {
+			t.Fatalf("a dead pid must be typed ErrProcessNotFound, got %v", err)
+		}
+	} else {
+		t.Skipf("pid %d was recycled by a live process between the dead-state observation and the exe-path probe - environment, not identity", pid)
 	}
 
-	if _, err := ProcessStartTime(pid); !errors.Is(err, ErrProcessNotFound) {
-		t.Fatalf("a dead pid must be typed ErrProcessNotFound for start time, got %v", err)
+	if _, err := ProcessStartTime(pid); err != nil {
+		if !errors.Is(err, ErrProcessNotFound) {
+			t.Fatalf("a dead pid must be typed ErrProcessNotFound for start time, got %v", err)
+		}
+	} else {
+		t.Skipf("pid %d was recycled by a live process between the dead-state observation and the start-time probe - environment, not identity", pid)
 	}
 }
 

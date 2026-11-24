@@ -17,6 +17,8 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
@@ -69,7 +71,11 @@ func buildHistoryPanel(ap *App) fyne.CanvasObject {
 	root := container.NewBorder(
 		container.NewVBox(
 			PageHeader("History", "Cross-session search (bounded, server-side)"),
-			container.NewHBox(p.q, p.mode),
+			// Run 45287161747 UX item: the search entry owns the full row
+			// width (the old HBox split it with the mode select, leaving a
+			// tiny search box); the mode select stays right-aligned with its
+			// own minimum.
+			container.NewBorder(nil, nil, nil, p.mode, p.q),
 		),
 		p.err, nil, nil, p.hits,
 	)
@@ -130,6 +136,7 @@ type modelsPanel struct {
 	engineCard *widget.Label
 	importIn   *widget.Entry
 	importB    *widget.Button
+	browseB    *widget.Button // platform file dialog (run 45287161747 UX)
 	openFldr   *widget.Button
 	task       *widget.Select
 	err        *widget.Label
@@ -215,6 +222,11 @@ func buildModelsPanelFor(ap *App) (fyne.CanvasObject, *modelsPanel) {
 	p.engineCard.TextStyle = fyne.TextStyle{Monospace: true}
 	p.importIn = widget.NewEntry()
 	p.importIn.SetPlaceHolder("Absolute path to a .gguf model on disk")
+	// Run 45287161747 UX item: model files can be picked from ANYWHERE on
+	// the PC through the platform file dialog, not only pasted by path or
+	// dropped into data/models. The dialog fills the same import path the
+	// core already accepts, so the server-side contract is unchanged.
+	p.browseB = widget.NewButton("Browse for .gguf…", func() { p.browseGGUF() })
 	p.importB = widget.NewButton("Import", func() { p.importModel() })
 	// v1.11.1 button-fit policy: short, clear action labels on
 	// constrained controls; the explanatory detail lives in the adjacent
@@ -311,7 +323,8 @@ func buildModelsPanelFor(ap *App) (fyne.CanvasObject, *modelsPanel) {
 			// "Open folder" was built but never attached to any
 			// container before this repair — the action was unreachable
 			// from the UI.
-			cardFit("Import a model", "Paste an absolute path to a .gguf file on disk, optionally pick a task fit, then Import.", container.NewVBox(
+			cardFit("Import a model", "Paste an absolute path to a .gguf file on disk, browse for one anywhere on this PC, optionally pick a task fit, then Import.", container.NewVBox(
+				p.browseB,
 				p.importIn,
 				container.NewHBox(p.importB, p.openFldr),
 				p.task,
@@ -324,6 +337,42 @@ func buildModelsPanelFor(ap *App) (fyne.CanvasObject, *modelsPanel) {
 	)
 	p.refresh()
 	return root, p
+}
+
+// browseGGUF opens the platform file dialog and copies the picked
+// file's absolute path into the import field. The core's ImportModel
+// contract (absolute path) is unchanged; the dialog only removes the
+// typing burden and makes every model file on the PC reachable in two
+// clicks. Errors surface through the panel's existing error row.
+func (p *modelsPanel) browseGGUF() {
+	win := p.ap.Window()
+	if win == nil {
+		return
+	}
+
+	dlg := dialog.NewFileOpen(func(rc fyne.URIReadCloser, err error) {
+		if rc != nil {
+			defer func() { _ = rc.Close() }()
+		}
+
+		if err != nil {
+			uiDo(func() { p.showErr("browse model file", err) })
+			return
+		}
+
+		if rc == nil || rc.URI() == nil || rc.URI().Path() == "" {
+			return
+		}
+
+		uiDo(func() {
+			p.importIn.SetText(rc.URI().Path())
+			p.err.Hide()
+		})
+	}, win)
+
+	dlg.SetFilter(storage.NewExtensionFileFilter([]string{".gguf", ".GGUF"}))
+	dlg.Resize(fyne.NewSize(760, 540))
+	dlg.Show()
 }
 
 // engineUpdatePollInterval is the bounded cadence of the install-progress

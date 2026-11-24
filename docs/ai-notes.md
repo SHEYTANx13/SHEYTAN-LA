@@ -10,49 +10,60 @@ session; rewrite this note so it stays true.
 
 ---
 
-## CURRENT HANDOFF — run 45165536396 repair + touch-responsive UX pass (2026-11-23) — supersedes all handoffs below
+## CURRENT HANDOFF — run 45287161747 repair + ALPHA identity + engine/model UX (2026-11-24) — supersedes all handoffs below
 
-Baseline: `93ce07ef6e0bf6562092ee70b40ac7f76efd77f2` (== origin/main == the exact commit the
-run 45165536396 platform build tested; CodeQL went green there per the operator). The prior
-session's candidate (squash of mesh phase 2a + darwin proc fixes + artifact policy) IS
-`93ce07e`; its darwin headless suite STILL failed on all three Apple lanes. Branch:
-`repair/run451655-darwin-runtime-touch` (local only; NO remote operations, per the standing
-manual rule). Delivery `note.md` carries the full evidence matrix.
+Baseline: `c8c2858ba9f528b8a8f29c5a256033e619adce8d` (== origin/main == the exact commit the
+run 45287161747 platform build tested; that run is the FIRST where the previous session's
+diagnosability work made the darwin failures VISIBLE — real `--- FAIL:` records). Branch:
+`repair/run45287161747-alpha-ux` (local only; NO remote operations, per the standing manual
+rule). Delivery `note.md` carries the full evidence matrix.
 
 What this session established and changed:
 
-1. The run's ONLY captured specifics: macos-x64 failed on lazy module downloads
-   (proxy.golang.org read timeouts, gogpu family, six occurrences); macos-arm64 and the iOS
-   lane host failed with exit 1 and ZERO test-failure records — a suite-timeout panic or a
-   package crash leaves no collector-visible trace (no `--- FAIL:`, no file:line). Hosted job
-   logs were NOT retrievable (anonymous REST rate-limited from this sandbox; no Actions log
-   tool in the plugin set). The exact hosted failure text remains UNKNOWN — the fix makes the
-   next run name it.
-2. `scripts/ci/module-preflight.sh` (NEW): `go mod download all` with exactly three bounded
-   attempts + fixed 15 s backoff, fail-closed with the captured proxy error; wired into
-   macos.sh / ios.sh / linux.sh / android.sh headless-tests BEFORE `go test`. Gates never
-   download.
-3. `summarize_headless_failure` in macos.sh/ios.sh: on suite failure the lane dumps the
-   stream's own root-cause records (panic / fatal error / FAIL / timeout, bounded to 15,
-   verbatim) as `::error::` annotations before the gate marker.
-4. Collector: JSON-frame `panic:` / `fatal error:` output buffers per (package, test) and
-   emits `[package pkg]` rows at the package FAIL verdict; raw panic/fatal lines are error
-   evidence in failed/cancelled jobs. Pinned by fixture case 34 (suite 40/0).
-5. proc darwin determinism: WrongPortRefused queries a kernel-proven free port (bind+close
-   probe) instead of `bound+1` (a busy runner can carry a REAL foreign listener there);
-   ProvenFreePort fails ONLY when the walk attributes OUR closed port to our own binary and
-   skips honestly when a foreign process recycled the ephemeral port.
-6. Touch UX (owner-directed): `floorTouch` (ui/fyne/widgets.go) — a one-child container with
-   a visibility-aware layout — makes the 44/48 DIP UX-06 floor STRUCTURAL for rail rows,
-   strip rows, More, Retry (44) and Send/Stop (48) and the empty-state sample chips (44) at
-   every width. Structural goldens must be REGENERATED on the hosted GL host
-   (FYNE_UPDATE_GOLDENS=1) — NOT run locally (no GL/wayland headers in this sandbox, no root;
-   the ui/fyne compile gate stays the hosted linux lane). Popup-menu items remain
-   driver-metric (recorded boundary in TOUCH-RESPONSIVE-MATRIX.md §1).
-7. Mesh phase-3 libp2p transport stays GATED (owner decision: new dependency + two-device LAN
-   demo prerequisite); nothing else from the previous session's leftover list is code work.
+1. **IPv6 liveness pre-probe (REPRODUCED on linux, not just inferred)**: `ListeningProcess`
+   dialed only `127.0.0.1`; a `[::1]`-only listener was "proven absent" (ok=false, nil
+   error) and the ownership walk never ran → `TestIPv6ListenerAttributed` +
+   `TestAdoptionAcceptsManagedEngine` + the whole darwin attribution family failed. Fixed:
+   both loopback families probed; an inconclusive family downgrades to not-proven.
+   Regression test `TestListeningProcessIPv6LoopbackAttributed` (windows = honest skip,
+   IPv4-table-only contract).
+2. **Walk resilience**: `listProcSocketFDs` now GROWS on proc_pidinfo's needed-bytes answer
+   (the old code typed-truncated the whole walk when one same-user process held >512 fds);
+   per-candidate faults (unreadable fd list, undocumented socket kind, unresolvable path)
+   are recorded and skipped — a proven owner still returns exactly, the fail-closed
+   ErrPortOwnerUnknown stands when nothing is proven.
+3. **Darwin test-environment honesty**: AF_UNIX socket under `t.TempDir()` breaches the
+   darwin sun_path(104) limit on hosted long TMPDIRs (mechanism reproduced on linux at 124
+   chars) → short MkdirTemp pattern; dead-owner metadata probes on an observed-dead pid may
+   answer a RECYCLED pid on busy runners → successful probe = honest skip, wrong typed
+   class = fail; `mustOwnExe` moved to the untagged darwin test file (CGO-free darwin test
+   build compiles again — pre-existing split).
+4. **ALPHA display identity (operator direction)**: desktop banner, headless banner and IPC
+   `coreVersion` carry `brand.DisplayVersion`; the numeric 1.11.1 identifier stays ONLY in
+   packaging plumbing (version contract: build/config.yml productVersion == AppVersion —
+   unchanged and green).
+5. **Engine update UX**: user-triggered update with NO model now follows the startup-gate
+   files-only policy (spec §2 Case D) instead of failing and rolling back a good download;
+   the live update message carries phase + bytes + percent (reuses `humanBytes`).
+6. **Model picker**: Models panel `Browse for .gguf…` opens the platform file dialog
+   (extension-filtered) and fills the existing absolute-path import field — no core change.
+7. **Search sizing**: history search entry owns its full row (Border layout, mode select
+   right-aligned); logs filter and repo-index search already own full-width rows.
+8. **UI goldens**: regenerated LOCALLY this session (the dev-header extraction trick —
+   Debian debs extracted into a local prefix with pkg-config shim + CGO_CFLAGS — made the
+   fyne test driver buildable WITHOUT root; recorded here so future sessions can repeat
+   it: libwayland-dev libxkbcommon-dev libegl-dev libgles-dev libglvnd-dev libopengl-dev
+   libgl-dev libglx-dev libxcursor-dev libxrandr-dev libxi-dev libxinerama-dev
+   libxfixes-dev libxrender-dev libxxf86vm-dev, dangling dev-symlinks re-pointed at the
+   system .so.N, prefix-rewritten .pc files). The 30→53-line golden delta is exactly the
+   prior session's deliberate 44-DIP floorTouch geometry.
+9. **Known pre-existing sandbox quirk (NOT a regression, reproduced on pristine c8c2858)**:
+   `go test ./internal/desktop/` on linux fails to LINK the test binary
+   (`goffi_errno_location_stub: unhandled relocation`, gogpu/goffi vs the sandbox linker).
+   The hosted windows lane compiles and runs it green; under `-tags headless` the package
+   has no tests and the full headless suite is green.
 
 Next actionable step for the operator: push the branch (or approve the push) and let the
-hosted platform build + CodeQL run on the candidate; the darwin lanes will either go green
-or NAME their failing package in the errors/warnings report. Then regenerate the UI goldens
-on any GL-capable host if the ui gate is touched there.
+hosted platform build + CodeQL run on the candidate — the darwin lanes must now either go
+green or name their exact remaining failure through three independent mechanisms (lane
+evidence dump, collector classification, preflight error capture).

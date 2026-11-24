@@ -122,7 +122,34 @@ func (s *Server) liveEngineUpdateCheck(ctx context.Context) engineUpdateCheck {
 		}
 		if p := s.engineUpdateProgress.Load(); p != nil {
 			st.Progress = p
-			st.Message = fmt.Sprintf("installing engine update %s — download in progress", st.LatestTag)
+			// Run 45287161747 UX item: the live status line carries the
+			// download phase AND the byte-level progress (done/total and
+			// percent) so any surface that renders the message - the
+			// engines panel, the system page, logs - shows the real
+			// download state without new API surface.
+			done, total := p.BytesDone, p.BytesTotal
+
+			pct := -1
+			if total > 0 {
+				pct = int(float64(done) / float64(total) * 100)
+
+				if pct < 0 {
+					pct = 0
+				}
+
+				if pct > 100 {
+					pct = 100
+				}
+			}
+
+			sizePart := humanBytes(uint64(done)) + " / " + humanBytes(uint64(total))
+
+			if pct < 0 {
+				sizePart = humanBytes(uint64(done)) + " / size unknown"
+			}
+
+			st.Message = fmt.Sprintf("installing engine update %s — %s — %s",
+				st.LatestTag, string(p.Phase), sizePart)
 		} else {
 			st.Message = fmt.Sprintf("installing engine update %s — transaction in progress", st.LatestTag)
 		}
@@ -287,7 +314,32 @@ func (s *Server) handleEngineUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 
 		logging.Default().Info("updater", "user-triggered engine update: installing %s through the engine-owned transaction", tag)
-		outcome, err := s.llama.UpdateEngineNow(ctx, tag, onProgress)
+
+		// MODEL-FIRST (spec §2 Case D): with no selected model the
+		// engine is never STARTED for readiness verification — the
+		// same files-only policy the startup gate applies. The
+		// staged installer identity-verifies the package (sha256
+		// manifest) and the static boot validation runs before the
+		// result is reported; the model selection owns the first
+		// start, and THAT start performs the readiness verification
+		// against the new package. The old behavior failed the
+		// whole user-triggered update (and rolled the package back)
+		// on ErrNoModelSelected — an update with nothing to verify
+		// it against must not destroy a good download.
+		var outcome string
+		var err error
+		if strings.TrimSpace(s.src.Load().Model) == "" {
+			logging.Default().Info("updater",
+				"no model selected — user-triggered engine update installs files only; the model selection owns the first start")
+			outcome, err = updater.UpdateEngineWithProgress(ctx, s.src.Load(), nil, tag, onProgress)
+			if err == nil {
+				if verr := s.maintenanceValidateInstalled(); verr != nil {
+					err = fmt.Errorf("installed engine %s fails static validation: %w", tag, verr)
+				}
+			}
+		} else {
+			outcome, err = s.llama.UpdateEngineNow(ctx, tag, onProgress)
+		}
 
 		st := engineUpdateCheck{
 			InstalledTag:     tag,
