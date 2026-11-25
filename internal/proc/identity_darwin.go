@@ -65,6 +65,7 @@ package proc
 import (
 	"errors"
 	"fmt"
+	"os"
 	"runtime"
 	"syscall"
 	"time"
@@ -262,26 +263,6 @@ import "C"
 // bridge (the native-walk test contract applies; the CGO_ENABLED=0 and
 // ios builds carry the typed-unsupported provider instead).
 const darwinIdentityNative = true
-
-// Typed walk states (fail-closed contract).
-var (
-	// errProcGone: the candidate process exited during inspection.
-	errProcGone = errors.New("process exited during inspection")
-
-	// errProcAccessDenied: the candidate process cannot be inspected by
-	// this (unprivileged, same-user) caller.
-	errProcAccessDenied = errors.New("process inspection denied")
-
-	// errProcTruncated: the kernel answer did not fit the buffer even
-	// after growth retries — the walk refuses to run on partial data.
-	errProcTruncated = errors.New("process descriptor list truncated")
-)
-
-// errSocketKindUndocumented: a socket record's soi_kind is outside every
-// kind the installed SDK documents — the union layout is unknown, so the
-// walk refuses the record instead of interpreting any union member as TCP
-// data (run 44835425398 repair: fail closed, never a guessed port).
-var errSocketKindUndocumented = errors.New("socket record carries an undocumented kind")
 
 // mapProcInfoErrno translates the libproc errno contract into the typed
 // walk states. ESRCH means the candidate died mid-walk; EPERM and EACCES
@@ -556,10 +537,27 @@ func isTCPListenerOn(rec *socketRecord, port int) bool {
 // then proc_pidpath for the executable identity. See the file header for
 // the fail-closed states.
 func listeningProcessImpl(port int) (int, string, bool, error) {
+	// Run 45424141601 repair: the walk carries a bounded diagnostic so a
+	// hosted failure NAMES its broken stage (enumeration, fd list, record
+	// decode, or owner path) instead of an unattributable unknown — six
+	// repair sessions guessed because the evidence never said which
+	// kernel stage failed on the runner. Counts and typed classes only.
+	diag := procWalkDiagnostic{
+		ListErrors:   map[string]int{},
+		RecordErrors: map[string]int{},
+		PathErrors:   map[string]int{},
+	}
+
+	selfPID := int32(os.Getpid())
+
 	pids, err := listAllPIDs()
 	if err != nil {
-		return 0, "", false, fmt.Errorf("%w: darwin process enumeration failed: %v", ErrPortOwnerUnknown, err)
+		diag.EnumerationError = errorClassOf(err)
+
+		return 0, "", false, fmt.Errorf("%w: darwin process enumeration failed: %v (%s)", ErrPortOwnerUnknown, err, renderProcWalkDiagnostic(&diag))
 	}
+
+	diag.PIDs = len(pids)
 
 	sawInaccessible := false
 
@@ -568,15 +566,21 @@ func listeningProcessImpl(port int) (int, string, bool, error) {
 			continue
 		}
 
+		if pid == selfPID {
+			diag.SelfPresent = true
+		}
+
 		fds, ferr := listProcSocketFDs(pid)
 		if ferr != nil {
 			switch {
 			case errors.Is(ferr, errProcGone):
 				// The candidate exited mid-walk — not an owner.
+				diag.Gone++
 				continue
 			case errors.Is(ferr, errProcAccessDenied):
 				// Something on this host cannot be inspected; remember
 				// it so a proven-nothing answer stays honest.
+				diag.AccessDenied++
 				sawInaccessible = true
 				continue
 			default:
@@ -587,9 +591,16 @@ func listeningProcessImpl(port int) (int, string, bool, error) {
 				// exact, and if none is found the accumulated
 				// inaccessibility keeps the final answer fail-closed
 				// (ErrPortOwnerUnknown, never a guessed "nothing").
+				recordDiagError(diag.ListErrors, ferr)
 				sawInaccessible = true
 				continue
 			}
+		}
+
+		diag.CandidatesRead++
+
+		if pid == selfPID {
+			diag.SelfSocketFDs = len(fds)
 		}
 
 	fdLoop:
@@ -600,17 +611,26 @@ func listeningProcessImpl(port int) (int, string, bool, error) {
 				case errors.Is(serr, errProcGone):
 					// Process (or its descriptor table) went away —
 					// it cannot be the owner we are proving.
+					diag.Gone++
 					break fdLoop
 				case errors.Is(serr, errProcAccessDenied):
+					diag.AccessDenied++
 					sawInaccessible = true
 					break fdLoop
 				default:
-					// Run 45287161747 repair: an uninterpretable record
+					// Run 45424141601 repair: an uninterpretable RECORD
 					// (undocumented socket kind, malformed answer) makes
-					// THIS candidate unprovable - not the whole system;
-					// the final fail-closed answer is preserved below.
+					// only THIS descriptor unproven — the candidate's
+					// REMAINING descriptors stay admissible evidence.
+					// The previous per-candidate break blinded the walk
+					// to every listening socket behind the first bad
+					// record (descriptors come in ascending order), so
+					// one exotic socket fd could hide the true owner of
+					// the queried port. The final fail-closed answer is
+					// preserved below.
+					recordDiagError(diag.RecordErrors, serr)
 					sawInaccessible = true
-					break fdLoop
+					continue
 				}
 			}
 
@@ -624,12 +644,22 @@ func listeningProcessImpl(port int) (int, string, bool, error) {
 				case errors.Is(perr, ErrProcessNotFound):
 					// The owner died between the socket read and the
 					// path read — no adoption of a corpse.
-				case errors.Is(perr, errProcAccessDenied):
+					diag.Gone++
+				case errors.Is(perr, ErrProcessPathUnresolvable):
+					// Run 45424141601 repair: a LIVE owner whose image
+					// path cannot be resolved (ENOENT class). The pid
+					// alone is never identity, so the candidate stays
+					// unproven — recorded, never guessed.
+					recordDiagError(diag.PathErrors, perr)
+					sawInaccessible = true
+				case errors.Is(perr, errProcAccessDenied), errors.Is(perr, ErrProcessMetadataUnsupported):
+					recordDiagError(diag.PathErrors, perr)
 					sawInaccessible = true
 				default:
 					// Run 45287161747 repair: an unresolvable path on one
 					// candidate leaves that candidate unproven without
 					// poisoning the remaining candidates.
+					recordDiagError(diag.PathErrors, perr)
 					sawInaccessible = true
 				}
 
@@ -641,8 +671,8 @@ func listeningProcessImpl(port int) (int, string, bool, error) {
 	}
 
 	if sawInaccessible {
-		return 0, "", false, fmt.Errorf("%w: port %d has listener candidates this process may not inspect on %s/%s",
-			ErrPortOwnerUnknown, port, runtime.GOOS, runtime.GOARCH)
+		return 0, "", false, fmt.Errorf("%w: port %d has listener candidates this process may not inspect on %s/%s (%s)",
+			ErrPortOwnerUnknown, port, runtime.GOOS, runtime.GOARCH, renderProcWalkDiagnostic(&diag))
 	}
 
 	return 0, "", false, nil
@@ -670,13 +700,29 @@ func processExePathImpl(pid int) (string, error) {
 		// TestListeningProcessDeadOwnerRefused pins the public contract
 		// (errors.Is(err, ErrProcessNotFound)) and the native darwin suite
 		// finally executed it here; the raw errno passthrough broke it.
+		//
+		// Run 45424141601 repair: ENOENT is now its own typed class. Apple
+		// documents (and actions/runner-images#14756 demonstrates ON THE
+		// HOSTED MACOS RUNNER IMAGES) that proc_pidpath answers ENOENT —
+		// NOT ESRCH, NOT EPERM — for a LIVE process whose executable image
+		// was unlinked while running; ENOENT therefore never means "the
+		// process is gone" (a reaped pid answers ESRCH) and never falls
+		// into the untyped default that made the recycled-incarnation
+		// class fail the dead-owner contract loudly instead of describing
+		// the NEW process honestly.
 		switch mapped := mapProcInfoErrno(err); {
 		case errors.Is(mapped, errProcGone):
 			return "", ErrProcessNotFound
+		case errors.Is(mapped, syscall.ENOENT):
+			return "", fmt.Errorf("%w (pid %d): %v", ErrProcessPathUnresolvable, pid, mapped)
 		case errors.Is(mapped, errProcAccessDenied):
 			return "", fmt.Errorf("%w (pid %d): %v", ErrProcessMetadataUnsupported, pid, mapped)
 		default:
-			return "", fmt.Errorf("proc_pidpath for pid %d failed: %v", pid, mapped)
+			// mapped is a RAW kernel errno here (the gone/denied classes
+			// are handled above): %w keeps the errno intact so the walk
+			// diagnostic renders the stable errno-<name> class instead
+			// of a truncated raw-text bucket (run 45424141601 pass 7).
+			return "", fmt.Errorf("proc_pidpath for pid %d failed: %w", pid, mapped)
 		}
 	}
 
@@ -725,7 +771,9 @@ func processStartTimeImpl(pid int) (time.Time, error) {
 		case errors.Is(mapped, errProcAccessDenied):
 			return time.Time{}, fmt.Errorf("%w (pid %d): %v", ErrProcessMetadataUnsupported, pid, mapped)
 		default:
-			return time.Time{}, fmt.Errorf("darwin start-time probe for pid %d failed: %v", pid, mapped)
+			// Same %w contract as processExePathImpl: the raw errno stays
+			// errors.As/Is-visible for the typed diagnostic classes.
+			return time.Time{}, fmt.Errorf("darwin start-time probe for pid %d failed: %w", pid, mapped)
 		}
 	}
 

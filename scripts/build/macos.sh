@@ -66,6 +66,16 @@ summarize_headless_failure() { # $1 = tee'd stream log, $2 = platform label
   grep -n -E '(--- FAIL:|panic: |fatal error: |^FAIL|test timed out|signal: [A-Z]+)' "$stream" | head -n 15 | while IFS= read -r ev; do
     echo "::error::${label} suite evidence: ${ev}"
   done
+  # Run 45424141601 repair: the FAIL FRAMES alone say WHICH test died,
+  # never WHY - the t.Fatalf messages (file.go:NN: ...) and the darwin
+  # walk's own walk-diag stage evidence live on separate -json output
+  # lines that the frame-only grep dropped. A repair session reading only
+  # the annotation channel (no auth for step logs) got frames without
+  # reasons and guessed six runs in a row. The message classes are
+  # bounded here exactly like the frames.
+  grep -n -E '(walk-diag |[[:space:]][A-Za-z0-9_/]+\.go:[0-9]+: )' "$stream" | grep -v -E '\.go:[0-9]+: (SKIP|skip)' | head -n 15 | while IFS= read -r ev; do
+    echo "::error::${label} failure message: ${ev}"
+  done
 }
 
 # write_info_plist emits the bundle's Info.plist (heredoc terminator must

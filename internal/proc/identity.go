@@ -36,6 +36,17 @@ var (
 	// other process-metadata probes (image path, start time) on
 	// platforms whose mechanism is not linked in this build.
 	ErrProcessMetadataUnsupported = errors.New("process metadata probe unsupported on this platform")
+
+	// ErrProcessPathUnresolvable is the typed answer for a LIVE process
+	// whose executable path cannot be resolved by the OS (run
+	// 45424141601 repair: proc_pidpath answers ENOENT — not ESRCH, not
+	// EPERM — for a process whose image was unlinked while running, a
+	// class GitHub documents on the macos-15 runner images themselves;
+	// actions/runner-images#14756). The process exists; its PATH is not
+	// evidence. Callers keep the operation fail-closed: an unresolvable
+	// path never satisfies the identity contract (a PID alone is never
+	// identity), and a dead pid still answers ErrProcessNotFound.
+	ErrProcessPathUnresolvable = errors.New("process exists but its executable path could not be resolved")
 )
 
 // ListeningProcess identifies the process listening on 127.0.0.1:port

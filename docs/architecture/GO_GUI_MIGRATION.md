@@ -8,6 +8,18 @@ the wired production shell (`internal/desktop` still constructs the Fyne
 app), `ui/gogui` is the complete migration candidate with its own test
 suite, and the flip is a deliberate follow-up gate (see "Flip procedure").
 
+## Status addendum (2026-11-24, run 45424141601 repair pass)
+
+Dependency refresh (owner direction): the in-app go-gui pin moved
+`v0.97.0 -> v0.99.1` in the root go.mod (published upstream, verified
+against the Go module proxy at execution time; `go mod tidy` at the
+pinned toolchain). The go-gui shell packages (`ui/gogui`, renderstate,
+renderer, render, platform, brand, renderboot, cmd/sheytan-mobile)
+build clean at v0.99.1 on linux/amd64 go1.27.4; the migration scope
+below is UNCHANGED — `ui/fyne` is still the wired production shell and
+the macos-x64 blocker still stands. The older counts in the 2026-11-21
+addendum refer to the v0.97.0 state and are kept for history.
+
 ## Status addendum (2026-11-21, runs 44663205295 + CodeQL 44663205241)
 
 Re-verified counts this pass: `ui/fyne` = 49 Go files (10 view files, 22

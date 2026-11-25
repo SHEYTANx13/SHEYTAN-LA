@@ -42,6 +42,31 @@ fail_gate() { # $1 = step name, $2 = human message
   exit 1
 }
 
+fail_gate() { # $1 = step name, $2 = human message
+  echo "::error::$2"
+  echo "$1" > "$MARKER"
+  exit 1
+}
+
+# summarize_headless_failure (run 45424141601 repair — lane parity with
+# macos.sh): a bare exit code is not a diagnosis. Extracts the suite's
+# OWN root-cause records (FAIL frames, panics, timeouts) AND the failing
+# tests' message lines (file.go:NN: ...) plus the darwin walk's walk-diag
+# stage evidence from the tee'd -json stream, bounded to 15 each, so the
+# annotation channel names the failing package, test and REASON - a
+# repair session without step-log auth still gets the why.
+summarize_headless_failure() { # $1 = tee'd stream log, $2 = platform label
+  local stream="$1" label="$2"
+  [ -f "$stream" ] || return 0
+  echo "::error::headless suite failure evidence (${label}): the suite's own root-cause records follow (bounded to 15; the full -json stream is in the step log)"
+  grep -n -E '(--- FAIL:|panic: |fatal error: |^FAIL|test timed out|signal: [A-Z]+)' "$stream" | head -n 15 | while IFS= read -r ev; do
+    echo "::error::${label} suite evidence: ${ev}"
+  done
+  grep -n -E '(walk-diag |[[:space:]][A-Za-z0-9_/]+\.go:[0-9]+: )' "$stream" | grep -v -E '\.go:[0-9]+: (SKIP|skip)' | head -n 15 | while IFS= read -r ev; do
+    echo "::error::${label} failure message: ${ev}"
+  done
+}
+
 phase="${1:-}"
 
 case "$phase" in
@@ -68,6 +93,7 @@ case "$phase" in
     # `go test -json` classifier (run 44457547289 3.4) needs the stream.
     echo "RUN go test ./internal/... -tags headless -json (linux/amd64)" >> ci-logs/gate-order.txt
     if ! go test ./internal/... -tags headless -json -count=1 -timeout "${GO_TEST_TIMEOUT}" 2>&1 | tee ci-logs/linux-go-test-headless.log; then
+      summarize_headless_failure ci-logs/linux-go-test-headless.log "linux/amd64"
       fail_gate "Headless core suite (linux/amd64)" "headless core tests failed on linux/amd64 (failing tests in ci-logs/linux-go-test-headless.log)"
     fi
     echo "gate OK: headless core suite (linux/amd64)" >> ci-logs/gate-order.txt

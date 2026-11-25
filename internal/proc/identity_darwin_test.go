@@ -19,6 +19,8 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -269,6 +271,14 @@ func TestListeningProcessDeadOwnerRefused(t *testing.T) {
 			// unprivileged caller (inspection denied) — the answer
 			// describes the NEW process, never the observed-dead one.
 			t.Skipf("pid %d was recycled by an uninspectable process between the dead-state observation and the exe-path probe - environment, not identity", pid)
+		case errors.Is(err, ErrProcessPathUnresolvable):
+			// Run 45424141601 repair: the recycled incarnation is a
+			// LIVE process whose executable image cannot be resolved
+			// (proc_pidpath ENOENT — the alive-but-unlinked class
+			// GitHub documents on the macos-15 runner images). The
+			// answer describes the NEW process, never the observed-
+			// dead one — the same honest-race policy as above.
+			t.Skipf("pid %d was recycled by a process whose executable path cannot be resolved (unlinked image) - environment, not identity", pid)
 		default:
 			t.Fatalf("a dead pid must be typed ErrProcessNotFound, got %v", err)
 		}
@@ -280,9 +290,12 @@ func TestListeningProcessDeadOwnerRefused(t *testing.T) {
 		switch {
 		case errors.Is(err, ErrProcessNotFound):
 			// The real contract: a still-dead pid answers typed not-found.
-		case errors.Is(err, ErrProcessMetadataUnsupported):
-			// Same recycled-incarnation policy as above.
-			t.Skipf("pid %d was recycled by an uninspectable process between the dead-state observation and the start-time probe - environment, not identity", pid)
+		case errors.Is(err, ErrProcessMetadataUnsupported), errors.Is(err, ErrProcessPathUnresolvable):
+			// Same recycled-incarnation policy as above (the
+			// unresolvable-path class is recorded here too for
+			// symmetry: the probes run sequentially and the pid
+			// can be recycled between them).
+			t.Skipf("pid %d was recycled by an uninspectable or path-less process between the dead-state observation and the start-time probe - environment, not identity", pid)
 		default:
 			t.Fatalf("a dead pid must be typed ErrProcessNotFound for start time, got %v", err)
 		}
@@ -333,5 +346,105 @@ func TestLocalPortOfNetworkOrderConvention(t *testing.T) {
 	// Upper half set: unusable evidence, decoded as 0 (never guessed).
 	if got := localPortOf(int32(0x0001901F)); got != 0 {
 		t.Fatalf("localPortOf with upper half set = %d, want 0", got)
+	}
+}
+
+// TestErrorClassOfTypedClasses pins the stable class names the walk
+// diagnostic renders (run 45424141601 repair: a hosted failure must NAME
+// its broken stage — the class strings are the contract the consolidated
+// collector and the repair sessions read).
+func TestErrorClassOfTypedClasses(t *testing.T) {
+	for tc, err := range map[string]error{
+		"gone":                     errProcGone,
+		"access-denied":            errProcAccessDenied,
+		"truncated":                errProcTruncated,
+		"undocumented-socket-kind": errSocketKindUndocumented,
+		"path-unresolvable":        ErrProcessPathUnresolvable,
+		"not-found":                ErrProcessNotFound,
+		"unsupported":              ErrPortOwnerUnsupported,
+	} {
+		if got := errorClassOf(err); got != tc {
+			t.Fatalf("errorClassOf(%v) = %q, want %q", err, got, tc)
+		}
+	}
+
+	// A kernel errno renders as its name — the class the hosted
+	// runner evidence needs (e.g. the ENOENT path-unlink family).
+	if got := errorClassOf(syscall.ENOENT); got != "errno-no such file or directory" {
+		t.Fatalf("errorClassOf(ENOENT) = %q, want the errno name", got)
+	}
+
+	if got := errorClassOf(nil); got != "" {
+		t.Fatalf("errorClassOf(nil) = %q, want the empty class", got)
+	}
+}
+
+// TestRenderProcWalkDiagnosticBounded pins the diagnostic render contract:
+// ONE line, deterministic bucket order, ASCII-only, no separator runs the
+// consolidated collector would have to transform, and bounded bucket
+// counts (run 45424141601 repair).
+func TestRenderProcWalkDiagnosticBounded(t *testing.T) {
+	empty := renderProcWalkDiagnostic(nil)
+	if empty != "" {
+		t.Fatalf("a nil diagnostic renders empty, got %q", empty)
+	}
+
+	d := &procWalkDiagnostic{
+		PIDs:           612,
+		SelfPresent:    true,
+		CandidatesRead: 601,
+		SelfSocketFDs:  7,
+		AccessDenied:   4,
+		Gone:           2,
+		RecordErrors: map[string]int{
+			"undocumented-socket-kind": 1,
+			"truncated":                2,
+			"errno-input/output error": 3,
+			"errno-permission denied":  4,
+			"fifth-class":              5,
+		},
+	}
+
+	line := renderProcWalkDiagnostic(d)
+
+	if strings.ContainsAny(line, "\n\r") {
+		t.Fatalf("the diagnostic must render ONE line, got %q", line)
+	}
+
+	if strings.Contains(line, "---") || strings.Contains(line, "===") {
+		t.Fatalf("the diagnostic must never carry separator runs, got %q", line)
+	}
+
+	for _, r := range line {
+		if r > 126 {
+			t.Fatalf("the diagnostic must be ASCII, got %q", line)
+		}
+	}
+
+	// Bounded: at most diagClassBound buckets are rendered per map.
+	if got := strings.Count(line, "="); got > 32 {
+		t.Fatalf("the diagnostic exceeded its bounded render, got %d fields in %q", got, line)
+	}
+
+	// Deterministic: two renders of the same diagnostic are identical.
+	if again := renderProcWalkDiagnostic(d); again != line {
+		t.Fatalf("the diagnostic render must be deterministic:\n %q\n %q", line, again)
+	}
+
+	// The classes the hosted evidence must be able to NAME are all
+	// present, and the bounded fold landed the overflow in "other".
+	for _, want := range []string{
+		"pids=612",
+		"self=true",
+		"self_sockets=7",
+		"walked=601",
+		"denied=4",
+		"gone=2",
+		"undocumented-socket-kind=1",
+		"other=5",
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("the diagnostic render is missing %q, got %q", want, line)
+		}
 	}
 }

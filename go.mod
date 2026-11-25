@@ -12,7 +12,7 @@ require (
 	github.com/anthonynsimon/bild v0.17.1
 	github.com/chromedp/cdproto v0.160.3
 	github.com/chromedp/chromedp v0.23.1
-	github.com/go-gui-org/go-gui v0.97.0
+	github.com/go-gui-org/go-gui v0.99.1
 	github.com/gogpu/gogpu v0.54.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/tc-hib/winres v0.3.1
@@ -36,8 +36,8 @@ require (
 	github.com/FyshOS/fancyfs v0.0.1 // indirect
 	github.com/alecthomas/chroma/v2 v2.27.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
-	github.com/dlclark/regexp2/v2 v2.2.2 // indirect
-	github.com/ebitengine/purego v0.11.1 // indirect
+	github.com/dlclark/regexp2/v2 v2.13.2 // indirect
+	github.com/ebitengine/purego v0.11.3 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fyne-io/gl-js v0.2.1-0.20260315212741-029c47fd27e8 // indirect
 	github.com/fyne-io/glfw-js v0.4.0 // indirect
@@ -45,7 +45,7 @@ require (
 	github.com/fyne-io/oksvg v0.2.1-0.20260918172519-a9af55fa95d9 // indirect
 	github.com/go-gl/gl v0.0.0-20260331235117-4566fea9a276 // indirect
 	github.com/go-gl/glfw/v3.4/glfw v0.1.0-pre.2 // indirect
-	github.com/go-gui-org/go-glyph v1.26.5 // indirect
+	github.com/go-gui-org/go-glyph v1.29.2 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260623181947-01eb4420fa68 // indirect
 	github.com/go-pdf/fpdf v0.9.0 // indirect
 	github.com/go-text/render v0.2.1 // indirect
@@ -70,7 +70,7 @@ require (
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c // indirect
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
-	github.com/tdewolff/parse/v2 v2.8.16 // indirect
+	github.com/tdewolff/parse/v2 v2.25.0 // indirect
 	github.com/wailsapp/wails/v3 v3.1.0
 	github.com/yuin/goldmark v1.8.7 // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect

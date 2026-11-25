@@ -101,6 +101,17 @@ switch ($Phase) {
     # `go test -json` classifier (run 44457547289 3.4) needs the stream.
     go test -tags headless -json -count=1 -timeout $goTestTimeout ./internal/... 2>&1 | Tee-Object -FilePath "ci-logs/win-go-test-headless.log"
     if ($LASTEXITCODE -ne 0) {
+      # Run 45424141601 repair (lane parity with macos.sh/linux.sh): a
+      # bare exit code is not a diagnosis - surface the suite's own
+      # root-cause records AND the failing tests' message lines (the
+      # walk-diag stage evidence) as ::error:: annotations, bounded.
+      Write-Host "::error::headless suite failure evidence (windows/amd64): the suite's own root-cause records follow (bounded to 15; the full -json stream is in the step log)"
+      Select-String -Path "ci-logs/win-go-test-headless.log" -Pattern '(--- FAIL:|panic: |fatal error: |^FAIL|test timed out|signal: [A-Z]+)' | Select-Object -First 15 | ForEach-Object {
+        Write-Host "::error::windows/amd64 suite evidence: $($_.LineNumber):$($_.Line)"
+      }
+      Select-String -Path "ci-logs/win-go-test-headless.log" -Pattern '(walk-diag |\s[A-Za-z0-9_/]+\.go:[0-9]+: )' | Where-Object { $_.Line -notmatch '\.go:[0-9]+: (SKIP|skip)' } | Select-Object -First 15 | ForEach-Object {
+        Write-Host "::error::windows/amd64 failure message: $($_.LineNumber):$($_.Line)"
+      }
       Fail-Gate "Headless core tests (windows/amd64)" "headless core tests failed on windows/amd64 (exit $LASTEXITCODE; failing test names in ci-logs/win-go-test-headless.log)"
     }
     Write-Host "headless core tests OK (windows/amd64)"
