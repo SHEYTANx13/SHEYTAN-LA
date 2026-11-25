@@ -30,7 +30,7 @@ var ErrUnsupportedTransport = errors.New("localipc: no supported local transport
 //     exact transport the server publishes.
 //   - Linux/macOS: a Unix domain socket dial carrying the caller's context.
 //
-// The former defect this function replaces: ui/fyne's CoreClient dialed
+// The former defect this function replaces: the core client (now internal/coreclient) dialed
 // "unix" unconditionally, which broke every HTTP- and WebSocket-backed tab
 // (including Logs) on Windows, where the endpoint is a \\.\pipe\... path.
 // All Fyne HTTP and WebSocket traffic now routes through this function;

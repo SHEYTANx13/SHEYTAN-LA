@@ -37,7 +37,7 @@ $ErrorActionPreference = "Stop"
 $markerPath = "ci-logs/$Target-upstream-failure.txt"
 $pkgRoot = $env:WIN_PKG_ROOT
 if (-not $pkgRoot) { $pkgRoot = "SHEYTAN-LA" }
-$stagingRoot = "dist/windows/app/$pkgRoot"
+$stagingRoot = "dist/SHEYTAN-LA-ALPHA-windows-x64-portable/$pkgRoot"
 $goTestTimeout = if ($env:GO_TEST_TIMEOUT) { $env:GO_TEST_TIMEOUT } else { "25m" }
 
 New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
@@ -271,7 +271,7 @@ switch ($Phase) {
     Use-Ucrt64
     # -H=windowsgui is the STRESS PIN (3g) - kept. -s -w strips the symbol
     # tables and DWARF debug info (v1.11.0 size work).
-    go build -ldflags "-H=windowsgui -s -w" -o "$stagingRoot/SHEYTAN-LA.exe" ./cmd/sheytan-local-agent
+    go build -tags webworkspace -ldflags "-H=windowsgui -s -w" -o "$stagingRoot/SHEYTAN-LA.exe" ./cmd/sheytan-local-agent
     if ($LASTEXITCODE -ne 0) {
       Fail-Gate "Build SHEYTAN-LA.exe (windowsgui subsystem)" "SHEYTAN-LA.exe build failed (go build exit $LASTEXITCODE, windowsgui subsystem, CGO toolchain above)"
     }

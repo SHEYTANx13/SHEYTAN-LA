@@ -2,7 +2,7 @@
 // UX-01). ONE authority for the product's semantic color roles and the six
 // supported themes, plus the shared typography, spacing, radius, elevation,
 // touch-target and responsive-band tokens. Renderers MAP tokens to their
-// native theme systems (Fyne in ui/fyne/theme.go; the Go-Gui, GoGPU UI and
+// native theme systems (the Go-Gui, GoGPU UI and
 // Wails CSS mappings are documented degradations in docs/ui/DESIGN-SYSTEM.md)
 // — no renderer owns a second palette and none silently invents a design.
 //

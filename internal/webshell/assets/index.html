@@ -3,110 +3,265 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="dark">
-<title>SHEYTAN-LA — ALPHA</title>
+<meta name="color-scheme" content="dark light">
+<title>SHEYTAN-LA</title>
+<link rel="icon" type="image/png" href="/logo.png">
 <link rel="stylesheet" href="/app.css">
 <script src="/app.js" defer></script>
 </head>
 <body>
-<noscript><p class="noscript">SHEYTAN-LA requires JavaScript for its workspace shell. The headless and CLI modes remain fully usable without it.</p></noscript>
+<div id="app" class="app">
+  <a class="skip-link" href="#view-host">Skip to content</a>
 
-<div id="shell" data-class="compact">
-  <header class="topbar" role="banner">
-    <button id="nav-toggle" class="iconbtn" aria-label="Toggle navigation" aria-expanded="false">☰</button>
-    <div class="brand"><span class="brand-name">SHEYTAN™ Local-Agent</span><span class="brand-stage">ALPHA</span></div>
-    <div id="status" class="status" role="status" aria-live="polite">
-      <span id="status-dot" class="dot" aria-hidden="true"></span>
-      <span id="status-text">checking core…</span>
+  <header class="topbar">
+    <button class="iconbtn nav-toggle" id="nav-toggle" type="button" aria-label="Toggle navigation" aria-expanded="false"></button>
+    <div class="brand">
+      <span class="brand-mark" id="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">SHEYTAN&#8482; Local-Agent</span>
+      <span class="brand-stage" id="brand-stage">ALPHA</span>
     </div>
-    <div class="topbar-actions">
-      <button id="palette-btn" class="btn" aria-label="Command palette (Ctrl+K)" title="Command palette (Ctrl+K)">⌘ Commands</button>
-      <button id="notif-btn" class="iconbtn" aria-label="Notifications" aria-expanded="false">🔔<span id="notif-count" class="badge" hidden>0</span></button>
+    <div class="topbar-status" id="topbar-status" role="status" aria-live="polite">
+      <span class="status-dot" id="core-dot" aria-hidden="true"></span>
+      <span id="core-state">connecting</span>
     </div>
+    <button class="iconbtn" id="palette-open" type="button" aria-label="Command palette" title="Command palette (Ctrl+K)"></button>
   </header>
 
-  <nav id="rail" class="rail" aria-label="Workspaces"><ul id="rail-list"></ul></nav>
+  <nav class="rail" id="rail" aria-label="Workspaces">
+    <div class="rail-group" id="rail-primary" role="list"></div>
+    <div class="rail-heading" id="rail-utility-heading">Utilities</div>
+    <div class="rail-group" id="rail-utility" role="list"></div>
+    <div class="rail-foot">
+      <span class="mono" id="rail-version"></span>
+    </div>
+  </nav>
 
-  <main id="stage" class="stage scroll" tabindex="-1">
-    <section class="view" data-view="chat" hidden>
-      <h1>Chat</h1>
-      <div class="card module-slot"><p class="muted">The conversation module mounts here in the adaptive web shell. The native shells remain fully functional while the web module set is verified lane by lane.</p></div>
+  <main class="view-host" id="view-host" tabindex="-1">
+
+    <section class="view" data-view="chat" id="view-chat" aria-labelledby="nav-chat">
+      <header class="view-head"><h1>Chat</h1><p class="view-sub">Sessions and conversations with the local core.</p></header>
+      <div class="chat-grid">
+        <div class="card chat-sessions">
+          <div class="card-head"><h2>Sessions</h2><button class="btn" id="chat-new" type="button">New session</button></div>
+          <ul class="list" id="chat-session-list" aria-live="polite"></ul>
+        </div>
+        <div class="card chat-main">
+          <div class="card-head"><h2 id="chat-title">Conversation</h2><span class="badge" id="chat-session-badge"></span></div>
+          <div class="chat-log" id="chat-log" aria-live="polite"></div>
+          <form class="composer" id="composer" autocomplete="off">
+            <label class="visually-hidden" for="composer-input">Message</label>
+            <textarea id="composer-input" rows="2" placeholder="Message the laboratory"></textarea>
+            <div class="composer-row">
+              <span class="muted" id="composer-hint">Enter sends · Shift+Enter breaks the line</span>
+              <button class="btn primary" type="submit" id="composer-send">Send</button>
+            </div>
+          </form>
+        </div>
+      </div>
     </section>
-    <section class="view" data-view="agent" hidden>
-      <h1>Agent</h1>
-      <div class="card module-slot"><p class="muted">The agent execution graph, tool inspector and approval queue mount here.</p></div>
+
+    <section class="view" data-view="agent" id="view-agent" aria-labelledby="nav-agent" hidden>
+      <header class="view-head"><h1>Agent</h1><p class="view-sub">Goals, runs and approvals — the core owns every decision.</p></header>
+      <div class="grid two">
+        <div class="card">
+          <div class="card-head"><h2>Goals</h2><button class="btn" id="agent-refresh" type="button">Refresh</button></div>
+          <ul class="list" id="goal-list" aria-live="polite"></ul>
+          <form class="inline-form" id="goal-form">
+            <label class="visually-hidden" for="goal-input">New goal</label>
+            <input id="goal-input" type="text" placeholder="Add a goal">
+            <button class="btn primary" type="submit">Add</button>
+          </form>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Run control</h2></div>
+          <div class="stack" id="agent-run-state"></div>
+          <div class="btnrow">
+            <button class="btn" id="run-paused-btn" type="button">Paused runs</button>
+            <button class="btn danger" id="run-abort-btn" type="button">Abort active run</button>
+          </div>
+          <div class="muted" id="agent-note"></div>
+        </div>
+      </div>
     </section>
-    <section class="view" data-view="workspace" hidden>
-      <h1>Workspace</h1>
-      <div class="card module-slot"><p class="muted">The rich-block workspace viewer (markdown, code, diff, tables, charts) mounts here.</p></div>
+
+    <section class="view" data-view="workspace" id="view-workspace" aria-labelledby="nav-workspace" hidden>
+      <header class="view-head"><h1>Workspace</h1><p class="view-sub">The indexed repository surface served by the core.</p></header>
+      <div class="grid two">
+        <div class="card">
+          <div class="card-head"><h2>Index</h2><button class="btn" id="ws-refresh" type="button">Refresh</button></div>
+          <div class="stack" id="ws-index-state"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Search</h2></div>
+          <form class="inline-form" id="ws-search-form">
+            <label class="visually-hidden" for="ws-search-input">Repository search</label>
+            <input id="ws-search-input" type="search" placeholder="Search the indexed workspace">
+            <button class="btn primary" type="submit">Search</button>
+          </form>
+          <ul class="list" id="ws-results" aria-live="polite"></ul>
+        </div>
+      </div>
     </section>
-    <section class="view" data-view="lab" hidden>
-      <h1>Coding Lab</h1>
-      <div class="card module-slot"><p class="muted">The coding lab workbench (read/edit/verify tools, task verification) mounts here.</p></div>
-    </section>
-    <section class="view" data-view="automation" hidden>
-      <h1>Automation</h1>
-      <div class="card module-slot"><p class="muted">The automation schedule editor and run history mount here.</p></div>
-    </section>
-    <section class="view" data-view="system" hidden>
-      <h1>System</h1>
+
+    <section class="view" data-view="lab" id="view-lab" aria-labelledby="nav-lab" hidden>
+      <header class="view-head"><h1>Coding Lab</h1><p class="view-sub">Experiments the core executes under its own guardrails.</p></header>
       <div class="card">
-        <h2>Core status</h2>
-        <p id="core-status" class="muted">polling…</p>
-        <p id="core-detail" class="muted small"></p>
+        <div class="card-head"><h2>Lab surface</h2><button class="btn" id="lab-refresh" type="button">Refresh</button></div>
+        <div class="stack" id="lab-state"></div>
       </div>
-    </section>
-    <section class="view" data-view="settings" hidden>
-      <h1>Settings</h1>
-      <div class="card module-slot"><p class="muted">Shared preferences and per-workspace settings sections mount here. The native shells keep full settings control until parity is verified.</p></div>
-    </section>
-    <section class="view" data-view="studio" hidden>
-      <h1>3D Studio</h1>
-      <div class="card module-slot"><p class="muted">The read-only 3D topology viewer mounts here (lazy-loaded on first open, disposed on leave).</p></div>
-    </section>
-    <section class="view" data-view="engines" hidden>
-      <h1>Engines</h1>
-      <div class="card" id="download-card">
-        <h2>Engine update</h2>
-        <p id="dl-status" class="dl-status">checking…</p>
-        <div class="dl-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="dl-bar"><div id="dl-fill" class="dl-fill"></div></div>
-        <p id="dl-progress" class="dl-progress muted small">phase — / —</p>
-        <p id="dl-error" class="dl-error" hidden></p>
-      </div>
-      <div class="card module-slot"><p class="muted">The engine gallery (install, remove, context budgets) mounts here.</p></div>
     </section>
 
-    <section class="view" data-view="history" hidden>
-      <h1>History</h1>
-      <div class="card module-slot"><p class="muted">Searchable run history mounts here.</p></div>
+    <section class="view" data-view="automation" id="view-automation" aria-labelledby="nav-automation" hidden>
+      <header class="view-head"><h1>Automation</h1><p class="view-sub">Scheduled tasks, runs and artifacts.</p></header>
+      <div class="grid two">
+        <div class="card">
+          <div class="card-head"><h2>Tasks</h2><button class="btn" id="auto-refresh" type="button">Refresh</button></div>
+          <ul class="list" id="automation-list" aria-live="polite"></ul>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Artifacts</h2></div>
+          <ul class="list" id="artifact-list" aria-live="polite"></ul>
+        </div>
+      </div>
     </section>
-    <section class="view" data-view="models" hidden>
-      <h1>Models</h1>
-      <div class="card module-slot"><p class="muted">The model registry (metadata first, weights never in the UI) mounts here.</p></div>
+
+    <section class="view" data-view="system" id="view-system" aria-labelledby="nav-system" hidden>
+      <header class="view-head"><h1>System</h1><p class="view-sub">Core health, hardware truth and connectivity.</p></header>
+      <div class="grid two">
+        <div class="card">
+          <div class="card-head"><h2>Health</h2><button class="btn" id="sys-refresh" type="button">Refresh</button></div>
+          <div class="stack" id="sys-health"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Environment</h2></div>
+          <div class="stack" id="sys-environment"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Performance</h2></div>
+          <div class="stack" id="sys-perf"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Network check</h2><button class="btn" id="netcheck-btn" type="button">Run net check</button></div>
+          <div class="stack" id="sys-netcheck"></div>
+        </div>
+      </div>
     </section>
-    <section class="view" data-view="tools" hidden>
-      <h1>My Tools</h1>
-      <div class="card module-slot"><p class="muted">The tool catalog with permission scopes mounts here.</p></div>
+
+    <section class="view" data-view="settings" id="view-settings" aria-labelledby="nav-settings" hidden>
+      <header class="view-head"><h1>Settings</h1><p class="view-sub">Configuration is owned and validated by the core.</p></header>
+      <div class="card">
+        <div class="card-head"><h2>Configuration</h2><button class="btn" id="settings-reload" type="button">Reload</button></div>
+        <div class="stack" id="settings-body"></div>
+        <div class="btnrow">
+          <button class="btn primary" id="settings-save" type="button">Save</button>
+          <span class="muted" id="settings-note">Text fields apply only to values the core already publishes.</span>
+        </div>
+      </div>
     </section>
-    <section class="view" data-view="logs" hidden>
-      <h1>Logs</h1>
-      <div class="card module-slot"><p class="muted">The bounded, cursor-paginated log surface mounts here.</p></div>
+
+    <section class="view" data-view="studio" id="view-studio" aria-labelledby="nav-studio" hidden>
+      <header class="view-head"><h1>3D Studio</h1><p class="view-sub">The core-owned render surface.</p></header>
+      <div class="card">
+        <div class="card-head"><h2>Render state</h2>
+          <div class="btnrow">
+            <button class="btn primary" id="studio-start" type="button">Start</button>
+            <button class="btn danger" id="studio-stop" type="button">Stop</button>
+          </div>
+        </div>
+        <div class="stack" id="studio-state"></div>
+      </div>
     </section>
+
+    <section class="view" data-view="engines" id="view-engines" aria-labelledby="nav-engines" hidden>
+      <header class="view-head"><h1>Engines</h1><p class="view-sub">Managed engine truth, adoption and updates.</p></header>
+      <div class="grid two">
+        <div class="card">
+          <div class="card-head"><h2>Engine</h2><button class="btn" id="engine-refresh" type="button">Refresh</button></div>
+          <div class="stack" id="engine-state"></div>
+          <div class="btnrow">
+            <button class="btn" id="engine-rediscover" type="button">Rediscover</button>
+            <button class="btn primary" id="engine-update" type="button">Check for update</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Download progress</h2></div>
+          <div class="progress-wrap" id="dl-wrap" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Engine download progress">
+            <div class="progress-bar" id="dl-bar"></div>
+          </div>
+          <div class="stack" id="engine-download">
+            <div class="kv"><span class="k">Phase</span><span class="v" id="dl-phase">idle</span></div>
+            <div class="kv"><span class="k">Bytes</span><span class="v mono" id="dl-bytes">0 / 0</span></div>
+            <div class="kv"><span class="k">Speed</span><span class="v mono" id="dl-speed">0 B/s</span></div>
+            <div class="kv"><span class="k">Status</span><span class="v" id="dl-status">not running</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view utility" data-view="history" id="view-history" aria-labelledby="nav-history" hidden>
+      <header class="view-head"><h1>History</h1><p class="view-sub">Search the task and conversation history.</p></header>
+      <div class="card">
+        <form class="inline-form" id="history-form">
+          <label class="visually-hidden" for="history-input">History query</label>
+          <input id="history-input" type="search" placeholder="Search history">
+          <button class="btn primary" type="submit">Search</button>
+        </form>
+        <ul class="list" id="history-results" aria-live="polite"></ul>
+      </div>
+    </section>
+
+    <section class="view utility" data-view="models" id="view-models" aria-labelledby="nav-models" hidden>
+      <header class="view-head"><h1>Models</h1><p class="view-sub">Installed models, recommendations and selection.</p></header>
+      <div class="grid two">
+        <div class="card">
+          <div class="card-head"><h2>Installed</h2><button class="btn" id="models-refresh" type="button">Refresh</button></div>
+          <ul class="list" id="models-list" aria-live="polite"></ul>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Recommendations</h2></div>
+          <ul class="list" id="models-recs" aria-live="polite"></ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="view utility" data-view="tools" id="view-tools" aria-labelledby="nav-tools" hidden>
+      <header class="view-head"><h1>My Tools</h1><p class="view-sub">Built-in and custom tools the agent may call.</p></header>
+      <div class="grid two">
+        <div class="card">
+          <div class="card-head"><h2>Built-in</h2><button class="btn" id="tools-refresh" type="button">Refresh</button></div>
+          <ul class="list" id="tools-list" aria-live="polite"></ul>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Custom</h2></div>
+          <ul class="list" id="custom-tools-list" aria-live="polite"></ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="view utility" data-view="logs" id="view-logs" aria-labelledby="nav-logs" hidden>
+      <header class="view-head"><h1>Logs</h1><p class="view-sub">The core's diagnostic stream.</p></header>
+      <div class="card">
+        <div class="card-head"><h2>Recent log lines</h2><button class="btn" id="logs-refresh" type="button">Refresh</button></div>
+        <pre class="logview mono" id="logs-view" aria-live="polite"></pre>
+      </div>
+    </section>
+
   </main>
 
-  <aside id="notifications" class="notifications" aria-label="Notification center" hidden>
-    <h2>Notifications</h2>
-    <ul id="notif-list"></ul>
-    <p class="muted small" id="notif-empty">No notifications yet. Completed jobs, download phases and failures appear here.</p>
-  </aside>
+  <footer class="statusbar" id="statusbar">
+    <span id="status-left" class="muted">SHEYTAN&#8482; Local-Agent — the model proposes, the tools execute, the laboratory verifies.</span>
+    <span id="status-right" class="muted mono"></span>
+  </footer>
+</div>
 
-  <div id="palette" class="palette" role="dialog" aria-modal="true" aria-label="Command palette" hidden>
-    <div class="palette-box">
-      <input id="palette-input" type="text" placeholder="Type a workspace or command…" autocomplete="off" spellcheck="false" aria-label="Command palette input">
-      <ul id="palette-list" role="listbox"></ul>
-      <p class="muted small palette-hint">Enter to run · Esc to close · arrow keys to move</p>
-    </div>
+<div class="notifications" id="notifications" aria-live="polite" aria-atomic="false"></div>
+
+<div class="palette-backdrop" id="palette-backdrop" hidden>
+  <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+    <input id="palette-input" type="text" placeholder="Jump to a workspace or run a command" autocomplete="off">
+    <ul class="palette-list" id="palette-list"></ul>
   </div>
 </div>
+
 </body>
 </html>

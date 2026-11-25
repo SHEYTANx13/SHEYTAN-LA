@@ -29,6 +29,7 @@ MARKER="ci-logs/${TARGET}-upstream-failure.txt"
 GO_TEST_TIMEOUT="${GO_TEST_TIMEOUT:-25m}"
 APP_VERSION="${APP_VERSION:?APP_VERSION must be provided by the workflow env}"
 LINUX_PKG_ROOT="${LINUX_PKG_ROOT:?LINUX_PKG_ROOT must be provided by the workflow env}"
+STAGE="dist/SHEYTAN-LA-ALPHA-linux-x64-portable"
 ARCHIVE="dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz"
 
 mkdir -p ci-logs
@@ -196,16 +197,18 @@ case "$phase" in
     ;;
 
   prereqs)
-    # The HONEST dependency contract for the Fyne CGO desktop build + the
-    # Xvfb smoke (no Qt, no Node, no GTK; libxxf86vm-dev included — its
-    # absence killed the run-#51 Fyne spike's link step).
+    # The HONEST dependency contract for the WebKitGTK-backed web-shell CGO desktop
+    # build + the Xvfb smoke (no Qt, no Node, no GTK4; webkit2gtk-4.1 is
+    # the WebKit backend the web workspace v3 runtime links on Linux).
     sudo apt-get update -q
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
       gcc pkg-config \
+      libgtk-3-dev libwebkit2gtk-4.1-dev libglib2.0-dev \
       libgl1-mesa-dev libegl1-mesa-dev \
       libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libxxf86vm-dev \
       libwayland-dev libxkbcommon-dev \
       xorg-dev xauth xvfb x11-utils zip unzip
+    echo "webkit2gtk-4.1 pkg-config version: $(pkg-config --modversion webkit2gtk-4.1)"
     echo "gl pkg-config version: $(pkg-config --modversion gl)"
     ;;
 
@@ -218,21 +221,21 @@ case "$phase" in
     ;;
 
   build)
-    mkdir -p "dist/linux/app/${LINUX_PKG_ROOT}"
+    mkdir -p "${STAGE}/${LINUX_PKG_ROOT}"
     # Run 44547031698 §3.2: the pinned goffi v0.6.8 documents that a
-    # binary containing goffi AND other cgo code (fyne/go-gl, purego)
-    # fails to link on Linux with "unhandled relocation ... (SDYNIMPORT)"
-    # (goffi issue #72; macOS and Windows are not affected). The Linux
-    # desktop build therefore EXCLUDES the gogpu adapter through the
-    # -tags nogogpu seam (internal/desktop: the render-verification
-    # wiring publishes the honest not-wired observation) and ships the
-    # CPU/Go-Gui path. The combined gogpu link regression proof runs on
-    # the macOS/Windows lanes, where upstream documents the combination
-    # as supported.
-    if ! go build -trimpath -tags nogogpu -o "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA" ./cmd/sheytan-local-agent; then
+    # binary containing goffi AND other cgo code (go-gl, purego, the
+    # WebKitGTK backend) fails to link on Linux with "unhandled
+    # relocation ... (SDYNIMPORT)" (goffi issue #72; macOS and Windows
+    # are not affected). The Linux desktop build therefore EXCLUDES the
+    # gogpu adapter through the -tags nogogpu seam (internal/desktop:
+    # the render-verification wiring publishes the honest not-wired
+    # observation) and ships the web-shell primary window. The combined
+    # gogpu link regression proof runs on the macOS/Windows lanes, where
+    # upstream documents the combination as supported.
+    if ! go build -trimpath -tags nogogpu,webworkspace -o "${STAGE}/${LINUX_PKG_ROOT}/SHEYTAN-LA" ./cmd/sheytan-local-agent; then
       fail_gate "Build the full desktop application (native linux/amd64)" "the linux/amd64 desktop build failed"
     fi
-    chmod +x "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA"
+    chmod +x "${STAGE}/${LINUX_PKG_ROOT}/SHEYTAN-LA"
     # Run 44547031698 §3.7.4/§3.7.5: the combined go-gui+gogpu link
     # regression proof. ONE binary imports BOTH stacks (purego + goffi);
     # under CGO_ENABLED=0 their fakecgo copies duplicate _cgo_init unless
@@ -255,7 +258,7 @@ case "$phase" in
     # is executable BEFORE changing into the isolated probe directory
     # (a relative path after cd is exactly the run-443 Linux exit 127).
     repoDir="$(pwd)"
-    bin="$(realpath "${repoDir}/dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA")"
+    bin="$(realpath "${repoDir}/${STAGE}/${LINUX_PKG_ROOT}/SHEYTAN-LA")"
     test -x "$bin" || fail_gate "Cross-check the compiled binary's build identity" "built executable missing or not executable: $bin"
     probeDir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/build-info-probe.XXXXXX")"
     cd "$probeDir"
@@ -289,7 +292,7 @@ case "$phase" in
     ;;
 
   verify-elf)
-    bin="dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA"
+    bin="${STAGE}/${LINUX_PKG_ROOT}/SHEYTAN-LA"
     test -x "$bin" || fail_gate "Verify the ELF (x86-64, executable bit)" "the Linux binary lost its executable bit"
     file "$bin" | tee ci-logs/linux-elf-check.log
     file "$bin" | grep -q "ELF 64-bit LSB.*x86-64" || fail_gate "Verify the ELF (x86-64, executable bit)" "not an x86-64 ELF binary"
@@ -299,7 +302,7 @@ case "$phase" in
     # Bounded observable readiness, soak, real SIGTERM with zombie-safe
     # reaping (the same smoke contract the retired ui job + Linux lane ran).
     work="$RUNNER_TEMP/linux-smoke"
-    mkdir -p "$work" && cp "dist/linux/app/${LINUX_PKG_ROOT}/SHEYTAN-LA" "$work/"
+    mkdir -p "$work" && cp "${STAGE}/${LINUX_PKG_ROOT}/SHEYTAN-LA" "$work/"
     cd "$work"
     Xvfb :92 -screen 0 1280x800x24 >/dev/null 2>&1 &
     XVFB_PID=$!
@@ -362,13 +365,13 @@ case "$phase" in
   build-info)
     # v1.11.1 minimal root: static package content under resources/docs;
     # no root-level models/workspace placeholders.
-    root="dist/linux/app/${LINUX_PKG_ROOT}"
+    root="${STAGE}/${LINUX_PKG_ROOT}"
     mkdir -p "$root/resources/docs"
     cat > "$root/resources/docs/BUILD-INFO.txt" <<EOF
 product: SHEYTAN-LA
 version: ${APP_VERSION}
 commit: ${GITHUB_SHA:-local}
-ui: fyne (one Go UI)
+ui: adaptive web shell (web workspace host)
 EOF
     echo "SHEYTAN-LA ${APP_VERSION} — run ./SHEYTAN-LA. Models are downloaded in-app; user data lives under data/ next to the executable. Static package content lives under resources/." > "$root/resources/docs/README.txt"
     for f in "$root/resources/docs/BUILD-INFO.txt" "$root/resources/docs/README.txt"; do
@@ -381,9 +384,9 @@ EOF
 
   archive)
     # Portable archive only — no DEB/RPM (master work order §10).
-    root="dist/linux/app/${LINUX_PKG_ROOT}"
+    root="${STAGE}/${LINUX_PKG_ROOT}"
     test -x "${root}/SHEYTAN-LA" || fail_gate "Create the portable archive (no DEB/RPM)" "staging tree lost the executable before archiving"
-    if ! tar -czf "$ARCHIVE" -C "dist/linux/app" "${LINUX_PKG_ROOT}"; then
+    if ! tar -czf "$ARCHIVE" -C "$STAGE" "${LINUX_PKG_ROOT}"; then
       fail_gate "Create the portable archive (no DEB/RPM)" "tar -czf failed for $ARCHIVE"
     fi
     echo "portable archive created (no installer)"

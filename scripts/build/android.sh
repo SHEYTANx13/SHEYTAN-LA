@@ -43,7 +43,7 @@ MARKER="ci-logs/${TARGET}-upstream-failure.txt"
 GO_TEST_TIMEOUT="${GO_TEST_TIMEOUT:-25m}"
 APP_VERSION="${APP_VERSION:?APP_VERSION must be provided by the workflow env}"
 mobilePin="v0.0.0-20261117202452-47699113848a"
-CANONICAL="dist/SHEYTAN-LA-ALPHA-android-arm64"
+CANONICAL="dist/SHEYTAN-LA-ALPHA-android-arm64/SHEYTAN-LA-ALPHA-android-arm64.apk"
 
 mkdir -p ci-logs
 
@@ -168,50 +168,29 @@ case "$phase" in
     # own embedded debug certificate (cmd/gomobile/build_androidapp.go:
     # debugCert) - no keystore file is created, so nothing can leak into
     # the repository or the artifact.
-    mkdir -p dist/android
-    if [ -d "cmd/sheytan-mobile" ]; then
-      # PRIMARY path: the Go-Gui mobile shell - the arm64-v8a APK through
-      # gomobile build at the pinned toolchain (single ABI, -work=false).
-      echo "cmd/sheytan-mobile present - building the arm64-v8a APK with gomobile build (the app command; bind builds an AAR library)"
-      if ! gomobile build -target=android/arm64 -androidapi 24 -work=false -o "${CANONICAL}.apk" ./cmd/sheytan-mobile; then
-        fail_gate "Package the Android arm64 app (debug-signed, never committed keys)" "gomobile build for ./cmd/sheytan-mobile failed (the APK command; the retired bind command builds an AAR library, never the APK)"
-      fi
-    else
-      # FALLBACK path (current product truth): fyne package FROM the app
-      # package directory. Run 44457547289 step-8 root cause: fyne package
-      # at the repo root has NO Go package and cannot build. The icon path
-      # is relative to the NEW CWD (cmd/sheytan-local-agent).
-      if ! (cd cmd/sheytan-local-agent && test -f ../../ui/fyne/assets/logo-512.png); then
-        fail_gate "Package the Android arm64 app (debug-signed, never committed keys)" "the brand icon ../../ui/fyne/assets/logo-512.png is not reachable from cmd/sheytan-local-agent"
-      fi
-      fyneVersion="$(go list -m fyne.io/fyne/v2)"
-      if ! go install "fyne.io/fyne/v2/cmd/fyne@${fyneVersion#fyne.io/fyne/v2 }"; then
-        fail_gate "Package the Android arm64 app (debug-signed, never committed keys)" "the fyne CLI install failed at the module's own fyne version"
-      fi
-      echo "cmd/sheytan-mobile absent - packaging cmd/sheytan-local-agent with fyne (run from the app package directory)"
-      if ! (cd cmd/sheytan-local-agent && fyne package -os android -arch arm64 \
-            -appID io.github.sheytanx13.SHEYTANLA \
-            -name SHEYTAN-LA \
-            -icon ../../ui/fyne/assets/logo-512.png \
-            -appBuild 1 \
-            -appVersion 1.11.1 \
-            -outputDir ../../dist/android); then
-        fail_gate "Package the Android arm64 app (debug-signed, never committed keys)" "fyne package -os android failed (packaged from cmd/sheytan-local-agent, not the repo root - run 44457547289 step 8 root cause)"
-      fi
-      apk="$(ls dist/android/*.apk 2>/dev/null | head -1 || true)"
-      test -s "$apk" || fail_gate "Package the Android arm64 app (debug-signed, never committed keys)" "no APK produced by fyne package"
-      cp "$apk" "${CANONICAL}.apk"
+    # Run 45634345922 update: the retired fyne CLI packaging fallback is
+    # gone with the Fyne shell itself; the mobile shell (the Go-Gui
+    # mobile surface) is the only Android package path.
+    if [ ! -d "cmd/sheytan-mobile" ]; then
+      fail_gate "Package the Android arm64 app (debug-signed, never committed keys)" "cmd/sheytan-mobile is absent — the mobile shell is the only Android package path (the fyne CLI fallback is retired)"
     fi
-    ls -la dist/android
-    echo "canonical package: ${CANONICAL}.apk (debug-signed app build - emulator/device smoke NOT RUN here, work order §6.1 gates it separately)"
+    # PRIMARY path: the Go-Gui mobile shell - the arm64-v8a APK through
+    # gomobile build at the pinned toolchain (single ABI, -work=false).
+    # The canonical APK is staged UNDER the matching directory so the
+    # platform artifact (the unpacked portable tree) carries it.
+    echo "building the arm64-v8a APK with gomobile build (the app command; bind builds an AAR library)"
+    if ! gomobile build -target=android/arm64 -androidapi 24 -work=false -o "${CANONICAL}" ./cmd/sheytan-mobile; then
+      fail_gate "Package the Android arm64 app (debug-signed, never committed keys)" "gomobile build for ./cmd/sheytan-mobile failed (the APK command; the retired bind command builds an AAR library, never the APK)"
+    fi
+    echo "canonical package: ${CANONICAL} (debug-signed app build - emulator/device smoke NOT RUN here, work order §6.1 gates it separately)"
     ;;
 
   verify)
     # Fail-closed structural checks on the CANONICAL package: the APK
     # is a zip - AndroidManifest.xml + classes.dex must be present, and
     # installer-class payload extensions are rejected.
-    pkg="${CANONICAL}.apk"
-    test -s "$pkg" || fail_gate "Verify the APK (fail-closed structural checks)" "no APK at ${CANONICAL}.apk"
+    pkg="${CANONICAL}"
+    test -s "$pkg" || fail_gate "Verify the APK (fail-closed structural checks)" "no APK at ${CANONICAL}"
     members="$(unzip -Z1 "$pkg")"
     echo "$members" | grep -Eq '(^|/)AndroidManifest\.xml$' || fail_gate "Verify the APK (fail-closed structural checks)" "AndroidManifest.xml missing from $pkg"
     echo "$members" | grep -Eq '(^|/)classes.*\.dex$' || fail_gate "Verify the APK (fail-closed structural checks)" "no classes.dex in $pkg"

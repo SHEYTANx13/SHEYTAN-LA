@@ -2850,6 +2850,114 @@
     "status": "active"
   },
   {
+    "path": "internal/coreclient/client.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/coreclient (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/coreclient",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/coreclient/client_source_contract_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/coreclient (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/coreclient",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/coreclient/fakecore_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/coreclient (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/coreclient",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/coreclient/ipc_integration_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/coreclient (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/coreclient",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/coreclient/ipc_integration_windows_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/coreclient (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/coreclient",
+    "testOnly": true,
+    "platform": "platform-specific",
+    "status": "test"
+  },
+  {
+    "path": "internal/coreclient/ipc_mismatched_windows_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/coreclient (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/coreclient",
+    "testOnly": true,
+    "platform": "platform-specific",
+    "status": "test"
+  },
+  {
+    "path": "internal/coreclient/ipc_negative_windows_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/coreclient (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/coreclient",
+    "testOnly": true,
+    "platform": "platform-specific",
+    "status": "test"
+  },
+  {
+    "path": "internal/coreclient/logic.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/coreclient (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/coreclient",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/coreclient/multipart.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/coreclient (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/coreclient",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/coreclient/settings_schema.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/coreclient (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/coreclient",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/coreclient/state.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/coreclient (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/coreclient",
+    "status": "needs review"
+  },
+  {
     "path": "internal/ctxtelemetry/bench_test.go",
     "type": "go",
     "language": "Go",
@@ -7734,6 +7842,16 @@
     "status": "needs review"
   },
   {
+    "path": "internal/webshell/assets/logo.png",
+    "type": "asset",
+    "language": "image",
+    "purpose": "Implementation file in internal/webshell/assets (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell/assets",
+    "runtimeAsset": true,
+    "status": "needs review"
+  },
+  {
     "path": "internal/webshell/webshell.go",
     "type": "go",
     "language": "Go",
@@ -8665,532 +8783,6 @@
     "layer": "ci-tooling",
     "subsystem": "scripts",
     "status": "active"
-  },
-  {
-    "path": "ui/fyne/adaptive_pane.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — adaptive_pane.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/app.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "The ONE Fyne application: wiring, window lifecycle, theme service, bootstrap",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/artifact_card.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — artifact_card.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/artifact_card_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/assets.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — assets.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/assets/logo-512.png",
-    "type": "asset",
-    "language": "image",
-    "purpose": "Fyne production-shell source (the presentation layer — logo-512.png)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "runtimeAsset": true,
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/button_fit_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/client.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — client.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/client_source_contract_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/composer.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — composer.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/composer_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/engine_update_ui_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/fakecore_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/ipc_integration_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/ipc_integration_windows_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "platform": "platform-specific",
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/ipc_mismatched_windows_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "platform": "platform-specific",
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/ipc_negative_windows_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "platform": "platform-specific",
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/lifecycle.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "The idempotent shutdown coordinator + the resize-smoke diagnostic mode",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/lifecycle_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/logic.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — logic.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/logic_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/logs_panel_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/model_studio_ui_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/models_panel_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/multipart.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — multipart.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/nav_ownership_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/panels.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — panels.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/settings_schema.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — settings_schema.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/shell.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "The responsive shell: navigation registry, rail/strip switching, status line",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/shell_responsive_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/shell_status_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/shell_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/state.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — state.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/testdata/golden-compact-landscape-844x390.txt",
-    "type": "text",
-    "language": "text",
-    "purpose": "Fyne production-shell source (the presentation layer — golden-compact-landscape-844x390.txt)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "fixture": true,
-    "status": "fixture"
-  },
-  {
-    "path": "ui/fyne/testdata/golden-compact-portrait-390x844.txt",
-    "type": "text",
-    "language": "text",
-    "purpose": "Fyne production-shell source (the presentation layer — golden-compact-portrait-390x844.txt)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "fixture": true,
-    "status": "fixture"
-  },
-  {
-    "path": "ui/fyne/testdata/golden-desktop-1366x768.txt",
-    "type": "text",
-    "language": "text",
-    "purpose": "Fyne production-shell source (the presentation layer — golden-desktop-1366x768.txt)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "fixture": true,
-    "status": "fixture"
-  },
-  {
-    "path": "ui/fyne/testdata/golden-medium-tablet-768x1024.txt",
-    "type": "text",
-    "language": "text",
-    "purpose": "Fyne production-shell source (the presentation layer — golden-medium-tablet-768x1024.txt)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "fixture": true,
-    "status": "fixture"
-  },
-  {
-    "path": "ui/fyne/testdata/golden-wide-2560x1440.txt",
-    "type": "text",
-    "language": "text",
-    "purpose": "Fyne production-shell source (the presentation layer — golden-wide-2560x1440.txt)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "fixture": true,
-    "status": "fixture"
-  },
-  {
-    "path": "ui/fyne/theme.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "The Fyne-side design-token mapping (derived from internal/theme; Obsidian carries the pre-token identity)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/theme_service.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "The live theme switcher: apply (preview) / cancel (restore) / save (persist) — UX-01",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/ui_marshal.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — ui_marshal.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/view_agent.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — view_agent.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/view_chat.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — view_chat.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/view_engines.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "The Engine Gallery: registry-driven engine cards, theme switcher, window controls — UX-02..05",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/view_engines_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/view_lab.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — view_lab.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/view_settings.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — view_settings.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/view_studio.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — view_studio.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/view_studio_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
-  },
-  {
-    "path": "ui/fyne/view_system.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "System Centre: honest hardware/engine/governor evidence",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/view_workspace.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — view_workspace.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/widgets.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — widgets.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/window_controls.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "The three-control window system: real close funnel, honest disabled minimize/tray — UX-05",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/workspace_hub.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Fyne production-shell source (the presentation layer — workspace_hub.go)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "status": "active"
-  },
-  {
-    "path": "ui/fyne/workspace_hub_test.go",
-    "type": "go",
-    "language": "Go",
-    "purpose": "Tests for ui/fyne (deterministic, table-driven where applicable)",
-    "layer": "presentation",
-    "subsystem": "ui/fyne",
-    "testOnly": true,
-    "status": "test"
   },
   {
     "path": "ui/gogui/app.go",

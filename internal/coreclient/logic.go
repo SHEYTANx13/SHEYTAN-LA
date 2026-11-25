@@ -10,7 +10,7 @@
 //   - mode-sessions: chat and agent are separate conversation spaces.
 //   - history-ref: references are refs, deduped, no self-attach, capped.
 //   - run-phase: the UI never invents a phase the backend did not signal.
-package fyneui
+package coreclient
 
 import (
 	"encoding/json"

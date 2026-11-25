@@ -25,27 +25,38 @@ func TestAssetsEmbedded(t *testing.T) {
 }
 
 // TestRegistryMirrorsNativeIA pins the web shell's workspace registry to
-// the ONE canonical IA the native shells derive their rail, compact strip
-// and shortcut maps from (ui/fyne/shell.go primaryViews + subPanels). The
-// ids AND the order must match — order is the rail order and the
-// Ctrl+number shortcut order.
+// the ONE canonical IA the native mirror shell derives its rail, compact
+// strip and shortcut maps from (ui/gogui/shell.go primaryViews +
+// subPanels). The fyne shell is RETIRED (run 45634345922 update: the web
+// host is the primary window on every desktop platform); the go-gui
+// mirror remains the native cross-check. The ids AND the order must
+// match — order is the rail order and the Ctrl+number shortcut order.
 func TestRegistryMirrorsNativeIA(t *testing.T) {
-	raw, err := os.ReadFile("../../ui/fyne/shell.go")
+	raw, err := os.ReadFile("../../ui/gogui/shell.go")
 	if err != nil {
-		t.Skipf("native shell source unavailable in this checkout layout: %v", err)
+		t.Skipf("native mirror shell source unavailable in this checkout layout: %v", err)
 	}
 
-	primaryRe := regexp.MustCompile(`\{"([a-z]+)", "[^"]+", theme\.\w+, build\w+View\}`)
-	utilityRe := regexp.MustCompile(`\{"([a-z]+)", "[^"]+", theme\.\w+, build\w+Panel\}`)
+	primaryRe := regexp.MustCompile(`\{"([a-z]+)", "[^"]+", build\w+\}`)
 
 	var nativePrimary, nativeUtility []string
+	inUtility := false
 
-	for _, m := range primaryRe.FindAllStringSubmatch(string(raw), -1) {
-		nativePrimary = append(nativePrimary, m[1])
-	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.Contains(line, "subPanels = ") {
+			inUtility = true
+		}
 
-	for _, m := range utilityRe.FindAllStringSubmatch(string(raw), -1) {
-		nativeUtility = append(nativeUtility, m[1])
+		m := primaryRe.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+
+		if inUtility {
+			nativeUtility = append(nativeUtility, m[1])
+		} else {
+			nativePrimary = append(nativePrimary, m[1])
+		}
 	}
 
 	if len(nativePrimary) == 0 || len(nativeUtility) == 0 {

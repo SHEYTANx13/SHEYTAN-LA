@@ -5,7 +5,7 @@
 // mutation boundary carries its contract (ported from the retired React
 // store): generation-guarded list refreshes, zero-session send, cumulative
 // stream folding, settlement reload of the authoritative transcript.
-package fyneui
+package coreclient
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 )
 
 // Runtime is safe for concurrent use. UI updates are marshalled to the
-// Fyne main loop by the views (fyne.Do); Runtime itself is plain Go.
+// presentation layer's main loop by its views; Runtime itself is plain Go.
 type Runtime struct {
 	mu       sync.Mutex
 	client   *CoreClient
@@ -30,7 +30,7 @@ type Runtime struct {
 	runActive  string // runId when a run is live in this process
 	busy       bool
 	stopCh     chan struct{}
-	onSettled  func() // UI callback (marshalled via fyne.Do)
+	onSettled  func() // UI callback (marshalled by the presentation layer)
 	onStream   func() // UI callback for stream updates
 	onSessions func() // UI callback for list changes
 	subMu      sync.Mutex
@@ -44,7 +44,7 @@ func NewRuntime(c *CoreClient) *Runtime {
 }
 
 // SetCallbacks installs UI-notification hooks (invoked from Runtime's
-// goroutines; the view wraps them in fyne.Do).
+// goroutines; the view wraps them in its main-loop dispatcher).
 func (r *Runtime) SetCallbacks(onStream, onSettled, onSessions func()) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

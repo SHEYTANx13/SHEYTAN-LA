@@ -35,10 +35,16 @@ var ErrHostMisconfigured = errors.New("web workspace host misconfigured")
 // is the shell handler (webshell.Handler(apiHandler)) — the SAME origin
 // serves the shell and the API so the bridge policy stays same-origin.
 type HostOptions struct {
-	Name         string           // application/brand name shown by the runtime
-	Title        string           // primary window title
-	Width        int              // primary window width (<=0 applies the default)
-	Height       int              // primary window height (<=0 applies the default)
+	Name   string // application/brand name shown by the runtime
+	Title  string // primary window title
+	Width  int    // primary window width (<=0 applies the default)
+	Height int    // primary window height (<=0 applies the default)
+	// Icon is the window image (PNG bytes) for the platforms that take it
+	// from the runtime options (the Linux taskbar/minimized icon; on
+	// Windows the PE version resource and on macOS the bundle conventions
+	// carry the brand mark). Empty means the platform default, never a
+	// failure.
+	Icon         []byte           // brand mark for the window surfaces that read it here
 	AssetHandler http.Handler     // serves the shell + the API on one origin
 	Interrupt    <-chan os.Signal // when set, a received signal quits the runtime cleanly
 }
@@ -72,6 +78,7 @@ func RunHost(opts HostOptions) error {
 		MinWidth:  360,
 		MinHeight: 480,
 		URL:       "/",
+		Linux:     application.LinuxWindow{Icon: opts.Icon},
 	})
 
 	if win == nil {

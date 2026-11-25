@@ -23,7 +23,7 @@ type ID string
 
 // The engines of the v1.11.1 renderer-convergence milestone.
 const (
-	Fyne         ID = "fyne"          // the production shell (ui/fyne)
+	Fyne         ID = "fyne"          // the RETIRED toolkit shell (deleted from the tree; id kept for renderer-name stability)
 	GoGui        ID = "gogui"         // github.com/go-gui-org/go-gui v0.96.0 POC
 	GoGPUUI      ID = "gogpu-ui"      // github.com/gogpu/ui (GoGPU stack) POC
 	WailsWebView ID = "wails-webview" // Wails v3 WebView Web Workspace POC
@@ -262,7 +262,7 @@ var catalog = []Manifest{
 			"mobile platforms unsupported in this milestone",
 			"system-tray integration requires a separate module (not added in v1.11.1)",
 		},
-		ThemeMapping: "full — ui/fyne/theme.go maps every token role to the Fyne theme",
+		ThemeMapping: "retired with the fyne shell — the web shell carries the token authority (internal/theme)",
 		Notes:        "The default, launch-critical production shell. Keep-first policy: no renderer replaces Fyne before the full promotion gate passes.",
 	},
 	{

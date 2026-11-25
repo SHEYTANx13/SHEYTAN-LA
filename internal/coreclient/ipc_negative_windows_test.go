@@ -10,7 +10,7 @@
 //   - proof that the whole flow opened NO TCP listener (netstat,
 //     PID-filtered — the transport-identity boundary is part of the
 //     security contract, and a TCP fallback must fail this gate).
-package fyneui_test
+package coreclient_test
 
 import (
 	"context"
@@ -22,8 +22,8 @@ import (
 	"testing"
 	"time"
 
+	coreclient "github.com/SHEYTANx13/SHEYTAN-LA/internal/coreclient"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/localipc"
-	fyneui "github.com/SHEYTANx13/SHEYTAN-LA/ui/fyne"
 )
 
 // windowsListeningTCPLines counts netstat LISTENING rows owned by this
@@ -64,7 +64,7 @@ func TestWindowsIPCFlowOpensNoTCPListener(t *testing.T) {
 	}
 	t.Cleanup(ipc.Stop)
 
-	client := fyneui.NewCoreClient(ipc.Endpoint(), key)
+	client := coreclient.NewCoreClient(ipc.Endpoint(), key)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -79,7 +79,7 @@ func TestWindowsIPCFlowOpensNoTCPListener(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	rt := fyneui.NewRuntime(client)
+	rt := coreclient.NewRuntime(client)
 	defer rt.Shutdown()
 	attachDone := make(chan error, 1)
 	actx, acancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -116,7 +116,7 @@ func TestCoreClientWebSocketCallerCancelWindows(t *testing.T) {
 	}
 	t.Cleanup(ipc.Stop)
 
-	client := fyneui.NewCoreClient(ipc.Endpoint(), key)
+	client := coreclient.NewCoreClient(ipc.Endpoint(), key)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := client.Handshake(ctx); err != nil {
@@ -128,7 +128,7 @@ func TestCoreClientWebSocketCallerCancelWindows(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	rt := fyneui.NewRuntime(client)
+	rt := coreclient.NewRuntime(client)
 	defer rt.Shutdown()
 
 	attached := make(chan struct{}, 1)

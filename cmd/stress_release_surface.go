@@ -38,15 +38,17 @@ func goModToolchainVersion(path string) (string, error) {
 //
 // These scenarios pin the current CI/desktop release surface so a workflow
 // or packaging regression fails the stress gate instead of shipping:
-// the pinned Go 1.27 toolchain, the Fyne-era Linux dependency set
-// (gcc/pkg-config + the OpenGL/X11/Wayland development libraries the
-// Fyne CGO build links, including libxxf86vm-dev, plus the Xvfb/xauth
-// smoke tooling), the Windows resource/icon pipeline (gen-syso) and
-// windowsgui subsystem, the packaged .bat launcher, portable ZIP
-// packaging under the release-contract artifact names, collision-proof
-// memory IDs, and Windows-safe log rotation. The Node/React/Vite and
-// Qt/CMake/QML UI toolchains are RETIRED and their reintroduction is
-// banned here (v1.11.0 one-Go-UI migration).
+// the pinned Go 1.27 toolchain, the Linux dependency set of the adaptive
+// web-shell era (gcc/pkg-config, the GTK3/WebKit2GTK 4.1 stack the web workspace
+// web host links, plus the Xvfb/xauth smoke tooling), the Windows
+// resource/icon pipeline (gen-syso) and windowsgui subsystem, the
+// packaged .bat launcher, portable ZIP packaging under the
+// release-contract artifact names, collision-proof memory IDs, and
+// Windows-safe log rotation. The Node/React/Vite and Qt/CMake/QML UI
+// toolchains are RETIRED and their reintroduction is banned here
+// (v1.11.0 one-Go-UI migration); the Fyne toolkit shell is retired the
+// same way by the run 45634345922 update (the web workspace web host is the
+// primary window on every desktop platform).
 //
 // v1.10.4 (run 38569081029): the Linux dependency pin still required the
 // RETIRED first-generation webview-era GTK stack (libgtk-4-dev /
@@ -414,10 +416,10 @@ func stressReleaseSurface() error {
 		refs []string
 	}{
 		{id: "actions/checkout", refs: []string{"3d3c42e5aac5ba805825da76410c181273ba90b1"}},
-		{id: "actions/setup-go", refs: []string{"b7ad1dad31e06c5925ef5d2fc7ad053ef454303e"}},
+		{id: "actions/setup-go", refs: []string{"d8cbb8045d7f43706b9177cceb36c1f91a6644d5"}},
 		{id: "actions/download-artifact", refs: []string{"9000827ccba6bdab643e8b6fd33ac0654aef8333"}},
 		{id: "softprops/action-gh-release", refs: []string{"8a0cd651e5b2365bd640854a3fa5dfc70e4875f3"}},
-		{id: "msys2/setup-msys2", refs: []string{"ec48f7c5447b3140e2b088413ae3a55687bccb6e"}},
+		{id: "msys2/setup-msys2", refs: []string{"3c51bf698df1e37b2261f53cb67797b97761185c"}},
 	} {
 		if !workflowHasAction(allWorkflows, required.id, required.refs...) {
 			return fmt.Errorf(
@@ -515,14 +517,17 @@ func stressReleaseSurface() error {
 		}
 	}
 
-	// 3f. THE CURRENT Linux CI dependency contract (v1.11.0 retarget):
-	// the desktop host is the ONE Fyne client — its CGO build needs
-	// gcc/pkg-config and the OpenGL/X11/Wayland development libraries
-	// (libxxf86vm-dev included: its absence killed the run-#51 Fyne
-	// spike's link step), and the desktop smoke needs Xvfb + xauth.
-	// Requiring a retired package here made the stress gate fail hosted
-	// runs while the workflow itself was correct (run 38569081029) — the
-	// pin tracks the CURRENT contract, never a retired transport.
+	// 3f. THE CURRENT Linux CI dependency contract (run 45634345922
+	// retarget): the desktop host is the adaptive web shell rendered by
+	// the web workspace web workspace host — its CGO build needs gcc/pkg-config,
+	// the GTK3 development libraries AND libwebkit2gtk-4.1-dev (the
+	// WebKitGTK backend the web workspace v3 runtime links on Linux), and the
+	// desktop smoke needs Xvfb + xauth. Requiring a retired package here
+	// made the stress gate fail hosted runs while the workflow itself
+	// was correct (run 38569081029) — the pin tracks the CURRENT
+	// contract, never a retired transport. The Fyne-era X11/OpenGL set
+	// stays required: the go-gui mirror capability and the Xvfb smoke
+	// still consume it.
 	//
 	// Run 44547031698 repair: since the CI consolidation moved the apt
 	// package list into the ONE Linux lane script
@@ -540,13 +545,16 @@ func stressReleaseSurface() error {
 
 	if !strings.Contains(w, "scripts/build/linux.sh prereqs") {
 		return fmt.Errorf(
-			"the platform-build workflow does not dispatch the Linux prerequisite phase (expected `scripts/build/linux.sh prereqs`) — the Fyne CGO build and the Xvfb smoke are uninstallable without it",
+			"the platform-build workflow does not dispatch the Linux prerequisite phase (expected `scripts/build/linux.sh prereqs`) — the web workspace/WebKit CGO build and the Xvfb smoke are uninstallable without it",
 		)
 	}
 
 	for _, linuxDep := range []string{
 		"gcc",
 		"pkg-config",
+		"libgtk-3-dev",
+		"libwebkit2gtk-4.1-dev",
+		"libglib2.0-dev",
 		"libgl1-mesa-dev",
 		"libegl1-mesa-dev",
 		"libx11-dev",
@@ -562,22 +570,23 @@ func stressReleaseSurface() error {
 	} {
 		if !strings.Contains(linuxLane, linuxDep) {
 			return fmt.Errorf(
-				"Linux CI dependencies missing %q from scripts/build/linux.sh (the canonical prereqs phase) — the Fyne desktop build (CGO/X11/OpenGL/Wayland) and the Xvfb smoke need the documented prerequisite set",
+				"Linux CI dependencies missing %q from scripts/build/linux.sh (the canonical prereqs phase) — the web workspace/WebKitGTK desktop build (CGO/GTK3/WebKit 4.1/X11/OpenGL/Wayland) and the Xvfb smoke need the documented prerequisite set",
 				linuxDep,
 			)
 		}
 	}
 
-	// The whole retired webview-era GTK/WebKit stack is banned in BOTH
-	// generations (second generation: libgtk-3-dev / libwebkit2gtk-4.1-dev;
-	// third generation: libgtk-4-dev / libwebkitgtk-6.0-dev): reinstalling any of them
-	// would reintroduce the second-desktop-shell ambiguity the v1.10.x
-	// Qt migration removed.
+	// The retired webview-era stack is banned in its THIRD generation
+	// (libgtk-4-dev / libwebkitgtk-6.0-dev) and the Qt stacks in every
+	// generation: reinstalling any of them would reintroduce the
+	// second-desktop-shell ambiguity. The second-generation GTK3/
+	// WebKit2GTK-4.1 pair is no longer banned — since the run
+	// 45634345922 update it IS the required WebKitGTK 4.1 backend (see 3f),
+	// and a ban would fail every hosted run while the workflow was
+	// correct (the run 38569081029 defect class, one generation later).
 	for _, staleDep := range []string{
 		"libgtk-4-dev",
 		"libwebkitgtk-6.0-dev",
-		"libgtk-3-dev",
-		"libwebkit2gtk-4.1-dev",
 		"qt6-base-dev",
 		"qtbase5-dev",
 		"qtdeclarative5-dev",
@@ -586,7 +595,7 @@ func stressReleaseSurface() error {
 	} {
 		if strings.Contains(w, staleDep) {
 			return fmt.Errorf(
-				"retired UI-toolchain dependency %q still installed by Linux CI — the desktop host is the ONE Fyne client; the GTK/WebKit/Qt stacks must not return",
+				"retired UI-toolchain dependency %q still installed by Linux CI — the desktop host is the adaptive web shell through the web workspace host; the retired GTK4/WebKitGTK6/Qt stacks must not return",
 				staleDep,
 			)
 		}
@@ -704,7 +713,7 @@ func stressReleaseSurface() error {
 	// (cmd/sheytan-local-agent/). v1.11.0: the UI verification IS the Go
 	// UI suite (no frontend toolchain exists anymore).
 	for _, fragment := range []string{
-		"go test ./ui/fyne/",
+		"go test ./ui/",
 		"go test ./internal/... -tags headless",
 		"go test ./internal/releasecontract/",
 		"Xvfb",
@@ -725,7 +734,7 @@ func stressReleaseSurface() error {
 	// resolver cmd/printversion (--plain / --json). Run #54
 	// (40394318382) proved that resolving the version through the full
 	// agent binary is load-bearing fragile: `go run
-	// ./cmd/sheytan-local-agent version` compiles ui/fyne (CGO), so on
+	// ./cmd/sheytan-local-agent version` compiles the UI-linked CGO graph, so on
 	// a fresh runner without the graphics development headers the
 	// resolution step — and every step that shares that pattern — dies
 	// before printing anything. The shell must not re-parse the
@@ -759,8 +768,8 @@ func stressReleaseSurface() error {
 
 	// 3l. Headless audit surface (run #54, 40394318382): the audit job
 	// is the HEADLESS core gate and its runner never installs the
-	// Fyne/CGO graphics prerequisites — the stress gate there MUST run
-	// under the `headless` build tag so it compiles without ui/fyne.
+	// UI-toolkit CGO graphics prerequisites — the stress gate there MUST run
+	// under the `headless` build tag so it compiles without the UI graph.
 	// The untagged invocation on a fresh Linux runner is exactly how
 	// run #54's "Stress + release-surface gate" step died in ~1s (cgo
 	// glfw compile: missing graphics headers), while the same suite

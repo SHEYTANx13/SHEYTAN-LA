@@ -10,10 +10,11 @@
 //     notifications, the command palette and the adaptive layout; each
 //     workspace owns its own composition.
 //   - Workspace registry: the canonical 9-destination IA plus the 4
-//     utility surfaces — the SAME ids, order and grouping the native
-//     shells (ui/fyne, ui/gogui) derive their rail, compact strip and
-//     shortcut maps from. This package is the web-side copy of that ONE
-//     registry, and the contract test pins the two sides together.
+//     utility surfaces. THIS package is the CANONICAL registry since the
+//     fyne retirement (run 45634345922 update); the surviving native
+//     mirror shell (ui/gogui) derives its rail, compact strip and
+//     shortcut maps from the same ids and order, and the contract test
+//     pins the two sides together.
 //   - Screen classes compact / medium / expanded / wide resolved from the
 //     shared 600 / 900 / 1280 CSS-px bands the native shells already use
 //     (the blueprint's shared width classification as the starting point;
@@ -64,8 +65,8 @@ const (
 	ClassWide     = "wide"
 )
 
-// Band boundaries shared with the native shells (ui/fyne/shell.go,
-// ui/gogui/shell.go): ONE width classification across every surface.
+// Band boundaries shared with the native mirror shell (ui/gogui/shell.go):
+// ONE width classification across every surface.
 const (
 	BandMedium   = 600
 	BandExpanded = 900
@@ -104,9 +105,9 @@ const (
 	KindDownload = "download"
 )
 
-// primaryIDs is the ordered 9-destination IA (mirrors ui/fyne/shell.go
-// primaryViews and ui/gogui/shell.go). Order IS the rail order and the
-// Ctrl+number shortcut order.
+// primaryIDs is the ordered 9-destination IA (mirrored by ui/gogui/shell.go
+// primaryViews). Order IS the rail order and the Ctrl+number shortcut
+// order.
 var primaryIDs = []Workspace{
 	{"chat", "Chat", KindPrimary},
 	{"agent", "Agent", KindPrimary},
@@ -120,7 +121,7 @@ var primaryIDs = []Workspace{
 }
 
 // utilityIDs is the ordered 4-surface utilities group (mirrors the
-// subPanels registry of the native shells).
+// subPanels registry of the native mirror shell).
 var utilityIDs = []Workspace{
 	{"history", "History", KindUtility},
 	{"models", "Models", KindUtility},

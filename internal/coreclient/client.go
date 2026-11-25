@@ -1,13 +1,17 @@
 //go:build !headless
 
-// Package fyneui is the ONE product UI: a native Go + Fyne application
-// replacing the retired Qt/QML host and the retired React/TypeScript web
-// frontend (v1.11.0 one-Go-UI migration).
+// Package coreclient is the typed CLIENT of the ONE core authority: the
+// transport and presentation-state layer every UI shell consumes. It was
+// carried by the retired Fyne shell (v1.11.0 one-Go-UI migration) and now
+// serves the adaptive web shell era: the desktop primary window renders
+// internal/webshell through the web workspace host, and this package remains the
+// contract-tested client used by the native go-gui mirror and the IPC
+// integration gates.
 //
 // Authority contract: this package is a CLIENT. Durable state, permissions,
 // policy, run lifecycle, tool execution, approvals, model/backend truth and
 // persistence remain in the existing Go core (internal/*) exposed through
-// the secured local IPC endpoint (internal/localipc). The UI mirrors no
+// the secured local IPC endpoint (internal/localipc). A UI mirrors no
 // state that the core does not publish, and every visible action calls a
 // real core operation.
 //
@@ -16,7 +20,7 @@
 // exact contract the Qt host consumed (ui/qt/src/coreclient.cpp, retired).
 // No Origin header is sent (native client); the key header travels on every
 // request for parity with the previous client.
-package fyneui
+package coreclient
 
 import (
 	"bytes"

@@ -1,7 +1,7 @@
 // field_contract_test.go (file name kept from its v1.10.3 origin): the
 // wire-contract pin for the ONE UI client.
 //
-// The product UI (ui/fyne — formerly the Qt host) consumes EXACT field
+// The product UI (the adaptive web shell — formerly the Qt and Fyne hosts) consumes EXACT field
 // names from these endpoints; a silent rename blanks the desktop UI
 // instead of failing a test. v1.10.2 proved the failure mode for real: a
 // client parsed a wrapped {"sessions":[…]} envelope the core never

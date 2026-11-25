@@ -122,7 +122,7 @@ jobs:
           fi
       - name: Build (fixture)
         run: |
-          go build -o "dist/linux/app/SHEYTAN-LA" ./cmd/sheytan-local-agent
+          go build -o "dist/SHEYTAN-LA-ALPHA-linux-x64-portable/SHEYTAN-LA" ./cmd/sheytan-local-agent
 `
 
 // linuxRunnerOtherTargetBlock is the fixture fragment identifying the
@@ -264,7 +264,8 @@ func TestLinuxRunnerContractRejectsMissingLinuxTarget(t *testing.T) {
 // The linux-x64 lane is located through the parsed MATRIX; its runner
 // image must be the singular pinned ubuntu-26.04. The lane must be the
 // true Linux x64 package lane — verified by what it DOES (build the
-// desktop binary from the canonical cmd target into the dist/linux/app
+// desktop binary from the canonical cmd target into the
+// dist/SHEYTAN-LA-ALPHA-linux-x64-portable
 // staging tree via scripts/build/linux.sh, produce and verify the
 // portable .tar.gz archive), never by a label alone. Any runner or
 // package drift in the production workflow fails here.
@@ -303,14 +304,14 @@ func TestPlatformBuildWorkflowLinuxX64Conformance(t *testing.T) {
 
 	// Package-lane identity from the dispatched script content, never
 	// from a label. scripts/build/linux.sh must build the desktop binary
-	// from the canonical cmd target into the dist/linux/app staging tree
+	// from the canonical cmd target into the dist/SHEYTAN-LA-ALPHA-linux-x64-portable staging tree
 	// and produce the portable .tar.gz archive.
 	linuxScript := readTreeFile(t, linuxLaneRelPath)
 
 	if !strings.Contains(linuxScript, "./cmd/sheytan-local-agent") ||
-		!strings.Contains(linuxScript, "dist/linux/app") {
+		!strings.Contains(linuxScript, "dist/SHEYTAN-LA-ALPHA-linux-x64-portable") {
 		t.Fatalf(
-			"production workflow drift: the Linux lane script %s does not build the desktop binary from ./cmd/sheytan-local-agent into dist/linux/app — the pinned runner identity would guard a lane that no longer builds the Linux x64 package",
+			"production workflow drift: the Linux lane script %s does not build the desktop binary from ./cmd/sheytan-local-agent into dist/SHEYTAN-LA-ALPHA-linux-x64-portable — the pinned runner identity would guard a lane that no longer builds the Linux x64 package",
 			linuxLaneRelPath,
 		)
 	}

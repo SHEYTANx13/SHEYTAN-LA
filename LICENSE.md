@@ -64,7 +64,7 @@ area):
 |---|---|---|
 | SHEYTAN product implementation | internal/ (all packages except the Open components above), cmd/ (including cmd/sheytan-local-agent/) | The product-specific implementation: engine lifecycle, sampling gate, model-selection state machine, accelerator resolver, transactional updater/installer, agent orchestrator, research engine, coding lab, sessions, vision, calibration. |
 | Native C++ engine | native/engine/ | SHEYTAN-specific proprietary inference engine implementation, tokenizer, scheduler, GGUF loader. |
-| UI/UX | ui/fyne/ (the ONE Go + Fyne application), assets, theme tokens | Product-specific implementation and interface designs. |
+| UI/UX | internal/webshell/ (the adaptive web shell), internal/webworkspace/ (the web host), ui/gogui/ (the native mirror), theme tokens | Product-specific implementation and interface designs. |
 | Brand, assets and designs | internal/brand/ (logo SVG and identity constants), build/ (icon, packaging art), scripts/gen-syso/logo-512.png | Trademarked assets and designs. |
 | Product documentation | README.md, docs/ (ARCHITECTURE, FEATURES, ROADMAP, changelog, CONTRIBUTING, UPDATE, ui-contract, 3dstudio, TROUBLESHOOTING, agent, ai-notes, Dev-Notes, worklog, retired), internal/aicontext/AI-CONTEXT.md, native/engine/README.md | Product documentation and engineering records. |
 | Build, release and CI machinery | scripts/, packaging/, .github/, Makefiles | Product-specific delivery pipeline. |

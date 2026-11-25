@@ -19,7 +19,7 @@
 // The hand-rolled-listener fixtures (mismatched protocol, missing
 // endpoint) are Unix-only; their Windows equivalents are covered by
 // internal/localipc/dial_windows_test.go against the real pipe API.
-package fyneui_test
+package coreclient_test
 
 import (
 	"context"
@@ -35,8 +35,8 @@ import (
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/api"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	coreclient "github.com/SHEYTANx13/SHEYTAN-LA/internal/coreclient"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/localipc"
-	fyneui "github.com/SHEYTANx13/SHEYTAN-LA/ui/fyne"
 )
 
 // newIsolatedCore builds a REAL api.Server over an isolated temporary
@@ -94,7 +94,7 @@ func TestCoreClientEndToEndOverLocalIPC(t *testing.T) {
 	}
 	ipc := startIPC(t, srv, cfg, key)
 
-	client := fyneui.NewCoreClient(ipc.Endpoint(), key)
+	client := coreclient.NewCoreClient(ipc.Endpoint(), key)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -150,7 +150,7 @@ func TestCoreClientEndToEndOverLocalIPC(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	rt := fyneui.NewRuntime(client)
+	rt := coreclient.NewRuntime(client)
 	defer rt.Shutdown()
 
 	streamSeen := make(chan struct{}, 1)
@@ -202,7 +202,7 @@ func TestCoreClientRejectsWrongKey(t *testing.T) {
 	}
 	ipc := startIPC(t, srv, cfg, key)
 
-	bad := fyneui.NewCoreClient(ipc.Endpoint(), "definitely-the-wrong-key")
+	bad := coreclient.NewCoreClient(ipc.Endpoint(), "definitely-the-wrong-key")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -236,7 +236,7 @@ func TestCoreClientRefusesMismatchedProtocol(t *testing.T) {
 	t.Cleanup(func() { _ = fake.Close() })
 	go func() { _ = fake.Serve(ln) }()
 
-	client := fyneui.NewCoreClient(path, "")
+	client := coreclient.NewCoreClient(path, "")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -266,7 +266,7 @@ func TestUnixIPCFlowOpensNoTCPListener(t *testing.T) {
 	}
 	ipc := startIPC(t, srv, cfg, key)
 
-	client := fyneui.NewCoreClient(ipc.Endpoint(), key)
+	client := coreclient.NewCoreClient(ipc.Endpoint(), key)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := client.Handshake(ctx); err != nil {
@@ -280,7 +280,7 @@ func TestUnixIPCFlowOpensNoTCPListener(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	rt := fyneui.NewRuntime(client)
+	rt := coreclient.NewRuntime(client)
 	defer rt.Shutdown()
 	attachDone := make(chan error, 1)
 	actx, acancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -347,7 +347,7 @@ func TestCoreClientWebSocketCallerCancelUnix(t *testing.T) {
 	}
 	ipc := startIPC(t, srv, cfg, key)
 
-	client := fyneui.NewCoreClient(ipc.Endpoint(), key)
+	client := coreclient.NewCoreClient(ipc.Endpoint(), key)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := client.Handshake(ctx); err != nil {
@@ -359,7 +359,7 @@ func TestCoreClientWebSocketCallerCancelUnix(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	rt := fyneui.NewRuntime(client)
+	rt := coreclient.NewRuntime(client)
 	defer rt.Shutdown()
 
 	attached := make(chan struct{}, 1)
@@ -401,7 +401,7 @@ func TestCoreClientWebSocketCallerCancelUnix(t *testing.T) {
 // error surface depends on this never being swallowed.
 func TestCoreClientReportsTransportFailureHonestly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "no-core.sock")
-	client := fyneui.NewCoreClient(path, "")
+	client := coreclient.NewCoreClient(path, "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

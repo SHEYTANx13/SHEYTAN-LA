@@ -16,7 +16,7 @@
 // endpoint) are Unix-only here; the Windows missing-pipe and busy-pipe
 // dial behaviors are covered by internal/localipc/dial_windows_test.go
 // against the real pipe API.
-package fyneui_test
+package coreclient_test
 
 import (
 	"context"
@@ -28,8 +28,8 @@ import (
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/api"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/brand"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/config"
+	coreclient "github.com/SHEYTANx13/SHEYTAN-LA/internal/coreclient"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/localipc"
-	fyneui "github.com/SHEYTANx13/SHEYTAN-LA/ui/fyne"
 )
 
 // newIsolatedCoreWindows builds a REAL api.Server over an isolated
@@ -78,7 +78,7 @@ func TestCoreClientEndToEndOverWindowsNamedPipe(t *testing.T) {
 	}
 	t.Cleanup(ipc.Stop)
 
-	client := fyneui.NewCoreClient(ipc.Endpoint(), key)
+	client := coreclient.NewCoreClient(ipc.Endpoint(), key)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -135,7 +135,7 @@ func TestCoreClientEndToEndOverWindowsNamedPipe(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	rt := fyneui.NewRuntime(client)
+	rt := coreclient.NewRuntime(client)
 	defer rt.Shutdown()
 
 	streamSeen := make(chan struct{}, 1)
@@ -189,7 +189,7 @@ func TestCoreClientRejectsWrongKeyWindows(t *testing.T) {
 	}
 	t.Cleanup(ipc.Stop)
 
-	bad := fyneui.NewCoreClient(ipc.Endpoint(), "definitely-the-wrong-key")
+	bad := coreclient.NewCoreClient(ipc.Endpoint(), "definitely-the-wrong-key")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

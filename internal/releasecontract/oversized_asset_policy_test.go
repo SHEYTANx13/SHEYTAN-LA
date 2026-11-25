@@ -129,7 +129,7 @@ func TestPackagingLanesEnforceSizeCeiling(t *testing.T) {
 	linuxStep := workflowStepBody(t, linW, "Payload size gate (100 MB per file)")
 	for _, need := range []struct{ fragment, why string }{
 		{"bash scripts/ci/package-size-audit.sh", "the Linux lane must invoke the shared fail-closed size-audit script"},
-		{`--dir "dist/linux/app/${LINUX_PKG_ROOT}"`, "the staging tree must be audited BEFORE the archive is built"},
+		{`--dir "dist/SHEYTAN-LA-ALPHA-linux-x64-portable/${LINUX_PKG_ROOT}"`, "the staging tree must be audited BEFORE the archive is built"},
 		{`tar -tzvf "dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz"`, "every archive member's UNCOMPRESSED size must be audited AFTER the archive is built"},
 		{"tee ci-logs/linux-size-audit.log", "the audit transcript must reach the consolidated run-log artifact"},
 	} {

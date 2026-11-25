@@ -3,28 +3,28 @@
 // Package desktop launches the native desktop application: the Go core
 // (ONE authority for policy, runs, sessions, tools, approvals) serving its
 // existing API surface over the secured local IPC channel, plus the ONE
-// Fyne UI running in-process as its client (v1.11.0 one-Go-UI migration).
+// adaptive web shell rendered in the primary window by the typed
+// web workspace host (the 2026-11-25 adaptive web UI platform decision,
+// completed by the run 45634345922 update).
 //
-// The former Qt Quick/QML host child process is retired, and with it the
-// React/WebView shell before that. The UI is a Fyne window built from the
-// same Go codebase that ships on every platform; it connects to the core
-// through the same authenticated local endpoint the Qt host used, so the
-// transport identity boundary (uid peer check / per-user DACL + ephemeral
-// key handshake) is preserved exactly.
+// The retired shells: the Qt Quick/QML host child process (retired
+// v1.11.0), the React/WebView shell before that, and — this update — the
+// Fyne toolkit shell (deleted once the web shell carried its full
+// surface; the retirement is recorded in docs/retired.md). The web shell
+// and the core API share ONE loopback origin through the asset handler,
+// so the shell's same-origin CSP and the core's authentication boundary
+// hold unchanged.
 //
 // The headless/API mode (headless build tag) keeps serving the documented
 // HTTP API for CI, containers and tooling with no GUI dependency.
 package desktop
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"runtime"
-	"syscall"
 	"time"
 
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/api"
@@ -34,12 +34,11 @@ import (
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/logging"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/platform"
 	"github.com/SHEYTANx13/SHEYTAN-LA/internal/startup"
-	fyneui "github.com/SHEYTANx13/SHEYTAN-LA/ui/fyne"
 )
 
-// fyneUIPackagePath pins the ONE UI package the launcher attaches (the
-// architecture test asserts it).
-const fyneUIPackagePath = "github.com/SHEYTANx13/SHEYTAN-LA/ui/fyne"
+// webShellPackagePath pins the ONE shell package the launcher renders in
+// the primary window (the architecture test asserts it).
+const webShellPackagePath = "github.com/SHEYTANx13/SHEYTAN-LA/internal/webshell"
 
 // failBoot reports a fatal boot failure through EVERY visibility channel
 // the process has: the named-step ERROR line in app.log (the catcher the
@@ -63,12 +62,13 @@ func failBoot(step string, err error) int {
 	return 1
 }
 
-// Run starts the SHEYTAN desktop application and blocks until the Fyne
-// window closes.
+// Run starts the SHEYTAN desktop application and blocks until the
+// primary window closes.
 //
-// Launch order is deterministic: core up → IPC endpoint bound → Fyne UI
-// attached as the ONE in-process client → run until the window closes →
-// clean core shutdown.
+// Launch order is deterministic: core up → IPC endpoint bound → the ONE
+// UI shell (the adaptive web shell through the typed web workspace host)
+// rendered in the primary window → run until the window closes → clean
+// core shutdown.
 func Run(cfg *config.Config) int {
 	if cfg == nil {
 		return failBoot("config", errors.New("missing configuration"))
@@ -142,13 +142,23 @@ func Run(cfg *config.Config) int {
 		logging.Default().Info("desktop", "ipc stopped")
 	}()
 
-	// Run 45522548507 (adaptive web UI decision): the UI shell
-	// selection. The web UI host is the PRIMARY shell on every desktop
-	// platform when this build carries it (the webworkspace build tag);
-	// SHEYTAN_UI=fyne forces the native toolkit shell as the selectable
-	// capability, and auto prefers the web host when present. A build
-	// without the host never silently fakes it: an explicit web request
-	// fails boot with the typed build-miswire error.
+	// Run 44457547289 §5: the GoGPU render service verification runs in
+	// the BACKGROUND (never on the first-frame path); its observation is
+	// published to the toolkit-neutral channel the UIs read. The wiring
+	// stays behind the nogogpu build seam (the gogpu/goffi stack cannot
+	// link beside other cgo code on Linux per the pinned goffi v0.6.8
+	// documentation, goffi issue #72): the default build links the render
+	// service, -tags nogogpu builds publish the honest not-wired
+	// observation instead.
+	startRenderVerification()
+
+	// Run 45634345922 update: the UI shell selection. The web UI host IS
+	// the shell on every desktop platform when this build carries it (the
+	// webworkspace build tag - every packaged desktop build does).
+	// SHEYTAN_UI=fyne names a RETIRED shell and fails boot with the typed
+	// retirement error; a build without the host never silently fakes it:
+	// an explicit web request fails boot with the typed build-miswire
+	// error.
 	mode, merr := resolveUIMode()
 	if merr != nil {
 		return failBoot("ui mode", merr)
@@ -158,24 +168,6 @@ func Run(cfg *config.Config) int {
 		return runWebUI(srv)
 	}
 
-	// Run 45287161747 repair (operator direction): the user-facing product
-	// identity is the ALPHA stage (brand.DisplayVersion), never the numeric
-	// build identifier - the numeric id stays in packaging plumbing
-	// (build/config.yml productVersion, BUILD-INFO, update manifests).
-	logging.Default().Info("desktop", "%s v%s (Fyne desktop, one Go UI)", config.AppName, brand.DisplayVersion)
-	fmt.Printf("%s v%s (Fyne desktop, one Go UI)\n", config.AppName, brand.DisplayVersion)
-
-	// Run 44457547289 §5: the GoGPU render service verification runs in
-	// the BACKGROUND (never on the first-frame path); its observation is
-	// published to the toolkit-neutral channel the UIs read.
-	//
-	// Run 44547031698 §3.2: the link graph is build-profile dependent
-	// (the gogpu/goffi stack cannot link beside other cgo code on Linux
-	// per the pinned goffi v0.6.8 documentation, goffi issue #72), so
-	// the wiring lives behind the nogogpu build seam - the default
-	// build links the render service, -tags nogogpu builds publish the
-	// honest not-wired observation instead.
-	startRenderVerification()
 	// v1.11.1: the transport KIND is logged, never the endpoint path —
 	// on Windows the pipe name embeds the account name and on Unix the
 	// path embeds the uid; neither belongs in a log file an operator
@@ -185,34 +177,11 @@ func Run(cfg *config.Config) int {
 	if runtime.GOOS == "windows" {
 		transport = "windows-named-pipe"
 	}
-	logging.Default().Info("desktop", "core transport: %s", transport)
-	fmt.Printf("  core transport: %s\n", transport)
+	logging.Default().Info("desktop", "%s v%s (web UI host — core transport: %s)", config.AppName, brand.DisplayVersion, transport)
+	fmt.Printf("%s v%s (web UI host — core transport: %s)\n", config.AppName, brand.DisplayVersion, transport)
 
-	// The Fyne app is the ONLY UI: it connects to the same authenticated
-	// endpoint the Qt host used, in-process. No child binary, no
-	// SHEYTAN_UI_EXECUTABLE spawn override — the one-Go-UI program
-	// removed the second implementation entirely.
-	su.StartPhase(startup.PhaseFyneApp)
-	client := fyneui.NewCoreClient(ipc.Endpoint(), key)
-	app := fyneui.NewDesktopApp(client)
-	su.EndPhase(startup.PhaseFyneApp, nil)
-
-	// Termination signals close the window through the SAME idempotent
-	// shutdown coordinator as the user's window close (one funnel:
-	// interceptor, signal and programmatic paths all converge there);
-	// the deferred shutdowns above then stop the IPC and the core in
-	// order after the UI has closed.
-	sigCh := make(chan os.Signal, 2)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		sig := <-sigCh
-		logging.Default().Info("desktop", "signal %v — closing through the shutdown coordinator", sig)
-		fmt.Println("desktop: signal", sig, "— stopping")
-		app.Close()
-	}()
-
-	_ = context.Background // context reserved for the app-lifetime scope
-	code := app.Run()
-	logging.Default().Info("desktop", "ui exit: clean close (exit code %d)", code)
-	return code
+	// Unreachable with the current mode set (auto resolves to the web
+	// host when present and fails typed otherwise); the return keeps the
+	// control flow exhaustive for future shell additions.
+	return failBoot("ui mode", ErrWebUINotCompiled)
 }

@@ -39,6 +39,12 @@ func runWebUI(srv *api.Server) int {
 	err := webworkspace.RunHost(webworkspace.HostOptions{
 		Name:  config.AppName,
 		Title: config.AppName + " — " + brand.DisplayVersion,
+		// The brand mark for the window surfaces that read it here (the
+		// Linux taskbar; Windows carries it in the PE version resource
+		// through the gen-syso pipeline). The asset ships inside the
+		// shell bundle, so the icon and the interface are ONE build
+		// artifact.
+		Icon: webshell.MustAsset("logo.png"),
 		// ONE origin: the shell and the core API served by the same
 		// handler, the same authentication boundary as every other mode.
 		AssetHandler: webshell.Handler(srv.Handler()),

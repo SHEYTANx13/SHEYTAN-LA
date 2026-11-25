@@ -1,6 +1,6 @@
 //go:build !headless
 
-package fyneui
+package coreclient
 
 import (
 	"os"
@@ -69,7 +69,7 @@ func TestCoreClientDialsThroughCanonicalLocalIPC(t *testing.T) {
 }
 
 // TestNoSecondDialImplementationInUI pins the one-dial rule package-wide:
-// no non-test source in ui/fyne outside client.go may construct a
+// no non-test source in internal/coreclient outside client.go may construct a
 // transport dial of its own (the shared CoreClient dial is the only one;
 // client.go's exact allowed shape is pinned by its own test above).
 func TestNoSecondDialImplementationInUI(t *testing.T) {

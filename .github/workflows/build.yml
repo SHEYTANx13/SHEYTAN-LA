@@ -470,7 +470,7 @@ jobs:
         run: |
           try {
             $sizeLimit = 100000000
-            $root = "dist/windows/app/${env:WIN_PKG_ROOT}"
+            $root = "dist/SHEYTAN-LA-ALPHA-windows-x64-portable/${env:WIN_PKG_ROOT}"
             New-Item -ItemType Directory -Force -Path ci-logs | Out-Null
             $files = @(Get-ChildItem -Recurse -File $root)
             $violations = @($files | Where-Object { $_.Length -gt $sizeLimit })
@@ -496,10 +496,10 @@ jobs:
         shell: pwsh
         run: |
           try {
-            Compress-Archive -Path "dist/windows/app/${env:WIN_PKG_ROOT}" -DestinationPath "dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip" -Force -ErrorAction Stop
+            Compress-Archive -Path "dist/SHEYTAN-LA-ALPHA-windows-x64-portable/${env:WIN_PKG_ROOT}" -DestinationPath "dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip" -Force -ErrorAction Stop
             Write-Host "ZIP created"
           } catch {
-            Write-Host ("::error::Create Windows ZIP failed: source dist/windows/app/${env:WIN_PKG_ROOT}, destination dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip - {0}" -f $_.Exception.Message)
+            Write-Host ("::error::Create Windows ZIP failed: source dist/SHEYTAN-LA-ALPHA-windows-x64-portable/${env:WIN_PKG_ROOT}, destination dist/SHEYTAN-LA-ALPHA-windows-x64-portable.zip - {0}" -f $_.Exception.Message)
             Set-Content -Path ci-logs/windows-x64-upstream-failure.txt -Value 'Create Windows ZIP'
             throw
           }
@@ -716,7 +716,7 @@ jobs:
         run: |
           set -uo pipefail
           if ! bash scripts/ci/package-size-audit.sh \
-            --dir "dist/linux/app/${LINUX_PKG_ROOT}" \
+            --dir "dist/SHEYTAN-LA-ALPHA-linux-x64-portable/${LINUX_PKG_ROOT}" \
             | tee ci-logs/linux-size-audit.log; then
             echo "::error::staged payload size audit failed"
             echo "Payload size gate (100 MB per file)" > ci-logs/linux-x64-upstream-failure.txt
@@ -998,12 +998,21 @@ jobs:
           echo "upload-package=$upload" >> "$GITHUB_OUTPUT"
           echo "package upload eligibility: $upload ($reason)"
 
+      # Run 45634345922 update (operator direction: "no extra layer of
+      # zip"): the artifact carries the UNPACKED portable tree, so the
+      # run-page download IS the package contents — exactly ONE archive
+      # layer, never a zip inside a zip. The sealed portable archives
+      # stay in dist/ for the verification gates and the tag-only
+      # release job (which re-creates them deterministically from the
+      # same bytes). The `**` glob matches only the CONTENTS of the
+      # staged trees, so the sealed archives themselves never ride
+      # along.
       - name: Upload the platform package
         if: always() && steps.package-eligibility.outputs.upload-package == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ matrix.artifact }}
-          path: dist/SHEYTAN-LA-ALPHA-*
+          path: dist/SHEYTAN-LA-ALPHA-*/
           if-no-files-found: error
           retention-days: 14
           overwrite: true
@@ -1076,6 +1085,19 @@ jobs:
             echo "If the report contains a MISSING LOG SOURCES section, job logs could not be recovered for those jobs and coverage=INCOMPLETE."
             echo ""
             echo "Job results: platform-build=${{ needs.platform-build.result }} (the five-target matrix; this collector job reports its own conclusion in the run page)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # Run 45634345922 update (operator direction: the warning log
+          # must not require a zip download): the FULL report is rendered
+          # into the run summary below, bounded to 256 KiB so a
+          # pathological run can never blow the summary surface. The
+          # artifact stays the machine-readable copy.
+          {
+            echo "## Errors and warnings (full report)"
+            echo ""
+            echo '```'
+            head -c 262144 SHEYTAN-LA-errors-warnings.txt
+            echo ""
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       # The ONE evidence artifact (2026-11-23 policy): the curated
@@ -1169,6 +1191,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Run 45634345922 update: the platform artifacts carry the UNPACKED
+      # portable trees (the run-page download is one archive layer, never
+      # a zip inside a zip). The tag-only release job re-creates the two
+      # sealed archives from those exact bytes, deterministically, before
+      # the verification and manifest steps run.
       - name: Download Windows portable package
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
@@ -1180,6 +1207,17 @@ jobs:
         with:
           name: SHEYTAN-LA-ALPHA-linux-x64-portable
           path: dist/
+
+      - name: Re-create the sealed portable archives from the staged trees
+        run: |
+          set -euo pipefail
+          win_tree="dist/SHEYTAN-LA-ALPHA-windows-x64-portable"
+          lin_tree="dist/SHEYTAN-LA-ALPHA-linux-x64-portable"
+          test -f "${win_tree}/SHEYTAN-LA/SHEYTAN-LA.exe" || { echo "::error::windows staging tree missing SHEYTAN-LA/SHEYTAN-LA.exe"; exit 1; }
+          test -f "${lin_tree}/SHEYTAN-LA/SHEYTAN-LA" || { echo "::error::linux staging tree missing SHEYTAN-LA/SHEYTAN-LA"; exit 1; }
+          (cd "${win_tree}" && zip -qr "../SHEYTAN-LA-ALPHA-windows-x64-portable.zip" "SHEYTAN-LA")
+          tar -czf "dist/SHEYTAN-LA-ALPHA-linux-x64-portable.tar.gz" -C "${lin_tree}" "SHEYTAN-LA"
+          echo "sealed archives re-created from the staged trees"
 
       - name: Verify the artifact set against the release contract
         run: |

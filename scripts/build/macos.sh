@@ -39,7 +39,7 @@ case "$TARGET" in
 esac
 
 ZIP="dist/SHEYTAN-LA-ALPHA-macos-${ARCH}-portable.zip"
-APP_DIR="dist/macos-${ARCH}"
+APP_DIR="dist/SHEYTAN-LA-ALPHA-macos-${ARCH}-portable"
 APP_BUNDLE="${APP_DIR}/SHEYTAN-LA.app"
 
 mkdir -p ci-logs
@@ -166,7 +166,7 @@ case "$phase" in
   build)
     export CGO_ENABLED=1
     mkdir -p "${APP_DIR}/app"
-    if ! GOOS=darwin GOARCH="${GOARCH_VALUE}" go build -trimpath -o "${APP_DIR}/app/SHEYTAN-LA" ./cmd/sheytan-local-agent; then
+    if ! GOOS=darwin GOARCH="${GOARCH_VALUE}" go build -trimpath -tags webworkspace -o "${APP_DIR}/app/SHEYTAN-LA" ./cmd/sheytan-local-agent; then
       fail_gate "Build the full desktop application (native darwin/${GOARCH_VALUE})" "the darwin/${GOARCH_VALUE} desktop build failed"
     fi
     ;;
@@ -191,7 +191,7 @@ case "$phase" in
     mkdir -p "${app}/Contents/MacOS" "${app}/Contents/Resources"
     cp "${APP_DIR}/app/SHEYTAN-LA" "${app}/Contents/MacOS/SHEYTAN-LA"
     chmod +x "${app}/Contents/MacOS/SHEYTAN-LA"
-    printf 'product: SHEYTAN-LA\nstage: ALPHA\ncommit: %s\nui: fyne (one Go UI)\n' "${GITHUB_SHA:-local}" > "${app}/Contents/Resources/BUILD-INFO.txt"
+    printf 'product: SHEYTAN-LA\nstage: ALPHA\ncommit: %s\nui: adaptive web shell (web workspace host)\n' "${GITHUB_SHA:-local}" > "${app}/Contents/Resources/BUILD-INFO.txt"
     write_info_plist "${app}/Contents/Info.plist"
     # The emitted plist is already unindented; the sed pass below is a
     # belt-and-braces guard so the XML declaration sits at byte 0, then

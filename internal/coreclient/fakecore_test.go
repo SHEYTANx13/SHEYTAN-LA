@@ -8,7 +8,7 @@
 // CoreClient dials the platform-aware localipc transport — Windows named
 // pipe / Unix domain socket — through the ONE canonical localipc.DialContext;
 // the fake server url is passed the same way through a tiny adapter).
-package fyneui
+package coreclient
 
 import (
 	"context"

@@ -80,6 +80,7 @@ import (
 #include <sys/proc_info.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
+#include <sys/user.h>
 #include <netinet/in.h>
 #include <string.h>
 
@@ -133,6 +134,46 @@ static int c_list_all_pids(void *buf, int cap_pids) {
 static int c_pid_at(const void *buf, int index) {
         const pid_t *pids = (const pid_t *)buf;
         return (int)pids[index];
+}
+
+// ENUMERATION REDUNDANCY (run 45634345922 repair): the hosted macOS lanes
+// failed the ENTIRE attribution family across three runs while the
+// record-level and metadata probes stayed green — the only stage whose
+// failure deterministically kills every live-port query is the WHOLE-TABLE
+// enumeration. The walk therefore carries TWO independent enumeration
+// sources for the SAME PROC_ALL_PIDS contract: the libproc wrapper
+// proc_listallpids (the proc_info LISTPIDS syscall) and the BSD sysctl
+// KERN_PROC_ALL (the ps(1) path — a different kernel entry point). One
+// source failing is a recorded class and a fallback attempt, not a whole-
+// walk fatal; both failing is the typed unknown, with both classes named.
+// All structure knowledge (kinfo_proc) stays in C — Go receives pids.
+
+// c_list_pids_sysctl fills buf with up to cap_pids process identifiers
+// through the BSD sysctl KERN_PROC_ALL interface. Returns the pid count
+// (size/sizeof(struct kinfo_proc)), or -1 with errno set (ENOMEM also
+// reports the needed size through *needed_size, the documented sysctl
+// resize contract).
+static int c_list_pids_sysctl(void *buf, int cap_pids, size_t *needed_size) {
+        int mib[2];
+        size_t size;
+
+        mib[0] = CTL_KERN;
+        mib[1] = KERN_PROC_ALL;
+        size = (size_t)cap_pids * sizeof(struct kinfo_proc);
+        errno = 0;
+        if (sysctl(mib, 2, buf, &size, NULL, 0) != 0) {
+                if (errno == ENOMEM && needed_size != NULL) {
+                        *needed_size = size;
+                }
+                return -1;
+        }
+        return (int)(size / sizeof(struct kinfo_proc));
+}
+
+// c_sysctl_pid_at reads one decoded pid from a KERN_PROC_ALL buffer.
+static int c_sysctl_pid_at(const void *buf, int index) {
+        const struct kinfo_proc *kp = (const struct kinfo_proc *)buf;
+        return (int)kp[index].kp_proc.p_pid;
 }
 
 // c_list_fds returns the PROC_PIDLISTFDS answer in BYTES for pid
@@ -327,9 +368,13 @@ func mapProcInfoErrno(err error) error {
 // pid space is never guessed.
 
 // listAllPIDs returns every PID the kernel reports (PROC_ALL_PIDS) via
-// proc_listallpids. The buffer grows until the documented pid-count answer
-// no longer fills it; every returned pid is validated, and an answer that
-// cannot fit the documented contract fails typed instead of guessing.
+// the PRIMARY enumeration source (proc_listallpids — the proc_info
+// LISTPIDS syscall). The buffer grows until the documented pid-count
+// answer no longer fills it; every returned pid is validated, and an
+// answer that cannot fit the documented contract fails typed instead of
+// guessing. On a typed failure the walk falls back to the BSD sysctl
+// KERN_PROC_ALL source (listAllPIDsSysctl) before giving up — see the
+// ENUMERATION REDUNDANCY note in the C prelude.
 func listAllPIDs() ([]int32, error) {
 	const initialPIDs = 8192
 	const maxPIDs = 1 << 21 // 2,097,152 pids — far beyond any real process table
@@ -378,6 +423,77 @@ func listAllPIDs() ([]int32, error) {
 		}
 
 		capPIDs *= 2
+	}
+}
+
+// listAllPIDsSysctl is the SECOND enumeration source: the BSD sysctl
+// KERN_PROC_ALL (the ps(1) path — a different kernel entry point from the
+// proc_info LISTPIDS syscall). Same pid-count contract, same validation,
+// same growth bound; kinfo_proc knowledge stays in C. The per-entry
+// buffer bound (1024 bytes) exceeds the real kinfo_proc size on both
+// darwin architectures, so the kernel write always fits its slot count.
+func listAllPIDsSysctl() ([]int32, error) {
+	const (
+		initialPIDs  = 2048
+		maxPIDs      = 1 << 14 // 16,384 entries — far beyond any real macOS process table
+		entryBufSize = 1024
+	)
+
+	capPIDs := initialPIDs
+
+	for {
+		buf := make([]byte, capPIDs*entryBufSize)
+
+		var needed C.size_t
+
+		n, err := C.c_list_pids_sysctl(unsafe.Pointer(&buf[0]), C.int(capPIDs), &needed)
+		runtime.KeepAlive(buf)
+
+		if err != nil {
+			// ENOMEM carries the needed size — grow toward it, bounded;
+			// every other errno is typed and retried once at the doubled
+			// cap (a mid-walk mutation can transiently change the table;
+			// the bound is the honest stop).
+			var errno syscall.Errno
+			if errors.As(err, &errno) && errno == syscall.ENOMEM {
+				if needed > 0 {
+					if want := int(needed)/648 + 1; want > capPIDs {
+						capPIDs = want
+					}
+				} else {
+					capPIDs *= 2
+				}
+
+				if capPIDs > maxPIDs {
+					return nil, fmt.Errorf("%w: the sysctl KERN_PROC_ALL pid list exceeds the %d-entry walk cap", errProcTruncated, maxPIDs)
+				}
+
+				continue
+			}
+
+			return nil, mapProcInfoErrno(err)
+		}
+
+		if n < 0 || n > capPIDs {
+			return nil, fmt.Errorf("%w: sysctl KERN_PROC_ALL answered %d entries against a %d-entry buffer — the kernel answer does not fit the documented contract", errProcTruncated, n, capPIDs)
+		}
+
+		pids := make([]int32, 0, n)
+
+		for i := 0; i < n; i++ {
+			p := int(C.c_sysctl_pid_at(unsafe.Pointer(&buf[0]), C.int(i)))
+			runtime.KeepAlive(buf)
+
+			// Same semantic validation as the primary source: a
+			// non-positive pid means the decode is wrong — fail closed.
+			if p <= 0 {
+				return nil, fmt.Errorf("%w: sysctl KERN_PROC_ALL returned pid %d at index %d — outside the documented pid space", errProcTruncated, p, i)
+			}
+
+			pids = append(pids, int32(p))
+		}
+
+		return pids, nil
 	}
 }
 
@@ -583,11 +699,22 @@ func listeningProcessImpl(port int) (int, string, bool, error) {
 
 	selfPID := int32(os.Getpid())
 
+	// ENUMERATION REDUNDANCY: the primary source failing is a recorded
+	// class and a fallback attempt, never a whole-walk fatal. Only when
+	// BOTH sources refuse is the answer the typed unknown — with both
+	// classes named and the diagnostic FRONT-LOADED so the consolidated
+	// evidence channel's bounded message window carries the WHY.
 	pids, err := listAllPIDs()
 	if err != nil {
 		diag.EnumerationError = errorClassOf(err)
 
-		return 0, "", false, fmt.Errorf("%w: darwin process enumeration failed: %v (%s)", ErrPortOwnerUnknown, err, renderProcWalkDiagnostic(&diag))
+		pids2, err2 := listAllPIDsSysctl()
+		if err2 != nil {
+			return 0, "", false, fmt.Errorf("%w (walk-diag %s): darwin process enumeration failed on both sources: proc_listallpids: %v; sysctl KERN_PROC_ALL: %v",
+				ErrPortOwnerUnknown, renderProcWalkDiagnostic(&diag), err, err2)
+		}
+
+		pids = pids2
 	}
 
 	diag.PIDs = len(pids)
@@ -730,8 +857,8 @@ func listeningProcessImpl(port int) (int, string, bool, error) {
 	}
 
 	if sawInaccessible {
-		return 0, "", false, fmt.Errorf("%w: port %d has listener candidates this process may not inspect on %s/%s (%s)",
-			ErrPortOwnerUnknown, port, runtime.GOOS, runtime.GOARCH, renderProcWalkDiagnostic(&diag))
+		return 0, "", false, fmt.Errorf("%w (walk-diag %s): port %d has listener candidates this process may not inspect on %s/%s",
+			ErrPortOwnerUnknown, renderProcWalkDiagnostic(&diag), port, runtime.GOOS, runtime.GOARCH)
 	}
 
 	return 0, "", false, nil

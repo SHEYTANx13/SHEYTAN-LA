@@ -1,6 +1,6 @@
 //go:build !headless
 
-package fyneui
+package coreclient
 
 import (
 	"bytes"

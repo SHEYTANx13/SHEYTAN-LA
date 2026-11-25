@@ -125,9 +125,17 @@ func main() {
 		Compatibility:       winres.Win10AndAbove,
 	})
 
-	// 5) Emit the .syso next to main.go — the Go toolchain links it into
-	//    windows/amd64 builds automatically (other platforms ignore it).
-	out, err := os.Create("rsrc_windows_amd64.syso")
+	// 5) Emit the .syso NEXT TO main.go — the Go toolchain links only
+	//    the .syso files found in the PACKAGE DIRECTORY of the built
+	//    target, so the path is the app entry package, never the
+	//    current working directory. Run 45634345922 repair (the "no
+	//    icon" defect): the previous relative path wrote the object
+	//    into the repo root (where `go run ./scripts/gen-syso` happens
+	//    to execute), the build linked nothing, and the shipped
+	//    SHEYTAN-LA.exe carried the generic Go icon, no version info
+	//    and no DPI manifest. Other platforms ignore a windows .syso.
+	const sysoPath = "cmd/sheytan-local-agent/rsrc_windows_amd64.syso"
+	out, err := os.Create(sysoPath)
 	if err != nil {
 		fatal("create syso: %v", err)
 	}
@@ -144,8 +152,8 @@ func main() {
 		fatal("write ico: %v", err)
 	}
 
-	fmt.Printf("rsrc_windows_amd64.syso + build/sheytan.ico written — icon + version %s + DPI-aware manifest embedded\n",
-		config.AppVersion)
+	fmt.Printf("%s + build/sheytan.ico written — icon + version %s + DPI-aware manifest embedded (linked from the app package directory)\n",
+		sysoPath, config.AppVersion)
 }
 
 // writeICO packs img into a classic multi-image .ico file: BMP entries

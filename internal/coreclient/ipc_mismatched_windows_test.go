@@ -11,7 +11,7 @@
 // TCP test seam (NewCoreClientForTest) — the seam the fake-core UI
 // contract tests own. The Unix twin (TestCoreClientRefusesMismatchedProtocol)
 // proves the same refusal over a real socket.
-package fyneui
+package coreclient
 
 import (
 	"context"

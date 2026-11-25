@@ -7,7 +7,7 @@
 // schema (internal/config) remains the only authority for values, defaults
 // and validation; this registry decides WHERE a field is edited and its
 // wire type.
-package fyneui
+package coreclient
 
 // SettingsSection mirrors the 8-section IA.
 type SettingsSection struct {

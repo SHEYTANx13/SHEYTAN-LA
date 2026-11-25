@@ -106,18 +106,22 @@ func For(version string) Contract {
 // the workflow assembles the portable Windows application into. Kept as a
 // concrete constant for tooling and tests; the workflow itself derives the
 // same path from the canonical WIN_PKG_ROOT (see the workflow slot below).
-const WindowsAppDir = "dist/windows/app/" + WindowsAppRoot
+// Run 45634345922 update: the staging tree carries the portable package
+// name (the contracted artifact prefix) because the run-page artifact
+// uploads the UNPACKED tree — the download is exactly one archive layer,
+// never a zip inside a zip.
+const WindowsAppDir = "dist/SHEYTAN-LA-ALPHA-windows-x64-portable/" + WindowsAppRoot
 
 // LinuxAppDir is the concrete Linux staging directory for tooling/tests.
-const LinuxAppDir = "dist/linux/app/" + LinuxAppRoot
+const LinuxAppDir = "dist/SHEYTAN-LA-ALPHA-linux-x64-portable/" + LinuxAppRoot
 
 // Workflow staging-directory slots: the exact spellings the workflow must
 // contain. Requiring the SLOT (not the concrete name) is what makes the
 // canonical variable contract enforceable — a workflow that reintroduces a
 // duplicated root literal in the staging path no longer matches.
 const (
-	WindowsAppDirWorkflowSlot = "dist/windows/app/" + WinRootPwsh
-	LinuxAppDirWorkflowSlot   = "dist/linux/app/" + LinuxRootBash
+	WindowsAppDirWorkflowSlot = "dist/SHEYTAN-LA-ALPHA-windows-x64-portable/" + WinRootPwsh
+	LinuxAppDirWorkflowSlot   = "dist/SHEYTAN-LA-ALPHA-linux-x64-portable/" + LinuxRootBash
 )
 
 // RequiredWindowsZipEntries lists the entries the Windows portable ZIP
