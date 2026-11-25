@@ -105,12 +105,31 @@ switch ($Phase) {
       # bare exit code is not a diagnosis - surface the suite's own
       # root-cause records AND the failing tests' message lines (the
       # walk-diag stage evidence) as ::error:: annotations, bounded.
+      # Run 45522548507 repair (verdict-aware messages): collect the
+      # FAILED test names from the -json fail events FIRST - an output
+      # event can echo the literal string, so fail events are the lines
+      # that are NOT output events - and emit only those tests' message
+      # lines. The previous verdict-blind selector surfaced SKIP messages
+      # and success-path t.Logf lines as "failure evidence" (8 of the 9
+      # records in run 45522548507 described tests that never failed).
+      # Messages are emitted before frames so the consolidated channel's
+      # bounded budget carries the WHY.
       Write-Host "::error::headless suite failure evidence (windows/amd64): the suite's own root-cause records follow (bounded to 15; the full -json stream is in the step log)"
+      $failedTests = @{}
+      Get-Content "ci-logs/win-go-test-headless.log" | ForEach-Object {
+        if ($_.Contains('"Action":"fail"') -and -not $_.Contains('"Action":"output"')) {
+          if ($_ -match '"Test":"([^"]+)"') { $failedTests[$Matches[1]] = $true } else { $failedTests[''] = $true }
+        }
+      }
+      Select-String -Path "ci-logs/win-go-test-headless.log" -Pattern '(walk-diag |\s[A-Za-z0-9_/]+\.go:[0-9]+: )' | Where-Object { $_.Line -notmatch '\.go:[0-9]+: (SKIP|skip)' } | ForEach-Object {
+        $test = ''
+        if ($_.Line -match '"Test":"([^"]+)"') { $test = $Matches[1] }
+        if ($failedTests.ContainsKey($test)) { $_ }
+      } | Select-Object -First 15 | ForEach-Object {
+        Write-Host "::error::windows/amd64 failure message: $($_.LineNumber):$($_.Line)"
+      }
       Select-String -Path "ci-logs/win-go-test-headless.log" -Pattern '(--- FAIL:|panic: |fatal error: |^FAIL|test timed out|signal: [A-Z]+)' | Select-Object -First 15 | ForEach-Object {
         Write-Host "::error::windows/amd64 suite evidence: $($_.LineNumber):$($_.Line)"
-      }
-      Select-String -Path "ci-logs/win-go-test-headless.log" -Pattern '(walk-diag |\s[A-Za-z0-9_/]+\.go:[0-9]+: )' | Where-Object { $_.Line -notmatch '\.go:[0-9]+: (SKIP|skip)' } | Select-Object -First 15 | ForEach-Object {
-        Write-Host "::error::windows/amd64 failure message: $($_.LineNumber):$($_.Line)"
       }
       Fail-Gate "Headless core tests (windows/amd64)" "headless core tests failed on windows/amd64 (exit $LASTEXITCODE; failing test names in ci-logs/win-go-test-headless.log)"
     }

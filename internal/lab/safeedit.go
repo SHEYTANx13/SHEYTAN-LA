@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // Safe file editing — v1.1.5 Phase 6 (coding effectiveness).
@@ -356,11 +359,67 @@ func writeFileAtomicInRoot(root *os.Root, rel string, data []byte) error {
 		return fmt.Errorf("close temp: %w", err)
 	}
 
-	if err := root.Rename(tmpRel, rel); err != nil {
+	if err := renameIntoPlaceBounded(root, tmpRel, rel); err != nil {
 		_ = root.Remove(tmpRel)
 
 		return fmt.Errorf("rename into place: %w", err)
 	}
 
 	return nil
+}
+
+// renameIntoPlaceBounded performs the final atomic rename with a bounded
+// retry for the transient Windows file-lock window: real-time malware
+// scanners and the search indexer briefly hold a lock on a file that was
+// just written, synced and closed, so the rename (and any immediate
+// re-read behind it) can fail with ERROR_SHARING_VIOLATION,
+// ERROR_LOCK_VIOLATION or ERROR_ACCESS_DENIED on an otherwise healthy
+// filesystem — the flake class run 45522548507 recorded on the hosted
+// windows/amd64 lane (TestEditFileInvalidatesVerification). The staging
+// file still exists on every retry, so the rename cannot double-apply an
+// edit, the content is already durable, and the bound (four attempts,
+// ~105ms total backoff) keeps every persistent failure loud and typed —
+// the fail-closed contract is unchanged. On every other platform the
+// retry is a single attempt, exactly as before.
+func renameIntoPlaceBounded(root *os.Root, tmpRel, rel string) error {
+	const maxRenameAttempts = 4
+
+	var err error
+
+	for attempt := 0; attempt < maxRenameAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(1<<(attempt-1)) * 15 * time.Millisecond)
+		}
+
+		err = root.Rename(tmpRel, rel)
+		if err == nil || !isTransientWindowsFileLock(err) {
+			return err
+		}
+	}
+
+	return err
+}
+
+// isTransientWindowsFileLock reports whether err is one of the Windows
+// sharing-violation errnos a real-time scanner can produce against a
+// freshly written file. The values are the win32 error codes surfaced by
+// syscall.Errno on windows/amd64 (syscall does not export the named
+// constants on other platforms, so the GOOS-guarded literals carry a
+// comment naming each one).
+func isTransientWindowsFileLock(err error) bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+
+	var errno syscall.Errno
+	if !errors.As(err, &errno) {
+		return false
+	}
+
+	switch errno {
+	case 5, 32, 33: // ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION
+		return true
+	}
+
+	return false
 }

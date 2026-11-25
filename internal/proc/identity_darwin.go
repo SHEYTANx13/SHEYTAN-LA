@@ -63,6 +63,7 @@ package proc
 //     of one call only and pinned with runtime.KeepAlive.
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -78,6 +79,7 @@ import (
 #include <sys/param.h>
 #include <sys/proc_info.h>
 #include <sys/socket.h>
+#include <sys/sysctl.h>
 #include <netinet/in.h>
 #include <string.h>
 
@@ -228,6 +230,38 @@ static int c_proc_path(int pid, void *buf, int bytes) {
         return (int)proc_pidpath(pid, buf, (uint32_t)bytes);
 }
 
+// c_proc_args2 fetches KERN_PROCARGS2 for pid — the DOCUMENTED sysctl
+// interface carrying the process's original exec arguments. Layout of a
+// successful answer: [int32 argc][exec path, NUL-terminated, padded]
+// [argv strings][env strings] — the FIRST NUL-terminated string after the
+// argc field is the exec path (argv[0]). Returns the byte count written
+// (0 < n <= bytes), or -1 with errno set.
+// Run 45522548507 repair: this is the PATH-INDEPENDENT identity fallback
+// for the actions/runner-images#14756 class — proc_pidpath answering
+// ENOENT for a LIVE process whose image was unlinked while running. The
+// kernel keeps argv[0] even when the image is unlinked, so the class the
+// run evidence proved stays attributable without weakening a single
+// fail-closed state: a corpse (ESRCH) still refuses, an uninspectable
+// candidate still refuses.
+static int c_proc_args2(int pid, void *buf, int bytes) {
+        int mib[3];
+        size_t size;
+
+        mib[0] = CTL_KERN;
+        mib[1] = KERN_PROCARGS2;
+        mib[2] = pid;
+        size = (size_t)bytes;
+        errno = 0;
+        if (sysctl(mib, 3, buf, &size, NULL, 0) != 0) {
+                return -1;
+        }
+        if (size > (size_t)bytes || size < sizeof(int) + 2) {
+                errno = EINVAL;
+                return -1;
+        }
+        return (int)size;
+}
+
 // c_start_time fetches PROC_PIDTBSDINFO and returns the absolute epoch
 // start identity (pbi_start_tvsec / pbi_start_tvusec) — the PID-reuse
 // defense values, read through the real header structure. Return codes:
@@ -281,16 +315,16 @@ func mapProcInfoErrno(err error) error {
 	}
 }
 
-// darwinPIDSpaceUpperBound is the kernel pid space upper bound the walk
-// validates every decoded pid against. The value mirrors the documented
-// XNU historical PID_MAX (99999): the constant CANNOT be read from a
-// public Apple SDK header (sys/limits.h is not shipped on macOS and
-// PID_MAX lives in the XNU-private sys/proc_internal.h — run
-// 44663205295 repair), so it is carried here as an explicit, typed
-// bound instead of depending on a private or unavailable macro. A pid
-// outside [1, darwinPIDSpaceUpperBound] means the buffer decode is
-// wrong and the walk fails typed — never a silent partial answer.
-const darwinPIDSpaceUpperBound = 99999
+// Run 45522548507 repair (defensive): the historical XNU PID_MAX (99999)
+// hard upper-bound validation is RETIRED. The constant cannot be read
+// from a public Apple SDK header (sys/limits.h is not shipped on macOS
+// and PID_MAX lives in the XNU-private sys/proc_internal.h — run
+// 44663205295 repair), and a hard-coded historical value turned ANY pid
+// above it into a whole-walk truncation failure — an environment defect
+// masquerading as a decode defect. The decode-wrong signal stays exactly
+// as documented: a non-positive pid fails the walk typed; the buffer
+// growth cap (2^21 pids) stays the allocation bound; the kernel's real
+// pid space is never guessed.
 
 // listAllPIDs returns every PID the kernel reports (PROC_ALL_PIDS) via
 // proc_listallpids. The buffer grows until the documented pid-count answer
@@ -324,13 +358,12 @@ func listAllPIDs() ([]int32, error) {
 				p := int(C.c_pid_at(unsafe.Pointer(&buf[0]), C.int(i)))
 				runtime.KeepAlive(buf)
 
-				// Semantic validation: a pid outside [1,
-				// darwinPIDSpaceUpperBound] means the buffer decode is
-				// wrong — fail closed, never guess. The bound is the
-				// explicit Go-side constant above (the public Apple SDK
-				// does not ship sys/limits.h, and XNU's PID_MAX is
-				// private — run 44663205295 repair).
-				if p <= 0 || p > darwinPIDSpaceUpperBound {
+				// Semantic validation: a non-positive pid means the
+				// buffer decode is wrong — fail closed, never guess.
+				// The historical PID_MAX upper bound is retired (run
+				// 45522548507 repair); the walk cap above bounds the
+				// allocation and the kernel owns the pid space.
+				if p <= 0 {
 					return nil, fmt.Errorf("%w: proc_listallpids returned pid %d at index %d — outside the documented pid space", errProcTruncated, p, i)
 				}
 
@@ -640,6 +673,32 @@ func listeningProcessImpl(port int) (int, string, bool, error) {
 
 			exe, perr := processExePathImpl(int(pid))
 			if perr != nil {
+				// Run 45522548507 repair: a path failure on a LIVE
+				// port-matched owner no longer ends the proof. The
+				// runner-images#14756 class (proc_pidpath ENOENT for a
+				// live process whose image was unlinked while running)
+				// hits exactly the processes the walk must attribute:
+				// the go test binary and its own re-exec'd children —
+				// which is why the attribution family stayed red after
+				// the ENOENT mapping landed (the mapping renamed the
+				// class but the walk still refused). Identity is now
+				// re-proven PATH-INDEPENDENTLY: the walk's own pid via
+				// os.Executable (the kernel's launch path, unlink-proof)
+				// and every other same-user candidate via KERN_PROCARGS2
+				// argv[0] — the exact analog of the Linux walk's
+				// /proc/<pid>/exe fallback. A corpse is still never
+				// adopted, and an owner both probes refuse stays unproven
+				// and recorded below — the fail-closed contract is
+				// unchanged; the fallback only widens the admissible
+				// EVIDENCE for a live candidate this caller could
+				// already inspect (its fd list and socket record were
+				// read successfully).
+				if !errors.Is(perr, ErrProcessNotFound) {
+					if exe2, ferr := fallbackOwnerExePath(int(pid), selfPID); ferr == nil {
+						return int(pid), exe2, true, nil
+					}
+				}
+
 				switch {
 				case errors.Is(perr, ErrProcessNotFound):
 					// The owner died between the socket read and the
@@ -744,13 +803,103 @@ func processExePathImpl(pid int) (string, error) {
 	return string(buf[:end]), nil
 }
 
+// fallbackOwnerExePath is the path-INDEPENDENT identity fallback for a
+// live port-matched owner whose proc_pidpath answer is unusable (the
+// runner-images#14756 ENOENT class). Two sources, in order:
+//
+//  1. the walk's OWN pid: os.Executable (Go's _NSGetExecutablePath — the
+//     kernel's recorded launch path, unlink-proof by construction);
+//  2. any other same-user candidate: KERN_PROCARGS2 argv[0] — the same
+//     interface the Linux walk's /proc/<pid>/exe fallback mirrors.
+//
+// The walk has ALREADY read this candidate's fd list and socket record
+// through proc_pidinfo (same-user proof); the fallback only widens the
+// admissible identity evidence. Every refusal stays typed and fail-closed.
+func fallbackOwnerExePath(pid int, selfPID int32) (string, error) {
+	if int32(pid) == selfPID {
+		if exe, err := os.Executable(); err == nil && exe != "" {
+			return exe, nil
+		}
+	}
+
+	return processArgsExePathImpl(pid)
+}
+
+// processArgsExePathImpl resolves the exec path of pid through the
+// documented KERN_PROCARGS2 sysctl (sys/sysctl.h — a PUBLIC interface,
+// unlike the private libproc calls). The answer's layout is
+// [int32 argc][exec path NUL-terminated][padding][argv][env]; the first
+// NUL-terminated string after the argc field is the exec path. Typed
+// failures exactly like processExePathImpl: a vanished pid is
+// ErrProcessNotFound, an uninspectable one is ErrProcessMetadataUnsupported,
+// everything else carries the raw errno for the diagnostic classes.
+func processArgsExePathImpl(pid int) (string, error) {
+	if pid <= 0 {
+		return "", ErrProcessNotFound
+	}
+
+	// ARG_MAX-scale answer: the sysctl writes argc + exec path + argv +
+	// env, and a hosted runner's environment alone can exceed 4 KiB.
+	// The exec path sits at the FRONT of the answer, so the buffer only
+	// needs to admit the whole sysctl write; one transient allocation on
+	// a rare path is bounded and never retained.
+	buf := make([]byte, 1<<20)
+
+	n, err := C.c_proc_args2(C.int(pid), unsafe.Pointer(&buf[0]), C.int(len(buf)))
+	runtime.KeepAlive(buf)
+
+	if err != nil {
+		switch mapped := mapProcInfoErrno(err); {
+		case errors.Is(mapped, errProcGone):
+			return "", ErrProcessNotFound
+		case errors.Is(mapped, errProcAccessDenied):
+			return "", fmt.Errorf("%w (pid %d): %v", ErrProcessMetadataUnsupported, pid, mapped)
+		default:
+			// Same %w contract as processExePathImpl: the raw errno
+			// stays errors.As/Is-visible for the typed classes.
+			return "", fmt.Errorf("KERN_PROCARGS2 for pid %d failed: %w", pid, mapped)
+		}
+	}
+
+	if n <= 0 || int(n) > len(buf) {
+		return "", fmt.Errorf("KERN_PROCARGS2 for pid %d returned %d bytes — outside the documented byte-count contract", pid, n)
+	}
+
+	data := buf[:int(n)]
+
+	if len(data) < 5 {
+		return "", fmt.Errorf("KERN_PROCARGS2 for pid %d answered %d bytes — too small to carry argc and the exec path", pid, n)
+	}
+
+	// argc is a little-endian int32 on both darwin architectures; it is
+	// parsed only as a sanity signal, never trusted as identity.
+	argc := int(uint32(data[0]) | uint32(data[1])<<8 | uint32(data[2])<<16 | uint32(data[3])<<24)
+
+	if argc <= 0 {
+		return "", fmt.Errorf("KERN_PROCARGS2 for pid %d carries argc %d — the answer does not describe an exec", pid, argc)
+	}
+
+	rest := data[4:]
+	end := bytes.IndexByte(rest, 0)
+	if end <= 0 {
+		return "", fmt.Errorf("KERN_PROCARGS2 for pid %d carries no exec path string", pid)
+	}
+
+	return string(rest[:end]), nil
+}
+
 // processStartTimeImpl on darwin: PROC_PIDTBSDINFO (proc_pidinfo) carries
 // pbi_start_tvsec/pbi_start_tvusec — the absolute epoch start time of the
 // process incarnation (run 44457547289 §1.3.a item 2: PID-reuse defense
 // needs the real start identity, not a name). The answer is typed:
 //   - a vanished PID is ErrProcessNotFound;
 //   - an uninspectable PID is a typed denied error — callers see "unknown",
-//     never a fabricated timestamp (run 44306343338 repair §4.7).
+//     never a fabricated timestamp (run 44306343338 repair §4.7);
+//   - ENOENT is the typed path-unresolvable class (run 45522548507 repair:
+//     the start-time probe can observe the same runner-image anomaly class
+//     as proc_pidpath, and TestListeningProcessDeadOwnerRefused's recycled-
+//     incarnation policy explicitly anticipates this sentinel here — the
+//     untyped default made that branch unreachable and the test fail loudly).
 func processStartTimeImpl(pid int) (time.Time, error) {
 	if pid <= 0 {
 		return time.Time{}, ErrProcessNotFound
@@ -768,6 +917,8 @@ func processStartTimeImpl(pid int) (time.Time, error) {
 		switch mapped := mapProcInfoErrno(err); {
 		case errors.Is(mapped, errProcGone):
 			return time.Time{}, ErrProcessNotFound
+		case errors.Is(mapped, syscall.ENOENT):
+			return time.Time{}, fmt.Errorf("%w (pid %d): %v", ErrProcessPathUnresolvable, pid, mapped)
 		case errors.Is(mapped, errProcAccessDenied):
 			return time.Time{}, fmt.Errorf("%w (pid %d): %v", ErrProcessMetadataUnsupported, pid, mapped)
 		default:

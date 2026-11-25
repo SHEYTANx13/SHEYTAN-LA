@@ -33,16 +33,42 @@ func localPortOf(raw int32) int {
 // (darwin is case-sensitive, unlike the Windows implementation). Pure Go —
 // shared by the native libproc bridge, the CGO_ENABLED=0 fallback and the
 // iOS contained provider (GOOS=ios satisfies the darwin constraint).
+//
+// Run 45522548507 repair: when an executable image is UNLINKED while the
+// process runs (the actions/runner-images#14756 class on the macos-15
+// runner images), filepath.EvalSymlinks fails on BOTH sides and the raw
+// strings can differ only by the macOS /private symlink alias
+// (proc_pidpath answers the canonical /private/var/... vnode path while
+// os.Executable answers the /var/... exec path — the boundary the
+// run 45086860202 repair documented). When both sides RESOLVE, the
+// comparison stays exact: two successfully resolved but different paths
+// are different files, and the alias fallback never runs.
 func sameExecutableImpl(a, b string) bool {
-	if ra, err := filepath.EvalSymlinks(a); err == nil {
+	ra, aerr := filepath.EvalSymlinks(a)
+	if aerr == nil {
 		a = ra
 	}
 
-	if rb, err := filepath.EvalSymlinks(b); err == nil {
+	rb, berr := filepath.EvalSymlinks(b)
+	if berr == nil {
 		b = rb
 	}
 
-	return a == b
+	if a == b {
+		return true
+	}
+
+	if aerr == nil && berr == nil {
+		// Both paths resolved to real files and differ: different images.
+		return false
+	}
+
+	// At least one image is unresolvable (the unlinked-image class): the
+	// surviving raw strings are compared lexically, with the /private
+	// symlink alias normalized in both directions.
+	ca, cb := filepath.Clean(a), filepath.Clean(b)
+
+	return ca == cb || ca == "/private"+cb || cb == "/private"+ca
 }
 
 // ---------------------------------------------------------------------------

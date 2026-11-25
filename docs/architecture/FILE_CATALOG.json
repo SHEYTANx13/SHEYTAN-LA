@@ -2994,6 +2994,15 @@
     "status": "active"
   },
   {
+    "path": "internal/desktop/desktop_nowails.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/desktop — The desktop application boot: core lifecycle, signals, ordered shutdown",
+    "layer": "domain",
+    "subsystem": "internal/desktop",
+    "status": "active"
+  },
+  {
     "path": "internal/desktop/desktop_test.go",
     "type": "go",
     "language": "Go",
@@ -3002,6 +3011,15 @@
     "subsystem": "internal/desktop",
     "testOnly": true,
     "status": "test"
+  },
+  {
+    "path": "internal/desktop/desktop_wails.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/desktop — The desktop application boot: core lifecycle, signals, ordered shutdown",
+    "layer": "domain",
+    "subsystem": "internal/desktop",
+    "status": "active"
   },
   {
     "path": "internal/desktop/headless.go",
@@ -3023,6 +3041,15 @@
   },
   {
     "path": "internal/desktop/renderboot_nogogpu.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/desktop — The desktop application boot: core lifecycle, signals, ordered shutdown",
+    "layer": "domain",
+    "subsystem": "internal/desktop",
+    "status": "active"
+  },
+  {
+    "path": "internal/desktop/ui_mode.go",
     "type": "go",
     "language": "Go",
     "purpose": "Implementation file in internal/desktop — The desktop application boot: core lifecycle, signals, ordered shutdown",
@@ -7675,6 +7702,64 @@
     "subsystem": "internal/webapphost",
     "testOnly": true,
     "status": "test"
+  },
+  {
+    "path": "internal/webshell/assets/app.css",
+    "type": "other",
+    "language": "",
+    "purpose": "Implementation file in internal/webshell/assets (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell/assets",
+    "runtimeAsset": true,
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webshell/assets/app.js",
+    "type": "other",
+    "language": "",
+    "purpose": "Implementation file in internal/webshell/assets (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell/assets",
+    "runtimeAsset": true,
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webshell/assets/index.html",
+    "type": "other",
+    "language": "",
+    "purpose": "Implementation file in internal/webshell/assets (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell/assets",
+    "runtimeAsset": true,
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webshell/webshell.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/webshell (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell",
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webshell/webshell_test.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Tests for internal/webshell (deterministic, table-driven where applicable)",
+    "layer": "domain",
+    "subsystem": "internal/webshell",
+    "testOnly": true,
+    "status": "test"
+  },
+  {
+    "path": "internal/webworkspace/host.go",
+    "type": "go",
+    "language": "Go",
+    "purpose": "Implementation file in internal/webworkspace (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webworkspace",
+    "status": "needs review"
   },
   {
     "path": "internal/webworkspace/provider.go",

@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>SHEYTAN-LA — ALPHA</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<noscript><p class="noscript">SHEYTAN-LA requires JavaScript for its workspace shell. The headless and CLI modes remain fully usable without it.</p></noscript>
+
+<div id="shell" data-class="compact">
+  <header class="topbar" role="banner">
+    <button id="nav-toggle" class="iconbtn" aria-label="Toggle navigation" aria-expanded="false">☰</button>
+    <div class="brand"><span class="brand-name">SHEYTAN™ Local-Agent</span><span class="brand-stage">ALPHA</span></div>
+    <div id="status" class="status" role="status" aria-live="polite">
+      <span id="status-dot" class="dot" aria-hidden="true"></span>
+      <span id="status-text">checking core…</span>
+    </div>
+    <div class="topbar-actions">
+      <button id="palette-btn" class="btn" aria-label="Command palette (Ctrl+K)" title="Command palette (Ctrl+K)">⌘ Commands</button>
+      <button id="notif-btn" class="iconbtn" aria-label="Notifications" aria-expanded="false">🔔<span id="notif-count" class="badge" hidden>0</span></button>
+    </div>
+  </header>
+
+  <nav id="rail" class="rail" aria-label="Workspaces"><ul id="rail-list"></ul></nav>
+
+  <main id="stage" class="stage scroll" tabindex="-1">
+    <section class="view" data-view="chat" hidden>
+      <h1>Chat</h1>
+      <div class="card module-slot"><p class="muted">The conversation module mounts here in the adaptive web shell. The native shells remain fully functional while the web module set is verified lane by lane.</p></div>
+    </section>
+    <section class="view" data-view="agent" hidden>
+      <h1>Agent</h1>
+      <div class="card module-slot"><p class="muted">The agent execution graph, tool inspector and approval queue mount here.</p></div>
+    </section>
+    <section class="view" data-view="workspace" hidden>
+      <h1>Workspace</h1>
+      <div class="card module-slot"><p class="muted">The rich-block workspace viewer (markdown, code, diff, tables, charts) mounts here.</p></div>
+    </section>
+    <section class="view" data-view="lab" hidden>
+      <h1>Coding Lab</h1>
+      <div class="card module-slot"><p class="muted">The coding lab workbench (read/edit/verify tools, task verification) mounts here.</p></div>
+    </section>
+    <section class="view" data-view="automation" hidden>
+      <h1>Automation</h1>
+      <div class="card module-slot"><p class="muted">The automation schedule editor and run history mount here.</p></div>
+    </section>
+    <section class="view" data-view="system" hidden>
+      <h1>System</h1>
+      <div class="card">
+        <h2>Core status</h2>
+        <p id="core-status" class="muted">polling…</p>
+        <p id="core-detail" class="muted small"></p>
+      </div>
+    </section>
+    <section class="view" data-view="settings" hidden>
+      <h1>Settings</h1>
+      <div class="card module-slot"><p class="muted">Shared preferences and per-workspace settings sections mount here. The native shells keep full settings control until parity is verified.</p></div>
+    </section>
+    <section class="view" data-view="studio" hidden>
+      <h1>3D Studio</h1>
+      <div class="card module-slot"><p class="muted">The read-only 3D topology viewer mounts here (lazy-loaded on first open, disposed on leave).</p></div>
+    </section>
+    <section class="view" data-view="engines" hidden>
+      <h1>Engines</h1>
+      <div class="card" id="download-card">
+        <h2>Engine update</h2>
+        <p id="dl-status" class="dl-status">checking…</p>
+        <div class="dl-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="dl-bar"><div id="dl-fill" class="dl-fill"></div></div>
+        <p id="dl-progress" class="dl-progress muted small">phase — / —</p>
+        <p id="dl-error" class="dl-error" hidden></p>
+      </div>
+      <div class="card module-slot"><p class="muted">The engine gallery (install, remove, context budgets) mounts here.</p></div>
+    </section>
+
+    <section class="view" data-view="history" hidden>
+      <h1>History</h1>
+      <div class="card module-slot"><p class="muted">Searchable run history mounts here.</p></div>
+    </section>
+    <section class="view" data-view="models" hidden>
+      <h1>Models</h1>
+      <div class="card module-slot"><p class="muted">The model registry (metadata first, weights never in the UI) mounts here.</p></div>
+    </section>
+    <section class="view" data-view="tools" hidden>
+      <h1>My Tools</h1>
+      <div class="card module-slot"><p class="muted">The tool catalog with permission scopes mounts here.</p></div>
+    </section>
+    <section class="view" data-view="logs" hidden>
+      <h1>Logs</h1>
+      <div class="card module-slot"><p class="muted">The bounded, cursor-paginated log surface mounts here.</p></div>
+    </section>
+  </main>
+
+  <aside id="notifications" class="notifications" aria-label="Notification center" hidden>
+    <h2>Notifications</h2>
+    <ul id="notif-list"></ul>
+    <p class="muted small" id="notif-empty">No notifications yet. Completed jobs, download phases and failures appear here.</p>
+  </aside>
+
+  <div id="palette" class="palette" role="dialog" aria-modal="true" aria-label="Command palette" hidden>
+    <div class="palette-box">
+      <input id="palette-input" type="text" placeholder="Type a workspace or command…" autocomplete="off" spellcheck="false" aria-label="Command palette input">
+      <ul id="palette-list" role="listbox"></ul>
+      <p class="muted small palette-hint">Enter to run · Esc to close · arrow keys to move</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>

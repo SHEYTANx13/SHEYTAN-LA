@@ -1,0 +1,201 @@
+/* SHEYTAN-LA adaptive web shell — design tokens + layout + touch contract.
+   The token block mirrors the product token authority (internal/theme):
+   same roles, radii, spacing scale, motion scale and touch floors. A
+   workspace may change density and arrangement, never the token language. */
+:root {
+  --color-bg: #101216;
+  --color-surface: #191D24;
+  --color-surface-raised: #222833;
+  --color-border: rgba(255, 255, 255, .10);
+  --color-text: #F3F5F8;
+  --color-muted: #A6AFBE;
+  --color-accent: #D52B42;
+  --color-ok: #2E9E6B;
+  --color-warn: #D59A2B;
+  --color-err: #D52B42;
+  --radius-card: 14px;
+  --radius-control: 9px;
+  --space-1: .25rem;
+  --space-2: .5rem;
+  --space-3: .75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --motion-fast: 120ms;
+  --motion-normal: 180ms;
+  --motion-slow: 260ms;
+  --touch-floor: 44px; /* ONE touch floor: every interactive element */
+  --rail-width: 13rem;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* Safe areas: the shell respects the platform insets (phone/foldable). */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+#shell {
+  display: grid;
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas: "top top" "rail stage";
+  height: 100vh;
+}
+
+/* ONE scroll contract for every section: momentum scrolling on touch,
+   contained overscroll, thin overlay scrollbars, keyboard reachable. */
+.scroll {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+  touch-action: pan-y;
+}
+.scroll::-webkit-scrollbar { width: 10px; }
+.scroll::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 5px; }
+
+/* --- top bar --- */
+.topbar {
+  grid-area: top;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  min-height: var(--touch-floor);
+}
+.brand { display: flex; align-items: baseline; gap: var(--space-2); white-space: nowrap; }
+.brand-name { font-weight: 650; letter-spacing: .01em; }
+.brand-stage { color: var(--color-accent); font-size: .72rem; font-weight: 700; border: 1px solid var(--color-accent); border-radius: 4px; padding: 0 var(--space-1); }
+.status { display: flex; align-items: center; gap: var(--space-2); color: var(--color-muted); min-width: 0; }
+.status #status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--color-muted); flex: none; }
+.dot.ok { background: var(--color-ok); }
+.dot.warn { background: var(--color-warn); }
+.dot.err { background: var(--color-err); }
+.topbar-actions { margin-left: auto; display: flex; gap: var(--space-2); }
+
+/* --- interactive floors: every control meets the touch contract --- */
+.btn, .iconbtn, #palette-input {
+  min-height: var(--touch-floor);
+  border-radius: var(--radius-control);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  font: inherit;
+}
+.btn { padding: 0 var(--space-3); }
+.iconbtn { min-width: var(--touch-floor); position: relative; }
+.btn:hover, .iconbtn:hover { border-color: var(--color-accent); }
+.btn:focus-visible, .iconbtn:focus-visible, a:focus-visible, #palette-input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.badge {
+  position: absolute; top: 2px; right: 2px;
+  background: var(--color-accent); color: #fff;
+  border-radius: 8px; font-size: .62rem; padding: 0 4px; min-width: 14px; text-align: center;
+}
+
+/* --- rail (navigation) --- */
+.rail { grid-area: rail; background: var(--color-surface); border-right: 1px solid var(--color-border); }
+.rail ul { list-style: none; margin: 0; padding: var(--space-2); display: flex; flex-direction: column; gap: 2px; }
+.rail a {
+  display: flex; align-items: center; gap: var(--space-3);
+  min-height: var(--touch-floor); padding: 0 var(--space-3);
+  border-radius: var(--radius-control); color: var(--color-muted);
+  text-decoration: none; white-space: nowrap;
+}
+.rail a:hover { background: var(--color-surface-raised); color: var(--color-text); }
+.rail a.active { background: var(--color-surface-raised); color: var(--color-text); border-left: 3px solid var(--color-accent); }
+
+/* --- stage --- */
+.stage { grid-area: stage; padding: var(--space-4) var(--space-6); }
+.view h1 { font-size: 1.15rem; margin: 0 0 var(--space-4); }
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  max-width: 60rem;
+}
+.card h2 { font-size: .95rem; margin: 0 0 var(--space-2); }
+.muted { color: var(--color-muted); }
+.small { font-size: .82rem; }
+
+/* --- download progress (engine updates; file size + status) --- */
+.dl-status { margin: 0 0 var(--space-2); font-weight: 600; }
+.dl-status.ok { color: var(--color-ok); }
+.dl-status.warn { color: var(--color-warn); }
+.dl-status.err { color: var(--color-err); }
+.dl-bar {
+  height: 10px; border-radius: 5px; background: var(--color-surface-raised);
+  border: 1px solid var(--color-border); overflow: hidden; margin: var(--space-2) 0;
+}
+.dl-fill { height: 100%; width: 0%; background: var(--color-accent); transition: width var(--motion-normal); }
+.dl-progress { margin: 0; }
+.dl-error { color: var(--color-err); margin: var(--space-2) 0 0; }
+
+/* --- notifications --- */
+.notifications {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(20rem, 85vw);
+  background: var(--color-surface); border-left: 1px solid var(--color-border);
+  padding: var(--space-4); overflow-y: auto;
+  -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+  z-index: 30;
+}
+.notifications ul { list-style: none; margin: 0; padding: 0; }
+.notifications li { border-bottom: 1px solid var(--color-border); padding: var(--space-2) 0; }
+
+/* --- command palette --- */
+.palette { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); display: flex; align-items: flex-start; justify-content: center; padding: 12vh var(--space-4) 0; z-index: 40; }
+.palette-box { width: min(34rem, 100%); background: var(--color-surface-raised); border: 1px solid var(--color-border); border-radius: var(--radius-card); padding: var(--space-3); }
+#palette-input { width: 100%; padding: 0 var(--space-3); background: var(--color-surface); }
+#palette-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; max-height: 45vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+#palette-list li { padding: 0 var(--space-3); min-height: var(--touch-floor); display: flex; align-items: center; border-radius: var(--radius-control); }
+#palette-list li[aria-selected="true"] { background: var(--color-surface); }
+.palette-hint { margin: var(--space-2) 0 0; }
+
+.noscript { padding: var(--space-8); color: var(--color-warn); }
+
+/* --- adaptive screen classes: compact < 600, medium 600–899,
+       expanded 900–1279, wide >= 1280 (the shared bands) --- */
+@media (max-width: 599.98px) {
+  #shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas: "top" "stage" "rail";
+  }
+  /* Compact: the rail becomes a thumb-reachable bottom strip. */
+  .rail { border-right: 0; border-top: 1px solid var(--color-border); }
+  .rail ul { flex-direction: row; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .rail a { flex: none; }
+  .stage { padding: var(--space-3); }
+  #nav-toggle { display: inline-flex; }
+}
+@media (min-width: 600px) and (max-width: 899.98px) {
+  #shell { --rail-width: 4.5rem; }
+  .rail a span.label { display: none; }
+  .stage { padding: var(--space-4); }
+}
+@media (min-width: 900px) and (max-width: 1279.98px) {
+  .stage { padding: var(--space-6); }
+}
+@media (min-width: 1280px) {
+  .stage { padding: var(--space-6) var(--space-8); }
+  .card { max-width: 64rem; }
+}
+
+/* Utilities on medium+ live inside the rail under a muted heading;
+   compact reaches them through the palette and the notification drawer. */
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}

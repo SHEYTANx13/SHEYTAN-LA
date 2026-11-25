@@ -59,11 +59,36 @@ summarize_headless_failure() { # $1 = tee'd stream log, $2 = platform label
   local stream="$1" label="$2"
   [ -f "$stream" ] || return 0
   echo "::error::headless suite failure evidence (${label}): the suite's own root-cause records follow (bounded to 15; the full -json stream is in the step log)"
+  # Run 45522548507 repair (verdict-aware messages): the run's windows
+  # lane proved the previous message selector grabs SKIP messages and
+  # success-path t.Logf lines when it reads the whole stream verdict-
+  # blind - 8 of its 9 recorded "failure messages" described tests that
+  # never failed. The failed test names are collected from the -json fail
+  # events FIRST (an output event can echo the literal string, so fail
+  # events are the lines that are NOT output events), and only those
+  # tests' message lines are emitted - messages before frames, so the
+  # consolidated channel's bounded per-lane budget carries the WHY and
+  # not just the frame list. POSIX-safe awk only ([ \t], no char classes)
+  # because these lanes run BSD awk and mawk alike.
+  awk '
+    FNR == NR {
+      if ($0 ~ /"Action":"fail"/ && $0 !~ /"Action":"output"/) {
+        if (match($0, /"Test":"[^"]+"/)) failed[substr($0, RSTART + 8, RLENGTH - 9)] = 1
+        else failed[""] = 1
+      }
+      next
+    }
+    emitted >= 15 { next }
+    $0 ~ /(walk-diag |[ \t][A-Za-z0-9_\/]+\.go:[0-9]+: )/ && $0 !~ /\.go:[0-9]+: (SKIP|skip)/ {
+      name = ""
+      if (match($0, /"Test":"[^"]+"/)) name = substr($0, RSTART + 8, RLENGTH - 9)
+      if (name in failed) { print; emitted++ }
+    }
+  ' "$stream" "$stream" | head -n 15 | while IFS= read -r ev; do
+    echo "::error::${label} failure message: ${ev}"
+  done
   grep -n -E '(--- FAIL:|panic: |fatal error: |^FAIL|test timed out|signal: [A-Z]+)' "$stream" | head -n 15 | while IFS= read -r ev; do
     echo "::error::${label} suite evidence: ${ev}"
-  done
-  grep -n -E '(walk-diag |[[:space:]][A-Za-z0-9_/]+\.go:[0-9]+: )' "$stream" | grep -v -E '\.go:[0-9]+: (SKIP|skip)' | head -n 15 | while IFS= read -r ev; do
-    echo "::error::${label} failure message: ${ev}"
   done
 }
 

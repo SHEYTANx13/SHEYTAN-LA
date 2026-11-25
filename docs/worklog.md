@@ -9,6 +9,7 @@ history → [`changelog.md`](changelog.md). Direction →
 [`ROADMAP.md`](ROADMAP.md). Current work order →
 [`Dev-Notes.md`](Dev-Notes.md).
 
+- | 2026-11-25 | Run 45522548507 repair on local branch `repair/run45522548507-wails-first` (base `b8d16bb` == main HEAD, clean tree; no remote operations) | Darwins: identity re-proven path-independently (os.Executable + KERN_PROCARGS2 argv[0]), start-time ENOENT typed, SameExecutable unlinked-image alias handling, PID_MAX bound retired, diagnostic fixture fixed (fill-side fold), child start-time honest-skip; Windows: verdict-aware lane selectors in all four scripts (synthetic-stream functional test), lab rename retry on transient sharing violations; adaptive web shell package `internal/webshell` + typed web UI host (`internal/webworkspace/host.go`) + desktop shell selection (`SHEYTAN_UI=auto|web|fyne`); deps x/net 0.63.0, chromedp 0.24.0, cdproto 0.160.8, fyne 2.8.3; actions v7.1.0/v2.34.0/codeql 4.39.4 from the repo's dependabot branches; FILE_CATALOG regenerated (1004 files) | Headless suite 77 pkgs green ×2, webshell/webworkspace/releasecontract green, proc/lab green, CGO-free purego web-host vet green on linux/darwin/windows, go mod download all byte-stable ×2 | Hosted run on the candidate; native webview runtime launch; the fyne-file deletion gate (after the hosted flip run)
 
 ---
 

@@ -142,6 +142,22 @@ func Run(cfg *config.Config) int {
 		logging.Default().Info("desktop", "ipc stopped")
 	}()
 
+	// Run 45522548507 (adaptive web UI decision): the UI shell
+	// selection. The web UI host is the PRIMARY shell on every desktop
+	// platform when this build carries it (the webworkspace build tag);
+	// SHEYTAN_UI=fyne forces the native toolkit shell as the selectable
+	// capability, and auto prefers the web host when present. A build
+	// without the host never silently fakes it: an explicit web request
+	// fails boot with the typed build-miswire error.
+	mode, merr := resolveUIMode()
+	if merr != nil {
+		return failBoot("ui mode", merr)
+	}
+
+	if mode == uiModeWeb || (mode == uiModeAuto && webUIHostAvailable()) {
+		return runWebUI(srv)
+	}
+
 	// Run 45287161747 repair (operator direction): the user-facing product
 	// identity is the ALPHA stage (brand.DisplayVersion), never the numeric
 	// build identifier - the numeric id stays in packaging plumbing
