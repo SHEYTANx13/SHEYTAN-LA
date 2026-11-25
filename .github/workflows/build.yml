@@ -127,7 +127,7 @@ jobs:
 
       - name: Setup Go
         id: setup-go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
@@ -282,7 +282,7 @@ jobs:
         # commit pin for the verified upstream v2 tag - the repo-wide
         # action-reference policy. UCRT64 is the supported CRT (MINGW64
         # is deprecated per msys2's October 2026 announcement).
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        uses: msys2/setup-msys2@3c51bf698df1e37b2261f53cb67797b97761185c # v2
         with:
           msystem: UCRT64
           update: false
