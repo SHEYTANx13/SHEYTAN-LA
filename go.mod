@@ -8,7 +8,7 @@ go 1.26.0
 toolchain go1.27.4
 
 require (
-	fyne.io/fyne/v2 v2.8.2
+	fyne.io/fyne/v2 v2.8.3
 	github.com/anthonynsimon/bild v0.17.1
 	github.com/chromedp/cdproto v0.160.3
 	github.com/chromedp/chromedp v0.23.1
