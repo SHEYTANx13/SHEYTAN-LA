@@ -474,13 +474,20 @@ func listAllPIDsSysctl() ([]int32, error) {
 			return nil, mapProcInfoErrno(err)
 		}
 
-		if n < 0 || n > capPIDs {
-			return nil, fmt.Errorf("%w: sysctl KERN_PROC_ALL answered %d entries against a %d-entry buffer — the kernel answer does not fit the documented contract", errProcTruncated, n, capPIDs)
+		// cgo answer type: C.int is a DISTINCT Go type — comparing or
+		// ranging it directly against Go ints does not compile (run
+		// 45716559459 root cause: the hosted darwin lanes failed exactly
+		// on `n > capPIDs` and `i < n`). One explicit conversion here is
+		// the whole contract: every use below is the Go-side count.
+		count := int(n)
+
+		if count < 0 || count > capPIDs {
+			return nil, fmt.Errorf("%w: sysctl KERN_PROC_ALL answered %d entries against a %d-entry buffer — the kernel answer does not fit the documented contract", errProcTruncated, count, capPIDs)
 		}
 
-		pids := make([]int32, 0, n)
+		pids := make([]int32, 0, count)
 
-		for i := 0; i < n; i++ {
+		for i := 0; i < count; i++ {
 			p := int(C.c_sysctl_pid_at(unsafe.Pointer(&buf[0]), C.int(i)))
 			runtime.KeepAlive(buf)
 

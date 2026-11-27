@@ -929,7 +929,12 @@ jobs:
             echo "PACKAGE_GATE_RESULT BLOCKED_BY_UPSTREAM_TEST_FAILURE ${gate}"
             exit 1
           fi
-          pkg="dist/SHEYTAN-LA-ALPHA-android-arm64.apk"
+          # Run 45716559459 root cause (path parity): android.sh stages the
+          # canonical APK UNDER the portable-prefix directory
+          # (dist/SHEYTAN-LA-ALPHA-android-arm64/), the same unpacked-tree
+          # layout every platform artifact uploads; the gate must inspect
+          # that exact path, not the retired flat file.
+          pkg="dist/SHEYTAN-LA-ALPHA-android-arm64/SHEYTAN-LA-ALPHA-android-arm64.apk"
           if [ ! -s "$pkg" ]; then
             echo "::error::the Android APK package was not produced - see the FIRST failed step of this job for the root cause"
             echo "PACKAGE_GATE_RESULT PACKAGE_MISSING ${pkg}"

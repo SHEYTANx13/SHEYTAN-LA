@@ -178,6 +178,11 @@ case "$phase" in
     # gomobile build at the pinned toolchain (single ABI, -work=false).
     # The canonical APK is staged UNDER the matching directory so the
     # platform artifact (the unpacked portable tree) carries it.
+    # Run 45716559459 root cause: the nested CANONICAL path is two
+    # levels deep and NOTHING created its parent directory - gomobile
+    # build -o does not mkdir -p, so the APK write failed on the hosted
+    # lane before the toolchain ever produced a byte.
+    mkdir -p "$(dirname "${CANONICAL}")"
     echo "building the arm64-v8a APK with gomobile build (the app command; bind builds an AAR library)"
     if ! gomobile build -target=android/arm64 -androidapi 24 -work=false -o "${CANONICAL}" ./cmd/sheytan-mobile; then
       fail_gate "Package the Android arm64 app (debug-signed, never committed keys)" "gomobile build for ./cmd/sheytan-mobile failed (the APK command; the retired bind command builds an AAR library, never the APK)"

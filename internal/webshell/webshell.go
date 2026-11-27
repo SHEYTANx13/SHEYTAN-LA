@@ -110,7 +110,7 @@ const (
 // order.
 var primaryIDs = []Workspace{
 	{"chat", "Chat", KindPrimary},
-	{"agent", "Agent", KindPrimary},
+	{"agent", "Multi-Agent", KindPrimary},
 	{"workspace", "Workspace", KindPrimary},
 	{"lab", "Coding Lab", KindPrimary},
 	{"automation", "Automation", KindPrimary},
@@ -187,6 +187,16 @@ func Handler(apiHandler http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+		// Run 45716559459 update (secure-connection hardening):
+		// the shell talks to EXACTLY ONE origin — its own. These
+		// headers pin that down beyond CSP: no ambient authority
+		// is granted to any powerful platform feature (the shell
+		// needs none), the window is isolated from any opener
+		// context, and embedded subresources may only come from
+		// this same origin.
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), interest-cohort=()")
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		h.Set("Cross-Origin-Resource-Policy", "same-origin")
 
 		if apiHandler != nil {
 			p := r.URL.Path

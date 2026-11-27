@@ -232,7 +232,15 @@ case "$phase" in
     # observation) and ships the web-shell primary window. The combined
     # gogpu link regression proof runs on the macOS/Windows lanes, where
     # upstream documents the combination as supported.
-    if ! go build -trimpath -tags nogogpu,webworkspace -o "${STAGE}/${LINUX_PKG_ROOT}/SHEYTAN-LA" ./cmd/sheytan-local-agent; then
+    # Run 45716559459 root cause: the pinned github.com/wailsapp/wails
+    # v3.1.0 DEFAULT linux cgo backend compiles against
+    # `gtk4 webkitgtk-6.0` (pkg/application/linux_cgo.go); the
+    # GTK3/WebKit2GTK-4.1 backend — the stack this contract REQUIRES and
+    # installs in `prereqs` — is opt-in through the upstream `gtk3` tag
+    # (pkg/application/linux_cgo_gtk3.go). Without the tag the desktop
+    # build fails at pkg-config ("gtk4 not found") exactly as the hosted
+    # linux lane did.
+    if ! go build -trimpath -tags nogogpu,webworkspace,gtk3 -o "${STAGE}/${LINUX_PKG_ROOT}/SHEYTAN-LA" ./cmd/sheytan-local-agent; then
       fail_gate "Build the full desktop application (native linux/amd64)" "the linux/amd64 desktop build failed"
     fi
     chmod +x "${STAGE}/${LINUX_PKG_ROOT}/SHEYTAN-LA"

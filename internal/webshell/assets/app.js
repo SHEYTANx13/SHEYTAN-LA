@@ -184,6 +184,55 @@ function badge(text, kind) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Loading experience.                                                 */
+/* Skeletons only fill a surface that has never rendered (first paint), */
+/* so polling refreshes never flash. Every helper degrades to a no-op   */
+/* when its host is absent.                                             */
+/* ------------------------------------------------------------------ */
+
+function skeleton(host, rows) {
+  if (!host || host.childElementCount) return;
+  for (let i = 0; i < (rows || 3); i++) {
+    const li = el("li", "skeleton-row");
+    li.appendChild(el("div", "skeleton skeleton-line"));
+    li.appendChild(el("div", "skeleton skeleton-sub"));
+    host.appendChild(li);
+  }
+}
+
+async function withBusy(btn, fn) {
+  if (btn) {
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+  }
+  try {
+    return await fn();
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+    }
+  }
+}
+
+/* The boot splash covers first paint while the core handshake settles. */
+/* It is dismissed on the FIRST healthy core answer and by a safety      */
+/* timeout, so a slow or absent core can never trap the operator behind  */
+/* an overlay.                                                           */
+function splashStage(text) {
+  const stage = $("#boot-stage");
+  if (stage) stage.textContent = text;
+}
+
+function dismissSplash() {
+  const splash = $("#boot-splash");
+  if (!splash || splash.dataset.done) return;
+  splash.dataset.done = "1";
+  splash.classList.add("splash-done");
+  window.setTimeout(() => splash.remove(), 500);
+}
+
+/* ------------------------------------------------------------------ */
 /* Core status dot + status bar.                                       */
 /* ------------------------------------------------------------------ */
 
@@ -197,6 +246,8 @@ async function refreshHealth() {
     if (dot) dot.className = "status-dot ok";
     if (label) label.textContent = "core " + (h && h.status ? h.status : "ok");
     setStatusRight(h);
+    splashStage("core ready — shell live");
+    dismissSplash();
   } catch (err) {
     if (dot) dot.className = "status-dot bad";
     if (label) label.textContent = "core unreachable";
@@ -292,7 +343,7 @@ document.addEventListener("visibilitychange", () => {
 /* Module views — each loader reads REAL core routes.                  */
 /* ------------------------------------------------------------------ */
 
-const loaders = {};
+const loaders = new Map();
 const activeTimers = [];
 
 function clearLoaders() {
@@ -308,13 +359,14 @@ function every(ms, fn) {
 
 let currentSession = "";
 
-loaders.chat = () => {
+loaders.set("chat", () => {
   every(5000, loadSessions);
-};
+});
 
 async function loadSessions() {
   const list = $("#chat-session-list");
   if (!list) return;
+  skeleton(list, 4);
   const data = await api("/api/sessions");
   const sessions = Array.isArray(data) ? data : data && data.sessions ? data.sessions : [];
   list.textContent = "";
@@ -456,7 +508,7 @@ async function openSessionQuiet(id) {
 
 /* --- agent ----------------------------------------------------------- */
 
-loaders.agent = () => {
+loaders.set("agent", () => {
   bindOnce("#agent-refresh", loadGoals);
   bindOnce("#run-paused-btn", loadPaused);
   bindOnce("#run-abort-btn", async () => {
@@ -464,24 +516,30 @@ loaders.agent = () => {
       notify("warn", "no open session to abort");
       return;
     }
-    await api("/api/abort", { method: "POST", body: { sessionId: currentSession } });
-    notify("ok", "abort requested for " + currentSession);
+    await withBusy($("#run-abort-btn"), async () => {
+      await api("/api/abort", { method: "POST", body: { sessionId: currentSession } });
+      notify("ok", "abort requested for " + currentSession);
+    });
   });
   bindOnce("#goal-form", async (e) => {
     e.preventDefault();
     const input = $("#goal-input");
     const text = input && input.value.trim();
     if (!text) return;
-    await api("/api/goals", { method: "POST", body: { title: text } });
+    const submit = e.currentTarget && e.currentTarget.querySelector ? e.currentTarget.querySelector("button") : null;
+    await withBusy(submit, async () => {
+      await api("/api/goals", { method: "POST", body: { title: text } });
+    });
     if (input) input.value = "";
     loadGoals();
   });
   every(8000, loadGoals);
-};
+});
 
 async function loadGoals() {
   const list = $("#goal-list");
   if (!list) return;
+  skeleton(list, 3);
   const data = await api("/api/goals");
   const goals = Array.isArray(data) ? data : data && data.goals ? data.goals : [];
   list.textContent = "";
@@ -492,7 +550,8 @@ async function loadGoals() {
   for (const g of goals) {
     const li = el("li");
     li.appendChild(el("div", "grow", g.title || g.name || g.id || "goal"));
-    li.appendChild(badge(g.status || g.state || "open", g.status === "done" || g.state === "done" ? "ok" : ""));
+    const state = g.status || g.state || "open";
+    li.appendChild(badge(state, state === "done" || state === "completed" ? "ok" : state === "paused" || state === "blocked" ? "warn" : ""));
     list.appendChild(li);
   }
 }
@@ -511,7 +570,7 @@ async function loadPaused() {
 
 /* --- workspace -------------------------------------------------------- */
 
-loaders.workspace = () => {
+loaders.set("workspace", () => {
   bindOnce("#ws-refresh", loadRepoIndex);
   bindOnce("#ws-search-form", async (e) => {
     e.preventDefault();
@@ -532,7 +591,7 @@ loaders.workspace = () => {
     }
   });
   every(20000, loadRepoIndex);
-};
+});
 
 async function loadRepoIndex() {
   const host = $("#ws-index-state");
@@ -548,10 +607,10 @@ async function loadRepoIndex() {
 
 /* --- lab --------------------------------------------------------------- */
 
-loaders.lab = () => {
+loaders.set("lab", () => {
   bindOnce("#lab-refresh", loadLab);
   every(15000, loadLab);
-};
+});
 
 async function loadLab() {
   const host = $("#lab-state");
@@ -573,10 +632,10 @@ async function loadLab() {
 
 /* --- automation --------------------------------------------------------- */
 
-loaders.automation = () => {
+loaders.set("automation", () => {
   bindOnce("#auto-refresh", loadAutomation);
   every(12000, loadAutomation);
-};
+});
 
 async function loadAutomation() {
   const list = $("#automation-list");
@@ -613,16 +672,41 @@ async function loadAutomation() {
 
 /* --- system -------------------------------------------------------------- */
 
-loaders.system = () => {
+loaders.set("system", () => {
   bindOnce("#sys-refresh", loadSystem);
-  bindOnce("#netcheck-btn", async () => {
+  bindOnce("#netcheck-btn", () => withBusy($("#netcheck-btn"), async () => {
     const host = $("#sys-netcheck");
     if (host) host.textContent = "";
     const data = await api("/api/netcheck", { method: "POST" });
     if (host) renderKV(host, data);
-  });
+  }));
   every(15000, loadSystem);
-};
+});
+
+/* Hardware & driver facts: the REAL GPU probe payload (vendor, name,
+ * driver version, VRAM) rendered as readable cards. The honesty
+ * contract is the product's own: detection is the first stage of
+ * DETECTED → AVAILABLE → SELECTED → EXECUTED → VERIFIED, and OS driver
+ * installation is never performed by this app — update checks happen
+ * against official upstream sources on the Engines surface. */
+function renderGpus(host, env) {
+  if (!host) return;
+  host.textContent = "";
+  const gpus = env && Array.isArray(env.gpus) ? env.gpus : [];
+  if (!gpus.length) {
+    host.appendChild(el("span", "muted", "no GPU detected — CPU execution"));
+  }
+  for (const g of gpus) {
+    const card = el("div", "gpu-card");
+    card.appendChild(el("div", "gpu-name", [g.vendor, g.name].filter(Boolean).join(" ") || "GPU"));
+    const facts = el("div", "chiprow");
+    facts.appendChild(el("span", "chip mono", g.driverVer ? "driver " + g.driverVer : "driver version unknown"));
+    if (g.vramBytes) facts.appendChild(el("span", "chip mono", humanBytes(Number(g.vramBytes))));
+    card.appendChild(facts);
+    host.appendChild(card);
+  }
+  host.appendChild(el("p", "muted small", "Driver facts come from the system probe. Engine and driver update checks run against official upstream sources (Engines surface); the app never installs operating-system drivers itself."));
+}
 
 async function loadSystem() {
   const health = $("#sys-health");
@@ -636,10 +720,13 @@ async function loadSystem() {
   const env = $("#sys-environment");
   if (env) {
     try {
-      renderKV(env, await api("/api/environment"));
+      const envData = await api("/api/environment");
+      renderKV(env, envData, ["gpus"]);
+      renderGpus($("#sys-gpus"), envData);
     } catch (err) {
       env.textContent = "";
       env.appendChild(el("span", "muted", "environment unavailable"));
+      renderGpus($("#sys-gpus"), null);
     }
   }
   const perf = $("#sys-perf");
@@ -659,11 +746,11 @@ async function loadSystem() {
 
 let settingsDoc = null;
 
-loaders.settings = () => {
+loaders.set("settings", () => {
   bindOnce("#settings-reload", loadSettings);
   bindOnce("#settings-save", saveSettings);
   every(30000, loadSettings);
-};
+});
 
 async function loadSettings() {
   const host = $("#settings-body");
@@ -723,7 +810,7 @@ async function saveSettings() {
 
 /* --- studio ----------------------------------------------------------------- */
 
-loaders.studio = () => {
+loaders.set("studio", () => {
   bindOnce("#studio-start", async () => {
     await api("/api/studio/start", { method: "POST" });
     loadStudio();
@@ -733,7 +820,7 @@ loaders.studio = () => {
     loadStudio();
   });
   every(10000, loadStudio);
-};
+});
 
 async function loadStudio() {
   const host = $("#studio-state");
@@ -748,14 +835,14 @@ async function loadStudio() {
 
 /* --- engines ------------------------------------------------------------------ */
 
-loaders.engines = () => {
+loaders.set("engines", () => {
   bindOnce("#engine-refresh", loadEngines);
-  bindOnce("#engine-rediscover", async () => {
+  bindOnce("#engine-rediscover", () => withBusy($("#engine-rediscover"), async () => {
     await api("/api/engine/rediscover", { method: "POST" });
     notify("ok", "engine rediscovery requested");
     loadEngines();
-  });
-  bindOnce("#engine-update", async () => {
+  }));
+  bindOnce("#engine-update", () => withBusy($("#engine-update"), async () => {
     const check = await api(UpdateCheckPath);
     renderDownload(check);
     const running = check && check.phase && check.phase !== "idle" && check.phase !== "done" && check.phase !== "error";
@@ -767,10 +854,10 @@ loaders.engines = () => {
     await api("/api/engine/update", { method: "POST" });
     notify("ok", "engine update started — progress is on this surface");
     startPolling();
-  });
+  }));
   every(5000, loadEngines);
   pollDownload();
-};
+});
 
 async function loadEngines() {
   const host = $("#engine-state");
@@ -788,7 +875,7 @@ async function loadEngines() {
 
 /* --- history -------------------------------------------------------------------- */
 
-loaders.history = () => {
+loaders.set("history", () => {
   bindOnce("#history-form", async (e) => {
     e.preventDefault();
     const input = $("#history-input");
@@ -809,18 +896,74 @@ loaders.history = () => {
       out.appendChild(li);
     }
   });
-};
+});
 
 /* --- models ------------------------------------------------------------------------ */
 
-loaders.models = () => {
+loaders.set("models", () => {
   bindOnce("#models-refresh", loadModels);
+  bindOnce("#opt-apply", applyLoadOptions);
   every(20000, loadModels);
-};
+  loadModelOptions();
+});
+
+/* Model load options: the launch-time knobs the core owns (threads, GPU
+ * offload layers, flash attention, the GPU posture switch). Every field
+ * maps to a REAL /api/config patch field (mergeConfigPatch deep-merges
+ * the llm object; gpuAutoOffload marks the explicit-user posture), so
+ * the controls are live — never decorative. */
+async function loadModelOptions() {
+  const host = $("#opt-state");
+  try {
+    const cfg = await api("/api/config");
+    const llm = (cfg && cfg.llm) || {};
+    const threads = $("#opt-threads");
+    const layers = $("#opt-gpulayers");
+    const flash = $("#opt-flash");
+    const offload = $("#opt-autooffload");
+    if (threads) threads.value = llm.numThread > 0 ? String(llm.numThread) : "";
+    if (layers) layers.value = llm.numGpu > 0 ? String(llm.numGpu) : "";
+    if (flash) flash.checked = !!llm.flashAttention;
+    if (offload) offload.checked = !!(cfg && cfg.gpuAutoOffload);
+    if (host) host.textContent = llm.model ? "selected model: " + llm.model : "no model selected yet";
+  } catch (err) {
+    if (host) host.textContent = "load options unavailable: " + (err.message || err);
+  }
+}
+
+async function applyLoadOptions() {
+  const num = (sel) => {
+    const node = $(sel);
+    if (!node || node.value === "") return undefined;
+    const v = Number(node.value);
+    return Number.isFinite(v) && v >= 0 ? Math.floor(v) : undefined;
+  };
+  const llm = {};
+  const threads = num("#opt-threads");
+  const layers = num("#opt-gpulayers");
+  if (threads !== undefined) llm.numThread = threads;
+  if (layers !== undefined) llm.numGpu = layers;
+  const flash = $("#opt-flash");
+  if (flash) llm.flashAttention = !!flash.checked;
+  const offload = $("#opt-autooffload");
+  const patch = Object.keys(llm).length ? { llm } : {};
+  if (offload) patch.gpuAutoOffload = !!offload.checked;
+  if (!Object.keys(patch).length) {
+    notify("warn", "nothing to apply — set a value first");
+    return;
+  }
+  const btn = $("#opt-apply");
+  await withBusy(btn, async () => {
+    await api("/api/config", { method: "PATCH", body: patch });
+    notify("ok", "load options applied — the core validated and stored them");
+  });
+  loadModelOptions();
+}
 
 async function loadModels() {
   const list = $("#models-list");
   if (list) {
+    skeleton(list, 4);
     const data = await api("/api/models");
     const local = data && Array.isArray(data.local) ? data.local : [];
     list.textContent = "";
@@ -832,18 +975,22 @@ async function loadModels() {
       const selectBtn = el("button", "btn");
       selectBtn.type = "button";
       selectBtn.textContent = "Select";
-      selectBtn.addEventListener("click", async () => {
+      selectBtn.addEventListener("click", () => withBusy(selectBtn, async () => {
         await api("/api/models/select", { method: "POST", body: { model: m.name || m.id } });
         notify("ok", "model selection requested: " + (m.name || m.id));
         loadModels();
-      });
+      }));
       li.appendChild(selectBtn);
       list.appendChild(li);
     }
+    // CodeQL #367 fix: the badge element is now USED — the models
+    // backend lands in the conversation badge, refreshed in place. The
+    // old code declared badgeEl unused and appended "backend …" onto the
+    // shared status line on EVERY 20 s poll (a duplicate pile-up).
     const badgeEl = $("#chat-session-badge");
-    if (data && data.backend) {
-      const right = $("#status-right");
-      if (right && data.backend) right.textContent = (right.textContent ? right.textContent + " · " : "") + "backend " + data.backend;
+    if (badgeEl && data && data.backend) {
+      badgeEl.textContent = "backend " + data.backend;
+      badgeEl.className = "badge accent";
     }
   }
   const recs = $("#models-recs");
@@ -868,10 +1015,10 @@ async function loadModels() {
 
 /* --- tools --------------------------------------------------------------------------- */
 
-loaders.tools = () => {
+loaders.set("tools", () => {
   bindOnce("#tools-refresh", loadTools);
   every(30000, loadTools);
-};
+});
 
 async function loadTools() {
   const list = $("#tools-list");
@@ -915,10 +1062,10 @@ async function loadTools() {
 
 /* --- logs ------------------------------------------------------------------------------ */
 
-loaders.logs = () => {
+loaders.set("logs", () => {
   bindOnce("#logs-refresh", loadLogs);
   every(6000, loadLogs);
-};
+});
 
 async function loadLogs() {
   const view = $("#logs-view");
@@ -991,7 +1138,15 @@ function show(id) {
   clearLoaders();
   for (const w of REGISTRY) {
     const section = document.querySelector('[data-view="' + w.id + '"]');
-    if (section) section.hidden = w.id !== id;
+    if (section) {
+      const entering = section.hidden && w.id === id;
+      section.hidden = w.id !== id;
+      if (entering) {
+        section.classList.remove("view-enter");
+        void section.offsetWidth; /* restart the CSS animation */
+        section.classList.add("view-enter");
+      }
+    }
     const item = document.getElementById("nav-" + w.id);
     if (item) {
       item.classList.toggle("active", w.id === id);
@@ -1002,7 +1157,11 @@ function show(id) {
   document.body.classList.remove("nav-open");
   const toggle = $("#nav-toggle");
   if (toggle) toggle.setAttribute("aria-expanded", "false");
-  const loader = loaders[id];
+  // The route id is validated against the REGISTRY allowlist; the
+  // Map.get lookup (a typed method call, never a dynamic property
+  // access) is what keeps the call site out of the unvalidated
+  // dynamic-method-call class entirely (CodeQL #366).
+  const loader = loaders.get(id);
   if (loader) loader();
   const host = $("#view-host");
   if (host) host.focus({ preventScroll: true });
@@ -1171,8 +1330,12 @@ function boot() {
   window.addEventListener("resize", applyClass);
   applyClass();
   show(currentRoute());
+  splashStage("core handshake");
   startHealth();
   startPolling();
+  /* Fail-open: a slow or dead core never traps the operator behind the
+   * splash — the shell is still navigable without the core. */
+  window.setTimeout(dismissSplash, 6000);
 }
 
 document.addEventListener("DOMContentLoaded", boot);

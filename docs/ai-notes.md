@@ -10,71 +10,96 @@ session; rewrite this note so it stays true.
 
 ---
 
-## CURRENT HANDOFF — run 45634345922 repair: the UI flip completed, ui/fyne deleted, packaging un-nested, the icon pipeline fixed, the darwin walk enumeration-redundant (2026-11-25) — supersedes all handoffs below
+## CURRENT HANDOFF — run 45716559459 repair: the five lane failures rooted and fixed, CodeQL #366/#367 closed, the shell loading experience and system/model surfaces upgraded (2026-11-27) — supersedes all handoffs below
 
-Read this BEFORE touching the darwin walk, the lane scripts or the UI
-surface again. The decisive facts of this update:
+Read this BEFORE touching the lane scripts, the darwin walk or the web
+shell again. The decisive facts of this update:
 
-1. **THE FLIP IS DONE — no more gating.** The operator's Windows test
-   proved the previous session's design shipped nothing: no lane built
-   `-tags webworkspace`, so every package carried the Fyne shell. Now
-   every desktop lane compiles the tag (windows.ps1, linux.sh
-   `nogogpu,webworkspace`, macos.sh), the Linux `prereqs` phase
-   installs `libgtk-3-dev libwebkit2gtk-4.1-dev libglib2.0-dev`, and
-   `SHEYTAN_UI=auto` boots the web shell everywhere. `SHEYTAN_UI=fyne`
-   answers the typed `ErrFyneRetired` — never a silent fallback.
-2. **ui/fyne IS DELETED, not gated.** The web shell (internal/webshell)
-   carries the full IA with REAL API-backed views for all 13
-   workspaces; the fyne-free client cluster (CoreClient, Runtime,
-   logic, settings schema, the IPC integration gates) moved verbatim to
-   **internal/coreclient** — the windows named-pipe integration gate
-   runs there now. The webshell registry is CANONICAL; ui/gogui is the
-   native mirror and the IA contract test pins both. Fyne left go.mod;
-   LICENSE.md was regenerated from the brand authority after the
-   surface-table row changed.
-3. **PACKAGING: the artifacts upload the UNPACKED portable trees**
-   (`dist/SHEYTAN-LA-ALPHA-*/` — one download layer, no zip inside a
-   zip); the sealed archives stay in dist/ for the gates and the
-   tag-only release job re-seals them deterministically before
-   publishing. The collector report is ALSO rendered into the run
-   summary (256 KiB bound). **ICON: gen-syso wrote the .syso into the
-   repo ROOT while Go links .syso only from the built package's
-   directory — the exe shipped with the generic Go icon, no version, no
-   manifest. It now writes `cmd/sheytan-local-agent/
-   rsrc_windows_amd64.syso`**; the web-shell window additionally
-   carries the brand mark through the host's LinuxWindow.Icon and the
-   shell's /logo.png favicon.
-4. **DARWIN (honest boundary: still compile-level only).** Three runs
-   failed exactly the tests whose flow reaches the walk on a live port,
-   while record-level and metadata probes stayed green — the only
-   whole-walk-fatal stage is PROC_ALL_PIDS enumeration. The walk now
-   has TWO enumeration sources (proc_listallpids, then BSD sysctl
-   KERN_PROC_ALL — a different kernel entry point; kinfo_proc stays in
-   C), fails typed only when both refuse, front-loads the walk-diag in
-   both error messages (the consolidated channel's ~110-char window now
-   carries the class), and maps raw errnos outside the gone/denied/
-   ENOENT classes to the typed metadata-unsupported class (errno text
-   kept in the message; consumers were already fail-closed there).
-   Do NOT re-apply errno-only patches. The hosted darwin lanes remain
-   the runtime authority — if a failure survives, its annotation now
-   names the exact stage within the truncation window.
-5. **The stress gate follows the workflow forward** (its own rule): the
-   linux failure of run 45634345922 was the gate rejecting the CORRECT
-   dependabot pins (setup-go v7.1.0, msys2 v2.34.0 SHAs). Accepted
-   refs moved; the Linux dependency contract is now the web-shell era
-   (GTK3 + WebKit2GTK-4.1 REQUIRED, third-generation GTK4/WebKitGTK6
-   and Qt still banned; the second-generation ban is lifted because
-   WebKit2GTK-4.1 IS the required backend). UI-suite pin: `go test ./ui/`.
+1. **DARWIN LANES (both macos) — cgo TYPE CONTRACT.** The sysctl
+   enumeration source added to `internal/proc/identity_darwin.go`
+   compared the raw `C.int` answer against Go ints (`n > capPIDs`,
+   `i < n`) — cgo types are DISTINCT Go types; the comparisons do not
+   compile. Fixed with one explicit conversion (`count := int(n)`).
+   LESSON: `CGO_ENABLED=0 go vet` on darwin EXCLUDES every cgo file —
+   it never type-checked identity_darwin.go at all. Any future darwin
+   cgo change must be reviewed line-by-line for C-int/Go-int mixing
+   (the hosted darwin lanes are the only true compile authority).
+2. **LINUX LANE — WAILS BACKEND TAG.** wails v3.1.0's DEFAULT linux cgo
+   backend compiles against `gtk4 webkitgtk-6.0`
+   (`pkg/application/linux_cgo.go`); the GTK3/WebKit2GTK-4.1 backend —
+   the stack the dependency contract REQUIRES and `prereqs` installs —
+   is opt-in through the upstream `gtk3` tag
+   (`pkg/application/linux_cgo_gtk3.go`). The linux desktop build is
+   now `-tags nogogpu,webworkspace,gtk3`. NEVER drop the `gtk3` tag on
+   linux: without it the build fails at pkg-config (`gtk4 not found`),
+   and GTK4/WebKitGTK6 stay banned by the release-surface contract.
+3. **WINDOWS LANE — STALE GATE PATH.** windows.ps1's ipc-integration
+   phase still ran `go test ./ui/fyne/` — deleted by the 45634345922
+   flip. It now runs the production CoreClient integration suite from
+   `internal/coreclient/` (the one tracked home).
+4. **ANDROID LANE — PACKAGE DIRECTORY.** The canonical APK path is
+   nested (`dist/SHEYTAN-LA-ALPHA-android-arm64/
+   SHEYTAN-LA-ALPHA-android-arm64.apk`); `gomobile build -o` does not
+   mkdir. The package phase creates the directory and the build.yml
+   package gate inspects the SAME nested path (the gate still pointed
+   at the retired flat path — fixed in the same change).
+5. **CODEQL #366 (High) / #367 (Note) — CLOSED AT THE ROOT.** The shell
+   route loader table is a `Map` and `show()` calls `loaders.get(id)` —
+   a typed method call, never a dynamic property access with a
+   route-derived key. The unused `badgeEl` in `loadModels` is now used:
+   the models backend lands in the conversation badge, refreshed in
+   place (the old code ALSO appended `backend …` onto the shared status
+   line every 20 s poll — a duplicate pile-up bug that is gone).
+6. **SHELL UPGRADES — every control maps to a REAL endpoint.** Boot
+   splash (staged status, dismissed by the FIRST healthy `/api/health`
+   answer + a 6 s fail-open timeout — never a trap); skeleton shimmer on
+   first paint only (sessions/goals/models); view-entry fade; in-flight
+   `aria-busy` button states. Models carries LIVE load options
+   (`llm.numThread`, `llm.numGpu`, `llm.flashAttention` through
+   `mergeConfigPatch`'s llm deep-merge; `gpuAutoOffload` marks the
+   explicit-user posture). System carries a "GPU & drivers" card from
+   the REAL hardware probe (`gpus[].vendor/name/driverVer/vramBytes`)
+   with the DETECTED → AVAILABLE → SELECTED → EXECUTED → VERIFIED
+   honesty contract stated; OS driver installation is NEVER performed by
+   the app — engine/driver update checks run against official upstream
+   sources on the Engines surface. Security hardening beyond the
+   same-origin CSP: `Permissions-Policy` (no powerful features granted),
+   `Cross-Origin-Opener-Policy: same-origin`,
+   `Cross-Origin-Resource-Policy: same-origin`. The webshell serving
+   contract tests still pin the four original headers; the new three are
+   additive.
+7. **The webshell asset contract is intact**: registry mirror pinned to
+   ui/gogui, `data-view` sections, ARIA download bar, adaptive CSS band
+   strings, touch floor, `prefers-reduced-motion` (which also kills all
+   new animation), and the same-origin-only CSP scan (zero remote-origin
+   literals in the assets).
 
-Local evidence: headless suite 77 pkgs green; releasecontract,
-webshell, webworkspace, coreclient green; stress 47/47 green;
-cross vets (darwin arm64/amd64, windows) green; the flip compiles
-CGO-free (`-tags webworkspace,purego`) on linux/darwin/windows.
-NOT RUN locally: native webview window launch, native darwin CGO
-suite, Windows PE/icon inspection, macOS code-sign/smoke — the hosted
-lanes are the authority.
+Local evidence (see the run note for the exact commands): gofmt clean;
+headless suite green; releasecontract/webshell/webworkspace/coreclient
+green; stress green; cross vets green; `node --check app.js` green;
+build.yml YAML-valid; lane scripts bash-syntax-valid. NOT RUN locally:
+the GTK3 cgo desktop link (sandbox has no webkit dev libraries), native
+webview window launch, native darwin CGO compile, windows PE inspection,
+android NDK build — the hosted lanes remain the authority.
 
-Next actionable step: push the candidate branch (operator
-authorization required) and let the hosted platform build + CodeQL run
-on it; the web-shell window launch evidence and the Windows PE icon
-check ride that same run.
+Next actionable step: push the candidate branch (operator authorization
+required) and let the hosted platform build + CodeQL run on it; the
+web-shell window launch evidence and the Windows PE icon check ride
+that same run.
+
+---
+
+## Historical context (still true)
+
+- The 45634345922 flip made the web shell the product UI on every
+  packaged desktop (`-tags webworkspace` everywhere, `SHEYTAN_UI=fyne`
+  retired typed, ui/fyne deleted, client cluster moved verbatim to
+  `internal/coreclient`, artifacts upload unpacked portable trees,
+  gen-syso writes the .syso into the app package directory).
+- The darwin walk has TWO enumeration sources (proc_listallpids, then
+  BSD sysctl KERN_PROC_ALL), fails typed only when both refuse, and
+  front-loads the walk-diag inside the ~110-char evidence truncation
+  window. Do NOT re-apply errno-only patches.
+- The stress gate follows the workflow forward: accepted SHAs track the
+  dependabot pins; the Linux dependency contract is the web-shell era
+  (GTK3 + WebKit2GTK-4.1 REQUIRED; GTK4/WebKitGTK6 and Qt banned).

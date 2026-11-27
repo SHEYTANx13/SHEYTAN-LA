@@ -238,7 +238,12 @@ switch ($Phase) {
     if ($LASTEXITCODE -ne 0) {
       Fail-Gate "Windows named-pipe CoreClient integration (production client over localipc.Serve)" "localipc transport tests failed on windows/amd64 (exit $LASTEXITCODE; output in ci-logs/win-localipc-tests.log)"
     }
-    go test ./ui/fyne/ -count=1 -timeout 15m -v -run "TestCoreClientEndToEndOverWindowsNamedPipe|TestCoreClientRejectsWrongKeyWindows|TestCoreClientWebSocketCallerCancelWindows|TestWindowsIPCFlowOpensNoTCPListener|TestCoreClientRefusesMismatchedProtocolWindows" 2>&1 | Tee-Object -FilePath "ci-logs/win-ipc-integration.log"
+    # Run 45716559459 root cause: the client cluster moved ui/fyne ->
+    # internal/coreclient (the run 45634345922 flip deleted ui/fyne);
+    # this gate still named the deleted package and failed at compile.
+    # The production CoreClient integration suite now runs from its one
+    # tracked home.
+    go test ./internal/coreclient/ -count=1 -timeout 15m -v -run "TestCoreClientEndToEndOverWindowsNamedPipe|TestCoreClientRejectsWrongKeyWindows|TestCoreClientWebSocketCallerCancelWindows|TestWindowsIPCFlowOpensNoTCPListener|TestCoreClientRefusesMismatchedProtocolWindows" 2>&1 | Tee-Object -FilePath "ci-logs/win-ipc-integration.log"
     if ($LASTEXITCODE -ne 0) {
       Fail-Gate "Windows named-pipe CoreClient integration (production client over localipc.Serve)" "Windows named-pipe CoreClient integration failed (exit $LASTEXITCODE) - the production client cannot reach the core through the pipe"
     }

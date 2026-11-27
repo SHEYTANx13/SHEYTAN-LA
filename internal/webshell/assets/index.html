@@ -10,6 +10,18 @@
 <script src="/app.js" defer></script>
 </head>
 <body>
+  <!-- Boot splash: covers first paint while the core handshake settles.
+       Dismissed by the first healthy /api/health answer and by a 6 s
+       safety timeout — it can never trap the operator behind an overlay. -->
+  <div id="boot-splash" role="status" aria-live="polite">
+    <div class="splash-box">
+      <img class="splash-logo" src="/logo.png" alt="">
+      <div class="splash-name">SHEYTAN&#8482; Local-Agent</div>
+      <div class="splash-spinner" aria-hidden="true"></div>
+      <div class="splash-stage" id="boot-stage">starting the laboratory</div>
+    </div>
+  </div>
+
 <div id="app" class="app">
   <a class="skip-link" href="#view-host">Skip to content</a>
 
@@ -61,7 +73,7 @@
     </section>
 
     <section class="view" data-view="agent" id="view-agent" aria-labelledby="nav-agent" hidden>
-      <header class="view-head"><h1>Agent</h1><p class="view-sub">Goals, runs and approvals — the core owns every decision.</p></header>
+      <header class="view-head"><h1>Multi-Agent</h1><p class="view-sub">Goals, run control and parallel work — the core owns every decision and every approval.</p></header>
       <div class="grid two">
         <div class="card">
           <div class="card-head"><h2>Goals</h2><button class="btn" id="agent-refresh" type="button">Refresh</button></div>
@@ -79,7 +91,7 @@
             <button class="btn" id="run-paused-btn" type="button">Paused runs</button>
             <button class="btn danger" id="run-abort-btn" type="button">Abort active run</button>
           </div>
-          <div class="muted" id="agent-note"></div>
+          <div class="muted" id="agent-note">Scheduled parallel task work lives on the Automation surface; this view drives the goals and the active runs that carry them.</div>
         </div>
       </div>
     </section>
@@ -135,6 +147,10 @@
         <div class="card">
           <div class="card-head"><h2>Environment</h2></div>
           <div class="stack" id="sys-environment"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>GPU &amp; drivers</h2></div>
+          <div class="stack" id="sys-gpus"><span class="muted">probing hardware…</span></div>
         </div>
         <div class="card">
           <div class="card-head"><h2>Performance</h2></div>
@@ -211,11 +227,24 @@
     </section>
 
     <section class="view utility" data-view="models" id="view-models" aria-labelledby="nav-models" hidden>
-      <header class="view-head"><h1>Models</h1><p class="view-sub">Installed models, recommendations and selection.</p></header>
+      <header class="view-head"><h1>Models</h1><p class="view-sub">Installed models, selection and launch-time load options — every value is validated and stored by the core.</p></header>
       <div class="grid two">
         <div class="card">
           <div class="card-head"><h2>Installed</h2><button class="btn" id="models-refresh" type="button">Refresh</button></div>
           <ul class="list" id="models-list" aria-live="polite"></ul>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Load options</h2></div>
+          <div class="stack">
+            <label class="opt-row" for="opt-threads"><span>Compute threads</span><input id="opt-threads" type="number" min="0" step="1" inputmode="numeric" placeholder="auto"></label>
+            <label class="opt-row" for="opt-gpulayers"><span>GPU offload layers</span><input id="opt-gpulayers" type="number" min="0" step="1" inputmode="numeric" placeholder="auto"></label>
+            <label class="opt-row opt-check" for="opt-flash"><span>Flash attention</span><input id="opt-flash" type="checkbox"></label>
+            <label class="opt-row opt-check" for="opt-autooffload"><span>GPU auto-offload posture</span><input id="opt-autooffload" type="checkbox"></label>
+            <div class="btnrow">
+              <button class="btn primary" id="opt-apply" type="button">Apply</button>
+              <span class="muted" id="opt-state" role="status" aria-live="polite"></span>
+            </div>
+          </div>
         </div>
         <div class="card">
           <div class="card-head"><h2>Recommendations</h2></div>
