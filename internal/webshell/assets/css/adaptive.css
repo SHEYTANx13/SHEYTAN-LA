@@ -1,0 +1,42 @@
+/* SHEYTAN-LA adaptive web shell — adaptive classes: the shared
+   600 / 900 / 1280 bands. The <html> element carries
+   .compact / .medium / .expanded / .wide. */
+
+@media (max-width: 599.98px) {
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "topbar"
+      "view"
+      "statusbar";
+  }
+  .rail {
+    position: fixed;
+    z-index: 50;
+    top: var(--topbar-height);
+    bottom: 0;
+    left: 0;
+    width: min(300px, 84vw);
+    transform: translateX(-102%);
+    transition: transform 0.25s ease;
+  }
+  body.nav-open .rail { transform: translateX(0); }
+  .nav-toggle { display: inline-flex; }
+  .chat-grid { grid-template-columns: 1fr; }
+  .view-host { padding: var(--space-3); }
+}
+
+@media (min-width: 600px) and (max-width: 899.98px) {
+  .app { grid-template-columns: 64px 1fr; }
+  .rail-item span.label, .rail-heading, .rail-foot, .brand-name, .brand-stage { display: none; }
+  .rail-item { justify-content: center; padding: 0; }
+  .chat-grid { grid-template-columns: 220px 1fr; }
+}
+
+@media (min-width: 900px) and (max-width: 1279.98px) {
+  :root { --rail-width: 200px; }
+}
+
+@media (min-width: 1280px) {
+  :root { --rail-width: 240px; }
+}

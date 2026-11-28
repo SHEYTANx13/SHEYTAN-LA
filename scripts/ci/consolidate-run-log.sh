@@ -565,7 +565,17 @@ parse_go_test_json() {  # $1 = job index; $2 = cleaned log file; $3 = job id
       return s ~ /^[A-Za-z0-9_./\\+-]+\.[A-Za-z][A-Za-z0-9]*:[0-9]+(:[0-9]+)?:/
     }
     function emit(txt,   k) {
-      if (length(txt) > 240) txt = substr(txt, 1, 240)
+      # Run 46050871166 repair: the darwin walk typed evidence lives in
+      # the "(walk-diag ...)" segment the error text carries after the
+      # message prefix — the fixed 240-char bound cut the diag off at
+      # exactly the point five repair sessions needed, so every repair
+      # guessed (pids/self_sockets/walked/denied counts never survived).
+      # Lines carrying the walk-diag get an 1100-char bound (still
+      # bounded and deterministic); everything else keeps the 240-char
+      # channel budget.
+      if (txt ~ /walk-diag /) {
+        if (length(txt) > 1100) txt = substr(txt, 1, 1100)
+      } else if (length(txt) > 240) txt = substr(txt, 1, 240)
       k = 100000 + (++SEQ)
       print jidx "\t0000\t" k "\t" txt >> errfile
     }
@@ -704,7 +714,12 @@ classify_job_log() {  # $1 = job index; $2 = has_ann(0/1); $3 = annotations ndjs
     -v errfile="$ERRIDX" -v warnfile="$WARNIDX" -v tfailfile="$TFAILIDX" -v sq="'" '
     function normmsg(m) { gsub(/[ \t]+/, " ", m); sub(/^ /, "", m); sub(/ $/, "", m); return m }
     function emit(lvl, t, txt,   k) {
-      if (length(txt) > 240) txt = substr(txt, 1, 240)
+      # Run 46050871166 repair: walk-diag lines carry an 1100-char bound
+      # (see the -json machine emit above for the evidence rationale);
+      # every other line keeps the 240-char channel budget.
+      if (txt ~ /walk-diag /) {
+        if (length(txt) > 1100) txt = substr(txt, 1, 1100)
+      } else if (length(txt) > 240) txt = substr(txt, 1, 240)
       if (t == "") t = "0000"
       k = ++SEQ
       if (lvl == "error") print jidx "\t" t "\t" k "\t" txt >> errfile

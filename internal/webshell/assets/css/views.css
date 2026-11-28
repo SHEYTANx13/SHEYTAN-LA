@@ -1,0 +1,85 @@
+/* SHEYTAN-LA adaptive web shell — view host and reusable view surfaces:
+   scroll host, headings, cards, stacks, lists and key/value rows. */
+
+.view-host {
+  grid-area: view;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: var(--space-5);
+  padding-bottom: calc(var(--space-5) + env(safe-area-inset-bottom));
+  scrollbar-width: thin;
+}
+.view-host::-webkit-scrollbar { width: 8px; height: 8px; }
+.view-host::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+.view-head { margin-bottom: var(--space-4); }
+.view-head h1 { margin: 0 0 var(--space-1); font-size: 22px; }
+.view-sub { margin: 0; color: var(--fg-muted); }
+
+.grid.two {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  align-items: start;
+}
+
+.card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+.card-head h2 { margin: 0; font-size: 15px; }
+
+.stack { display: flex; flex-direction: column; gap: var(--space-2); }
+.btnrow { display: flex; gap: var(--space-2); margin-top: var(--space-3); flex-wrap: wrap; }
+.inline-form { display: flex; gap: var(--space-2); margin: var(--space-3) 0; flex-wrap: wrap; }
+.inline-form input { flex: 1 1 200px; }
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 420px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-small);
+  min-height: calc(var(--touch-floor) - 8px);
+}
+.list li:hover { background: var(--bg-hover); }
+.list li .grow { flex: 1; min-width: 0; }
+.list li .sub { color: var(--fg-muted); font-size: 12px; }
+
+.kv {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+  border-bottom: 1px dashed var(--border);
+}
+.kv .k { color: var(--fg-muted); }
+.kv .v { text-align: right; word-break: break-word; }
+
+.small { font-size: 12px; line-height: 1.45; }
+.muted.small { margin: var(--space-2) 0 0; }

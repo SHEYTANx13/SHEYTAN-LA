@@ -1,0 +1,54 @@
+/* SHEYTAN-LA adaptive web shell — design tokens.
+   One file per element (run 46050871166 update): tokens first, so every
+   later cascade file can consume them. Tokens mirror the product token
+   authority (internal/theme): same roles, radii, spacing and touch
+   floors. A view may change density and arrangement, never the token
+   language. */
+
+:root {
+  color-scheme: dark;
+
+  --bg: #0e1116;
+  --bg-raised: #151a22;
+  --bg-hover: #1c2330;
+  --bg-active: #223046;
+  --fg: #e8ecf3;
+  --fg-muted: #98a2b3;
+  --accent: #4f8cff;
+  --accent-strong: #2f6fe0;
+  --ok: #35c26e;
+  --warn: #e0a13a;
+  --danger: #e05252;
+  --border: #263041;
+  --radius: 10px;
+  --radius-small: 6px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --touch-floor: 44px;
+  --rail-width: 220px;
+  --topbar-height: 52px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #f4f6fa;
+    --bg-raised: #ffffff;
+    --bg-hover: #e9eef6;
+    --bg-active: #dbe7fb;
+    --fg: #1a2230;
+    --fg-muted: #5c6b82;
+    --accent: #2f6fe0;
+    --accent-strong: #1d55b8;
+    --border: #d5dde8;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root { --border: var(--fg-muted); }
+}

@@ -36,10 +36,24 @@ package smokeverdict
 import "strings"
 
 // Shell evidence records (the app.log strings the smoke asserts).
+//
+// TWO shell eras carry the same three-stage contract (handshake, first
+// core read, shutdown):
+//   - the named-pipe era: the shell client dialed the windows named pipe
+//     (ui/gogui bootstrap — the Android mobile shell today);
+//   - the web era (run 45634345922 flip): the desktop shell is the
+//     same-origin web shell — it owns NO client-side named-pipe dial, so
+//     the desktop's handshake-equivalent is the REAL first core read the
+//     web host performs through the exact served handler before the
+//     window boots (internal/desktop, run 46050871166 repair). Both
+//     transport tokens are accepted; each era's record set is internally
+//     consistent and a mixed log still fails the stage it lies about.
 const (
 	ShellHandshakeRecord = "core handshake successful"
 	ShellPipeTransport   = "transport=windows-named-pipe"
+	ShellWebTransport    = "transport=same-origin-http"
 	ShellFirstReadRecord = "first session refresh succeeded"
+	ShellWebFirstRead    = "first core read succeeded"
 	ShellIPCStopped      = "ipc stopped"
 	ShellCoreClosed      = "server closed"
 )
@@ -158,8 +172,36 @@ func FromAppLog(logText string) Verdict {
 	}
 
 	// --- shell evidence ---------------------------------------------------
-	v.ShellOK = has(ShellHandshakeRecord) && has(ShellPipeTransport) &&
-		has(ShellFirstReadRecord) && has(ShellIPCStopped) && has(ShellCoreClosed)
+	// The handshake record must name ONE shell-era transport and the
+	// first-read record must belong to the SAME era — a log mixing eras
+	// (a hand-edited or half-upgraded shell) still fails: the named-pipe
+	// first-read record proves nothing about the web transport and vice
+	// versa. The binding is per-record (line-level), not document-level:
+	// the transport named BY the handshake line must be the transport the
+	// first-read line belongs to. The shutdown records close the contract.
+	handshakeEra := ""
+	firstReadEra := ""
+
+	for _, line := range strings.Split(logText, "\n") {
+		if strings.Contains(line, ShellHandshakeRecord) {
+			switch {
+			case strings.Contains(line, ShellPipeTransport):
+				handshakeEra = "pipe"
+			case strings.Contains(line, ShellWebTransport):
+				handshakeEra = "web"
+			}
+		}
+
+		switch {
+		case strings.Contains(line, ShellFirstReadRecord):
+			firstReadEra = "pipe"
+		case strings.Contains(line, ShellWebFirstRead):
+			firstReadEra = "web"
+		}
+	}
+
+	v.ShellOK = handshakeEra != "" && handshakeEra == firstReadEra &&
+		has(ShellIPCStopped) && has(ShellCoreClosed)
 
 	if !v.ShellOK {
 		v.Reasons = append(v.Reasons, "shell evidence incomplete (handshake/first-read/shutdown records)")

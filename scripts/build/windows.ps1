@@ -464,22 +464,36 @@ switch ($Phase) {
     Write-Host "window observed (MainWindowHandle: $($p.MainWindowHandle), enumPath: $enumSeen)"
 
     # IPC contract stages: handshake, first core read, log persistence.
+    # TWO shell eras carry this contract (run 46050871166 repair): the
+    # named-pipe era records transport=windows-named-pipe (a shell client
+    # that dialed the pipe), and the web era — the packaged desktop shell
+    # since the 45634345922 flip — records transport=same-origin-http
+    # (the web host's REAL first core read through the served handler,
+    # internal/desktop). The stage passes on EITHER era's internally
+    # consistent record set; a mixed log still fails here exactly like it
+    # fails the internal/smokeverdict contract.
     $appLog = Join-Path (Split-Path $exe) "data\logs\app.log"
     $ipcDeadline = (Get-Date).AddSeconds(30)
     $handshakeSeen = $false
+    $handshakeEra = ""
     $refreshSeen = $false
+    $refreshEra = ""
     $logDirSeen = $false
     while ((Get-Date) -lt $ipcDeadline) {
       if ($p.HasExited) { break }
       if (-not $handshakeSeen -and (Test-Path $appLog)) {
         $hits = Select-String -LiteralPath $appLog -Pattern "core handshake successful" -SimpleMatch
         if ($hits) {
-          $pipeHit = $hits | Where-Object { $_.Line -match "transport=windows-named-pipe" }
-          if ($pipeHit) { $handshakeSeen = $true }
+          foreach ($hit in $hits) {
+            if ($hit.Line -match "transport=windows-named-pipe") { $handshakeEra = "pipe" }
+            elseif ($hit.Line -match "transport=same-origin-http") { $handshakeEra = "web" }
+          }
+          if ($handshakeEra) { $handshakeSeen = $true }
         }
       }
       if (-not $refreshSeen -and (Test-Path $appLog)) {
-        if (Select-String -LiteralPath $appLog -Pattern "first session refresh succeeded" -SimpleMatch) { $refreshSeen = $true }
+        if (Select-String -LiteralPath $appLog -Pattern "first session refresh succeeded" -SimpleMatch) { $refreshSeen = $true; $refreshEra = "pipe" }
+        if (Select-String -LiteralPath $appLog -Pattern "first core read succeeded" -SimpleMatch) { $refreshSeen = $true; $refreshEra = "web" }
       }
       if (-not $logDirSeen -and (Test-Path $appLog)) {
         if (Select-String -LiteralPath $appLog -Pattern "log directory:" -SimpleMatch) { $logDirSeen = $true }
@@ -487,17 +501,22 @@ switch ($Phase) {
       if ($handshakeSeen -and $refreshSeen -and $logDirSeen) { break }
       Start-Sleep -Milliseconds 500
     }
+    if ($handshakeSeen -and $refreshSeen -and ($handshakeEra -ne $refreshEra)) {
+      Write-Host "--- data\logs\app.log tail ---"
+      if (Test-Path $appLog) { Get-Content $appLog -Tail 40 }
+      Fail-Gate "Launch smoke (window + IPC handshake + core read + logging persistence + graceful close)" "launch smoke stage IPC-HANDSHAKE: the handshake record names transport '$handshakeEra' while the first-read record belongs to era '$refreshEra' - a mixed-era log proves nothing"
+    }
     if (-not $handshakeSeen) {
       if (Test-Path $appLog) { Write-Host "--- data\logs\app.log tail ---"; Get-Content $appLog -Tail 40 }
-      Fail-Gate "Launch smoke (window + IPC handshake + core read + logging persistence + graceful close)" "launch smoke stage IPC-HANDSHAKE: no successful windows-named-pipe handshake record in data\logs\app.log within 30s - a visible window alone is no longer a pass"
+      Fail-Gate "Launch smoke (window + IPC handshake + core read + logging persistence + graceful close)" "launch smoke stage IPC-HANDSHAKE: no successful shell handshake record (transport=windows-named-pipe or transport=same-origin-http) in data\logs\app.log within 30s - a visible window alone is no longer a pass"
     }
     if (-not $refreshSeen) {
-      Fail-Gate "Launch smoke (window + IPC handshake + core read + logging persistence + graceful close)" "launch smoke stage CORE-READ: the first session refresh (a real core API read after the handshake) never succeeded within 30s"
+      Fail-Gate "Launch smoke (window + IPC handshake + core read + logging persistence + graceful close)" "launch smoke stage CORE-READ: the first core read record ('first session refresh succeeded' / 'first core read succeeded') never appeared in data\logs\app.log within 30s"
     }
     if (-not $logDirSeen) {
       Fail-Gate "Launch smoke (window + IPC handshake + core read + logging persistence + graceful close)" "launch smoke stage LOG-PERSISTENCE: app.log exists but carries no resolved-log-directory startup record"
     }
-    Write-Host "IPC gate: handshake successful (windows-named-pipe), first core read succeeded, log directory recorded"
+    Write-Host "IPC gate: shell handshake successful (transport era: $handshakeEra), first core read succeeded, log directory recorded"
 
     # Managed-engine settle window (run 43995689377): give transactional
     # engine maintenance a BOUNDED window to reach a terminal record.

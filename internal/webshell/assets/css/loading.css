@@ -1,0 +1,96 @@
+/* SHEYTAN-LA adaptive web shell — loading and motion: boot splash,
+   first-paint skeletons, view entry. Every rule here also dies under
+   prefers-reduced-motion (motion.css). */
+
+#boot-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  transition: opacity 0.45s ease;
+}
+
+#boot-splash.splash-done {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.splash-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  text-align: center;
+}
+
+.splash-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius);
+  animation: splash-pulse 2.4s ease-in-out infinite;
+}
+
+.splash-name {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.splash-spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  animation: splash-spin 0.9s linear infinite;
+}
+
+.splash-stage {
+  color: var(--fg-muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  min-height: 16px;
+}
+
+@keyframes splash-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(0.94); opacity: 0.82; }
+}
+
+@keyframes splash-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Skeleton loading. Shimmer rows fill a surface's FIRST paint only;
+   polling refreshes never flash. */
+.skeleton-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  list-style: none;
+}
+
+.skeleton {
+  border-radius: var(--radius-small);
+  background: linear-gradient(90deg, var(--bg-hover) 25%, var(--bg-active) 50%, var(--bg-hover) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton-line { height: 14px; width: 68%; }
+.skeleton-sub { height: 10px; width: 42%; }
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* View entry: a quiet fade-and-rise on every workspace switch. */
+.view-enter { animation: view-enter 0.28s ease both; }
+
+@keyframes view-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}

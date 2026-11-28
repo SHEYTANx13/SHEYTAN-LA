@@ -249,14 +249,26 @@ func MustAsset(name string) []byte {
 
 // AssetNames lists the embedded shell assets (contract tests iterate it).
 func AssetNames() []string {
-	matches, err := fs.Glob(assetsFS, root+"/*")
+	out := make([]string, 0, 16)
+
+	// Walk the whole embedded tree — the shell's per-element CSS lives
+	// under assets/css/ (run 46050871166 update: one file per element,
+	// never one big stylesheet), and the contract suite must see it.
+	err := fs.WalkDir(assetsFS, root, func(p string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+
+		if d.IsDir() {
+			return nil
+		}
+
+		out = append(out, strings.TrimPrefix(p, root+"/"))
+
+		return nil
+	})
 	if err != nil {
 		return nil
-	}
-
-	out := make([]string, 0, len(matches))
-	for _, m := range matches {
-		out = append(out, strings.TrimPrefix(m, root+"/"))
 	}
 
 	return out

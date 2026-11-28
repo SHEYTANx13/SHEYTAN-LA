@@ -1,0 +1,60 @@
+/* SHEYTAN-LA adaptive web shell — navigation rail. */
+
+.rail {
+  grid-area: rail;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-2);
+  padding-bottom: calc(var(--space-2) + env(safe-area-inset-bottom));
+  background: var(--bg-raised);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.rail-heading {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--fg-muted);
+  padding: var(--space-3) var(--space-3) var(--space-1);
+}
+
+.rail-group { display: flex; flex-direction: column; gap: 2px; }
+
+.rail-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--touch-floor);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-small);
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+}
+.rail-item svg { width: 18px; height: 18px; flex: none; }
+.rail-item:hover { background: var(--bg-hover); color: var(--fg); }
+.rail-item.active { background: var(--bg-active); color: var(--fg); font-weight: 600; }
+.rail-item:focus-visible { outline: 2px solid var(--accent); }
+.rail-item .kbd {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.rail-foot {
+  margin-top: auto;
+  padding: var(--space-3);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.nav-toggle { display: none; }

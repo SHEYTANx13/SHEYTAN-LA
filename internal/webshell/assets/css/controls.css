@@ -1,0 +1,71 @@
+/* SHEYTAN-LA adaptive web shell — controls: buttons and inputs.
+   The touch floor is the minimum hit target. */
+
+.iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--touch-floor);
+  min-height: calc(var(--touch-floor) - 12px);
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  border-radius: var(--radius-small);
+  cursor: pointer;
+}
+.iconbtn svg { width: 20px; height: 20px; }
+.iconbtn:hover, .iconbtn:focus-visible { background: var(--bg-hover); color: var(--fg); }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: calc(var(--touch-floor) - 10px);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--bg-raised);
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+}
+.btn:hover { background: var(--bg-hover); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.btn.primary { background: var(--accent); border-color: var(--accent-strong); color: #fff; }
+.btn.primary:hover { background: var(--accent-strong); }
+.btn.danger { border-color: var(--danger); color: var(--danger); }
+.btn.danger:hover { background: rgba(224, 82, 82, 0.12); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+
+input, textarea, select {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  padding: var(--space-2) var(--space-3);
+  min-height: calc(var(--touch-floor) - 12px);
+}
+input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+
+/* Busy action feedback: disabled + aria-busy while a request is in flight. */
+button[aria-busy="true"] {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+/* Badges and chips: state markers shared by every surface. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 2px 10px;
+  background: var(--bg-hover);
+  color: var(--fg-muted);
+}
+.badge.ok { background: rgba(53, 194, 110, 0.15); color: var(--ok); }
+.badge.warn { background: rgba(224, 161, 58, 0.15); color: var(--warn); }
+.badge.danger { background: rgba(224, 82, 82, 0.15); color: var(--danger); }
+.badge.accent { background: rgba(79, 140, 255, 0.15); color: var(--accent); }

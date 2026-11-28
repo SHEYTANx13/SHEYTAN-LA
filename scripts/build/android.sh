@@ -48,12 +48,9 @@ CANONICAL="dist/SHEYTAN-LA-ALPHA-android-arm64/SHEYTAN-LA-ALPHA-android-arm64.ap
 mkdir -p ci-logs
 
 fail_gate() { # $1 = step name, $2 = human message
-  echo "::error::$2"
-  echo "$1" > "$MARKER"
-  exit 1
-}
-
-fail_gate() { # $1 = step name, $2 = human message
+  # (run 46050871166 cleanup: the previous tree defined fail_gate twice in
+  # sequence — an identical-body leftover; the second definition silently
+  # shadowed the first. One definition.)
   echo "::error::$2"
   echo "$1" > "$MARKER"
   exit 1

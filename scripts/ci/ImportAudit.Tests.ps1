@@ -116,6 +116,43 @@ try {
     $code = $LASTEXITCODE
     Assert-True ($code -ne 0) "fixture 7: a runtime-exception audit script never yields exit 0 (got $code)"
 
+    # --- fixture 7b: a module with NO static import table must PASS ---
+    # Run 46050871166 repair: the hosted windows lane died exactly here —
+    # a zero-import module (importRva == 0) made the audit's module loop
+    # unwrap a $null answer and .Count threw under strict mode, classifying
+    # a clean closure as ERROR exit 3. A hand-built minimal PE32+ whose
+    # import data directory is ZERO carries no imports; the audit must
+    # report "0 static import(s)" and exit 0 — an empty answer is a clean
+    # closure, never an error.
+    $noImportDir = Join-Path $work "noimports"
+    New-Item -ItemType Directory -Force -Path $noImportDir | Out-Null
+    $noImportDll = Join-Path $noImportDir "resource-only.dll"
+    $pe = New-Object byte[] 1024
+    $pe[0] = 0x4D; $pe[1] = 0x5A                      # 'MZ'
+    $pe[0x3C] = 0x40                                  # e_lfanew -> 0x40
+    $pe[0x40] = 0x50; $pe[0x41] = 0x45                # 'PE'
+    # COFF header at 0x44: machine x86-64, 1 section, no symbols.
+    $pe[0x44] = 0x64; $pe[0x45] = 0x86
+    $pe[0x46] = 0x01; $pe[0x47] = 0x00
+    $pe[0x54] = 0xF0; $pe[0x55] = 0x00                # size of optional header = 240 (PE32+)
+    # Optional header at 0x58: magic PE32+ (0x020B).
+    $pe[0x58] = 0x0B; $pe[0x59] = 0x02
+    # Import data directory (index 1, at optOff + 112 = 0x58 + 112 = 0xC8):
+    # RVA 0, size 0 — the whole point of this fixture.
+    # Section table at 0x58 + 240 = 0x148: one section, VA 0x1000,
+    # raw size 0x200, raw pointer 0x200 (identity-ish mapping).
+    $pe[0x148 + 12] = 0x00; $pe[0x148 + 13] = 0x10    # VirtualAddress 0x1000
+    $pe[0x148 + 8]  = 0x00; $pe[0x148 + 9]  = 0x02    # VirtualSize 0x200
+    $pe[0x148 + 16] = 0x00; $pe[0x148 + 17] = 0x02    # SizeOfRawData 0x200
+    $pe[0x148 + 20] = 0x00; $pe[0x148 + 21] = 0x02    # PointerToRawData 0x200
+    [System.IO.File]::WriteAllBytes($noImportDll, $pe)
+
+    $out = & $auditScript -ExeDir $noImportDir -Modules @("resource-only.dll") 2>&1
+    $code = $LASTEXITCODE
+    $text = ($out | ForEach-Object { $_.ToString() }) -join "`n"
+    Assert-True ($code -eq 0) "fixture 7b: a zero-import module exits 0 — an empty answer is a clean closure (got $code)"
+    Assert-True ($text -match "0 static import\(s\)") "fixture 7b: the report names the zero-import module honestly"
+
     # --- fixture 8: ERROR/UNKNOWN fixtures must fail a release gate ---
     # The workflow wrapper's contract: exit 0 proceeds; ANY other exit is
     # FAIL (2) or ERROR (3, marker + job gate). Pinned here by asserting

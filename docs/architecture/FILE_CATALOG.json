@@ -7832,6 +7832,126 @@
     "status": "needs review"
   },
   {
+    "path": "internal/webshell/assets/css/adaptive.css",
+    "type": "other",
+    "language": "",
+    "purpose": "Implementation file in internal/webshell/assets/css (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell/assets/css",
+    "runtimeAsset": true,
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webshell/assets/css/base.css",
+    "type": "other",
+    "language": "",
+    "purpose": "Implementation file in internal/webshell/assets/css (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell/assets/css",
+    "runtimeAsset": true,
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webshell/assets/css/chat.css",
+    "type": "other",
+    "language": "",
+    "purpose": "Implementation file in internal/webshell/assets/css (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell/assets/css",
+    "runtimeAsset": true,
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webshell/assets/css/controls.css",
+    "type": "other",
+    "language": "",
+    "purpose": "Implementation file in internal/webshell/assets/css (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell/assets/css",
+    "runtimeAsset": true,
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webshell/assets/css/layout.css",
+    "type": "other",
+    "language": "",
+    "purpose": "Implementation file in internal/webshell/assets/css (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell/assets/css",
+    "runtimeAsset": true,
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webshell/assets/css/loading.css",
+    "type": "other",
+    "language": "",
+    "purpose": "Implementation file in internal/webshell/assets/css (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell/assets/css",
+    "runtimeAsset": true,
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webshell/assets/css/motion.css",
+    "type": "other",
+    "language": "",
+    "purpose": "Implementation file in internal/webshell/assets/css (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell/assets/css",
+    "runtimeAsset": true,
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webshell/assets/css/panels.css",
+    "type": "other",
+    "language": "",
+    "purpose": "Implementation file in internal/webshell/assets/css (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell/assets/css",
+    "runtimeAsset": true,
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webshell/assets/css/rail.css",
+    "type": "other",
+    "language": "",
+    "purpose": "Implementation file in internal/webshell/assets/css (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell/assets/css",
+    "runtimeAsset": true,
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webshell/assets/css/system.css",
+    "type": "other",
+    "language": "",
+    "purpose": "Implementation file in internal/webshell/assets/css (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell/assets/css",
+    "runtimeAsset": true,
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webshell/assets/css/tokens.css",
+    "type": "other",
+    "language": "",
+    "purpose": "Implementation file in internal/webshell/assets/css (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell/assets/css",
+    "runtimeAsset": true,
+    "status": "needs review"
+  },
+  {
+    "path": "internal/webshell/assets/css/views.css",
+    "type": "other",
+    "language": "",
+    "purpose": "Implementation file in internal/webshell/assets/css (package role not curated — needs review)",
+    "layer": "domain",
+    "subsystem": "internal/webshell/assets/css",
+    "runtimeAsset": true,
+    "status": "needs review"
+  },
+  {
     "path": "internal/webshell/assets/index.html",
     "type": "other",
     "language": "",

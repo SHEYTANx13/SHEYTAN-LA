@@ -1,0 +1,7 @@
+/* SHEYTAN-LA adaptive web shell — motion safety. Every animation and
+   transition defined in the loading/controls/adaptive files dies here:
+   the reduced-motion contract is the last cascade layer and wins. */
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}

@@ -192,7 +192,16 @@ try {
             continue
         }
         try {
-            $imports = Get-StaticImportDlls -Path $modPath
+            # Run 46050871166 repair: @( ) is REQUIRED here — a module with
+            # NO static imports (importRva == 0) makes the function emit
+            # ZERO pipeline objects, scalar assignment turns that into
+            # $null, and $imports.Count under Set-StrictMode -Version
+            # Latest throws "The property 'Count' cannot be found on this
+            # object" — the hosted windows lane's audit died exactly there
+            # (ImportAudit.ps1:207) and classified a clean dependency
+            # closure as ERROR exit 3. @() makes the empty answer an empty
+            # array; the audit then reports "0 static import(s)" honestly.
+            $imports = @(Get-StaticImportDlls -Path $modPath)
         } catch {
             # v1.11.1: a module whose import table could not be read has
             # NOT been audited — "no exception on the other modules" is
@@ -204,7 +213,7 @@ try {
             $script:auditError = $true
             continue
         }
-        Write-Output ("--- {0}: {1} static import(s) ---" -f $mod, $imports.Count)
+        Write-Output ("--- {0}: {1} static import(s) ---" -f $mod, @($imports).Count)
         $modRecord = [ordered]@{ name = $mod; status = "OK"; imports = New-Object System.Collections.Generic.List[object] }
         $script:Report.modules.Add($modRecord)
         $seen = @{}

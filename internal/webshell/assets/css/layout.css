@@ -1,0 +1,70 @@
+/* SHEYTAN-LA adaptive web shell — layout elements: the app frame grid,
+   topbar (brand, status), and the status bar. */
+
+.app {
+  display: grid;
+  height: 100%;
+  grid-template-columns: var(--rail-width) 1fr;
+  grid-template-rows: var(--topbar-height) 1fr auto;
+  grid-template-areas:
+    "topbar topbar"
+    "rail view"
+    "statusbar statusbar";
+}
+
+.topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 var(--space-4) 0 calc(var(--space-3) + env(safe-area-inset-top));
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.brand-mark { display: inline-flex; width: 22px; height: 22px; }
+.brand-mark svg { width: 100%; height: 100%; }
+.brand-stage {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.topbar-status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+.status-dot {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+.status-dot.ok { background: var(--ok); }
+.status-dot.bad { background: var(--danger); }
+
+.statusbar {
+  grid-area: statusbar;
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4) calc(var(--space-2) + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+  font-size: 12px;
+}

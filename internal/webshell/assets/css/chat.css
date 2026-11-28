@@ -1,0 +1,31 @@
+/* SHEYTAN-LA adaptive web shell — chat: the DEFAULT load-up surface.
+   Local-first conversation with the AI core: log, message bubbles and
+   composer. */
+
+.chat-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: 260px 1fr;
+  align-items: start;
+}
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 240px;
+  max-height: 480px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding: var(--space-2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+}
+.msg { padding: var(--space-2) var(--space-3); border-radius: var(--radius-small); max-width: 85%; word-break: break-word; }
+.msg.user { align-self: flex-end; background: var(--bg-active); }
+.msg.core { align-self: flex-start; background: var(--bg-raised); border: 1px solid var(--border); }
+.msg .who { display: block; font-size: 11px; color: var(--fg-muted); margin-bottom: 2px; }
+.composer { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
+.composer textarea { resize: vertical; }
+.composer-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }

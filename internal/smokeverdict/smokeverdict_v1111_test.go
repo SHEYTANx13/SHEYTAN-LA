@@ -48,6 +48,64 @@ func run43995689377EngineFailureBlock() string {
 	}, "\n")
 }
 
+// run46050871166WebShellBlock renders the WEB-SHELL-era records (the
+// run 45634345922 flip's packaged desktop): the shell has no client-side
+// named-pipe dial, so the handshake-equivalent records come from the web
+// host's real first core read through the served handler.
+func run46050871166WebShellBlock() string {
+	return strings.Join([]string{
+		`2026-11-27T20:00:01Z INFO  startup session start (SHEYTAN-LA 1.11.1, windows/amd64)`,
+		`2026-11-27T20:00:01Z INFO  paths log directory: C:\smoke\SHEYTAN-LA\data\logs`,
+		`2026-11-27T20:00:01Z INFO  desktop SHEYTAN-LA v1.11.1-ALPHA (web UI host — the adaptive web shell)`,
+		`2026-11-27T20:00:02Z INFO  ipc core handshake successful protocol=sheytan-ipc protocolVersion=1 coreVersion=1.11.1 transport=same-origin-http`,
+		`2026-11-27T20:00:02Z INFO  ipc first core read succeeded (transport=same-origin-http)`,
+		`2026-11-27T20:00:43Z INFO  desktop ipc stopped`,
+		`2026-11-27T20:00:43Z INFO  desktop server closed`,
+		`2026-11-27T20:00:43Z INFO  logging log sinks closing`,
+	}, "\n")
+}
+
+// TestWebShellEraSmokeIsGreen pins the run 46050871166 repair: the
+// packaged desktop shell is the same-origin web shell, so the smoke must
+// accept the web-era record set exactly like the named-pipe era's — and
+// a log that MIXES the eras must still fail (each record set proves only
+// its own transport).
+func TestWebShellEraSmokeIsGreen(t *testing.T) {
+	v := FromAppLog(run46050871166WebShellBlock() + "\n" +
+		`2026-11-27T20:00:04Z INFO  maintenance startup gate: engine is current (b12445)`)
+
+	if !v.ShellOK {
+		t.Fatalf("the web-era shell records genuinely prove the three stages — ShellOK must be true (reasons=%v)", v.Reasons)
+	}
+	if !v.EngineReady {
+		t.Fatalf("the engine-current maintenance record makes the engine ready, got state %q", v.EngineState)
+	}
+	if !v.TestReadyOverall() {
+		t.Fatal("the web-era healthy app must pass the overall gate")
+	}
+	if got := v.Summary(); got != "SMOKE OK: shell + managed engine" {
+		t.Fatalf("summary = %q", got)
+	}
+}
+
+// TestMixedEraLogStillFails: a handshake record naming one transport with
+// a first-read record from the OTHER era proves nothing — the verdict
+// stays red (a half-upgraded or hand-edited log is not shell evidence).
+func TestMixedEraLogStillFails(t *testing.T) {
+	mixed := strings.Join([]string{
+		`2026-11-27T20:00:02Z INFO  ipc core handshake successful protocol=sheytan-ipc protocolVersion=1 coreVersion=1.11.1 transport=same-origin-http`,
+		`2026-11-27T20:00:02Z INFO  ipc first session refresh succeeded (connected) transport=windows-named-pipe`,
+		`2026-11-27T20:00:43Z INFO  desktop ipc stopped`,
+		`2026-11-27T20:00:43Z INFO  desktop server closed`,
+	}, "\n")
+
+	v := FromAppLog(mixed)
+
+	if v.ShellOK {
+		t.Fatal("a mixed-era log must fail the shell contract (each record set proves only its own transport)")
+	}
+}
+
 // TestRun43995689377FalseGreenIsNowRed is THE regression fixture: shell
 // green + engine red must produce the labelled split verdict and a RED
 // overall test-ready result.

@@ -112,18 +112,70 @@ func TestResolveClassBands(t *testing.T) {
 	}
 }
 
+// cssElementFiles is the ONE-per-element cascade the shell ships since
+// the run 46050871166 update: app.css is the ENTRY (index.html keeps the
+// single /app.css reference; the file carries the ordered @import
+// cascade), and every element owns its own file under /css/. The order
+// mirrors the cascade contract documented in app.css itself.
+var cssElementFiles = []string{
+	"css/tokens.css",
+	"css/base.css",
+	"css/layout.css",
+	"css/controls.css",
+	"css/rail.css",
+	"css/views.css",
+	"css/chat.css",
+	"css/panels.css",
+	"css/loading.css",
+	"css/system.css",
+	"css/adaptive.css",
+	"css/motion.css",
+}
+
+// cssBundle assembles the presentation language the shell actually
+// serves: the entry plus every per-element file, in cascade order.
+func cssBundle(t *testing.T) string {
+	t.Helper()
+
+	var b strings.Builder
+
+	b.WriteString(string(MustAsset("app.css")))
+	b.WriteString("\n")
+
+	for _, name := range cssElementFiles {
+		b.WriteString(string(MustAsset(name)))
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
 // TestShellAssetContract pins the structure the blueprint demands: the
 // assets reference each other, the JS carries the whole registry and the
-// download-progress polling, the CSS carries the four screen classes, the
-// touch floor, momentum scrolling and the reduced-motion contract — and
-// NOTHING references a remote origin (the CSP is same-origin only).
+// download-progress polling, the CSS bundle carries the four screen
+// classes, the touch floor, momentum scrolling and the reduced-motion
+// contract — and NOTHING references a remote origin (the CSP is
+// same-origin only).
 func TestShellAssetContract(t *testing.T) {
 	html := string(MustAsset("index.html"))
-	css := string(MustAsset("app.css"))
+	entry := string(MustAsset("app.css"))
+	css := cssBundle(t)
 	js := string(MustAsset("app.js"))
 
 	if !strings.Contains(html, `href="/app.css"`) || !strings.Contains(html, `src="/app.js"`) {
 		t.Fatalf("index.html must reference the shell assets self-origin only")
+	}
+
+	// The per-element contract: ONE entry, ONE file per element, no
+	// element rules left in the entry itself.
+	for _, name := range cssElementFiles {
+		if len(MustAsset(name)) < 60 {
+			t.Fatalf("per-element stylesheet %q is suspiciously small — the element cascade is incomplete", name)
+		}
+
+		if !strings.Contains(entry, "@import url(\""+name+"\")") { // run 46050871166: double-quoted needle (byte-identical to the served bytes)
+			t.Fatalf("app.css does not import the per-element file %q in its cascade", name)
+		}
 	}
 
 	for _, w := range append(Workspaces(), Utilities()...) {
@@ -153,12 +205,58 @@ func TestShellAssetContract(t *testing.T) {
 		"env(safe-area-inset-top)",
 	} {
 		if !strings.Contains(css, want) {
-			t.Fatalf("app.css is missing the %q contract (adaptive classes, touch floor, scroll or motion)", want)
+			t.Fatalf("the css bundle (entry + per-element files) is missing the %q contract (adaptive classes, touch floor, scroll or motion)", want)
 		}
 	}
 
+	// The entry must stay an entry: rules for elements live in the
+	// per-element files, so the entry carries only comments and imports.
+	// The scan tracks /* ... */ comment state so multi-line comment text
+	// never trips the rule check.
+	inComment := false
+
+	for _, line := range strings.Split(entry, "\n") {
+		trimmed := strings.TrimSpace(line)
+
+		if inComment {
+			if strings.Contains(trimmed, "*/") {
+				inComment = false
+			}
+
+			continue
+		}
+
+		if trimmed == "" {
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "/*") {
+			if !strings.Contains(trimmed, "*/") {
+				inComment = true
+			}
+
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "@import") {
+			continue
+		}
+
+		t.Fatalf("app.css carries a rule outside the @import cascade (%q) — element rules belong in css/", trimmed)
+	}
+
 	// CSP conformance: no remote origin anywhere in the shell assets.
-	for name, body := range map[string]string{"index.html": html, "app.css": css, "app.js": js} {
+	for name, body := range map[string]string{"index.html": html, "app.css": entry, "app.js": js} {
+		for _, remote := range []string{"http://", "https://", "//cdn.", "integrity="} {
+			if strings.Contains(body, remote) {
+				t.Fatalf("%s references %q — the shell CSP is same-origin only", name, remote)
+			}
+		}
+	}
+
+	for _, name := range cssElementFiles {
+		body := string(MustAsset(name))
+
 		for _, remote := range []string{"http://", "https://", "//cdn.", "integrity="} {
 			if strings.Contains(body, remote) {
 				t.Fatalf("%s references %q — the shell CSP is same-origin only", name, remote)
