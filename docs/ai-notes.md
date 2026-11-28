@@ -10,23 +10,53 @@ session; rewrite this note so it stays true.
 
 ---
 
-## CURRENT HANDOFF — run 46050871166 repair: android go.sum mutation reproduced, the web-shell-era smoke contract, the ImportAudit zero-import crash, the walk-diag evidence channel, plain-text log artifact, per-element shell CSS (2026-11-28) — supersedes all handoffs below
+## CURRENT HANDOFF — run 46131092469 repair: the darwin attribution family closed at the named stage (zeroed pid slots, transient sysctl), the macOS .app icon, the coarse-pointer touch floor, the UI-contract docs consolidation (2026-11-29) — supersedes all handoffs below
 
-Read this BEFORE touching the lane scripts, the preflight, the smoke
-contract or the web shell again. The decisive facts of this update:
+Read this BEFORE touching the darwin proc identity, the lane scripts or
+the web shell again. The decisive facts of this update:
 
-1. **ANDROID LANE — `go mod download all` MUTATES go.sum (REPRODUCED).**
-   The module preflight walked the transitive METADATA graph and, when
-   the committed go.sum lacks the h1:/go.mod sums for graph-only
-   modules, wrote +298 lines into the TRACKED go.sum — exactly one
-   residue line (` M go.sum`), caught only by the android lane's
-   post-packaging cleanliness guard. Committing the completed go.sum is
-   structurally IMPOSSIBLE while `module-integrity.sh` pins
-   `go mod tidy -diff` empty (tidy can never record the graph-only h1:
-   sums — verified empirically). The preflight now runs plain
-   `go mod download` (the build-relevant set, verified a tree no-op).
-   NEVER re-introduce `go mod download all` in a lane script.
-2. **WINDOWS LAUNCH SMOKE — TWO SHELL ERAS.** The packaged desktop
+1. **DARWIN ENUMERATION — A PID 0 SLOT IS A KERNEL ARTIFACT, NOT DECODE
+   CORRUPTION.** The run-46050871166 walk-diag channel delivered its
+   design goal: the failure finally named its stage
+   (`pids=0 … walked=0 … enum_err=truncated`, BOTH sources refused).
+   `proc_listallpids` answered a pid 0 slot (indices 449–468 of
+   ~450–470 entry tables, varying per test) — a process that exits
+   between the kernel's count pass and its copy pass leaves a zeroed
+   slot; `sysctl KERN_PROC_ALL` answered ENOENT (the same mid-copy
+   mutation). The policy is now `sanitizePIDList`
+   (identity_darwin_path.go, pure Go, pinned by
+   `TestSanitizePIDListPolicy` in every darwin build): pid 0 slots are
+   SKIPPED and counted (`skipped=%d` in the walk-diag line), a NEGATIVE
+   pid and a >¼ zeroed majority stay typed decode-corruption failures;
+   the sysctl source re-snapshots (same buffer, bounded, NO sleeps) on
+   transient ENOENT/ESRCH. `TestAdoptionAcceptsManagedEngine` needs no
+   llm-side change — it adopts through `proc.ListeningProcess`
+   (adoption.go:82) and died with the same enumeration failure.
+2. **CGO DARWIN COMPILE — the hosted lanes stay the authority.**
+   `CGO_ENABLED=0` vet on darwin type-checks the pure-Go files and the
+   tests, but EXCLUDES every cgo file (the 45716559459 lesson still
+   holds): review identity_darwin.go cgo sections line-by-line
+   (C-int/Go-int conversions).
+3. **MACOS .APP ICON — built at package time.** macos.sh stage-app
+   builds `sheytan.icns` from `internal/webshell/assets/logo.png` with
+   sips+iconutil (present on every macOS runner image), declares
+   `CFBundleIconFile`, and verify-zip fails closed on a bundle missing
+   the icon. Do NOT commit image binaries; the icns is never a tracked
+   artifact. Windows embeds via the gen-syso pipeline (already wired).
+4. **TOUCH FLOOR — coarse pointers get the REAL floor.** The shell
+   declared `--touch-floor: 44px` while pointer-era min-heights sat
+   under it. Controls now carry `touch-action: manipulation`, visible
+   `:active` states, and the `@media (pointer: coarse)` floors
+   (controls.css/views.css) raise buttons/inputs/icon buttons/list rows
+   to 44px with the 16px input font floor (no WebView focus zoom).
+   Never reintroduce hover-only feedback.
+5. **UI-CONTRACT DOCS — ONE HOME.** The three `docs/ui/` pages
+   (ACCESSIBILITY, DESIGN-SYSTEM, TOUCH-RESPONSIVE-MATRIX) are merged
+   into the rewritten web-shell-era `docs/ui-contract.md` and retired
+   from the tree; all cross-links point there. Do not recreate
+   per-topic UI pages; amend the one contract in the same change as the
+   behavior it describes.
+6. **WINDOWS LAUNCH SMOKE — TWO SHELL ERAS.** The packaged desktop
    shell is the WEB shell (`-tags webworkspace` →
    `internal/desktop.runWebUI`): it owns NO named-pipe dial, so the
    go-gui-era records can never appear. The web host performs ONE real
@@ -37,63 +67,44 @@ contract or the web shell again. The decisive facts of this update:
    binding (a mixed-era log still fails); `windows.ps1` mirrors the
    contract. The named-pipe era remains the truth for the ANDROID
    mobile shell (ui/gogui bootstrap).
-3. **IMPORT AUDIT — @( ) IS MANDATORY.** A module with no static import
+7. **ANDROID LANE — `go mod download all` MUTATES go.sum.** The
+   module preflight runs plain `go mod download` (verified a tree
+   no-op); `module-integrity.sh` pins `go mod tidy -diff` empty. NEVER
+   re-introduce `go mod download all` in a lane script.
+8. **IMPORT AUDIT — @( ) IS MANDATORY.** A module with no static import
    table makes `Get-StaticImportDlls` emit ZERO pipeline objects;
    scalar assignment unwraps that to $null and `.Count` throws under
-   `Set-StrictMode -Version Latest` (the hosted windows lane died at
-   ImportAudit.ps1:207). The caller wraps `@(...)` and fixture 7b pins
-   the zero-import class. Any new PowerShell collection assignment
-   from a function call needs the same @() guard.
-4. **EVIDENCE CHANNEL — WALK-DIAG LINES CARRY 1100 CHARS.** The
-   consolidated report's 240-char annotation bound cut the darwin
-   walk's typed evidence off exactly where it starts; five repair
-   sessions guessed because the WHY never survived. `consolidate-run-
-   log.sh` now bounds walk-diag lines at 1100 chars. NO speculative
-   darwin code change was made in this pass — the next hosted run
-   delivers the stage evidence (`pids= self= self_sockets= walked=
-   denied=` counts) that decides the fix. The failing family: the
-   live-port attribution tests + `TestAdoptionAcceptsManagedEngine`
-   (same identity proof); free-port/wrong-port/record-decode tests
-   PASS, so enumeration liveness, record decode and the matcher are
-   all proven on the runner — the evidence will name the remaining
-   stage.
-5. **LOG ARTIFACT — PLAIN TEXT.** The errors/warnings artifact uploads
-   with `archive: false` (the codeql.yml precedent): the run-page
-   download IS the .txt, never a txt-in-zip.
-6. **SHELL CSS — ONE FILE PER ELEMENT.** `app.css` is the ENTRY only
+   `Set-StrictMode -Version Latest`. Any new PowerShell collection
+   assignment from a function call needs the same @() guard.
+9. **LOG ARTIFACT — PLAIN TEXT.** The errors/warnings artifact uploads
+   with `archive: false`: the run-page download IS the .txt.
+10. **SHELL CSS — ONE FILE PER ELEMENT.** `app.css` is the ENTRY only
    (comments + ordered `@import` cascade of `assets/css/{tokens,base,
    layout,controls,rail,views,chat,panels,loading,system,adaptive,
-   motion}.css`). index.html keeps the single `/app.css` reference;
-   the shell asset contract test assembles the served bundle, pins the
-   entry shape and scans every element file for remote-origin
-   literals. `AssetNames()` walks the whole tree. Tokens moved
-   byte-for-byte (zero design drift).
-7. **The webshell asset contract is otherwise intact**: registry mirror
-   pinned to ui/gogui, `data-view` sections, ARIA download bar,
-   adaptive CSS band strings, touch floor, `prefers-reduced-motion`
-   (the last cascade layer — motion.css kills every animation), and
-   the same-origin-only CSP.
+   motion}.css`). The shell asset contract test assembles the served
+   bundle, pins the entry shape and scans every element file for
+   remote-origin literals. Tokens moved byte-for-byte (zero design
+   drift); the registry mirror stays pinned to ui/gogui.
+11. **CodeQL #366** (unvalidated dynamic method call, app.js loaders
+   table) is closed at the root on main: the loader table is a `Map`
+   with a typed `loaders.get(id)` call; the alert re-validates closed
+   on the hosted scan of the next pushed commit.
 
-Local evidence: gofmt repo-wide clean; headless suite (all internal
-packages) green; releasecontract (file catalog regenerated for the 12
-new CSS files) green; smokeverdict + desktop + webshell + webworkspace
-+ proc suites green; collector fixtures 40/0; `node --check app.js`;
-YAML-valid workflows; bash-syntax lane scripts; `CGO_ENABLED=0 go vet
--tags webworkspace,purego ./internal/desktop/ ./internal/webworkspace/
-./internal/webshell/` on linux and windows/amd64. NOT RUN locally:
-native darwin CGO compile/tests, the GTK3/WebKit2GTK linux desktop
-link, Windows pwsh fixture execution (no pwsh in this sandbox — the
-hosted windows lane is the authority for ImportAudit.Tests.ps1 incl.
-the new fixture 7b), the hosted platform build + CodeQL on the
-candidate.
+Local evidence (this pass, linux/amd64 go1.27.4): gofmt clean;
+`GOOS=darwin CGO_ENABLED=0 go vet ./internal/proc/` green (pure-Go
+policy + new tests); headless build + full internal suite green;
+webshell/webworkspace/desktop/smokeverdict suites green;
+releasecontract green with the regenerated file catalog (three docs/ui
+pages merged away); `node --check app.js`; `bash -n` lane scripts.
+NOT RUN locally: native darwin CGO compile/tests (no macOS SDK), the
+real WebView runtimes, sips/iconutil (macOS-only), pwsh fixture
+execution (no pwsh), the hosted platform build + CodeQL on the
+candidate (no remote operations authorized).
 
 Next actionable step: push the candidate branch (operator
 authorization required) and let the hosted platform build + CodeQL run
-on it. The run ALSO delivers the first complete walk-diag evidence for
-the darwin attribution family — if a darwin lane still fails, the
-failure message now carries the WHY (fix the named stage; do not
-guess), and if all lanes go green the STEM designation becomes
-justifiable for the delivery naming.
+on it. The darwin lanes decide the enumeration fix; a green run
+justifies the STEM delivery naming on that commit.
 
 ---
 
@@ -114,9 +125,9 @@ justifiable for the delivery naming.
   directory; its shell upgrades (splash, skeletons, Multi-Agent
   surface, live model load options, GPU & drivers card,
   Permissions-Policy/COOP/CORP hardening) are all on main via 2d23a59.
-- CodeQL #366 (unvalidated dynamic method call, app.js loaders table)
-  and #367 (unused variable) are closed at the root on main: the
-  loader table is a `Map` with a typed `loaders.get(id)` call.
+- CodeQL #366 (unvalidated dynamic method call) and #367 (unused
+  variable) are closed at the root on main: the loader table is a
+  `Map` with a typed `loaders.get(id)` call (see item 11 above).
 - The darwin walk has TWO enumeration sources (proc_listallpids, then
   BSD sysctl KERN_PROC_ALL), fails typed only when both refuse, and
   front-loads the walk-diag inside the evidence window. Do NOT re-apply

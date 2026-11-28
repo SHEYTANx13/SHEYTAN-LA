@@ -123,6 +123,7 @@ const (
 type procWalkDiagnostic struct {
 	EnumerationError string         // "" when the pid enumeration succeeded; its typed class otherwise
 	PIDs             int            // pids the kernel enumerated (0 when enumeration failed)
+	SkippedZeroes    int            // zeroed pid slots the enumeration skipped (kernel artifacts)
 	SelfPresent      bool           // the walk's own pid was in the enumerated list
 	CandidatesRead   int            // candidates whose fd list was read successfully
 	SelfSocketFDs    int            // socket fds seen on the walk's own process
@@ -198,8 +199,8 @@ func renderProcWalkDiagnostic(d *procWalkDiagnostic) string {
 	var b strings.Builder
 
 	b.WriteString("walk-diag pids=")
-	fmt.Fprintf(&b, "%d self=%t self_sockets=%d walked=%d denied=%d gone=%d",
-		d.PIDs, d.SelfPresent, d.SelfSocketFDs, d.CandidatesRead, d.AccessDenied, d.Gone)
+	fmt.Fprintf(&b, "%d skipped=%d self=%t self_sockets=%d walked=%d denied=%d gone=%d",
+		d.PIDs, d.SkippedZeroes, d.SelfPresent, d.SelfSocketFDs, d.CandidatesRead, d.AccessDenied, d.Gone)
 
 	if d.EnumerationError != "" {
 		fmt.Fprintf(&b, " enum_err=%s", d.EnumerationError)
@@ -231,6 +232,61 @@ func renderProcWalkDiagnostic(d *procWalkDiagnostic) string {
 	renderBuckets("path_err", d.PathErrors)
 
 	return b.String()
+}
+
+// sanitizePIDList applies the hosted-evidence pid-list policy (run
+// 46131092469 repair): the kernel's whole-table enumeration MAY answer
+// ZEROED slots — a process that exits between the kernel's count pass and
+// its copy pass leaves a 0 where its pid would have been (observed on BOTH
+// hosted darwin lanes as a pid 0 at varying indices 449-468 of ~450-470
+// entry tables, run 46131092469), and pid 0 (kernel_task) itself may sit
+// in an ALL_PIDS enumeration. A zeroed slot is an enumeration artifact,
+// never a decode signal: it carries no identity, cannot own a listening
+// socket and cannot be inspected. The policy:
+//
+//   - pid == 0 slots are SKIPPED and counted (the count is walk-diag
+//     evidence, never a silent drop);
+//   - a NEGATIVE pid is decode corruption — fail closed, typed;
+//   - a list whose zeroed slots dominate the answer (every slot zero, or
+//     more than a quarter of the returned entries zero) is decode
+//     corruption — fail closed, typed. A real process table never loses a
+//     quarter of its entries inside one synchronous kernel copy pass, so
+//     that bound can only fire on a genuinely broken buffer.
+//
+// The returned count is the number of skipped zeroed slots, for the walk
+// diagnostic. Pure Go — shared by every darwin build variant and pinned
+// by TestSanitizePIDListPolicy.
+func sanitizePIDList(raw []int32) ([]int32, int, error) {
+	zeroes := 0
+
+	for _, p := range raw {
+		if p == 0 {
+			zeroes++
+			continue
+		}
+
+		if p < 0 {
+			return nil, zeroes, fmt.Errorf("%w: the enumerated pid list carries a negative pid (%d) — the buffer decode is wrong", errProcTruncated, p)
+		}
+	}
+
+	if zeroes > 0 && (zeroes == len(raw) || zeroes*4 > len(raw)) {
+		return nil, zeroes, fmt.Errorf("%w: %d of %d enumerated pid slots are zeroed — the decode-corruption bound", errProcTruncated, zeroes, len(raw))
+	}
+
+	if len(raw) == 0 {
+		return nil, 0, nil
+	}
+
+	pids := make([]int32, 0, len(raw)-zeroes)
+
+	for _, p := range raw {
+		if p > 0 {
+			pids = append(pids, p)
+		}
+	}
+
+	return pids, zeroes, nil
 }
 
 // sortedClassKeys returns the bucket keys in deterministic order (Go map

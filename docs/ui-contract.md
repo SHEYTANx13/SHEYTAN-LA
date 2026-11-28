@@ -1,92 +1,151 @@
 # UI Design Contract
 
-**Binding for every UI/UX upgrade phase.** This is the single, documented design contract that every later phase of the UI/UX hybrid upgrade obeys. The long-term capability plan lives in ROADMAP.md ("UI/UX hybrid upgrade"); Dev-Notes.md carries only the current work order.
+**Binding for every UI/UX change.** This is the single, documented design
+contract for the adaptive web shell (`internal/webshell`) — the ONE
+desktop UI surface, rendered in the primary window by the web workspace
+host (`internal/webworkspace`, Wails v3.1.0) on every desktop platform.
+The Fyne shell generation (`ui/fyne`, retired by the run-45634345922
+flip; see [`retired.md`](retired.md)) executed the original phased
+contracts #1–15; its contract text lives in git history, and the rules
+below carry the surviving invariants forward onto the web shell. The
+Go-Gui mirror (`ui/gogui`) stays the Android mobile shell and the native
+IA mirror the shell contract test pins against.
 
-Provenance: created by the run #123 fix session, 2026-11-01, as Phase 0 of the operator-authorized UI/UX research (the research record lived in Dev-Notes.md before its one-time cleanup; the plan home is ROADMAP.md). Phase status: **Phase 0 (Design System and Contracts) — executed**; **Phase 1 (Conversation Surface: Chat + Agent) — executed by the run #124 fix session (2026-11-01, operator-authorized in the current prompt)**: contracts #1, #2, #3 and #5 landed and pinned by tests; **Phase 2 (Artifact / Workspace Integration) — executed by the run #125 fix session (2026-11-01, operator-authorized in the current prompt)**: contract #8 landed and pinned by tests. Contracts #4, #6, #7 remain in force and untouched. Phases 3–5 stay deferred.
-
-**v1.11.1 operator-feedback remediation pass (2026-11-02, post-run-#126 green baseline, operator-authorized in the current prompt)** — a focused remediation of real-PC UX/packaging issues, NOT part of the phased plan: the navigation ownership contract (#9 below) landed with tree-identity regression tests; the model-selection flow contract (#10) landed with the single-flight/live-phase suite; the speed-preference contract (#11) landed inside the ONE recommendation authority. **Formal roadmap Phases 3–5 remain deferred — they are NOT complete and must not be marked complete because this remediation pass landed.**
+Provenance: created by the run #123 fix session (2026-11-01) as Phase 0
+of the operator-authorized UI/UX research; phases 1–2 and the v1.11.1
+remediation pass executed on the Fyne shell (history in git). Rewritten
+2026-11-29 (run 46131092469) as the web-shell-era contract, merging the
+former TOUCH-RESPONSIVE-MATRIX, DESIGN-SYSTEM and ACCESSIBILITY topics
+(the three `docs/ui/` pages) into this one document — consolidation:
+same category, one home; the merged pages are retired from the tree.
 
 ---
 
 ## 1. Token source of truth
 
-All design tokens live in `ui/fyne/theme.go` and nowhere else. Views consume tokens, never literals — from Phase 1 on, no view hardcodes a spacing, size, or color value. Defining a token is not a visual change; applying one is (each application is a Phase 1+ edit with its own evidence).
+- The ONE token authority is CODE: `internal/theme` — schema-versioned,
+  WCAG-contrast-validated (the catalog test gates every theme on every
+  build), JSON-serializable via `Theme.JSON()`.
+- The web shell consumes the tokens through `internal/webshell/assets/css/tokens.css`
+  — the CSS custom properties (`--bg`, `--fg`, `--accent`, `--border`,
+  `--radius*`, `--space-1..5`, `--touch-floor: 44px`) mirror the product
+  token roles. A view may change density and arrangement, never the
+  token language; no element file hardcodes a role outside a token.
+- The per-element cascade (`assets/css/*.css`: tokens, base, layout,
+  controls, rail, views, chat, panels, loading, system, adaptive,
+  motion) is entered through ONE `app.css` of comments + ordered
+  `@import`s — the entry shape and the same-origin CSP scan across every
+  element file are pinned by the `internal/webshell` contract suite.
+- Dark is the identity default; the light variant is the same role
+  system re-expressed via `prefers-color-scheme`, and
+  `prefers-contrast: more` raises the border floor.
 
-### Spacing scale (dp)
+## 2. Touch contract
 
-| Token | Value | Use |
-|-------|-------|-----|
-| `SpaceXS` | 4 | intra-control gaps, icon-to-label |
-| `SpaceS` | 8 | control padding (theme `SizeNamePadding` today) |
-| `SpaceM` | 12 | grouped-control gaps |
-| `SpaceL` | 16 | view margins, card insets |
-| `SpaceXL` | 24 | section separation |
-| `SpaceXXL` | 32 | view-level breathing room |
+- **The touch floor is 44px** (`--touch-floor`); 48px preferred for
+  primary actions. Rail items already carry the full floor; buttons,
+  inputs, icon buttons and tappable list rows reach it on coarse
+  pointers via the `@media (pointer: coarse)` floors in
+  `controls.css`/`views.css` — the pointer-era compact min-heights stay
+  for mouse-precision surfaces.
+- `touch-action: manipulation` on every interactive control: no
+  double-tap-zoom ambiguity on the WebView.
+- Pressed feedback is a visible `:active` state on every control class —
+  essential feedback never depends on hover, which sticky-hovers or
+  never fires on touch.
+- Text inputs carry the 16px font floor on coarse pointers, so WebView
+  focus auto-zoom can never jolt the layout on tap.
+- Safe areas: `env(safe-area-inset-*)` pads the topbar, status bar and
+  rail so system insets never cover controls.
+- 8–12px practical spacing between adjacent targets; no essential
+  action is hover-only; disabled reasons render as visible labels;
+  double-submit prevention stays with the core-owned single-flight
+  patterns (the UI is never the authority).
 
-### Typography hierarchy (dp)
+## 3. Responsive policy
 
-| Token | Value | Use |
-|-------|-------|-----|
-| `TypeTitle` | 20 | view titles (PageHeader) |
-| `TypeSection` | 16 | section / panel headings |
-| `TypeBody` | 14 | body text — the root size (`SizeNameText` today) |
-| `TypeMono` | 13 | monospace evidence, code, JSON |
-| `TypeStatus` | 12 | status line, badges, timestamps |
+ONE adaptive system in `adaptive.css`, driven by actual viewport width
+(never device labels), recomposed on resize:
 
-### Color roles — dark + light
+| Band (viewport width) | Class | Navigation |
+|---|---|---|
+| <600 | compact | fixed drawer rail, opened by the topbar toggle (`aria-expanded` managed) |
+| 600–899 | medium | 64px icon rail |
+| 900–1279 | desktop | wide rail (200px) |
+| ≥1280 | wide | wide rail (240px) |
 
-The role vocabulary: **surface, elevated, accent, success, warning, danger, muted** (plus background/control/border/text text roles). Mapping to the `roleSet` fields: surface = `Surface`, elevated = `Elevated`, accent = `Accent`, success = `Success`, warning = `Warn`, danger = `Error` (Fyne's error color name), muted = `Muted`.
+Views reflow inside the bands (`.chat-grid`, `.grid.two` collapse to one
+column when needed); scroll containers carry `overscroll-behavior:
+contain` and `-webkit-overflow-scrolling: touch`; clipping, overlap and
+accidental horizontal scrolling are defects, not styles.
 
-- `Palette` (dark) is the product identity root — values carried verbatim from the retired Qt Theme.qml tokens, byte-identical through this contract's creation.
-- `LightPalette` is the SAME role system re-expressed for light surfaces. It is defined and documented but **not wired into `appTheme`** — activating a light variant is a Phase 1+ visual change.
-- `PaletteFor(v fyne.ThemeVariant)` is the one variant-aware accessor; new code must resolve roles through it or through `Palette` directly (dark identity) — never through ad-hoc hex values.
+## 4. Interaction contracts (carried onto the web shell)
 
-### Radius, elevation, icon, density
+1. **Composer: Enter sends, Shift+Enter breaks the line** (hint rendered
+   beside the send action).
+2. **One destination renders once**: the route registry drives exactly
+   one rail entry per view; `show()` resolves the loader through the
+   typed `Map.get` allowlist (the CodeQL #366 unvalidated-dynamic-call
+   class is structurally absent), `aria-current="page"` marks the active
+   destination, and the view host takes focus after navigation.
+3. **Boot never traps the operator**: the splash overlay is dismissed by
+   the first healthy same-origin core read and by a 6s safety timeout;
+   the web host performs that read BEFORE the window boots and fails
+   boot typed on anything but success.
+4. **The status line stays truthful**: connection state renders
+   connecting / live / failed as real state; unknown renders unknown;
+   no fabricated telemetry.
+5. **Busy actions are visible**: in-flight actions set `aria-busy` and
+   render progress; a second activation during flight is a no-op.
+6. **Keyboard + palette**: Ctrl+1..9 reach the registry views, Ctrl+K
+   opens the command palette (dialog role, modal focus, Escape closes),
+   every control is reachable by keyboard and carries `:focus-visible`
+   outlines; the skip link reaches the view host first.
+7. **Reduced motion wins**: `motion.css` is the LAST cascade layer and
+   kills every transition/animation under `prefers-reduced-motion:
+   reduce`.
 
-| Family | Tokens |
-|--------|--------|
-| Radius (painted surfaces only; Fyne has no per-widget radius) | `RadiusControl` 8 (chips, badges) · `RadiusCard` 10 (cards, panels — the old `cardRadius`) · `RadiusDialog` 14 (dialogs) |
-| Elevation (shadow alpha steps for painted overlays) | `ElevationFlat` 0x00 · `ElevationLow` 0x28 (cards, hover lifts) · `ElevationMid` 0x50 (panels, popovers — theme shadow today) · `ElevationHigh` 0x78 (dialogs, modals) |
-| Icon sizes | `IconS` 14 (inline/dense) · `IconM` 18 (default — `SizeNameInlineIcon` today) · `IconL` 24 (rail, hero actions) |
-| Density (row heights) | `RowCompact` 28 (sessions, logs) · `RowRegular` 36 (standard rows) · `RowRelaxed` 44 (primary navigation) |
+## 5. Accessibility matrix (honest rows)
+
+- Semantic structure: landmarks (`header/nav/main/footer`), labelled
+  views (`aria-labelledby`), live regions (`aria-live="polite"` on
+  status/chat/log surfaces), progressbar roles with real values.
+- Accessible names: icon-only actions carry `aria-label` + tooltip text.
+- Screen-reader/AT verification on hardware (Narrator/NVDA/UIA,
+  AT-SPI/VoiceOver): **NOT RUN** — the WebView content follows the host
+  engine's accessibility implementation; no AT pass has been executed in
+  this repository. AT verification of the production shell stays a
+  roadmap row with the hosted/physical gates.
+- The Go-Gui Windows-accessibility correction (UI Automation serves
+  Narrator and NVDA on amd64/arm64) remains the recorded upstream fact
+  for the mobile-shell engine; it is tripwired against return by
+  `internal/renderer.TestGoGuiAccessibilityCorrection`.
+- IME/CJK composition and RTL rendering on the web shell: NOT RUN on
+  hardware; recorded, never claimed.
+
+## 6. Evidence ladder
+
+- `node --check internal/webshell/assets/app.js` and the
+  `internal/webshell` contract suite (bundle assembly, entry shape,
+  per-file same-origin CSP scan) on every change.
+- `go test ./internal/webshell/ ./internal/webworkspace/ ./internal/desktop/`
+  locally; the hosted lanes own the real WebView runtimes
+  (WebView2/WebKit/WKWebView), the Xvfb linux launch smoke and the
+  macOS/Windows launch-and-shutdown smokes.
+- Every "smoother or better" claim is backed by a test or an observable;
+  evidence classes never inflate (`docs/UPDATE.md` honesty rules).
+
+## 7. Contract governance
+
+- This document is amended only deliberately, in the same change as the
+  behavior it describes; token renames update section 1 in the same
+  change; status flips only with evidence.
+- The dark token values are the identity root: any change to them is a
+  deliberate identity decision recorded in [`changelog.md`](changelog.md),
+  never a side effect.
+- Superseded UI-contract text (Fyne era) lives in git history and in
+  [`retired.md`](retired.md) — never duplicated here.
 
 ---
 
-## 2. Interaction contracts
-
-Each contract states the target behavior, what is in force today, and the phase that lands the remainder. Nothing here may be implemented in a way that moves policy or state into the UI (one authority per concern).
-
-| # | Contract | Status today (verified against the tree) | Landing phase |
-|---|----------|------------------------------------------|---------------|
-| 1 | Composer **Enter = send, Shift+Enter = newline** | **LANDED (Phase 1)**: the mapping is owned by the `composerEntry` wrapper (ui/fyne/composer.go) on the real multiline entry — the fyne v2.8.2 multiline default is the INVERSE (typedKeyReturn submits on Shift+Enter), so the wrapper intercepts plain Enter and delegates Shift+Enter with OnSubmitted nil. Pinned by `TestComposerEnterSendsAndShiftEnterNewlines` driving the actual TypedKey/KeyDown/KeyUp path (both key spellings, both Shift sides) plus `TestChatViewWiringEmptyStateAndSlot` on the real view tree. Manual on-host smoke remains with the hosted Xvfb job. | Landed — Phase 1 |
-| 2 | **Focus returns after send** | **LANDED (Phase 1)**: `focusComposerIfSafe` returns focus to the composer after send/sample-draft actions and never steals focus from a dialog or another deliberate target (guards on the canvas's current focus). Behavior-level guard pinned in the wiring test; the on-host focus handoff runs under the hosted Xvfb job. | Landed — Phase 1 |
-| 3 | **Stop replaces Send while busy** (web + AI Studio pattern) | **LANDED (Phase 1)**: `primaryActionSlot` is ONE visual slot — Send while idle, Stop while a run is live; the hidden action is also disabled so it can never fire out-of-band. Both Chat and Agent composers use it; the duplicate inline Stop in the live bubble was removed (single cancellation point, existing `Runtime.Stop` path). Pinned by `TestPrimaryActionSlotHoldsExactlyOneOccupant` + the wiring test. | Landed — Phase 1 |
-| 4 | **The live bubble never becomes a final message** (settlement rule) | IN FORCE: settlement reloads the authoritative transcript (state.go SETTLEMENT path); the stream accumulator replaces, never appends (pinned by `TestStreamAccumulatorReplacesNeverAppends`). The live surface is provisional; settlement is the only path to final transcript state. | In force — preserve |
-| 5 | **Empty states prime capability (sample prompts / mode chips) without violating zero-session Send** | **LANDED (Phase 1)**: mode-aware `emptyStateSurface` (Chat + Agent) with sample-prompt actions that fill the composer DRAFT and focus it — never auto-send, never bypass the composer; shown only when the conversation is genuinely empty and no run is live. Pinned by `TestEmptyStateSamplesFillDraftOnly` (tap every sample in both modes; zero sends) and the wiring test (hidden until proven empty; empty draft + Enter never runs). Zero-session Send untouched. | Landed — Phase 1 |
-| 6 | **The status line remains truthful only** | IN FORCE: the status line reports only real state — connection, core version, active model, live-stream progress (shell.go); no fabricated telemetry, unknown rendered as unknown. | In force — preserve |
-| 7 | **Primary views stay distinct and reachable** (AI Studio left-rail discipline) | IN FORCE: 8-view IA with wide rail / compact rail / top strip + More menu (shell.go); every primary view one navigation action deep; Chat vs Agent hard separation preserved; contract #9 pins the ownership/duplication rules; contract #12 pins the v1.11.1 size-class breakpoints and matrix. | In force — preserve |
-| 8 | **Settled rich content is a first-class native artifact** (Antigravity/AI Studio artifact feel, native-first) | **LANDED (Phase 2)**: the native artifact card (ui/fyne/artifact_card.go) renders the LATEST SETTLED rich block on Chat AND Agent after settlement — kind · title line, one bounded single-line plain-text excerpt, the truthful Workspace status, and the contextual Open-in-Workspace action. The live bubble can never promote itself onto the card (settle-path-only promotion, pinned); empty or non-assistant settled content registers nothing; a rebuilt view re-seeds from the hub projection. The general Workspace entry is actionable ONLY once a settled artifact exists (an empty Workspace surface is never a click target). Open resolves the REGISTERED block at open time: a stale (evicted) reference degrades visibly — status text + disabled action — instead of opening a blank surface. Content-addressed upsert keeps one ID = one artifact. The hub's latest-block tracker (workspace_hub.go) is a read-only projection of the store, never a second registry; Workspace stays on-demand, loopback-only, token-gated, CSP-strict, zero commands — the shell gains no webview and no new authority. Pinned by `TestArtifactCardHiddenUntilSettled`, `TestArtifactCardShowsSettledBlockWithSafeExcerpt`, `TestChatSettlementPromotesSettledAssistantOnly`, `TestAgentSettlementPromotesItsOwnSettledAssistant`, `TestArtifactCardOpenResolvesRegisteredBlock`, `TestArtifactCardStaleReferenceDegradesVisibly`, `TestWorkspaceStatusTruthfulAcrossOpenClose`, `TestWorkspaceEntryRecoversAcrossUpsertAndRebuild` (+ the pre-existing hub/server/security suites). | Landed — Phase 2 |
-| 9 | **Every navigation destination renders exactly once — one parent per CanvasObject** (v1.11.1 operator-reported duplication fix) | **LANDED (v1.11.1 remediation)**: the shell tree is single-owner — the responsive container owns EXACTLY the rail, the compact top strip and the content border; the rail is never additionally a child of the content border (the historical double-parent insertion painted it twice at wide widths — the operator's duplicated-navigation report). Secondary utility routes (History / Models / My Tools / Logs) render as a grouped, visually subordinate Utilities section in the rail and through the compact strip's More menu — reachable at every width from 360 to 1920. Ctrl+1..8 covers every primary view in registry order. Pinned by `TestShellSingleParentOwnership` (fail-closed proven against the defect), `TestEveryDestinationRenderedOncePerZone` (360/500/640/800/999/1000/1280/1440/1920 + re-layout), `TestUtilitiesReachableEveryZone`, `TestNavigationActionInvokedOnce`, `TestShortcutKeyMapCoversAllPrimaryViews`. | Landed — v1.11.1 |
-| 10 | **Model selection is non-destructive, single-flight, and phase-truthful** | **LANDED (v1.11.1 remediation)**: highlighting a list row only renders its already-available facts (architecture, quantization, size, vision, context metadata) and arms ONE explicit "Use this model" action — a row selection never starts an engine transaction. The action is single-flight (a second invocation during flight is a no-op) and generation-guarded (a late poll or response from an old operation can never overwrite newer state; the terminal render settles the operation). While the synchronous POST walks the backend state machine, the AUTHORITATIVE GET selection state is polled at a bounded cadence off the UI thread and the REAL phases render; polling stops at terminal state, cancellation, or error. Row markers stay truthful and separate: SERVING (engine-loaded) and SELECTED (authoritative selection) never merge. Failure keeps the previous model active and re-enables the controls. Pinned by `TestModelRowSelectIsNonDestructive`, `TestUseModelSingleFlightLivePhasesTerminal` (live analyzing→loading phases + stale-guard), `TestUseModelFailureKeepsPreviousAndReenables`, `TestAlreadyServingSelectionNeedsNoAction`, `TestTruthfulRowMarkers`, `TestUseModelGuardEmptyState`. | Landed — v1.11.1 |
-| 11 | **The speed preference is one preference inside the ONE recommendation authority** | **LANDED (v1.11.1 remediation)**: "Prefer fastest safe inference" (config `preferFastest`, default ON, explicit opt-out preserved verbatim across reloads) biases the existing evidence-based recommendation toward the fastest SAFE profile — the speed-oriented choice at each genuine decision point (q8_0 KV cache under verified flash attention), always inside the measured memory/GPU limits and the resource verdict ladder. It is NOT a second tuning engine, never forces maxima, never enables unverified flash attention, and MANUAL mode is untouched (the recommendation applies only under AUTO). The Settings toggle is labeled "fastest SAFE" with the honest caveat (not guaranteed maximum throughput or GPU execution). Pinned by `TestPreferFastest*` (config defaults/legacy/explicit-false/round-trip), recommendation on/off/evidence-gates/memory-clamp tests, `TestPreferFastestPatchPersists` (API), `TestPreferFastestSettingsFieldPinned` (UI). | Landed — v1.11.1 |
-| 12 | **One responsive size-class policy over logical canvas units — every destination reachable at every size** | **LANDED (v1.11.1 maintenance pass, run 43008361835 §F4/§5.3)**: ONE `sizeClassFor(width)` function resolves the four logical-width classes — compact <600 (mobile-style top strip + More menu, one primary content column, no permanent sidebar), medium 600–899 (compact rail), desktop 900–1279 and wide ≥1280 (persistent wide rail; v1.11.1 has no inspector/side-panel surface, so wide keeps the desktop navigation policy — documented, not a hidden fourth layout). `navPolicy` DERIVES from the size class so navigation and views can never disagree about thresholds; breakpoints are declared once in shell.go. The mandatory logical-size matrix — phone portrait (320–430), phone landscape, small tablets, tablets (600–1024), laptops (1280/1366), desktops (1440–1920), wide (2560–3840), one-unit boundary pairs at 599/600/601, 899/900/901, 1279/1280/1281 at heights 240/320/480, and degenerate 0x0/1x1/240x320/280x480/320x240 — is asserted against the REAL assembled shell in a real window: zone-correct navigation visibility, rail/strip geometry, non-negative NaN-free content bounds, no canvas overflow, primary-button reachability in the strip zone, and ≥100px main content at every non-degenerate size. Resizing across classes preserves the selected destination and the built-view cache. Five representative layouts (compact portrait/landscape, medium tablet, desktop, wide) are pinned by reviewable structural goldens under `ui/fyne/testdata/golden-*.txt` (font-independent; pixel-image goldens are unreachable through the public API of the locked Fyne v2.8.2 — its software painter is internal — so the golden format is a deterministic tree snapshot: type, text, position, size, visibility; regenerate deliberately with `FYNE_UPDATE_GOLDENS=1`). CI additionally runs a REAL resize smoke under Xvfb (`SHEYTAN_UI_RESIZE_SMOKE=1`): the app resizes itself through the matrix on the real GLFW path, prints one evidence line per size with the resolved zone, and closes through the same graceful shutdown coordinator as a user close. Pinned by `TestResponsiveViewportMatrix`, `TestResponsiveBoundaryMatrix`, `TestResponsiveDegenerateMatrixInWindow`, `TestResizeAcrossClassesPreservesSelection`, `TestResponsiveGoldenSnapshots`, `TestNavPolicySizeClasses` (boundary pairs + size classes). | Landed — v1.11.1 |
-| 13 | **One close funnel: every exit path routes through the idempotent shutdown coordinator** | **LANDED (v1.11.1 maintenance pass, run 43008361835 §F3/§5.2)**: the user's window close (SetCloseIntercept), SIGINT/SIGTERM and programmatic Close() all converge on ONE running→closing→closed coordinator — an atomic CAS guarantees exactly one bounded teardown regardless of racing/duplicate closes; teardown (root-context cancel → activity-pump drain with deadline → workspace listener release) runs on a coordinator worker, never the UI goroutine; the interceptor never blocks the UI loop; the window closes for real only after teardown (Fyne v2.8.2's programmatic Close() bypasses the interceptor, so the funnel cannot re-enter). A deadline-exceeded teardown is recorded INCOMPLETE — never logged graceful. Pinned by `TestShutdownCoordinatorRunsExactlyOneTeardown` (10 racing closes, one teardown, graceful result, pump cancelled), `TestShutdownDeadlineMarksIncomplete`, `TestShutdownIdleCloseIsGraceful`, `TestCloseBeforeRunIsSafe`, `TestMarkClosedTransitions`. | Landed — v1.11.1 |
-| 14 | **IPC connection surface: Connecting / Connected / Disconnected with an actionable error and a safe retry** (extends contract #6) | **LANDED (v1.11.1 maintenance, 2026-11-14)**: the shell status line carries an explicit connecting state during bootstrap; a failed handshake or first-refresh renders the typed error in a dedicated status-bar error line plus a Retry action, visible ONLY while disconnected (single-flight — concurrent clicks coalesce into one bounded, user-initiated retry; never a reconnect loop). The bootstrap writes structured IPC handshake records (success names protocol/version/core version/transport; failure names transport + error; never the account-derived endpoint or the key). Pinned by `TestShellConnectionStates`, `TestShellRetryBootstrapReconnects`, and the production-path integration suites (`TestCoreClientEndToEndOverLocalIPC` / its Windows twin). | Landed — v1.11.1 |
-| 15 | **Button fit: no clipped labels, no compressed controls, every action reachable at every supported size** | **LANDED (v1.11.1 maintenance, 2026-11-14; run-43601915826 repair)**: short action labels with the explanatory detail in an adjacent WRAPPED caption (never lost, never clipped); card captions wrap inside the cards (`cardFit` — `widget.NewCard` subtitles never wrap and drove card MinSize past compact widths); the Models engine-update and import action groups are STACKED columns (each button always receives its full renderer minimum — the shipped HBox row compressed "Install update" and the fix makes the code match the documented policy); any remaining HBox action rows keep every child at its renderer MinSize and are asserted per-button at every matrix size; the navigation rail grows to its content minimum instead of clipping a nav label under larger Windows text/DPI metrics. `TestButtonFitMatrix` walks EVERY primary and utility destination at every representative logical size (phone → 4K wide, breakpoint boundaries, 240x320 minimum probe) asserting: every visible button ≥ its content MinSize, every rigid control inside the content area (absolute positions), at least one operable control per destination; `TestShellChromeButtonsFit` sweeps the rail/strip/status chrome from the window root (the former body-only walk was the blind spot that let Linux pass while Windows clipped rail labels); `TestRailButtonsFitRailWidth` pins the rail content-minimum contract (its medium-class probe is 700x800, not raw 600x800 — the test canvas applies 16 logical px of theme padding, so a raw 600 window carries an effective width of 584 and legitimately resolves to the top-strip zone; the probe fails loudly if it ever lands outside a rail zone); `TestShellChromeButtonsFit` additionally proves its walk root actually reaches the visible rail/strip (the run-43630164424 vet repair); `TestLongLabelButtonsShortened` pins the short-label policy. | Landed — v1.11.1 |
-
-Additional standing rules for every phase (binding; the phased plan and its provenance live in `ROADMAP.md` — "UI/UX hybrid upgrade" — after the v1.11.1 Dev-Notes cleanup): native Fyne stays primary; Workspace stays on-demand, loopback-only, token-gated, CSP-strict; no second UI stack; no new authorities; prefer pure layout/theme/presentation changes over new runtime surfaces; every claim of "smoother or better" is backed by a test or an observable before/after.
-
-Phase 2 additionally fixed a latent primary-navigation freeze the new navigation-shape tests exposed: `shell.show()` built a lazy view while holding the shell mutex, and the view's `shell.register()` call re-took that mutex — the first navigation to a not-yet-built view self-deadlocked the UI thread (production shape: the shell is non-nil; earlier tests built views detached from a shell, so the nil guard hid the deadlock). The build now runs outside the critical section, pinned by `TestShellShowLazyBuildDoesNotDeadlock`.
-
----
-
-## 3. Contract governance
-
-- This document is amended only deliberately, in the same batch as the change it describes (the same discipline as the release-contract tests).
-- Token renames or additions update section 1 in the same commit; interaction-contract status flips only with evidence (test or observable).
-- The evidence ladder for UI claims: `go test ./ui/fyne/` green + the hosted Fyne UI gates job; visual claims additionally need a before/after observable. Evidence class never inflated (docs/UPDATE.md honesty rules).
-- The dark palette is the identity root: any change to a `Palette` value is a deliberate identity decision recorded here, never a side effect.
-
----
-
-*UI/UX Hybrid Upgrade Phase 0 artifact. Phase plan and direction: `ROADMAP.md`. Current work order: `Dev-Notes.md`.*
+*Current work order: [`Dev-Notes.md`](Dev-Notes.md) (human-owned). Plan: [`ROADMAP.md`](ROADMAP.md).*

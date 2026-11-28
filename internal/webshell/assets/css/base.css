@@ -16,6 +16,10 @@ body {
   font-size: 15px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  /* Touch input polish (run 46131092469 update): the WebView's default
+     grey tap flash is suppressed — pressed feedback comes from the real
+     :active states in the element files, never from an unstyled blob. */
+  -webkit-tap-highlight-color: transparent;
 }
 
 .mono { font-family: var(--mono); }

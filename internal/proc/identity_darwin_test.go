@@ -482,3 +482,124 @@ func TestRenderProcWalkDiagnosticBounded(t *testing.T) {
 		}
 	}
 }
+
+// TestSanitizePIDListPolicy pins the hosted-evidence enumeration policy
+// (run 46131092469 repair): the kernel MAY answer a zeroed pid slot — a
+// process that exits between the kernel's count pass and its copy pass —
+// and pid 0 (kernel_task) may sit in an ALL_PIDS enumeration. A zeroed
+// slot is skipped and counted, never a typed failure; a negative pid and
+// a zeroed-slot majority are decode corruption and fail closed. The
+// policy is pure Go and runs in EVERY darwin build variant, so this test
+// is the regression gate the hosted lanes exercise.
+func TestSanitizePIDListPolicy(t *testing.T) {
+	tests := []struct {
+		name        string
+		raw         []int32
+		wantPIDs    []int32
+		wantSkipped int
+		wantErr     bool
+	}{
+		{
+			name:     "clean list passes through unchanged",
+			raw:      []int32{1, 42, 99999},
+			wantPIDs: []int32{1, 42, 99999},
+		},
+		{
+			name:        "the hosted zeroed-slot artifact is skipped and counted",
+			raw:         []int32{101, 102, 103, 104, 0, 105, 106},
+			wantPIDs:    []int32{101, 102, 103, 104, 105, 106},
+			wantSkipped: 1,
+		},
+		{
+			name:        "several zeroed slots stay within the artifact bound",
+			raw:         []int32{0, 201, 202, 0, 203, 0, 204, 205, 0, 206},
+			wantPIDs:    []int32{201, 202, 203, 204, 205, 206},
+			wantSkipped: 4,
+		},
+		{
+			name:    "a negative pid is decode corruption — fail closed",
+			raw:     []int32{301, -7, 302},
+			wantErr: true,
+		},
+		{
+			name:    "an all-zero list is decode corruption — fail closed",
+			raw:     []int32{0, 0, 0},
+			wantErr: true,
+		},
+		{
+			name:    "a zeroed-slot majority is decode corruption — fail closed",
+			raw:     []int32{0, 0, 0, 401},
+			wantErr: true,
+		},
+		{
+			name:     "a quarter-boundary zeroed slot still passes",
+			raw:      []int32{0, 501, 502, 503},
+			wantPIDs: []int32{501, 502, 503},
+			// 1 skipped of 4 slots: zeroes*4 == len(raw), not > len(raw).
+			wantSkipped: 1,
+		},
+		{
+			name:    "just past the quarter bound fails closed",
+			raw:     []int32{0, 0, 0, 601, 602, 603, 604, 605},
+			wantErr: true, // 3 of 8: zeroes*4 = 12 > 8 — the corruption bound fires
+		},
+	}
+
+	for _, tc := range tests {
+		pids, skipped, err := sanitizePIDList(tc.raw)
+
+		if tc.wantErr {
+			if err == nil {
+				t.Fatalf("%s: sanitize must fail typed, got pids=%v skipped=%d", tc.name, pids, skipped)
+			}
+
+			if !errors.Is(err, errProcTruncated) {
+				t.Fatalf("%s: the failure must be the typed truncation class, got %v", tc.name, err)
+			}
+
+			continue
+		}
+
+		if err != nil {
+			t.Fatalf("%s: sanitize must pass, got %v", tc.name, err)
+		}
+
+		if skipped != tc.wantSkipped {
+			t.Fatalf("%s: skipped = %d, want %d", tc.name, skipped, tc.wantSkipped)
+		}
+
+		if len(pids) != len(tc.wantPIDs) {
+			t.Fatalf("%s: pids = %v, want %v", tc.name, pids, tc.wantPIDs)
+		}
+
+		for i := range pids {
+			if pids[i] != tc.wantPIDs[i] {
+				t.Fatalf("%s: pids = %v, want %v", tc.name, pids, tc.wantPIDs)
+			}
+		}
+	}
+}
+
+// TestRenderProcWalkDiagnosticSkippedZeroes pins the skipped-slot evidence
+// field the walk-diag line renders (run 46131092469 repair): a hosted
+// attribution failure must carry the zeroed-slot count next to the pid
+// count, so the next repair session reads the artifact evidence without
+// guessing whether the enumeration was corrupted or merely skipped a
+// kernel artifact.
+func TestRenderProcWalkDiagnosticSkippedZeroes(t *testing.T) {
+	d := &procWalkDiagnostic{
+		PIDs:          449,
+		SkippedZeroes: 1,
+		SelfPresent:   true,
+	}
+
+	line := renderProcWalkDiagnostic(d)
+
+	if !strings.Contains(line, "pids=449") || !strings.Contains(line, "skipped=1") {
+		t.Fatalf("the walk-diag must carry pids and skipped counts, got %q", line)
+	}
+
+	if strings.Contains(line, "enum_err=") {
+		t.Fatalf("a successful enumeration must not render enum_err, got %q", line)
+	}
+}

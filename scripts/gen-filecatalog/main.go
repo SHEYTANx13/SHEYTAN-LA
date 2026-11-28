@@ -170,7 +170,7 @@ var fileOverride = map[string]string{
 	"docs/CONTRIBUTING.md":                       "Contribution rules",
 	"docs/TROUBLESHOOTING.md":                    "Operator troubleshooting guide",
 	"docs/UPDATE.md":                             "Update policy and the manual dependency inventory",
-	"docs/ui-contract.md":                        "The UI design contract: tokens, states, surfaces (run #123)",
+	"docs/ui-contract.md":                        "The web-shell-era UI design contract: tokens, touch floors, responsive bands, carried interaction contracts, honest accessibility rows (the docs/ui pages merged here)",
 	"docs/3dstudio.md":                           "3D Studio (read-only topology viewer) documentation",
 	"scripts/ci/PackageGate.ps1":                 "The fail-closed Windows package gate: portable-ZIP integrity, installer-remnant guard, dependency closure (installers retired, master work order §10)",
 	"scripts/ci/PackageGate.Tests.ps1":           "Deterministic fixture suite for the package gate truth table (real zips, installer-remnant fixtures)",

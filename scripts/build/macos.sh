@@ -113,6 +113,7 @@ write_info_plist() { # $1 = destination file
   <key>CFBundleShortVersionString</key><string>ALPHA</string>
   <key>CFBundleVersion</key><string>ALPHA</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>sheytan</string>
   <key>LSMinimumSystemVersion</key><string>12.0</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
@@ -192,6 +193,27 @@ case "$phase" in
     cp "${APP_DIR}/app/SHEYTAN-LA" "${app}/Contents/MacOS/SHEYTAN-LA"
     chmod +x "${app}/Contents/MacOS/SHEYTAN-LA"
     printf 'product: SHEYTAN-LA\nstage: ALPHA\ncommit: %s\nui: adaptive web shell (web workspace host)\n' "${GITHUB_SHA:-local}" > "${app}/Contents/Resources/BUILD-INFO.txt"
+    # App icon (run 46131092469 repair): the staged .app shipped with NO
+    # icon - the Info.plist carried no CFBundleIconFile and Resources
+    # carried no .icns, so Finder/Dock showed the generic executable
+    # face. The icns is built HERE, on the runner, from the brand logo
+    # the shell already ships, with the macOS-native tools every runner
+    # image has (sips resample + iconutil); no image binary is committed.
+    # Every stage below fails closed - a bundle without its icon must
+    # never pass as complete.
+    logo="internal/webshell/assets/logo.png"
+    [ -f "$logo" ] || fail_gate "Stage the .app bundle (portable, ad-hoc signed)" "brand logo missing: $logo"
+    iconset="${RUNNER_TEMP:-/tmp}/sheytan-icon.$$.iconset"
+    rm -rf "$iconset"; mkdir -p "$iconset"
+    icon_ok=true
+    for pair in "16:icon_16x16.png" "32:icon_16x16@2x.png" "32:icon_32x32.png" "64:icon_32x32@2x.png" "128:icon_128x128.png" "256:icon_128x128@2x.png" "256:icon_256x256.png" "512:icon_256x256@2x.png" "512:icon_512x512.png" "1024:icon_512x512@2x.png"; do
+      size="${pair%%:*}"; out="${pair#*:}"
+      sips -z "$size" "$size" "$logo" --out "$iconset/$out" >/dev/null 2>&1 || { icon_ok=false; break; }
+    done
+    $icon_ok || { rm -rf "$iconset"; fail_gate "Stage the .app bundle (portable, ad-hoc signed)" "the app iconset could not be built with sips from $logo"; }
+    iconutil -c icns "$iconset" -o "${app}/Contents/Resources/sheytan.icns" || { rm -rf "$iconset"; fail_gate "Stage the .app bundle (portable, ad-hoc signed)" "iconutil could not build sheytan.icns from the iconset"; }
+    rm -rf "$iconset"
+    [ -s "${app}/Contents/Resources/sheytan.icns" ] || fail_gate "Stage the .app bundle (portable, ad-hoc signed)" "the staged .app is missing its sheytan.icns icon"
     write_info_plist "${app}/Contents/Info.plist"
     # The emitted plist is already unindented; the sed pass below is a
     # belt-and-braces guard so the XML declaration sits at byte 0, then
@@ -248,6 +270,7 @@ case "$phase" in
     members="$(unzip -Z1 "$zip")"
     echo "$members" | grep -q "SHEYTAN-LA.app/Contents/MacOS/SHEYTAN-LA" || fail_gate "Verify the portable .zip (fail-closed)" "required member missing from the bundle zip"
     echo "$members" | grep -q "SHEYTAN-LA.app/Contents/Info.plist" || fail_gate "Verify the portable .zip (fail-closed)" "Info.plist missing from the bundle zip"
+    echo "$members" | grep -q "SHEYTAN-LA.app/Contents/Resources/sheytan.icns" || fail_gate "Verify the portable .zip (fail-closed)" "the bundle app icon (sheytan.icns) is missing from the bundle zip"
     if echo "$members" | grep -Eqi '\.(pkg|dmg|nsi|msi)$'; then
       fail_gate "Verify the portable .zip (fail-closed)" "installer-class payload found in the portable archive"
     fi

@@ -71,6 +71,6 @@ it. Navigation policy, downloads, CSP and feature detection contracts:
 `internal/theme` is the ONE token catalog (six themes, schema-versioned,
 WCAG-contrast-validated, JSON-serializable for web surfaces). Fyne maps
 it fully (`ui/fyne/theme.go`); the other engines' mappings are DESIGNED
-(`docs/ui/DESIGN-SYSTEM.md`) and degrade honestly — a renderer that
+(`docs/ui-contract.md`) and degrade honestly — a renderer that
 cannot implement a token documents the degradation rather than
 inventing a different design.

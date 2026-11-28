@@ -66,10 +66,18 @@
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-small);
   min-height: calc(var(--touch-floor) - 8px);
+  touch-action: manipulation;
 }
 .list li:hover { background: var(--bg-hover); }
+.list li:active { background: var(--bg-active); }
 .list li .grow { flex: 1; min-width: 0; }
 .list li .sub { color: var(--fg-muted); font-size: 12px; }
+
+/* Coarse-pointer floor (run 46131092469 update): a tappable list row
+   reaches the full touch floor on touch input. */
+@media (pointer: coarse) {
+  .list li { min-height: var(--touch-floor); }
+}
 
 .kv {
   display: flex;

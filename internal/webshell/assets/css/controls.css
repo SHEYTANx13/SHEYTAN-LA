@@ -1,5 +1,9 @@
 /* SHEYTAN-LA adaptive web shell — controls: buttons and inputs.
-   The touch floor is the minimum hit target. */
+   The touch floor is the minimum hit target. Run 46131092469 update:
+   every interactive control declares touch-action: manipulation (no
+   double-tap-zoom ambiguity on the WebView) and carries a visible
+   pressed (:active) state — essential feedback must never depend on
+   hover, which sticky-hovers or never fires on touch input. */
 
 .iconbtn {
   display: inline-flex;
@@ -12,9 +16,11 @@
   color: var(--fg-muted);
   border-radius: var(--radius-small);
   cursor: pointer;
+  touch-action: manipulation;
 }
 .iconbtn svg { width: 20px; height: 20px; }
 .iconbtn:hover, .iconbtn:focus-visible { background: var(--bg-hover); color: var(--fg); }
+.iconbtn:active { background: var(--bg-active); color: var(--fg); }
 
 .btn {
   display: inline-flex;
@@ -28,11 +34,14 @@
   color: var(--fg);
   font: inherit;
   cursor: pointer;
+  touch-action: manipulation;
 }
 .btn:hover { background: var(--bg-hover); }
 .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.btn:active { background: var(--bg-active); }
 .btn.primary { background: var(--accent); border-color: var(--accent-strong); color: #fff; }
 .btn.primary:hover { background: var(--accent-strong); }
+.btn.primary:active { background: var(--accent-strong); }
 .btn.danger { border-color: var(--danger); color: var(--danger); }
 .btn.danger:hover { background: rgba(224, 82, 82, 0.12); }
 .btn:disabled { opacity: 0.5; cursor: default; }
@@ -45,8 +54,20 @@ input, textarea, select {
   border-radius: var(--radius-small);
   padding: var(--space-2) var(--space-3);
   min-height: calc(var(--touch-floor) - 12px);
+  touch-action: manipulation;
 }
 input:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+
+/* Coarse-pointer floor (run 46131092469 update): on touch input the hit
+   target IS the touch floor the shell declares — the compact pointer-era
+   min-heights above sit under 44px by design, and a coarse pointer never
+   gets them. Text inputs also carry the 16px floor that stops WebView
+   focus auto-zoom from jolting the layout on every tap. */
+@media (pointer: coarse) {
+  .iconbtn { min-height: var(--touch-floor); }
+  .btn { min-height: var(--touch-floor); }
+  input, textarea, select { min-height: var(--touch-floor); font-size: 16px; }
+}
 
 /* Busy action feedback: disabled + aria-busy while a request is in flight. */
 button[aria-busy="true"] {

@@ -362,10 +362,19 @@ func mapProcInfoErrno(err error) error {
 // and PID_MAX lives in the XNU-private sys/proc_internal.h — run
 // 44663205295 repair), and a hard-coded historical value turned ANY pid
 // above it into a whole-walk truncation failure — an environment defect
-// masquerading as a decode defect. The decode-wrong signal stays exactly
-// as documented: a non-positive pid fails the walk typed; the buffer
-// growth cap (2^21 pids) stays the allocation bound; the kernel's real
-// pid space is never guessed.
+// masquerading as a decode defect. The buffer growth cap (2^21 pids)
+// stays the allocation bound; the kernel's real pid space is never
+// guessed.
+//
+// Run 46131092469 repair (defensive, refined): the decode-wrong signal is
+// now SHARPER than "a non-positive pid fails the walk". The hosted darwin
+// lanes proved a pid 0 slot is a real kernel enumeration artifact (a
+// process exiting between the kernel's count pass and its copy pass), so
+// pid 0 slots are skipped and counted as walk-diag evidence
+// (sanitizePIDList) while a NEGATIVE pid and a zeroed-slot majority still
+// fail the walk typed — the fail-closed decode stance is preserved where
+// the evidence says corruption, and relaxed exactly where the evidence
+// says artifact.
 
 // listAllPIDs returns every PID the kernel reports (PROC_ALL_PIDS) via
 // the PRIMARY enumeration source (proc_listallpids — the proc_info
@@ -375,7 +384,16 @@ func mapProcInfoErrno(err error) error {
 // guessing. On a typed failure the walk falls back to the BSD sysctl
 // KERN_PROC_ALL source (listAllPIDsSysctl) before giving up — see the
 // ENUMERATION REDUNDANCY note in the C prelude.
-func listAllPIDs() ([]int32, error) {
+//
+// Run 46131092469 repair: the decoded list passes through the shared
+// zeroed-slot policy (sanitizePIDList) — the hosted darwin lanes proved
+// the kernel MAY answer a pid 0 slot (a process that exits between the
+// kernel's count pass and its copy pass; a pid 0 at varying indices 449-468
+// of ~450-470 entry tables failed EVERY attribution test on BOTH macOS
+// architectures in run 46131092469). A zeroed slot is an enumeration
+// artifact, not a decode failure; the second return value is the skipped
+// count, the walk-diag evidence.
+func listAllPIDs() ([]int32, int, error) {
 	const initialPIDs = 8192
 	const maxPIDs = 1 << 21 // 2,097,152 pids — far beyond any real process table
 
@@ -389,37 +407,29 @@ func listAllPIDs() ([]int32, error) {
 		runtime.KeepAlive(buf)
 
 		if err != nil {
-			return nil, mapProcInfoErrno(err)
+			return nil, 0, mapProcInfoErrno(err)
 		}
 
 		if n < 0 || int(n) > capPIDs {
-			return nil, fmt.Errorf("%w: proc_listallpids answered %d against a %d-pid buffer — the kernel answer does not fit the documented pid-count contract", errProcTruncated, n, capPIDs)
+			return nil, 0, fmt.Errorf("%w: proc_listallpids answered %d against a %d-pid buffer — the kernel answer does not fit the documented pid-count contract", errProcTruncated, n, capPIDs)
 		}
 
 		if int(n) < capPIDs {
-			pids := make([]int32, 0, int(n))
+			// Decode every slot through the real pid_t view, then apply the
+			// shared zeroed-slot policy — the validation itself is pure Go
+			// and pinned by TestSanitizePIDListPolicy in every darwin build.
+			raw := make([]int32, int(n))
 
-			for i := 0; i < int(n); i++ {
-				p := int(C.c_pid_at(unsafe.Pointer(&buf[0]), C.int(i)))
+			for i := range raw {
+				raw[i] = int32(C.c_pid_at(unsafe.Pointer(&buf[0]), C.int(i)))
 				runtime.KeepAlive(buf)
-
-				// Semantic validation: a non-positive pid means the
-				// buffer decode is wrong — fail closed, never guess.
-				// The historical PID_MAX upper bound is retired (run
-				// 45522548507 repair); the walk cap above bounds the
-				// allocation and the kernel owns the pid space.
-				if p <= 0 {
-					return nil, fmt.Errorf("%w: proc_listallpids returned pid %d at index %d — outside the documented pid space", errProcTruncated, p, i)
-				}
-
-				pids = append(pids, int32(p))
 			}
 
-			return pids, nil
+			return sanitizePIDList(raw)
 		}
 
 		if capPIDs >= maxPIDs {
-			return nil, fmt.Errorf("%w: the pid list exceeds the %d-pid walk cap", errProcTruncated, maxPIDs)
+			return nil, 0, fmt.Errorf("%w: the pid list exceeds the %d-pid walk cap", errProcTruncated, maxPIDs)
 		}
 
 		capPIDs *= 2
@@ -432,14 +442,25 @@ func listAllPIDs() ([]int32, error) {
 // same growth bound; kinfo_proc knowledge stays in C. The per-entry
 // buffer bound (1024 bytes) exceeds the real kinfo_proc size on both
 // darwin architectures, so the kernel write always fits its slot count.
-func listAllPIDsSysctl() ([]int32, error) {
+//
+// Run 46131092469 repair: the same sysctl call also fails TRANSIENTLY
+// with ENOENT ("no such file or directory") when a process exits between
+// the kernel's size pass and its copy pass — the second-source failure of
+// the same run (the primary source failed on the zeroed slot at the same
+// moment, so BOTH sources refused and the whole attribution family went
+// unknown). A mid-copy mutation is not a kernel answer at all: the call
+// is retried at the SAME buffer size, bounded, without sleeps, so the
+// next attempt re-snapshots the table. ENOMEM keeps its grow contract.
+func listAllPIDsSysctl() ([]int32, int, error) {
 	const (
-		initialPIDs  = 2048
-		maxPIDs      = 1 << 14 // 16,384 entries — far beyond any real macOS process table
-		entryBufSize = 1024
+		initialPIDs      = 2048
+		maxPIDs          = 1 << 14 // 16,384 entries — far beyond any real macOS process table
+		entryBufSize     = 1024
+		transientRetries = 4 // bounded re-snapshot attempts on ENOENT/ESRCH
 	)
 
 	capPIDs := initialPIDs
+	transient := 0
 
 	for {
 		buf := make([]byte, capPIDs*entryBufSize)
@@ -450,28 +471,40 @@ func listAllPIDsSysctl() ([]int32, error) {
 		runtime.KeepAlive(buf)
 
 		if err != nil {
-			// ENOMEM carries the needed size — grow toward it, bounded;
-			// every other errno is typed and retried once at the doubled
-			// cap (a mid-walk mutation can transiently change the table;
-			// the bound is the honest stop).
 			var errno syscall.Errno
-			if errors.As(err, &errno) && errno == syscall.ENOMEM {
-				if needed > 0 {
-					if want := int(needed)/648 + 1; want > capPIDs {
-						capPIDs = want
+
+			if errors.As(err, &errno) {
+				// ENOMEM carries the needed size — grow toward it, bounded.
+				if errno == syscall.ENOMEM {
+					if needed > 0 {
+						if want := int(needed)/648 + 1; want > capPIDs {
+							capPIDs = want
+						}
+					} else {
+						capPIDs *= 2
 					}
-				} else {
-					capPIDs *= 2
+
+					if capPIDs > maxPIDs {
+						return nil, 0, fmt.Errorf("%w: the sysctl KERN_PROC_ALL pid list exceeds the %d-entry walk cap", errProcTruncated, maxPIDs)
+					}
+
+					continue
 				}
 
-				if capPIDs > maxPIDs {
-					return nil, fmt.Errorf("%w: the sysctl KERN_PROC_ALL pid list exceeds the %d-entry walk cap", errProcTruncated, maxPIDs)
-				}
+				// A mid-copy table mutation (ENOENT — the observed hosted
+				// class; ESRCH — its kernel-semantic sibling): the answer is
+				// discarded whole and the same call re-snapshots, bounded.
+				// No sleeps: the retry is a fresh kernel call, not a wait.
+				if errno == syscall.ENOENT || errno == syscall.ESRCH {
+					transient++
 
-				continue
+					if transient <= transientRetries {
+						continue
+					}
+				}
 			}
 
-			return nil, mapProcInfoErrno(err)
+			return nil, 0, mapProcInfoErrno(err)
 		}
 
 		// cgo answer type: C.int is a DISTINCT Go type — comparing or
@@ -482,25 +515,21 @@ func listAllPIDsSysctl() ([]int32, error) {
 		count := int(n)
 
 		if count < 0 || count > capPIDs {
-			return nil, fmt.Errorf("%w: sysctl KERN_PROC_ALL answered %d entries against a %d-entry buffer — the kernel answer does not fit the documented contract", errProcTruncated, count, capPIDs)
+			return nil, 0, fmt.Errorf("%w: sysctl KERN_PROC_ALL answered %d entries against a %d-entry buffer — the kernel answer does not fit the documented contract", errProcTruncated, count, capPIDs)
 		}
 
-		pids := make([]int32, 0, count)
+		// Same shared policy as the primary source (run 46131092469
+		// repair): zeroed slots are enumeration artifacts — skipped and
+		// counted, never a typed failure; negative pids and a zeroed-slot
+		// majority stay typed decode-corruption failures.
+		raw := make([]int32, count)
 
-		for i := 0; i < count; i++ {
-			p := int(C.c_sysctl_pid_at(unsafe.Pointer(&buf[0]), C.int(i)))
+		for i := range raw {
+			raw[i] = int32(C.c_sysctl_pid_at(unsafe.Pointer(&buf[0]), C.int(i)))
 			runtime.KeepAlive(buf)
-
-			// Same semantic validation as the primary source: a
-			// non-positive pid means the decode is wrong — fail closed.
-			if p <= 0 {
-				return nil, fmt.Errorf("%w: sysctl KERN_PROC_ALL returned pid %d at index %d — outside the documented pid space", errProcTruncated, p, i)
-			}
-
-			pids = append(pids, int32(p))
 		}
 
-		return pids, nil
+		return sanitizePIDList(raw)
 	}
 }
 
@@ -711,20 +740,22 @@ func listeningProcessImpl(port int) (int, string, bool, error) {
 	// BOTH sources refuse is the answer the typed unknown — with both
 	// classes named and the diagnostic FRONT-LOADED so the consolidated
 	// evidence channel's bounded message window carries the WHY.
-	pids, err := listAllPIDs()
+	pids, skipped, err := listAllPIDs()
 	if err != nil {
 		diag.EnumerationError = errorClassOf(err)
 
-		pids2, err2 := listAllPIDsSysctl()
+		pids2, skipped2, err2 := listAllPIDsSysctl()
 		if err2 != nil {
 			return 0, "", false, fmt.Errorf("%w (walk-diag %s): darwin process enumeration failed on both sources: proc_listallpids: %v; sysctl KERN_PROC_ALL: %v",
 				ErrPortOwnerUnknown, renderProcWalkDiagnostic(&diag), err, err2)
 		}
 
 		pids = pids2
+		skipped = skipped2
 	}
 
 	diag.PIDs = len(pids)
+	diag.SkippedZeroes = skipped
 
 	sawInaccessible := false
 

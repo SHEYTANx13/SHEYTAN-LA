@@ -675,34 +675,7 @@
     "path": "docs/ui-contract.md",
     "type": "doc",
     "language": "Markdown",
-    "purpose": "The UI design contract: tokens, states, surfaces (run #123)",
-    "layer": "docs",
-    "subsystem": "docs",
-    "status": "active"
-  },
-  {
-    "path": "docs/ui/ACCESSIBILITY.md",
-    "type": "doc",
-    "language": "Markdown",
-    "purpose": "Documentation — ACCESSIBILITY",
-    "layer": "docs",
-    "subsystem": "docs",
-    "status": "active"
-  },
-  {
-    "path": "docs/ui/DESIGN-SYSTEM.md",
-    "type": "doc",
-    "language": "Markdown",
-    "purpose": "Documentation — DESIGN-SYSTEM",
-    "layer": "docs",
-    "subsystem": "docs",
-    "status": "active"
-  },
-  {
-    "path": "docs/ui/TOUCH-RESPONSIVE-MATRIX.md",
-    "type": "doc",
-    "language": "Markdown",
-    "purpose": "Documentation — TOUCH-RESPONSIVE-MATRIX",
+    "purpose": "The web-shell-era UI design contract: tokens, touch floors, responsive bands, carried interaction contracts, honest accessibility rows (the docs/ui pages merged here)",
     "layer": "docs",
     "subsystem": "docs",
     "status": "active"
